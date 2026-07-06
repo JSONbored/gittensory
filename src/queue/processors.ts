@@ -493,6 +493,7 @@ import { resolveUnlinkedIssueMatchDisposition } from "../review/unlinked-issue-g
 import { DEFAULT_SCREENSHOT_TABLE_GATE, evaluateScreenshotTableGate } from "../review/screenshot-table-gate";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
+import { isPrReconciliationEnabled, runOpenPrReconciliation } from "../review/pr-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import {
   isCloseHoldOnly,
@@ -1118,6 +1119,12 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does zero
       // work here too. Fails safe internally — never throws into the queue.
       if (isSweepWatchdogEnabled(env)) await runSweepLivenessWatchdog(env);
+      return;
+    case "reconcile-open-prs":
+      // Self-heal (flag GITTENSORY_PR_RECONCILIATION). Defense-in-depth: the cron only ENQUEUES this when the
+      // flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does
+      // zero work here too. Fails safe internally — never throws into the queue.
+      if (isPrReconciliationEnabled(env)) await runOpenPrReconciliation(env);
       return;
     case "selftune":
       // Convergence (self-improve / auto-tune, flag GITTENSORY_REVIEW_SELFTUNE). Defense-in-depth: the cron only

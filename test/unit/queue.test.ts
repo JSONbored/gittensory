@@ -22181,6 +22181,29 @@ describe("queue processors", () => {
     expect(sent).toEqual([expect.objectContaining({ type: "agent-regate-sweep", repoFullName: "owner/stale-repo", installationId: 9311 })]);
   });
 
+  it("reconcile-open-prs job no-ops when GITTENSORY_PR_RECONCILIATION is OFF (does no scan)", async () => {
+    const env = createTestEnv(); // flag unset → OFF
+    await upsertRepositoryFromGitHub(env, { name: "stale-repo", full_name: "owner/stale-repo", private: false, owner: { login: "owner" } }, 9410);
+    await upsertRepositorySettings(env, { repoFullName: "owner/stale-repo", autonomy: { merge: "auto" } });
+    const reconcileSpy = vi.spyOn(backfillModule, "reconcileOpenPullRequests");
+
+    await processJob(env, { type: "reconcile-open-prs", requestedBy: "test" });
+
+    expect(reconcileSpy).not.toHaveBeenCalled();
+  });
+
+  it("reconcile-open-prs job runs the reconciliation scan when GITTENSORY_PR_RECONCILIATION is ON", async () => {
+    const env = createTestEnv({ GITTENSORY_PR_RECONCILIATION: "true" });
+    await upsertRepositoryFromGitHub(env, { name: "stale-repo", full_name: "owner/stale-repo", private: false, owner: { login: "owner" } }, 9411);
+    await upsertRepositorySettings(env, { repoFullName: "owner/stale-repo", autonomy: { merge: "auto" } });
+    const reconcileSpy = vi.spyOn(backfillModule, "reconcileOpenPullRequests").mockResolvedValue({ repoFullName: "owner/stale-repo", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+
+    await processJob(env, { type: "reconcile-open-prs", requestedBy: "test" });
+
+    expect(reconcileSpy).toHaveBeenCalledWith(env, "owner/stale-repo");
+    reconcileSpy.mockRestore();
+  });
+
   describe("type label decoupling (#label-decoupling)", () => {
     function stubTypeLabelFetch(prNumber: number, seen: { posted: string[]; removed: string[]; checkRunCreated: boolean }) {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -3132,6 +3132,52 @@ export async function fetchLivePullRequest(
   return result.status === "ok" ? result.data : undefined;
 }
 
+// Bounded at 1000 open PRs (10 pages of 100) — far beyond any real repo's open-PR count; a pathological repo
+// can't spin this loop forever.
+const RECONCILE_OPEN_PRS_MAX_PAGES = 10;
+
+export type OpenPrReconciliationResult = {
+  repoFullName: string;
+  remoteOpenCount: number;
+  localOpenCount: number;
+  /** PR numbers GitHub reports open that have NO local pull_requests row at all — a webhook silently lost. */
+  missingNumbers: number[];
+};
+
+/**
+ * Fast open-PR reconciliation (#audit-open-pr-reconciliation): a CHEAP list-only GitHub read (PR numbers only,
+ * via the Link-header-paginated `/pulls?state=open` list — never a per-PR detail fetch) diffed against the
+ * local `pull_requests` table. Exists to catch a silently-lost "PR opened" webhook (#3782/#3793, 2026-07-06:
+ * two contributor PRs had zero trace anywhere for ~2 hours) within minutes, instead of waiting on
+ * `backfillRegisteredRepositories`'s 6-hour freshness window.
+ *
+ * FAIL-OPEN: a total read failure (repo not found, or the very first list page erroring) returns an all-zero,
+ * empty-`missingNumbers` result — it must never falsely report every local PR as "missing" just because GitHub
+ * was briefly unreachable. A LATER page failing mid-crawl keeps the pages already fetched (a partial remote
+ * list can only under-report divergence, never wrongly flag a real local PR as missing).
+ */
+export async function reconcileOpenPullRequests(env: Env, repoFullName: string): Promise<OpenPrReconciliationResult> {
+  const empty: OpenPrReconciliationResult = { repoFullName, remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] };
+  const repo = await getRepository(env, repoFullName);
+  if (!repo) return empty;
+  const token = await tokenForRepo(env, repo);
+  const admissionKey = repoAdmissionKeyForToken(env, repo, token);
+  const remoteNumbers: number[] = [];
+  for (let page = 1; page <= RECONCILE_OPEN_PRS_MAX_PAGES; page += 1) {
+    const result = await githubJsonWithHeaders<Array<{ number: number }>>(env, repoFullName, `/pulls?state=open&per_page=100&page=${page}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
+    if (!result) {
+      if (page === 1) return empty;
+      break;
+    }
+    remoteNumbers.push(...result.data.map((pr) => pr.number));
+    if (!hasNextPage(result.link)) break;
+  }
+  const localOpen = await listOpenPullRequests(env, repoFullName);
+  const localNumbers = new Set(localOpen.map((pr) => pr.number));
+  const missingNumbers = remoteNumbers.filter((number) => !localNumbers.has(number));
+  return { repoFullName, remoteOpenCount: remoteNumbers.length, localOpenCount: localOpen.length, missingNumbers };
+}
+
 // #2537: durable, webhook-invalidated cache for the bare PR-state read (GET /pulls/{n}). Unlike the request-local
 // LiveGithubFacts memo (queue/processors.ts), this survives ACROSS webhook deliveries / sweep ticks, cutting
 // repeat /pulls/{n} calls for an unchanged PR at the freshness-guard/readiness/dup-winner call sites. NEVER used

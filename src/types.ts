@@ -197,6 +197,15 @@ export type JobMessage =
       requestedBy: "schedule" | "api" | "test";
     }
   | {
+      // Self-heal (flag-gated by GITTENSORY_PR_RECONCILIATION). List-diff GitHub's open PR numbers against the
+      // local table for every acting-autonomy repo — a much tighter cadence than backfillRegisteredRepositories's
+      // 6-hour freshness window — and catch up (fetch + upsert + regate) any PR number GitHub has that the local
+      // table doesn't (a silently-lost "opened" webhook). Enqueued on a short interval ONLY when the flag is ON
+      // (index.ts), so flag-OFF this job never exists.
+      type: "reconcile-open-prs";
+      requestedBy: "schedule" | "api" | "test";
+    }
+  | {
       // Convergence (self-improve / auto-tune, flag-gated by GITTENSORY_REVIEW_SELFTUNE). Run the ported
       // self-improvement loop over gittensory's review-outcome data — compute tuning recommendations,
       // SHADOW-SOAK any strictly-tightening one, and AUTO-PROMOTE it to live only after the soak window passes

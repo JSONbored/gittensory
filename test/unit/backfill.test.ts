@@ -45,6 +45,7 @@ import {
   isOwnReviewThreadAuthor,
   isRateLimitedGitHubFailure,
   mergeRequiredCiContexts,
+  reconcileOpenPullRequests,
   refreshContributorActivity,
   refreshInstallationHealth,
   refreshPullRequestDetails,
@@ -5820,6 +5821,99 @@ describe("GitHub backfill", () => {
 
     it("does not treat a non-403/429 failure as a rate limit even with a matching body", () => {
       expect(isRateLimitedGitHubFailure({ statusCode: 500, retryAfter: null, remaining: null, body: "secondary rate limit" })).toBe(false);
+    });
+  });
+
+  describe("reconcileOpenPullRequests (#audit-open-pr-reconciliation)", () => {
+    it("returns an all-zero result for a repo that does not exist", async () => {
+      const env = createTestEnv();
+      expect(await reconcileOpenPullRequests(env, "owner/missing")).toEqual({ repoFullName: "owner/missing", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+    });
+
+    it("reports no missing numbers when the local table already has every remote-open PR", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) return Response.json([{ number: 1 }]);
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result).toEqual({ repoFullName: "JSONbored/gittensory", remoteOpenCount: 1, localOpenCount: 1, missingNumbers: [] });
+    });
+
+    it("REGRESSION (#3782/#3793): reports a PR number GitHub has open that has no local row at all", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) return Response.json([{ number: 1 }, { number: 7 }]); // #7 opened but never made it into the local table
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result).toEqual({ repoFullName: "JSONbored/gittensory", remoteOpenCount: 2, localOpenCount: 1, missingNumbers: [7] });
+    });
+
+    it("paginates the open-PR list past the first 100 via the Link header", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) {
+          const page = Number(new URL(url).searchParams.get("page") ?? "1");
+          if (page === 1) {
+            return Response.json(
+              Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })),
+              { headers: { link: '<https://api.github.com/repositories/1/pulls?state=open&per_page=100&page=2>; rel="next"' } },
+            );
+          }
+          return Response.json([{ number: 101 }]);
+        }
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result.remoteOpenCount).toBe(101);
+      expect(result.missingNumbers).toEqual(expect.arrayContaining([1, 101]));
+    });
+
+    it("fails open (all-zero result) when the FIRST page fails, so a GitHub hiccup never falsely reports every local PR as missing", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async () => new Response("down", { status: 500 }));
+
+      expect(await reconcileOpenPullRequests(env, "JSONbored/gittensory")).toEqual({ repoFullName: "JSONbored/gittensory", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+    });
+
+    it("keeps the pages already fetched when a LATER page fails mid-crawl (a partial remote list can only under-report, never falsely flag a real local PR)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) {
+          const page = Number(new URL(url).searchParams.get("page") ?? "1");
+          if (page === 1) {
+            return Response.json(
+              Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })),
+              { headers: { link: '<https://api.github.com/repositories/1/pulls?state=open&per_page=100&page=2>; rel="next"' } },
+            );
+          }
+          return new Response("down", { status: 500 });
+        }
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result.remoteOpenCount).toBe(100); // page 1's 100 items are kept despite page 2 failing
     });
   });
 
