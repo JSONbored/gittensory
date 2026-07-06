@@ -7582,7 +7582,6 @@ async function maybePublishPrPublicSurface(
   // promise can gate the public-surface computation too, not just this label decision (#gate-only-type-labels).
   if (
     typeLabelsEnabled &&
-    !publicSurfaceSkipped &&
     !settings.agentPaused &&
     decision.skipReason !== "miner_detection_unavailable" &&
     decision.skipReason !== "not_official_gittensor_miner"
@@ -8941,7 +8940,12 @@ async function maybePublishPrPublicSurface(
             decisionOutcome: gateEvaluation?.conclusion,
           },
           () =>
-            autoReviewSkipReason
+            // #3698: a benign auto-review skip (draft, WIP title, too-large, docs-only, base-branch,
+            // auto-pause) shows the quiet "skipped (reason)" status -- but an IGNORED-AUTHOR skip also
+            // trips publicSurfaceSkipped, and that path exists specifically so the deterministic gate
+            // (e.g. the linked-issue hard rule) still shows its REAL, truthful conclusion instead of a
+            // "skipped" veneer that would let an ignored/excluded author's PR silently bypass it.
+            autoReviewSkipReason && !publicSurfaceSkipped
               ? createOrUpdateSkippedGateCheckRun(
                   env,
                   installationId,
@@ -8976,7 +8980,7 @@ async function maybePublishPrPublicSurface(
             headSha: advisory.headSha,
             checkRunId: gateCheckResult.id,
             /* v8 ignore next -- gate-enabled publication always has a gate evaluation. */
-            conclusion: autoReviewSkipReason ? "skipped" : (gateEvaluation?.conclusion ?? null),
+            conclusion: autoReviewSkipReason && !publicSurfaceSkipped ? "skipped" : (gateEvaluation?.conclusion ?? null),
             detailsUrl: gateCheckResult.html_url,
             deliveryId: webhook.deliveryId,
           }).catch((error) => {
