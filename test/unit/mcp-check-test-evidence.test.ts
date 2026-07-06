@@ -60,6 +60,33 @@ describe("buildCheckTestEvidenceReport (#2235)", () => {
     expect(report.classification).toBe("adequate");
     expect(report.testFileCount).toBe(1);
   });
+
+  it("deduplicates paths and ignores blank entries", () => {
+    const report = buildCheckTestEvidenceReport({
+      changedPaths: [" src/a.ts ", "src/a.ts", "", "   "],
+      testPaths: ["test/a.test.ts", "test/a.test.ts"],
+    });
+    expect(report.codeFileCount).toBe(1);
+    expect(report.testFileCount).toBe(1);
+    expect(report.classification).toBe("weak");
+  });
+
+  it("returns absent guidance strings for every non-docs classification band", () => {
+    const absent = buildCheckTestEvidenceReport({ changedPaths: ["src/only.ts"] });
+    const weak = buildCheckTestEvidenceReport({
+      changedPaths: [...Array.from({ length: 9 }, (_, i) => `src/file${i}.ts`), "test/one.test.ts"],
+    });
+    const adequate = buildCheckTestEvidenceReport({
+      changedPaths: ["src/a.ts", "src/b.ts", "src/c.ts", "test/a.test.ts"],
+    });
+    const strong = buildCheckTestEvidenceReport({
+      changedPaths: ["src/a.ts", "src/b.ts", "test/a.test.ts", "test/b.test.ts"],
+    });
+    expect(absent.guidance[0]).toMatch(/Add focused regression tests/);
+    expect(weak.guidance[0]).toMatch(/proportionally light/);
+    expect(adequate.guidance[0]).toMatch(/proportionally adequate/);
+    expect(strong.guidance[0]).toMatch(/proportionally strong/);
+  });
 });
 
 describe("MCP gittensory_check_test_evidence (#2235)", () => {
