@@ -220,6 +220,8 @@ export interface UnifiedCommentContext {
   preflightHeld?: boolean;
   /** Public freshness marker for the posted/updated review comment. Rendered as UTC when provided. */
   reviewedAt?: string | number | Date | undefined;
+  /** Display-only caps on rendered blockers/nits (`review.max_findings`). Omitted ⇒ legacy 12-item cap per list. (#2049) */
+  maxFindings?: { blockers: number | null; nits: number | null } | undefined;
 }
 
 const STATUS_META: Record<UnifiedCommentStatus, { alert: string; square: string; icon: string }> = {
@@ -361,8 +363,36 @@ function verdictLine(status: UnifiedCommentStatus, input: UnifiedReviewInput, ct
   }
 }
 
-/** Dedupe + cap a list of lines (case-insensitive), so blockers/nits never balloon the comment. */
-function dedupeLines(items: string[], cap = 12): string[] {
+/** Legacy unified-comment display cap when `review.max_findings` is absent (byte-identical). */
+export const LEGACY_FINDINGS_DISPLAY_CAP = 12;
+
+/** Truncate a deduped findings list for display. `cap === null` ⇒ show all lines. */
+export function truncateDisplayedFindingLines(
+  lines: readonly string[],
+  cap: number | null,
+): { visible: string[]; omitted: number } {
+  if (cap === null || lines.length <= cap) {
+    return { visible: [...lines], omitted: 0 };
+  }
+  return { visible: lines.slice(0, cap), omitted: lines.length - cap };
+}
+
+function resolveFindingsDisplayCap(
+  maxFindings: UnifiedCommentContext["maxFindings"],
+  kind: "blockers" | "nits",
+): number | null {
+  if (!maxFindings) return LEGACY_FINDINGS_DISPLAY_CAP;
+  return maxFindings[kind];
+}
+
+/** Escape angle brackets in caller-provided public text so raw HTML, HTML comments,
+ *  or stray closing tags cannot change the GitHub comment structure. */
+function escapePublicHtmlAngles(text: string): string {
+  return text.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"));
+}
+
+/** Dedupe a list of lines (case-insensitive) so blockers/nits never repeat in the comment. */
+function dedupeLines(items: string[], cap?: number): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of items) {
@@ -372,15 +402,9 @@ function dedupeLines(items: string[], cap = 12): string[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(line);
-    if (out.length >= cap) break;
+    if (cap !== undefined && out.length >= cap) break;
   }
   return out;
-}
-
-/** Escape angle brackets in caller-provided public text so raw HTML, HTML comments,
- *  or stray closing tags cannot change the GitHub comment structure. */
-function escapePublicHtmlAngles(text: string): string {
-  return text.replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"));
 }
 
 function bullets(items: string[]): string {
@@ -504,13 +528,29 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
 
   if (input.summary.trim()) blocks.push(`**Review summary**\n${escapePublicHtmlAngles(input.summary.trim())}`);
 
-  const nits = dedupeLines(input.nits ?? []);
-  if (nits.length) blocks.push(details("Nits", taskList(nits), `${nits.length} non-blocking`));
+  const nitsDeduped = dedupeLines(input.nits ?? []);
+  if (nitsDeduped.length) {
+    const nitsTrunc = truncateDisplayedFindingLines(nitsDeduped, resolveFindingsDisplayCap(ctx.maxFindings, "nits"));
+    const nitsBody =
+      taskList(nitsTrunc.visible) + (nitsTrunc.omitted > 0 ? `\n\n_+${nitsTrunc.omitted} more nit(s) not shown._` : "");
+    const nitsSub =
+      nitsTrunc.omitted > 0
+        ? `${nitsTrunc.visible.length} non-blocking (+${nitsTrunc.omitted} more)`
+        : `${nitsDeduped.length} non-blocking`;
+    blocks.push(details("Nits", nitsBody, nitsSub));
+  }
 
-  const blockers = dedupeLines(input.blockers ?? []);
-  if (blockers.length) {
+  const blockersDeduped = dedupeLines(input.blockers ?? []);
+  if (blockersDeduped.length) {
+    const blockersTrunc = truncateDisplayedFindingLines(
+      blockersDeduped,
+      resolveFindingsDisplayCap(ctx.maxFindings, "blockers"),
+    );
     const heading = status === "blocked" ? "Why this is blocked" : "Concerns raised — review before merging";
-    blocks.push(`**${heading}**\n${bullets(blockers)}`);
+    const blockersBody =
+      bullets(blockersTrunc.visible) +
+      (blockersTrunc.omitted > 0 ? `\n\n_+${blockersTrunc.omitted} more blocker(s) not shown._` : "");
+    blocks.push(`**${heading}**\n${blockersBody}`);
   }
 
   // Failing CI checks — list WHICH checks failed and WHY (codecov %/test/lint reason) under the "CI failing"

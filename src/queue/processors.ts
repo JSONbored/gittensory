@@ -374,6 +374,8 @@ import {
   type ReviewPathInstruction,
   type ReviewProfile,
   type ReviewFindingSeverity,
+  type MaxFindingsConfig,
+  maxFindingsPresent,
   type SelfHostAiModelConfig,
   type VisualConfig,
 } from "../signals/focus-manifest";
@@ -7754,6 +7756,7 @@ async function maybePublishPrPublicSurface(
   let effortScoreEnabledForReview = false;
   let findingCategoriesEnabledForReview = false;
   let minFindingSeverityForReview: ReviewFindingSeverity | null = null;
+  let maxFindingsForReview: MaxFindingsConfig | undefined;
   let aiReviewExpected = false;
   let aiReviewWasReused = false;
   let gateFinalized = false;
@@ -8258,6 +8261,9 @@ async function maybePublishPrPublicSurface(
     changedFilesSummaryEnabledForReview = deterministicReviewOverrides.changedFilesSummary;
     effortScoreEnabledForReview = deterministicReviewOverrides.effortScore;
     minFindingSeverityForReview = deterministicReviewOverrides.minFindingSeverity;
+    if (maxFindingsPresent(deterministicReviewOverrides.maxFindings)) {
+      maxFindingsForReview = deterministicReviewOverrides.maxFindings;
+    }
     const aiReviewWillRun =
       !authorBlacklisted &&
       !isFrozenForManualReview &&
@@ -9496,6 +9502,7 @@ async function maybePublishPrPublicSurface(
         ...(findingCategoriesEnabledForReview && aiReview?.inlineFindings?.length
           ? { findingCategories: aiReview.inlineFindings }
           : {}),
+        ...(maxFindingsForReview !== undefined ? { maxFindings: maxFindingsForReview } : {}),
       });
     } else {
       deterministicBody = buildPublicPrIntelligenceComment(commentArgs);

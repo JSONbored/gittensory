@@ -325,6 +325,8 @@ export type UnifiedCommentBridgeArgs = {
    *  `classifyFindingCategory` — never omitted from the count. Default OFF (the processor passes this only when
    *  the manifest opts in — see `resolveReviewPromptOverrides`'s `findingCategories`). (#1958) */
   findingCategories?: FindingCategoryInput[] | undefined;
+  /** Display-only caps on rendered blockers/nits (`review.max_findings` port). Omitted ⇒ legacy 12-item cap. (#2049) */
+  maxFindings?: { blockers: number | null; nits: number | null } | undefined;
   /** The disposition holds this PR for owner review because its diff touches a hard-guardrail path — so an
    *  otherwise-ready comment renders "held for review" instead of "safe to merge". (#guarded-hold-comment) */
   heldForReview?: boolean | undefined;
@@ -608,6 +610,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     ...(args.heldForReview ? { heldForReview: true } : {}),
     ...(args.neverClosed ? { neverClosed: true } : {}),
     ...(args.preflightHeld ? { preflightHeld: true } : {}),
+    ...(args.maxFindings !== undefined ? { maxFindings: args.maxFindings } : {}),
   });
 
   // Prepend the marker verbatim (matching the legacy body, which leads with the marker then a blank line)

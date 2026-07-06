@@ -353,6 +353,10 @@ export type FocusManifestReviewConfig = {
    *  configured level are suppressed from inline comments — never from gate blockers. null (default, absent) ⇒ every
    *  finding shown = byte-identical behavior. (#2048) */
   minFindingSeverity: ReviewFindingSeverity | null;
+  /** `review.max_findings`: display-only caps on how many blockers/nits render in the unified comment. Each field is
+   *  a non-negative integer; null/absent within the object ⇒ no cap for that list. The whole object absent ⇒ the
+   *  legacy 12-item display cap (byte-identical). Never affects gate decisions. (#2049) */
+  maxFindings: MaxFindingsConfig;
   /** `review.path_instructions`: per-path natural-language guidance handed to the AI reviewer when the PR's
    *  changed files match the glob. Empty (default) ⇒ byte-identical reviewer prompt. (#review-path-instructions) */
   pathInstructions: ReviewPathInstruction[];
@@ -438,6 +442,18 @@ export type AutoReviewConfig = {
    *  re-reviews. null/0 ⇒ byte-identical (re-review every sync). (#2042) */
   autoPauseAfterReviewedCommits: number | null;
 };
+
+/** `review.max_findings` display caps — null per field means no cap for that list when the object is present. */
+export type MaxFindingsConfig = {
+  blockers: number | null;
+  nits: number | null;
+};
+
+export const EMPTY_MAX_FINDINGS_CONFIG: MaxFindingsConfig = { blockers: null, nits: null };
+
+export function maxFindingsPresent(config: MaxFindingsConfig): boolean {
+  return config.blockers !== null || config.nits !== null;
+}
 
 export const EMPTY_AUTO_REVIEW_CONFIG: AutoReviewConfig = {
   skipDrafts: null,
@@ -684,7 +700,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -714,7 +730,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -833,6 +849,20 @@ function normalizeAutoReviewSizeCap(value: JsonValue | undefined, field: string,
     return 0;
   }
   return value;
+}
+
+/** Parse `review.max_findings` display caps. Absent ⇒ empty (legacy renderer cap applies). (#2049) */
+function normalizeMaxFindingsConfig(value: JsonValue | undefined, warnings: string[]): MaxFindingsConfig {
+  if (value === undefined || value === null) return { ...EMPTY_MAX_FINDINGS_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`Manifest field "review.max_findings" must be an object; ignoring it.`);
+    return { ...EMPTY_MAX_FINDINGS_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  return {
+    blockers: normalizeOptionalNonNegativeInt(record.blockers, "review.max_findings.blockers", warnings),
+    nits: normalizeOptionalNonNegativeInt(record.nits, "review.max_findings.nits", warnings),
+  };
 }
 
 /** Normalize an optional confidence threshold in [0,1] (#7) — a fractional value (NOT a 0-100 score), so it is
@@ -1665,7 +1695,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -1712,6 +1742,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     REVIEW_FINDING_SEVERITY_LADDER,
     warnings,
   );
+  const maxFindings = normalizeMaxFindingsConfig(r.max_findings, warnings);
   const pathInstructions = parseReviewPathInstructions(r.path_instructions, warnings);
   const instructions = parsePublicSafeText(r.instructions, "review.instructions", warnings);
   const excludePaths = parseReviewExcludePaths(r.exclude_paths, warnings);
@@ -1735,6 +1766,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       effortScore !== null ||
       findingCategories !== null ||
       minFindingSeverity !== null ||
+      maxFindingsPresent(maxFindings) ||
       pathInstructions.length > 0 ||
       instructions !== null ||
       excludePaths.length > 0 ||
@@ -1764,6 +1796,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     effortScore,
     findingCategories,
     minFindingSeverity,
+    maxFindings,
     pathInstructions,
     instructions,
     excludePaths,
@@ -2208,6 +2241,12 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   if (review.effortScore !== null) out.effort_score = review.effortScore;
   if (review.findingCategories !== null) out.finding_categories = review.findingCategories;
   if (review.minFindingSeverity !== null) out.min_finding_severity = review.minFindingSeverity;
+  if (maxFindingsPresent(review.maxFindings)) {
+    const maxFindings: Record<string, JsonValue> = {};
+    if (review.maxFindings.blockers !== null) maxFindings.blockers = review.maxFindings.blockers;
+    if (review.maxFindings.nits !== null) maxFindings.nits = review.maxFindings.nits;
+    out.max_findings = maxFindings;
+  }
   if (review.instructions !== null) out.instructions = review.instructions;
   if (review.pathInstructions.length > 0) out.path_instructions = review.pathInstructions.map((entry) => ({ path: entry.path, instructions: entry.instructions }));
   if (review.excludePaths.length > 0) out.exclude_paths = [...review.excludePaths];
@@ -2423,7 +2462,7 @@ export function composeManifestReviewInstructions(instructions: string | null, t
  *  failure). A null manifest yields the byte-identical defaults. Centralized so the AI-review caller threads them
  *  in one place with the null-manifest branch covered here (unit-tested) rather than inline in the processor.
  *  (#review-profile / #review-tone / #review-security-focus / #review-path-instructions / #review-exclude-paths / #2043 / #selfhost-ai-model-override / #1956) */
-export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; tone: string | null; securityFocus: boolean; inlineComments: boolean; suggestions: boolean; changedFilesSummary: boolean; effortScore: boolean; findingCategories: boolean; minFindingSeverity: ReviewFindingSeverity | null; pathInstructions: ReviewPathInstruction[]; instructions: string | null; excludePaths: string[]; pathFilters: string[]; selfHostAiModel: SelfHostAiModelConfig } {
+export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; tone: string | null; securityFocus: boolean; inlineComments: boolean; suggestions: boolean; changedFilesSummary: boolean; effortScore: boolean; findingCategories: boolean; minFindingSeverity: ReviewFindingSeverity | null; maxFindings: MaxFindingsConfig; pathInstructions: ReviewPathInstruction[]; instructions: string | null; excludePaths: string[]; pathFilters: string[]; selfHostAiModel: SelfHostAiModelConfig } {
   // inlineComments resolves to a strict boolean — true ONLY when the manifest explicitly set review.inline_comments:
   // true; null/false/absent ⇒ false. The caller ANDs this per-repo toggle with the operator flag + cutover allowlist.
   // securityFocus resolves the same way — true ONLY when the manifest explicitly set review.security_focus: true.
@@ -2435,7 +2474,7 @@ export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { 
   // (never touches the AI prompt) and only needs the unified-comment convergence feature to be on.
   // findingCategories resolves the same way (#1958) — like suggestions, the caller further ANDs it with the
   // already-resolved inlineComments gate, since a category has nothing to categorize without an inline finding.
-  return { profile: manifest?.review.profile ?? null, tone: manifest?.review.tone ?? null, securityFocus: manifest?.review.securityFocus === true, inlineComments: manifest?.review.inlineComments === true, suggestions: manifest?.review.suggestions === true, changedFilesSummary: manifest?.review.changedFilesSummary === true, effortScore: manifest?.review.effortScore === true, findingCategories: manifest?.review.findingCategories === true, minFindingSeverity: manifest?.review.minFindingSeverity ?? null, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [], pathFilters: manifest?.review.pathFilters ?? [], selfHostAiModel: resolveReviewSelfHostAiModel(manifest) };
+  return { profile: manifest?.review.profile ?? null, tone: manifest?.review.tone ?? null, securityFocus: manifest?.review.securityFocus === true, inlineComments: manifest?.review.inlineComments === true, suggestions: manifest?.review.suggestions === true, changedFilesSummary: manifest?.review.changedFilesSummary === true, effortScore: manifest?.review.effortScore === true, findingCategories: manifest?.review.findingCategories === true, minFindingSeverity: manifest?.review.minFindingSeverity ?? null, maxFindings: manifest?.review.maxFindings ?? { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [], pathFilters: manifest?.review.pathFilters ?? [], selfHostAiModel: resolveReviewSelfHostAiModel(manifest) };
 }
 
 /** Resolve `review.pre_merge_checks` from a possibly-null manifest (null = load failure ⇒ no checks). Centralized

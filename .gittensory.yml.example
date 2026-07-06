@@ -401,6 +401,13 @@ review:
   # configured level are suppressed from inline comments — never from gate blockers. Default: null (show all).
   # min_finding_severity: major
 
+  # Display-only caps on how many blockers/nits render in the unified comment. Each field is a non-negative integer;
+  # unset within the object ⇒ no cap for that list. Whole object absent ⇒ legacy 12-item cap (byte-identical).
+  # Never affects gate decisions. Default: absent.
+  # max_findings:
+  #   blockers: 5
+  #   nits: 10
+
   # Inline-comment layer toggles (#1956 / #1958). Bool | null. Default: null/false — byte-identical.
   # Requires operator flag GITTENSORY_REVIEW_INLINE_COMMENTS + cutover allowlist + review.inline_comments: true.
   # inline_comments: false
