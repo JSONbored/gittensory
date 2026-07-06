@@ -1080,6 +1080,32 @@
       }
     },
     {
+      "name": "focusedTest",
+      "title": "Focused tests",
+      "category": "quality",
+      "cost": "local",
+      "defaultEnabled": true,
+      "profiles": [
+        "fast",
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files"
+      ],
+      "limits": {
+        "maxFindings": 25,
+        "maxLineChars": 2000
+      },
+      "docs": {
+        "summary": "Flags a focused test a PR adds in a test file — `describe.only` / `it.only` / `test.only` — which silently skips every other test in that file.",
+        "looksAt": "Added lines in changed test files.",
+        "reports": "File and line of each focused-test call.",
+        "network": "Pure local analyzer. No external network call.",
+        "notes": "The test-file counterpart of the debug-leftover analyzer. String literals are stripped before matching, so a `.only` inside a string is not flagged."
+      }
+    },
+    {
       "name": "sizeSmell",
       "title": "Size smells",
       "category": "quality",

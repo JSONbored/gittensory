@@ -32,6 +32,7 @@ import { scanLooseRanges } from "./loose-range.js";
 import { scanMagicNumbers } from "./magic-number.js";
 import { scanConflictMarkers } from "./conflict-marker.js";
 import { scanDebugLeftover } from "./debug-leftover.js";
+import { scanFocusedTest } from "./focused-test.js";
 import { scanDeepNesting } from "./deep-nesting.js";
 import { scanI18nRegression } from "./i18n-regression.js";
 import { scanErrorSwallow } from "./error-swallow.js";
@@ -1027,6 +1028,35 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanDebugLeftover(req, signal),
+  }),
+  descriptor({
+    name: "focusedTest",
+    title: "Focused tests",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags a focused test a PR adds in a test file — `describe.only` / `it.only` / `test.only` — which silently skips every other test in that file.",
+      looksAt: "Added lines in changed test files.",
+      reports: "File and line of each focused-test call.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "The test-file counterpart of the debug-leftover analyzer. String literals are stripped before matching, so a `.only` inside a string is not flagged.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Focused tests (`.only` added by this PR — skips the rest of the file)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${helpers.safeCodeSpan(item.kind)}`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanFocusedTest(req, signal),
   }),
   descriptor({
     name: "sizeSmell",

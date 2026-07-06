@@ -511,6 +511,12 @@ export interface DebugLeftoverFinding {
   kind: "debugger" | "console" | "print";
 }
 
+export interface FocusedTestFinding {
+  file: string;
+  line: number;
+  kind: "only";
+}
+
 /** Maintainability size smell from patch structure (#2019, part of #1499).
  *  Reports estimated file length or added function body span — never source content. */
 export interface SizeSmellFinding {
@@ -693,6 +699,7 @@ export interface BriefFindings {
   magicNumber?: MagicNumberFinding[];
   conflictMarker?: ConflictMarkerFinding[];
   debugLeftover?: DebugLeftoverFinding[];
+  focusedTest?: FocusedTestFinding[];
   sizeSmell?: SizeSmellFinding[];
   floatingPromise?: FloatingPromiseFinding[];
   deepNesting?: DeepNestingFinding[];

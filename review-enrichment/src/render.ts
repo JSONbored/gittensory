@@ -486,6 +486,7 @@ export function renderBrief(
   lines.push(...renderDescriptorSection("magicNumber", findings.magicNumber));
   lines.push(...renderDescriptorSection("conflictMarker", findings.conflictMarker));
   lines.push(...renderDescriptorSection("debugLeftover", findings.debugLeftover));
+  lines.push(...renderDescriptorSection("focusedTest", findings.focusedTest));
   lines.push(...renderDescriptorSection("sizeSmell", findings.sizeSmell));
   lines.push(...renderDescriptorSection("floatingPromise", findings.floatingPromise));
   lines.push(...renderDescriptorSection("deepNesting", findings.deepNesting));

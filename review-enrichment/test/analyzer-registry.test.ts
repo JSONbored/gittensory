@@ -48,6 +48,7 @@ const EXPECTED_ANALYZERS = [
   "magicNumber",
   "conflictMarker",
   "debugLeftover",
+  "focusedTest",
   "sizeSmell",
   "floatingPromise",
   "deepNesting",
