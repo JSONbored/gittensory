@@ -3090,6 +3090,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
       ignoreAuthors: ["*[bot]", "dependabot[bot]"],
       ignoreTitleKeywords: ["WIP", "draft"],
       skipLabels: ["do-not-review", "wip"],
+      skipDocsOnly: null,
       baseBranches: ["main", "release/**"],
       autoPauseAfterReviewedCommits: null,
     });
@@ -3121,7 +3122,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
 
   it("evaluateAutoReviewSkipReason: byte-identical when unset; skips with deterministic reasons when configured", () => {
     const empty = { ...EMPTY_AUTO_REVIEW_CONFIG };
-    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], baseRef: "develop", reviewedCommitCount: 0 };
+    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], baseRef: "develop", reviewedCommitCount: 0 };
     expect(evaluateAutoReviewSkipReason(empty, input)).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: true })).toBe("review skipped (draft)");
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: false })).toBeNull();
@@ -3137,6 +3138,10 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(evaluateAutoReviewSkipReason({ ...empty, skipLabels: ["wip"] }, { ...input, labels: ["feature"] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipLabels: ["wip"] }, { ...input, labels: [] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipLabels: [] }, { ...input, labels: ["feature"] })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: ["README.md", "docs/guide.md"] })).toBe("review skipped (docs only)");
+    expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: ["README.md", "src/a.ts"] })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: [] })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: false }, { ...input, changedPaths: ["README.md"] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, baseBranches: ["main"] }, { ...input, baseRef: "develop" })).toBe(
       "review skipped (base branch out of scope)",
     );
@@ -3187,8 +3192,19 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(reviewConfigToJson(keywordsOnly.review)).toEqual({ auto_review: { ignore_title_keywords: ["DRAFT"] } });
     const labelsOnly = parseFocusManifest({ review: { auto_review: { skip_labels: ["do-not-review"] } } });
     expect(reviewConfigToJson(labelsOnly.review)).toEqual({ auto_review: { skip_labels: ["do-not-review"] } });
+    const docsOnly = parseFocusManifest({ review: { auto_review: { skip_docs_only: true } } });
+    expect(reviewConfigToJson(docsOnly.review)).toEqual({ auto_review: { skip_docs_only: true } });
     const basesOnly = parseFocusManifest({ review: { auto_review: { base_branches: ["main"] } } });
     expect(reviewConfigToJson(basesOnly.review)).toEqual({ auto_review: { base_branches: ["main"] } });
+  });
+
+  it("warns on invalid skip_docs_only values and round-trips explicit false", () => {
+    const bad = parseFocusManifest({ review: { auto_review: { skip_docs_only: "yes" } } });
+    expect(bad.review.autoReview.skipDocsOnly).toBeNull();
+    expect(bad.warnings.some((w) => /skip_docs_only.*boolean/.test(w))).toBe(true);
+    const explicitOff = parseFocusManifest({ review: { auto_review: { skip_docs_only: false } } });
+    expect(explicitOff.review.autoReview.skipDocsOnly).toBe(false);
+    expect(parseFocusManifest({ review: reviewConfigToJson(explicitOff.review) }).review.autoReview.skipDocsOnly).toBe(false);
   });
 
   it("warns on invalid skip_labels list shapes, dedupes case-insensitively, and caps entries", () => {

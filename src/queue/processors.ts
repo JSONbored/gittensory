@@ -6333,6 +6333,7 @@ export async function resolveAutoReviewSkipForPullRequest(
     author: string | null;
     deliveryId: string;
     headSha: string | null | undefined;
+    changedPaths?: readonly string[] | undefined;
   },
 ): Promise<{ skipReason: string | null; reviewManifest: FocusManifest | null }> {
   if (args.authorBlacklisted || args.isFrozenForManualReview) {
@@ -6347,6 +6348,7 @@ export async function resolveAutoReviewSkipForPullRequest(
     author: args.author,
     title: args.pr.title,
     labels: args.pr.labels ?? [],
+    changedPaths: args.changedPaths ?? [],
     baseRef: args.pr.baseRef ?? null,
     reviewedCommitCount,
   });
@@ -8141,6 +8143,7 @@ async function maybePublishPrPublicSurface(
       pr.labels.some((label) => label.toLowerCase() === manualReviewLabel.toLowerCase());
     let reviewManifestForAutoReview: FocusManifest | null = null;
     let autoReviewSkipReason: string | null = null;
+    const autoReviewChangedPaths = (await getReviewFiles()).map((file) => file.path);
     ({
       skipReason: autoReviewSkipReason,
       reviewManifest: reviewManifestForAutoReview,
@@ -8153,6 +8156,7 @@ async function maybePublishPrPublicSurface(
       author,
       deliveryId: webhook.deliveryId,
       headSha: advisory.headSha ?? null,
+      changedPaths: autoReviewChangedPaths,
     }));
     // review.changed_files_summary (#1957) + review.effort_score (#1955): both deterministic, no-AI — resolve
     // them here, UNCONDITIONALLY, rather than inside the aiReviewWillRun-gated closure below. These sections

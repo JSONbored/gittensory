@@ -12,6 +12,7 @@ import { normalizeModerationLabel, normalizeModerationRules } from "../settings/
 import { REES_ANALYZER_NAME_SET, type ReesAnalyzerName } from "../review/enrichment-analyzer-names";
 import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
+import { classifyChangedFile } from "./path-matchers";
 import { isSafeHttpUrl } from "../review/content-lane/safe-url";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
@@ -416,6 +417,9 @@ export type AutoReviewConfig = {
   ignoreTitleKeywords: string[];
   /** `review.auto_review.skip_labels`: case-insensitive PR label names that skip AI review. Empty ⇒ no skip. (#2062) */
   skipLabels: string[];
+  /** `review.auto_review.skip_docs_only`: when true, PRs whose every changed file classifies as docs skip AI review.
+   *  null (default) ⇒ docs PRs reviewed as today. Empty changed-file list ⇒ NOT docs-only (fail-safe eligible). (#2063) */
+  skipDocsOnly: boolean | null;
   /** `review.auto_review.base_branches`: base-ref globs whose PRs ARE reviewed; empty/unset ⇒ every base. (#2041) */
   baseBranches: string[];
   /** `review.auto_review.auto_pause_after_reviewed_commits`: after N published AI reviews on this PR, pause further
@@ -428,6 +432,7 @@ export const EMPTY_AUTO_REVIEW_CONFIG: AutoReviewConfig = {
   ignoreAuthors: [],
   ignoreTitleKeywords: [],
   skipLabels: [],
+  skipDocsOnly: null,
   baseBranches: [],
   autoPauseAfterReviewedCommits: null,
 };
@@ -1772,6 +1777,7 @@ function autoReviewPresent(config: AutoReviewConfig): boolean {
     config.ignoreAuthors.length > 0 ||
     config.ignoreTitleKeywords.length > 0 ||
     config.skipLabels.length > 0 ||
+    config.skipDocsOnly !== null ||
     config.baseBranches.length > 0 ||
     config.autoPauseAfterReviewedCommits !== null
   );
@@ -1790,6 +1796,7 @@ function parseAutoReviewConfig(value: JsonValue | undefined, warnings: string[])
     ignoreAuthors: parseManifestGlobList(record.ignore_authors, "review.auto_review.ignore_authors", warnings),
     ignoreTitleKeywords: parseAutoReviewTitleKeywords(record.ignore_title_keywords, warnings),
     skipLabels: parseAutoReviewSkipLabels(record.skip_labels, warnings),
+    skipDocsOnly: normalizeOptionalBoolean(record.skip_docs_only, "review.auto_review.skip_docs_only", warnings),
     baseBranches: parseManifestGlobList(record.base_branches, "review.auto_review.base_branches", warnings),
     autoPauseAfterReviewedCommits: normalizeOptionalNonNegativeInt(
       record.auto_pause_after_reviewed_commits,
@@ -2156,6 +2163,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     if (review.autoReview.ignoreAuthors.length > 0) autoReview.ignore_authors = [...review.autoReview.ignoreAuthors];
     if (review.autoReview.ignoreTitleKeywords.length > 0) autoReview.ignore_title_keywords = [...review.autoReview.ignoreTitleKeywords];
     if (review.autoReview.skipLabels.length > 0) autoReview.skip_labels = [...review.autoReview.skipLabels];
+    if (review.autoReview.skipDocsOnly !== null) autoReview.skip_docs_only = review.autoReview.skipDocsOnly;
     if (review.autoReview.baseBranches.length > 0) autoReview.base_branches = [...review.autoReview.baseBranches];
     if (review.autoReview.autoPauseAfterReviewedCommits !== null) {
       autoReview.auto_pause_after_reviewed_commits = review.autoReview.autoPauseAfterReviewedCommits;
@@ -2231,6 +2239,7 @@ export type AutoReviewEligibilityInput = {
   author: string | null;
   title: string;
   labels: readonly string[];
+  changedPaths: readonly string[];
   baseRef: string | null;
   reviewedCommitCount: number;
 };
@@ -2256,6 +2265,11 @@ export function evaluateAutoReviewSkipReason(config: AutoReviewConfig, input: Au
       return "review skipped (label)";
     }
   }
+  if (config.skipDocsOnly === true && input.changedPaths.length > 0) {
+    if (input.changedPaths.every((path) => classifyChangedFile(path) === "docs")) {
+      return "review skipped (docs only)";
+    }
+  }
   if (config.baseBranches.length > 0) {
     const baseRef = input.baseRef?.trim() ?? "";
     if (!baseRef || !config.baseBranches.some((glob) => matchesManifestPath(baseRef, glob))) {
@@ -2277,6 +2291,7 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
   author: string | null;
   title: string;
   labels?: readonly string[] | undefined;
+  changedPaths?: readonly string[] | undefined;
   baseRef: string | null;
   reviewedCommitCount?: number | undefined;
 }): string | null {
@@ -2286,6 +2301,7 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
     author: args.author,
     title: args.title,
     labels: args.labels ?? [],
+    changedPaths: args.changedPaths ?? [],
     baseRef: args.baseRef,
     reviewedCommitCount: args.reviewedCommitCount ?? 0,
   });
