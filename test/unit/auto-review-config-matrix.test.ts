@@ -22,6 +22,8 @@ describe("review.auto_review parse ↔ reviewConfigToJson round-trip (#2071)", (
     { name: "skip_drafts: false", autoReview: { skip_drafts: false } },
     { name: "ignore_authors", autoReview: { ignore_authors: ["*[bot]", "dependabot[bot]"] } },
     { name: "ignore_title_keywords", autoReview: { ignore_title_keywords: ["WIP", "draft"] } },
+    { name: "skip_docs_only: true", autoReview: { skip_docs_only: true } },
+    { name: "skip_docs_only: false", autoReview: { skip_docs_only: false } },
     { name: "base_branches", autoReview: { base_branches: ["main", "release/**"] } },
     { name: "auto_pause_after_reviewed_commits", autoReview: { auto_pause_after_reviewed_commits: 3 } },
     {
@@ -85,6 +87,7 @@ describe("evaluateAutoReviewSkipReason predicate precedence (#2071)", () => {
   };
 
   const allConfigured: AutoReviewConfig = {
+    ...EMPTY_AUTO_REVIEW_CONFIG,
     skipDrafts: true,
     ignoreAuthors: ["*[bot]"],
     ignoreTitleKeywords: ["wip"],
@@ -117,6 +120,12 @@ describe("evaluateAutoReviewSkipReason predicate precedence (#2071)", () => {
       config: { ...allConfigured, skipDrafts: false, ignoreAuthors: [] },
       input: { ...allTriggers, isDraft: false, author: "alice" },
       reason: "review skipped (WIP title)",
+    },
+    {
+      name: "docs only when earlier filters are off",
+      config: { ...allConfigured, skipDrafts: false, ignoreAuthors: [], ignoreTitleKeywords: [], skipDocsOnly: true },
+      input: { ...allTriggers, isDraft: false, author: "alice", title: "docs: readme", changedPaths: ["README.md"] },
+      reason: "review skipped (docs only)",
     },
     {
       name: "base branch when earlier filters are off",

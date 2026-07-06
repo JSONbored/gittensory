@@ -6329,10 +6329,11 @@ export async function resolveAutoReviewSkipForPullRequest(
     isFrozenForManualReview: boolean;
     forceAiReview?: boolean | undefined;
     repoFullName: string;
-    pr: { isDraft?: boolean | null; title: string; baseRef?: string | null; number: number; labels?: readonly string[]; changedPaths?: readonly string[] };
+    pr: { isDraft?: boolean | null; title: string; baseRef?: string | null; number: number; labels?: readonly string[] };
     author: string | null;
     deliveryId: string;
     headSha: string | null | undefined;
+    changedPaths?: readonly string[] | undefined;
   },
 ): Promise<{ skipReason: string | null; reviewManifest: FocusManifest | null }> {
   if (args.authorBlacklisted || args.isFrozenForManualReview) {
@@ -6341,7 +6342,7 @@ export async function resolveAutoReviewSkipForPullRequest(
   const reviewManifest = await loadRepoFocusManifest(env, args.repoFullName).catch(() => null);
   const reviewedCommitCount = await countPublishedAiReviewHeads(env, args.repoFullName, args.pr.number).catch(() => 0);
   const autoReviewConfig = resolveReviewAutoReviewConfig(reviewManifest);
-  let changedPaths = args.pr.changedPaths ?? [];
+  let changedPaths = args.changedPaths ?? [];
   if (autoReviewConfig.skipDocsOnly === true && changedPaths.length === 0) {
     const storedFiles = await listPullRequestFiles(env, args.repoFullName, args.pr.number).catch(() => []);
     changedPaths = storedFiles.map((file) => file.path);
@@ -6353,9 +6354,9 @@ export async function resolveAutoReviewSkipForPullRequest(
     author: args.author,
     title: args.pr.title,
     labels: args.pr.labels ?? [],
+    changedPaths,
     baseRef: args.pr.baseRef ?? null,
     reviewedCommitCount,
-    changedPaths,
   });
   if (skipReason) {
     await auditPullRequestAutoReviewSkip(env, {
@@ -8159,6 +8160,7 @@ async function maybePublishPrPublicSurface(
       pr.labels.some((label) => label.toLowerCase() === manualReviewLabel.toLowerCase());
     let reviewManifestForAutoReview: FocusManifest | null = null;
     let autoReviewSkipReason: string | null = null;
+    const autoReviewChangedPaths = (await getReviewFiles()).map((file) => file.path);
     ({
       skipReason: autoReviewSkipReason,
       reviewManifest: reviewManifestForAutoReview,
@@ -8167,10 +8169,11 @@ async function maybePublishPrPublicSurface(
       isFrozenForManualReview,
       forceAiReview: webhook.forceAiReview,
       repoFullName,
-      pr: { number: pr.number, title: pr.title, baseRef: pr.baseRef ?? null, isDraft: pr.isDraft ?? null, labels: pr.labels, changedPaths: pr.changedFiles ?? [] },
+      pr: { number: pr.number, title: pr.title, baseRef: pr.baseRef ?? null, isDraft: pr.isDraft ?? null, labels: pr.labels },
       author,
       deliveryId: webhook.deliveryId,
       headSha: advisory.headSha ?? null,
+      changedPaths: autoReviewChangedPaths,
     }));
     // review.changed_files_summary (#1957) + review.effort_score (#1955): both deterministic, no-AI — resolve
     // them here, UNCONDITIONALLY, rather than inside the aiReviewWillRun-gated closure below. These sections

@@ -417,7 +417,8 @@ export type AutoReviewConfig = {
   ignoreTitleKeywords: string[];
   /** `review.auto_review.skip_labels`: case-insensitive PR label names that skip AI review. Empty ⇒ no skip. (#2062) */
   skipLabels: string[];
-  /** `review.auto_review.skip_docs_only`: when true, docs-only PRs skip AI review. null (default) ⇒ reviewed as today. (#2063) */
+  /** `review.auto_review.skip_docs_only`: when true, PRs whose every changed file classifies as docs skip AI review.
+   *  null (default) ⇒ docs PRs reviewed as today. Empty changed-file list ⇒ NOT docs-only (fail-safe eligible). (#2063) */
   skipDocsOnly: boolean | null;
   /** `review.auto_review.base_branches`: base-ref globs whose PRs ARE reviewed; empty/unset ⇒ every base. (#2041) */
   baseBranches: string[];
@@ -2238,9 +2239,9 @@ export type AutoReviewEligibilityInput = {
   author: string | null;
   title: string;
   labels: readonly string[];
+  changedPaths: readonly string[];
   baseRef: string | null;
   reviewedCommitCount: number;
-  changedPaths: readonly string[];
 };
 
 /** Evaluate `review.auto_review` eligibility. Returns a quiet skip reason string, or null when AI review should proceed. (#1954) */
@@ -2288,9 +2289,9 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
   author: string | null;
   title: string;
   labels?: readonly string[] | undefined;
+  changedPaths?: readonly string[] | undefined;
   baseRef: string | null;
   reviewedCommitCount?: number | undefined;
-  changedPaths?: readonly string[] | undefined;
 }): string | null {
   if (args.forceAiReview === true) return null;
   return evaluateAutoReviewSkipReason(resolveAutoReviewConfig(args.manifest), {
@@ -2298,9 +2299,9 @@ export function resolvePullRequestAutoReviewSkipReason(args: {
     author: args.author,
     title: args.title,
     labels: args.labels ?? [],
+    changedPaths: args.changedPaths ?? [],
     baseRef: args.baseRef,
     reviewedCommitCount: args.reviewedCommitCount ?? 0,
-    changedPaths: args.changedPaths ?? [],
   });
 }
 

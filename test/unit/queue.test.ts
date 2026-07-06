@@ -3290,7 +3290,7 @@ describe("queue processors", () => {
       expect(audit?.detail).toBe("review skipped (label)");
     });
 
-    it("skips AI review when review.auto_review.skip_docs_only matches an all-docs diff (#2063)", async () => {
+    it("skips AI review for docs-only PRs when review.auto_review.skip_docs_only is enabled (#2063)", async () => {
       let aiCalls = 0;
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -3303,7 +3303,7 @@ describe("queue processors", () => {
       await upsertRepoFocusManifest(env, "JSONbored/gittensory", { review: { auto_review: { skip_docs_only: true } } });
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
         number: 79,
-        title: "Docs only",
+        title: "docs: update readme",
         state: "open",
         draft: false,
         user: { login: "contributor" },
@@ -3319,10 +3319,10 @@ describe("queue processors", () => {
         const method = init?.method ?? "GET";
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
         if (url.includes("/pulls/79/files")) return Response.json([
-          { filename: "docs/guide.md", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+docs" },
-          { filename: "README.md", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+readme" },
+          { filename: "README.md", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+docs" },
+          { filename: "docs/guide.md", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+more" },
         ]);
-        if (url.endsWith("/pulls/79")) return Response.json({ number: 79, title: "Docs only", state: "open", draft: false, user: { login: "contributor" }, head: { sha: "a79" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.endsWith("/pulls/79")) return Response.json({ number: 79, title: "docs: update readme", state: "open", draft: false, user: { login: "contributor" }, head: { sha: "a79" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
         if (url.includes("/commits/a79/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
         if (url.includes("/commits/a79/status")) return Response.json({ state: "success", statuses: [] });
         if (url.includes("/issues/79/comments")) return method === "POST" ? Response.json({ id: 79 }, { status: 201 }) : Response.json([]);

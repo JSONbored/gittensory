@@ -57,6 +57,49 @@ describe("review.auto_review wiring (#1954)", () => {
     ).toBeNull();
   });
 
+  it("resolvePullRequestAutoReviewSkipReason: skips docs-only PRs when configured", () => {
+    const manifest = parseFocusManifest({ review: { auto_review: { skip_docs_only: true } } });
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "docs: update guide",
+        changedPaths: ["README.md", "docs/guide.md"],
+        baseRef: "main",
+      }),
+    ).toBe("review skipped (docs only)");
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "docs: update guide",
+        changedPaths: ["README.md", "src/a.ts"],
+        baseRef: "main",
+      }),
+    ).toBeNull();
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "docs: update guide",
+        changedPaths: [],
+        baseRef: "main",
+      }),
+    ).toBeNull();
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest,
+        isDraft: false,
+        author: "alice",
+        title: "docs: update guide",
+        baseRef: "main",
+      }),
+    ).toBeNull();
+  });
+
   it("resolvePullRequestAutoReviewSkipReason: matches the documented *[bot] author glob", () => {
     const manifest = parseFocusManifest({ review: { auto_review: { ignore_authors: ["*[bot]"] } } });
     expect(
@@ -170,10 +213,11 @@ describe("review.auto_review wiring (#1954)", () => {
         authorBlacklisted: false,
         isFrozenForManualReview: false,
         repoFullName: "acme/widgets",
-        pr: { number: 9, title: "docs", baseRef: "main", isDraft: false, labels: [], changedPaths: ["docs/guide.md"] },
+        pr: { number: 8, title: "docs", baseRef: "main", isDraft: false, labels: [] },
         author: "alice",
-        deliveryId: "d9",
-        headSha: "sha9",
+        deliveryId: "d8",
+        headSha: "sha8",
+        changedPaths: ["README.md"],
       }),
     ).resolves.toEqual({ skipReason: "review skipped (docs only)", reviewManifest: docsManifest });
 
