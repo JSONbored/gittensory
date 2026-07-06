@@ -1622,4 +1622,7 @@ export const githubCommandsInternals = {
   snapshotFreshnessFromWarnings,
   refreshSections,
   askSections,
+  levenshteinDistance,
+  helpSections,
+  suggestCommand,
 };

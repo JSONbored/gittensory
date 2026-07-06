@@ -1989,6 +1989,30 @@ describe("suggestCommand (#2170)", () => {
     });
     expect(body).not.toContain("Did you mean");
   });
+
+  it("does not render did-you-mean when the typo is too far from any command", () => {
+    expect(suggestCommand("zzzz")).toBeNull();
+    const far = parseGittensoryMentionCommand("@gittensory zzzz")!;
+    expect(far).toMatchObject({ name: "help", unknownVerb: "zzzz" });
+    const body = buildPublicAgentCommandComment({
+      command: far,
+      repo: null,
+      issue: { number: 1, title: "t", state: "open" },
+      pullRequest: null,
+      actorKind: "maintainer",
+    });
+    expect(body).not.toContain("Did you mean");
+  });
+
+  it("covers levenshtein edge branches and the help-section no-suggestion arm", () => {
+    const { levenshteinDistance, helpSections } = githubCommandsInternals;
+    expect(levenshteinDistance("", "")).toBe(0);
+    expect(levenshteinDistance("", "help")).toBe(4);
+    expect(levenshteinDistance("help", "")).toBe(4);
+    expect(levenshteinDistance("help", "help")).toBe(0);
+    expect(helpSections("zzzz").join("\n")).not.toContain("Did you mean");
+    expect(helpSections("prefliht").join("\n")).toContain("Did you mean `@gittensory preflight`?");
+  });
 });
 
 describe("ask citation helpers", () => {
