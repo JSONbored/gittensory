@@ -4119,12 +4119,21 @@ export async function getLatestPublishedAiReview(
   };
 }
 
-/** Count distinct PR head SHAs that already received a published AI review — used by `review.auto_review.auto_pause_after_reviewed_commits`. (#2042) */
-export async function countPublishedAiReviewHeads(env: Env, repoFullName: string, pullNumber: number): Promise<number> {
-  const row = await env.DB.prepare(
-    "SELECT COUNT(DISTINCT head_sha) AS cnt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND published_at IS NOT NULL",
-  )
-    .bind(repoFullName, pullNumber)
+/** Count distinct prior PR head SHAs that already received a published AI review — used by `review.auto_review.auto_pause_after_reviewed_commits`. (#2042) */
+export async function countPublishedAiReviewHeads(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  currentHeadSha?: string | null | undefined,
+): Promise<number> {
+  const currentHeadClause = currentHeadSha ? " AND head_sha != ?" : "";
+  const row = await env.DB
+    .prepare(
+      `SELECT COUNT(DISTINCT head_sha) AS cnt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND published_at IS NOT NULL${currentHeadClause}`,
+    )
+    .bind(
+      ...(currentHeadSha ? [repoFullName, pullNumber, currentHeadSha] : [repoFullName, pullNumber]),
+    )
     .first<{ cnt: number }>();
   /* v8 ignore next -- SQL aggregate count always returns one row; fallback protects D1 driver anomalies. */
   return row?.cnt ?? 0;

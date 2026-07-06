@@ -485,6 +485,17 @@ describe("AI review cache (#1)", () => {
       expect(await countPublishedAiReviewHeads(env, "o/r", 61)).toBe(2);
     });
 
+    it("excludes the current published head from the pause threshold (regression for cached blocker suppression)", async () => {
+      const env = createTestEnv();
+      await putCachedAiReview(env, "o/r", 63, "sha1", "block", { notes: "first", reviewerCount: 1 });
+      await markAiReviewPublished(env, "o/r", 63, "sha1");
+      await putCachedAiReview(env, "o/r", 63, "sha2", "block", { notes: "current", reviewerCount: 1 });
+      await markAiReviewPublished(env, "o/r", 63, "sha2");
+
+      expect(await countPublishedAiReviewHeads(env, "o/r", 63, "sha2")).toBe(1);
+      expect(await countPublishedAiReviewHeads(env, "o/r", 63, null)).toBe(2);
+    });
+
     it("returns 0 when the count query yields no row (fail-safe)", async () => {
       const env = createTestEnv();
       const prepareSpy = vi.spyOn(env.DB, "prepare").mockReturnValue({

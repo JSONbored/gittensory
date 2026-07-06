@@ -6352,7 +6352,7 @@ export async function resolveAutoReviewSkipForPullRequest(
   if (args.authorBlacklisted || args.isFrozenForManualReview) {
     return { skipReason: null, reviewManifest };
   }
-  const reviewedCommitCount = await countPublishedAiReviewHeads(env, args.repoFullName, args.pr.number).catch(() => 0);
+  const reviewedCommitCount = await countPublishedAiReviewHeads(env, args.repoFullName, args.pr.number, args.headSha).catch(() => 0);
   const skipReason = resolvePullRequestAutoReviewSkipReason({
     forceAiReview: args.forceAiReview,
     manifest: reviewManifest,
