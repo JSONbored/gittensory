@@ -71,6 +71,42 @@ describe("buildBeforeAfterCollapsible", () => {
     expect(c?.body).not.toContain("<h2>✅ FORGED APPROVAL</h2>");
     expect(c?.body).not.toContain("<a href=x>maintainer click here</a>");
   });
+
+  it("renders a dash in the Diff column and the plain caption when no route has a diff image (#3674, e.g. hosted builds)", () => {
+    const c = buildBeforeAfterCollapsible(routes);
+    expect(c?.body).toContain("| Route | Viewport | Before (production) | After (this PR's preview) | Diff |");
+    expect(c?.body).toContain("| `/app/analytics` | desktop | <a href=\"https://api.example.dev/gittensory/shot?key=gittensory/shots/abc.png\"");
+    expect(c?.body).toMatch(/\| — \|\s*$/m);
+    expect(c?.body).not.toContain("Diff highlights exactly what changed");
+  });
+
+  it("renders a clickable Diff thumbnail and the diff-aware caption when a route has a diff image (#3674, self-host only)", () => {
+    const c = buildBeforeAfterCollapsible([
+      {
+        path: "/app/analytics",
+        beforeUrl: "https://api.example.dev/gittensory/shot?key=gittensory/shots/abc.png",
+        afterUrl: "https://api.example.dev/gittensory/shot?key=gittensory/shots/def.png",
+        diffUrl: "https://api.example.dev/gittensory/shot?key=gittensory/shots/abc-diff.png",
+      },
+    ]);
+    expect(c?.body).toContain('<a href="https://api.example.dev/gittensory/shot?key=gittensory/shots/abc-diff.png"');
+    expect(c?.body).toContain('alt="diff /app/analytics"');
+    expect(c?.body).toContain("Diff highlights exactly what changed");
+  });
+
+  it("renders a diffUrlMobile thumbnail on the mobile row independently of the desktop diff cell", () => {
+    const c = buildBeforeAfterCollapsible([
+      {
+        path: "/app/analytics",
+        beforeUrlMobile: "https://api.example.dev/gittensory/shot?key=gittensory/shots/abc-m.png",
+        afterUrlMobile: "https://api.example.dev/gittensory/shot?key=gittensory/shots/def-m.png",
+        diffUrlMobile: "https://api.example.dev/gittensory/shot?key=gittensory/shots/abc-diff-m.png",
+      },
+    ]);
+    expect(c?.body).toContain("| `/app/analytics` | mobile |");
+    expect(c?.body).toContain('<a href="https://api.example.dev/gittensory/shot?key=gittensory/shots/abc-diff-m.png"');
+    expect(c?.body).toContain('alt="diff /app/analytics (mobile)"');
+  });
 });
 
 describe("buildUnifiedCommentBody beforeAfter wiring", () => {

@@ -20,6 +20,7 @@ import {
   parseRepo,
 } from "./preview-url";
 import { captureShot, DESKTOP_VIEWPORT, MOBILE_VIEWPORT, type Viewport } from "./shot";
+import { compareCapturedScreenshots, isVisualDiffAvailable, type VisualDiffOutcome } from "./pixel-diff";
 
 const NAMESPACE = "gittensory";
 const DEFAULT_ROUTES = ["/"];
@@ -28,13 +29,17 @@ const DEFAULT_ROUTE_FILE = /apps\/gittensory-ui\/src\/routes\/(.+?)\.(?:tsx|jsx)
 // wall-clock — Browser Rendering is the costliest binding.
 const MAX_ROUTES = 2;
 
-/** A single captured route's before/after shot URLs (desktop + mobile). undefined slot ⇒ a dash cell. */
+/** A single captured route's before/after shot URLs (desktop + mobile), plus an optional pixel-diff overlay
+ *  per viewport (#3674) — self-host only (isVisualDiffAvailable), and only when the diff clears the visual-
+ *  diff module's own noise threshold; undefined slot ⇒ a dash cell either way. */
 export interface CaptureRoute {
   path: string;
   beforeUrl?: string | undefined;
   beforeUrlMobile?: string | undefined;
   afterUrl?: string | undefined;
   afterUrlMobile?: string | undefined;
+  diffUrl?: string | undefined;
+  diffUrlMobile?: string | undefined;
 }
 
 /** The capture pipeline's result: the rendered routes, plus whether a preview build is still pending. */
@@ -143,7 +148,12 @@ async function capturePage(
   slot: "before" | "after",
   viewportName: "desktop" | "mobile",
   viewport: Viewport,
-): Promise<{ url?: string | undefined }> {
+  // #3674: when true, ALSO resolve the raw PNG bytes (not just the URL) so the caller can pixel-diff
+  // before+after — including on a cache hit, which is the COMMON case for "before" (the same production
+  // shot is reused across many PR reviews). Costs one extra read on a cache hit; false (every existing
+  // caller) skips it entirely, so this is zero-cost unless a caller opts in.
+  includeBytes = false,
+): Promise<{ url?: string | undefined; png?: Uint8Array | undefined }> {
   if (!page) return {};
   const shotBase = env.PUBLIC_API_ORIGIN; // this worker's public origin (serves /gittensory/shot)
   const onDemand = shotBase ? `${shotBase}/${NAMESPACE}/shot?url=${encodeURIComponent(page)}&w=${viewport.width}&h=${viewport.height}` : page;
@@ -154,7 +164,11 @@ async function capturePage(
     const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.png`;
     const url = shotBase ? `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}` : onDemand;
     const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
-    if (cached) return { url };
+    if (cached) {
+      if (!includeBytes) return { url };
+      const bytes = await new Response(cached.body).arrayBuffer().then((buf) => new Uint8Array(buf)).catch(() => undefined);
+      return { url, ...(bytes ? { png: bytes } : {}) };
+    }
     const { png, authWalled } = await captureShot(env, page, viewport).catch(() => ({ png: null, authWalled: false }));
     // A protected route that redirected to a sign-in wall: show an honest "requires authentication"
     // placeholder rather than caching/serving a screenshot of the login screen.
@@ -163,10 +177,29 @@ async function capturePage(
     }
     if (png) {
       await env.REVIEW_AUDIT.put(key, png, { httpMetadata: { contentType: "image/png" } }).catch(() => undefined);
-      return { url };
+      return { url, ...(includeBytes ? { png } : {}) };
     }
   }
   return { url: onDemand };
+}
+
+/** Upload a computed diff-overlay PNG to the same store `capturePage` uses, returning its shot URL — or
+ *  undefined when there's no diff image (unchanged/new/removed/no-diff-provider), storage is unavailable, or
+ *  the upload fails. Mirrors capturePage's own key/URL scheme so the diff shares its caching story. */
+async function uploadDiffImage(
+  env: Env,
+  target: CaptureTarget,
+  path: string,
+  viewportName: "desktop" | "mobile",
+  diff: VisualDiffOutcome | null,
+): Promise<string | undefined> {
+  if (!diff?.diffImagePng) return undefined;
+  const shotBase = env.PUBLIC_API_ORIGIN;
+  if (!env.REVIEW_AUDIT || !shotBase) return undefined;
+  const fingerprint = await sha256Hex(`${target.headSha ?? target.prNumber}:diff:${viewportName}:${path}`);
+  const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}-diff.png`;
+  await env.REVIEW_AUDIT.put(key, diff.diffImagePng, { httpMetadata: { contentType: "image/png" } }).catch(() => undefined);
+  return `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}`;
 }
 
 /** Per-repo `review.visual` config, as resolved by the caller from the manifest (#3609 / #3610). Absent ⇒
@@ -229,6 +262,9 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
   const failedPlaceholder = shotBase ? `${shotBase}/${NAMESPACE}/shot?placeholder=failed` : undefined;
   const afterPlaceholder = previewFailed ? failedPlaceholder : loadingPlaceholder;
 
+  // #3674: resolved ONCE per call, not per route/viewport — false in every hosted build (see pixel-diff.ts),
+  // so capturePage never pays the extra cached-bytes-read cost unless self-host's real diff module is active.
+  const diffAvailable = isVisualDiffAvailable();
   const routes = resolveVisualRoutes(visualFiles, visualConfig?.routes);
   const captureRoutes: CaptureRoute[] = [];
   for (const path of routes) {
@@ -236,10 +272,22 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
     const afterPage = previewBase ? joinUrl(previewBase, path) : "";
     // Render desktop + mobile for each slot in parallel (4 PNGs/route) to bound wall-clock.
     const [beforeShot, beforeMobileShot, afterShot, afterMobileShot] = await Promise.all([
-      capturePage(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT),
-      capturePage(env, target, beforePage, "before", "mobile", MOBILE_VIEWPORT),
-      afterPage ? capturePage(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT) : Promise.resolve<{ url?: string | undefined }>({ url: afterPlaceholder }),
-      afterPage ? capturePage(env, target, afterPage, "after", "mobile", MOBILE_VIEWPORT) : Promise.resolve<{ url?: string | undefined }>({ url: afterPlaceholder }),
+      capturePage(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT, diffAvailable),
+      capturePage(env, target, beforePage, "before", "mobile", MOBILE_VIEWPORT, diffAvailable),
+      afterPage ? capturePage(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, diffAvailable) : Promise.resolve<{ url?: string | undefined; png?: Uint8Array | undefined }>({ url: afterPlaceholder }),
+      afterPage ? capturePage(env, target, afterPage, "after", "mobile", MOBILE_VIEWPORT, diffAvailable) : Promise.resolve<{ url?: string | undefined; png?: Uint8Array | undefined }>({ url: afterPlaceholder }),
+    ]);
+    // A diff needs BOTH sides' real bytes — a placeholder/dash slot (no preview yet, auth-walled, render
+    // failure) has no `png`, so compareCapturedScreenshots degrades to null exactly like a missing shot does.
+    const [desktopDiff, mobileDiff] = diffAvailable
+      ? await Promise.all([
+          compareCapturedScreenshots(beforeShot.png, afterShot.png),
+          compareCapturedScreenshots(beforeMobileShot.png, afterMobileShot.png),
+        ])
+      : [null, null];
+    const [diffUrl, diffUrlMobile] = await Promise.all([
+      uploadDiffImage(env, target, path, "desktop", desktopDiff),
+      uploadDiffImage(env, target, path, "mobile", mobileDiff),
     ]);
     captureRoutes.push({
       path,
@@ -247,6 +295,8 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
       beforeUrlMobile: beforeMobileShot.url,
       afterUrl: afterShot.url,
       afterUrlMobile: afterMobileShot.url,
+      ...(diffUrl ? { diffUrl } : {}),
+      ...(diffUrlMobile ? { diffUrlMobile } : {}),
     });
   }
   return { routes: captureRoutes, previewPending };

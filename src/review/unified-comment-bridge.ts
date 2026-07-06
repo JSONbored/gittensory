@@ -338,10 +338,13 @@ export type UnifiedCommentBridgeArgs = {
  * CLICKABLE THUMBNAILS: a small `<img>` (GitHub caps it to the column width) wrapped in an `<a href>` to the
  * SAME full-resolution shot, so a click opens the screenshot full-size. One row per route per viewport
  * (desktop / mobile), with the route path as the caption and a before (production) vs after (this PR's preview)
- * column. Emitted as TRUSTED raw HTML (`rawHtml: true`) so the `<a>/<img>` survive — public-safe by
- * construction: every value is a first-party minted /gittensory/shot URL or a route path (no private rubric /
- * scoring terms), and a stray `"` in a URL is neutralized so it can't break out of the attribute. Returns null
- * when nothing is renderable (no route has any shot URL), so the section is omitted rather than shown empty.
+ * column, plus a Diff column (#3674, self-host only) highlighting exactly what changed when a pixel-diff
+ * provider is available and finds a real visual difference — absent on hosted builds and any unchanged/no-diff
+ * cell, which render as a dash like every other missing shot. Emitted as TRUSTED raw HTML (`rawHtml: true`) so
+ * the `<a>/<img>` survive — public-safe by construction: every value is a first-party minted /gittensory/shot
+ * URL or a route path (no private rubric / scoring terms), and a stray `"` in a URL is neutralized so it can't
+ * break out of the attribute. Returns null when nothing is renderable (no route has any shot URL), so the
+ * section is omitted rather than shown empty.
  */
 export function buildBeforeAfterCollapsible(routes: CaptureRoute[]): UnifiedCollapsible | null {
   const attr = (value: string): string =>
@@ -355,22 +358,27 @@ export function buildBeforeAfterCollapsible(routes: CaptureRoute[]): UnifiedColl
   const cell = (url: string | undefined, label: string): string =>
     url ? `<a href="${attr(url)}" target="_blank" rel="noopener"><img width="360" alt="${attr(label)}" src="${attr(url)}"></a>` : "—";
   const rows: string[] = [];
+  let hasAnyDiff = false;
   for (const route of routes) {
     const path = markdownCode(route.path);
     if (route.beforeUrl || route.afterUrl) {
-      rows.push(`| ${path} | desktop | ${cell(route.beforeUrl, `before ${route.path}`)} | ${cell(route.afterUrl, `after ${route.path}`)} |`);
+      if (route.diffUrl) hasAnyDiff = true;
+      rows.push(`| ${path} | desktop | ${cell(route.beforeUrl, `before ${route.path}`)} | ${cell(route.afterUrl, `after ${route.path}`)} | ${cell(route.diffUrl, `diff ${route.path}`)} |`);
     }
     if (route.beforeUrlMobile || route.afterUrlMobile) {
-      rows.push(`| ${path} | mobile | ${cell(route.beforeUrlMobile, `before ${route.path} (mobile)`)} | ${cell(route.afterUrlMobile, `after ${route.path} (mobile)`)} |`);
+      if (route.diffUrlMobile) hasAnyDiff = true;
+      rows.push(`| ${path} | mobile | ${cell(route.beforeUrlMobile, `before ${route.path} (mobile)`)} | ${cell(route.afterUrlMobile, `after ${route.path} (mobile)`)} | ${cell(route.diffUrlMobile, `diff ${route.path} (mobile)`)} |`);
     }
   }
   if (rows.length === 0) return null;
   const body = [
-    "| Route | Viewport | Before (production) | After (this PR's preview) |",
-    "| --- | --- | --- | --- |",
+    "| Route | Viewport | Before (production) | After (this PR's preview) | Diff |",
+    "| --- | --- | --- | --- | --- |",
     ...rows,
     "",
-    "_Click any thumbnail to open the full-size screenshot. Before = production · After = this PR's preview deploy._",
+    hasAnyDiff
+      ? "_Click any thumbnail to open the full-size screenshot. Before = production · After = this PR's preview deploy · Diff highlights exactly what changed._"
+      : "_Click any thumbnail to open the full-size screenshot. Before = production · After = this PR's preview deploy._",
   ].join("\n");
   return { title: "Visual preview", body, rawHtml: true };
 }

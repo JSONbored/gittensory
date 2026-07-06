@@ -47,6 +47,11 @@ await esbuild.build({
         build.onResolve({ filter: /^cloudflare:workers$/ }, () => ({ path: resolve(root, "src/selfhost/cf-workers-shim.ts") }));
         build.onResolve({ filter: /^@cloudflare\/puppeteer$/ }, () => ({ path: resolve(root, "src/selfhost/stubs/puppeteer.ts") }));
         build.onResolve({ filter: /^agents\/mcp$/ }, () => ({ path: resolve(root, "src/selfhost/stubs/agents-mcp.ts") }));
+        // Worker-safe no-op → real pixel-diff (pixelmatch/pngjs need Node Buffer, forbidden in the Worker
+        // bundle by test/unit/worker-entry-boundary.test.ts). Exact match: capture.ts is the only value
+        // importer, always as "./pixel-diff" (same-directory sibling) — the stub's own `import type` back to
+        // the original is erased before bundling and never reaches this resolver.
+        build.onResolve({ filter: /^\.\/pixel-diff$/ }, () => ({ path: resolve(root, "src/selfhost/stubs/pixel-diff.ts") }));
       },
     },
   ],
