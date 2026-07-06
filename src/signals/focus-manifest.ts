@@ -342,6 +342,14 @@ export type FocusManifestReviewConfig = {
    *  source, same display-only (never touches the AI prompt) shape. null/false (default, absent) = no chip =
    *  byte-identical behavior. (#1955) */
   effortScore: boolean | null;
+  /** `review.test_generation` (#1972): when true, a diff that touches a small, precise set of boundary-condition
+   *  patterns (off-by-one array/index bounds, null/undefined branches, empty-collection checks — see
+   *  `src/signals/boundary-test-generation.ts`) with NO test evidence anywhere in the PR gets an additional
+   *  advisory finding plus a boundary-safe LOCAL-execution test-generation action spec (criteria/hints only,
+   *  never generated test code — mirrors the `src/mcp/local-write-tools.ts` no-cloud-write boundary). Purely
+   *  additive and deterministic; it never changes what `missingTestEvidence` already does. null/false (default,
+   *  absent) ⇒ byte-identical behavior — no boundary scan runs at all. */
+  testGeneration: boolean | null;
   /** `review.finding_categories`: when true, an inline finding is ALSO tagged with a category (security/
    *  correctness/performance/maintainability/tests/style) — the AI reviewer is asked to self-categorize, with a
    *  deterministic path/keyword fallback (`classifyFindingCategory`) covering whatever it omits. Only takes
@@ -695,7 +703,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -725,7 +733,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -1676,7 +1684,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, findingCategories: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -1716,6 +1724,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const suggestions = normalizeOptionalBoolean(r.suggestions, "review.suggestions", warnings);
   const changedFilesSummary = normalizeOptionalBoolean(r.changed_files_summary, "review.changed_files_summary", warnings);
   const effortScore = normalizeOptionalBoolean(r.effort_score, "review.effort_score", warnings);
+  const testGeneration = normalizeOptionalBoolean(r.test_generation, "review.test_generation", warnings);
   const findingCategories = normalizeOptionalBoolean(r.finding_categories, "review.finding_categories", warnings);
   const minFindingSeverity = normalizeOptionalEnum(
     r.min_finding_severity,
@@ -1745,6 +1754,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       suggestions !== null ||
       changedFilesSummary !== null ||
       effortScore !== null ||
+      testGeneration !== null ||
       findingCategories !== null ||
       minFindingSeverity !== null ||
       maxFindingsPresent(maxFindings) ||
@@ -1775,6 +1785,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     suggestions,
     changedFilesSummary,
     effortScore,
+    testGeneration,
     findingCategories,
     minFindingSeverity,
     maxFindings,
@@ -2234,6 +2245,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   if (review.suggestions !== null) out.suggestions = review.suggestions;
   if (review.changedFilesSummary !== null) out.changed_files_summary = review.changedFilesSummary;
   if (review.effortScore !== null) out.effort_score = review.effortScore;
+  if (review.testGeneration !== null) out.test_generation = review.testGeneration;
   if (review.findingCategories !== null) out.finding_categories = review.findingCategories;
   if (review.minFindingSeverity !== null) out.min_finding_severity = review.minFindingSeverity;
   if (maxFindingsPresent(review.maxFindings)) {
@@ -2481,6 +2493,15 @@ export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { 
  *  than inline in the processor. (#review-pre-merge-checks) */
 export function resolveReviewPreMergeChecks(manifest: FocusManifest | null): PreMergeCheck[] {
   return manifest?.review.preMergeChecks ?? [];
+}
+
+/** Resolve `review.test_generation` (#1972) from a possibly-null manifest (null = load failure ⇒ off). Deterministic/
+ *  display-only like `resolveReviewPreMergeChecks` — this never touches the AI reviewer prompt, only whether the
+ *  boundary-test-generation finding/spec (`src/signals/boundary-test-generation.ts`) is computed at all. Resolves to
+ *  a strict boolean — true ONLY when the manifest explicitly set `review.test_generation: true`; null/false/absent ⇒
+ *  false (byte-identical to today, no boundary scan runs). */
+export function resolveTestGenerationEnabled(manifest: FocusManifest | null): boolean {
+  return manifest?.review.testGeneration === true;
 }
 
 /** Resolve `review.enrichment` analyzer toggles from a possibly-null manifest (null = load failure ⇒ no toggles ⇒

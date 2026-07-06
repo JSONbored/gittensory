@@ -410,6 +410,13 @@ review:
   # effort_score: false
   # When true, the unified review comment gains a compact "review effort: N/5 (~M min)" chip.
 
+  # Boundary-safe test-generation advisory (#1972). Bool | null. Default: null/false -- byte-identical (no
+  # boundary scan runs at all). When true, a diff that touches a small, precise set of boundary-condition
+  # patterns (off-by-one array/index bounds, null/undefined branches, empty-collection checks) with NO test
+  # evidence anywhere in the PR gets an advisory finding plus a LOCAL-execution test-generation action spec
+  # (criteria/hints for your OWN agent to scaffold tests with -- gittensory never writes or runs test code).
+  # test_generation: false
+
   # Display-only floor for inline AI findings (`critical` | `major` | `minor` | `nitpick`). Findings below the
   # configured level are suppressed from inline comments — never from gate blockers. Default: null (show all).
   # min_finding_severity: major
@@ -802,6 +809,11 @@ settings:
 #   # compact "review effort: N/5 (~M min)" chip -- a deterministic, no-AI complexity/time estimate from the
 #   # changed files' added-line volume and file-type mix. Bool or null. Default: null/false.
 #   effort_score: false
+#   # When true, a diff touching a small, precise set of boundary-condition patterns (off-by-one array/index
+#   # bounds, null/undefined branches, empty-collection checks) with no test evidence in the PR gets an
+#   # advisory finding plus a LOCAL-execution test-generation action spec (criteria/hints only -- never
+#   # generated test code; your own agent scaffolds it). Bool or null. Default: null/false.
+#   test_generation: false
 #   # When true, an inline finding is ALSO tagged with a category (security/correctness/performance/
 #   # maintainability/tests/style) -- the AI reviewer self-categorizes, with a deterministic path/keyword
 #   # fallback for whatever it omits. Only takes effect when inline_comments is already on. Bool or null.

@@ -122,6 +122,7 @@ import { MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment, buildSlopAssessment } from "../signals/slop";
+import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec, detectBoundaryTouches } from "../signals/boundary-test-generation";
 import { buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
@@ -768,6 +769,23 @@ const checkIssueSlopShape = {
 
 const checkIssueSlopOutputSchema = checkSlopRiskOutputSchema;
 
+// Boundary-safe test-generation suggestion (#1972): pure local-metadata, like checkSlopRisk — the agent
+// supplies changed-file paths + patch text (never full file content) plus any test evidence it already has.
+// Advisory-only; this tool never blocks or writes anything — it only returns criteria/hints for the caller's
+// OWN agent to scaffold tests from (mirrors the local-write-tools.ts no-cloud-write boundary).
+const suggestBoundaryTestsShape = {
+  changedFiles: z
+    .array(z.object({ path: z.string().min(1).max(400), patch: z.string().max(20000).optional() }))
+    .max(500),
+  tests: z.array(z.string().max(400)).max(2000).optional(),
+  testFiles: z.array(z.string().max(400)).max(2000).optional(),
+};
+
+const suggestBoundaryTestsOutputSchema = {
+  finding: z.unknown().optional(),
+  spec: z.unknown().optional(),
+};
+
 const predictGateOutputSchema = {
   predicted: z.boolean().optional(),
   basis: z.string().optional(),
@@ -1232,6 +1250,17 @@ export class GittensoryMcp {
         outputSchema: checkIssueSlopOutputSchema,
       },
       async (input) => this.toolResult(await this.checkIssueSlop(input)),
+    );
+
+    server.registerTool(
+      "gittensory_suggest_boundary_tests",
+      {
+        description:
+          "Boundary-safe test-generation suggestion (#1972): scan changed-file patches for a small, precise set of boundary-condition patterns (off-by-one array/index bounds, null/undefined branches, empty-collection checks) with no test evidence in the diff, and return a LOCAL-execution action spec (criteria/hints only — never generated test code) for your OWN agent to scaffold tests with. Advisory-only; never blocks, never writes.",
+        inputSchema: suggestBoundaryTestsShape,
+        outputSchema: suggestBoundaryTestsOutputSchema,
+      },
+      async (input) => this.toolResult(this.suggestBoundaryTests(input)),
     );
 
     server.registerTool(
@@ -2220,6 +2249,16 @@ export class GittensoryMcp {
     return {
       summary: `Issue slop risk: ${assessment.band}.`,
       data: { band: assessment.band, findings: assessment.findings } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private suggestBoundaryTests(input: z.infer<z.ZodObject<typeof suggestBoundaryTestsShape>>): ToolPayload {
+    const touches = detectBoundaryTouches(input.changedFiles);
+    const finding = buildBoundaryTestGenerationFinding({ files: input.changedFiles, tests: input.tests, testFiles: input.testFiles });
+    const spec = finding ? buildBoundaryTestGenerationSpec(touches) : null;
+    return {
+      summary: finding ? "Boundary-condition code changed without test evidence." : "No boundary-condition gap detected.",
+      data: { finding, spec } as unknown as Record<string, unknown>,
     };
   }
 
