@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addedLineCount, buildUnifiedReviewDiff, diffFilePriority, keepHighSignalHunks } from "../../src/review/review-diff";
+import { addedLineCount, buildUnifiedReviewDiff, diffFilePriority, keepHighSignalHunks, totalAddedLineCount } from "../../src/review/review-diff";
 
 describe("diffFilePriority — source survives, noise drops first", () => {
   it("ranks source(0) < tests(1) < docs(2) < lockfiles/generated(4)", () => {
@@ -54,6 +54,20 @@ describe("addedLineCount — counts +lines, ignores +++ header", () => {
     expect(addedLineCount("@@\n+a\n+b\n-c\n d")).toBe(2);
     expect(addedLineCount("+++ b/file.ts\n+real")).toBe(1);
     expect(addedLineCount(undefined)).toBe(0);
+  });
+});
+
+describe("totalAddedLineCount — sums added lines across PR files (#2065)", () => {
+  it("aggregates patch counts and treats missing patches as zero", () => {
+    expect(totalAddedLineCount([
+      { patch: "@@\n+a\n+b" },
+      { patch: "@@\n+c" },
+      { patch: null },
+      { payload: { patch: "@@\n+d" } },
+      { payload: {} },
+      {},
+    ])).toBe(4);
+    expect(totalAddedLineCount([])).toBe(0);
   });
 });
 

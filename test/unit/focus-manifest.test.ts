@@ -3091,6 +3091,8 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
       ignoreTitleKeywords: ["WIP", "draft"],
       skipLabels: ["do-not-review", "wip"],
       skipDocsOnly: null,
+      maxAddedLines: 0,
+      maxFiles: 0,
       baseBranches: ["main", "release/**"],
       autoPauseAfterReviewedCommits: null,
     });
@@ -3122,7 +3124,7 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
 
   it("evaluateAutoReviewSkipReason: byte-identical when unset; skips with deterministic reasons when configured", () => {
     const empty = { ...EMPTY_AUTO_REVIEW_CONFIG };
-    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], baseRef: "develop", reviewedCommitCount: 0 };
+    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], addedLineCount: 0, changedFileCount: 0, baseRef: "develop", reviewedCommitCount: 0 };
     expect(evaluateAutoReviewSkipReason(empty, input)).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: true })).toBe("review skipped (draft)");
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: false })).toBeNull();
@@ -3142,6 +3144,12 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: ["README.md", "src/a.ts"] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: true }, { ...input, changedPaths: [] })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDocsOnly: false }, { ...input, changedPaths: ["README.md"] })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxAddedLines: 10 }, { ...input, addedLineCount: 11 })).toBe("review skipped (too large)");
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxAddedLines: 10 }, { ...input, addedLineCount: 10 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxAddedLines: 0 }, { ...input, addedLineCount: 999 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxFiles: 3 }, { ...input, changedFileCount: 4 })).toBe("review skipped (too large)");
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxFiles: 3 }, { ...input, changedFileCount: 3 })).toBeNull();
+    expect(evaluateAutoReviewSkipReason({ ...empty, maxFiles: 0 }, { ...input, changedFileCount: 99 })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, baseBranches: ["main"] }, { ...input, baseRef: "develop" })).toBe(
       "review skipped (base branch out of scope)",
     );
@@ -3194,8 +3202,25 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(reviewConfigToJson(labelsOnly.review)).toEqual({ auto_review: { skip_labels: ["do-not-review"] } });
     const docsOnly = parseFocusManifest({ review: { auto_review: { skip_docs_only: true } } });
     expect(reviewConfigToJson(docsOnly.review)).toEqual({ auto_review: { skip_docs_only: true } });
+    const linesCap = parseFocusManifest({ review: { auto_review: { max_added_lines: 500 } } });
+    expect(reviewConfigToJson(linesCap.review)).toEqual({ auto_review: { max_added_lines: 500 } });
+    const filesCap = parseFocusManifest({ review: { auto_review: { max_files: 25 } } });
+    expect(reviewConfigToJson(filesCap.review)).toEqual({ auto_review: { max_files: 25 } });
     const basesOnly = parseFocusManifest({ review: { auto_review: { base_branches: ["main"] } } });
     expect(reviewConfigToJson(basesOnly.review)).toEqual({ auto_review: { base_branches: ["main"] } });
+  });
+
+  it("warns on invalid max_added_lines and max_files values", () => {
+    const badLines = parseFocusManifest({ review: { auto_review: { max_added_lines: -1 } } });
+    expect(badLines.review.autoReview.maxAddedLines).toBe(0);
+    expect(badLines.warnings.some((w) => /max_added_lines.*non-negative integer/.test(w))).toBe(true);
+    const badFiles = parseFocusManifest({ review: { auto_review: { max_files: "many" } } });
+    expect(badFiles.review.autoReview.maxFiles).toBe(0);
+    expect(badFiles.warnings.some((w) => /max_files.*non-negative integer/.test(w))).toBe(true);
+    const explicitZero = parseFocusManifest({ review: { auto_review: { max_added_lines: 0, max_files: 0 } } });
+    expect(explicitZero.review.autoReview.maxAddedLines).toBe(0);
+    expect(explicitZero.review.autoReview.maxFiles).toBe(0);
+    expect(reviewConfigToJson(explicitZero.review)).toBeNull();
   });
 
   it("warns on invalid skip_docs_only values and round-trips explicit false", () => {

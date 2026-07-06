@@ -35,6 +35,19 @@ export function addedLineCount(patch: string | undefined): number {
   return n;
 }
 
+/** Sum added-line counts across a PR file list — used by auto-review size-cap eligibility (#2065). */
+export function totalAddedLineCount(
+  files: readonly { patch?: string | null | undefined; payload?: { patch?: unknown } | null | undefined }[],
+): number {
+  let total = 0;
+  for (const file of files) {
+    const patch =
+      file.patch ?? (typeof file.payload?.patch === "string" ? file.payload.patch : undefined);
+    total += addedLineCount(patch);
+  }
+  return total;
+}
+
 /** Split a unified patch into hunks (each starting at an `@@` header); any preamble stays as hunk 0. */
 function splitHunks(patch: string): string[] {
   const hunks: string[] = [];

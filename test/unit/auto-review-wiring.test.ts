@@ -100,6 +100,65 @@ describe("review.auto_review wiring (#1954)", () => {
     ).toBeNull();
   });
 
+  it("resolvePullRequestAutoReviewSkipReason: skips oversized PRs when size caps are configured", () => {
+    const linesManifest = parseFocusManifest({ review: { auto_review: { max_added_lines: 10 } } });
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest: linesManifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: big change",
+        addedLineCount: 11,
+        changedFileCount: 1,
+        baseRef: "main",
+      }),
+    ).toBe("review skipped (too large)");
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest: linesManifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: big change",
+        addedLineCount: 10,
+        changedFileCount: 1,
+        baseRef: "main",
+      }),
+    ).toBeNull();
+
+    const filesManifest = parseFocusManifest({ review: { auto_review: { max_files: 2 } } });
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest: filesManifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: wide change",
+        addedLineCount: 1,
+        changedFileCount: 3,
+        baseRef: "main",
+      }),
+    ).toBe("review skipped (too large)");
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest: filesManifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: wide change",
+        addedLineCount: 1,
+        changedFileCount: 2,
+        baseRef: "main",
+      }),
+    ).toBeNull();
+    expect(
+      resolvePullRequestAutoReviewSkipReason({
+        manifest: filesManifest,
+        isDraft: false,
+        author: "alice",
+        title: "feat: wide change",
+        baseRef: "main",
+      }),
+    ).toBeNull();
+  });
+
   it("resolvePullRequestAutoReviewSkipReason: matches the documented *[bot] author glob", () => {
     const manifest = parseFocusManifest({ review: { auto_review: { ignore_authors: ["*[bot]"] } } });
     expect(
@@ -220,6 +279,23 @@ describe("review.auto_review wiring (#1954)", () => {
         changedPaths: ["README.md"],
       }),
     ).resolves.toEqual({ skipReason: "review skipped (docs only)", reviewManifest: docsManifest });
+
+    const sizeManifest = parseFocusManifest({ review: { auto_review: { max_added_lines: 1 } } });
+    loadSpy.mockResolvedValueOnce(sizeManifest);
+    await expect(
+      resolveAutoReviewSkipForPullRequest({} as Env, {
+        authorBlacklisted: false,
+        isFrozenForManualReview: false,
+        repoFullName: "acme/widgets",
+        pr: { number: 9, title: "feat", baseRef: "main", isDraft: false, labels: [] },
+        author: "alice",
+        deliveryId: "d9",
+        headSha: "sha9",
+        changedPaths: ["src/a.ts"],
+        addedLineCount: 2,
+        changedFileCount: 1,
+      }),
+    ).resolves.toEqual({ skipReason: "review skipped (too large)", reviewManifest: sizeManifest });
 
     loadSpy.mockRejectedValueOnce(new Error("manifest unavailable"));
     await expect(

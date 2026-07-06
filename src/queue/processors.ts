@@ -334,7 +334,7 @@ import {
   type ContributorProfile,
 } from "../signals/engine";
 import { isDuplicateClusterWinnerByClaim } from "../signals/duplicate-winner";
-import { buildUnifiedReviewDiff } from "../review/review-diff";
+import { buildUnifiedReviewDiff, totalAddedLineCount } from "../review/review-diff";
 import { estimateReviewEffort } from "../review/review-effort";
 import { buildUnifiedCommentBody } from "../review/unified-comment-bridge";
 import { randomUUID } from "node:crypto";
@@ -6334,6 +6334,8 @@ export async function resolveAutoReviewSkipForPullRequest(
     deliveryId: string;
     headSha: string | null | undefined;
     changedPaths?: readonly string[] | undefined;
+    addedLineCount?: number | undefined;
+    changedFileCount?: number | undefined;
   },
 ): Promise<{ skipReason: string | null; reviewManifest: FocusManifest | null }> {
   if (args.authorBlacklisted || args.isFrozenForManualReview) {
@@ -6349,6 +6351,8 @@ export async function resolveAutoReviewSkipForPullRequest(
     title: args.pr.title,
     labels: args.pr.labels ?? [],
     changedPaths: args.changedPaths ?? [],
+    addedLineCount: args.addedLineCount ?? 0,
+    changedFileCount: args.changedFileCount ?? 0,
     baseRef: args.pr.baseRef ?? null,
     reviewedCommitCount,
   });
@@ -8143,7 +8147,10 @@ async function maybePublishPrPublicSurface(
       pr.labels.some((label) => label.toLowerCase() === manualReviewLabel.toLowerCase());
     let reviewManifestForAutoReview: FocusManifest | null = null;
     let autoReviewSkipReason: string | null = null;
-    const autoReviewChangedPaths = (await getReviewFiles()).map((file) => file.path);
+    const autoReviewFiles = await getReviewFiles();
+    const autoReviewChangedPaths = autoReviewFiles.map((file) => file.path);
+    const autoReviewAddedLineCount = totalAddedLineCount(autoReviewFiles);
+    const autoReviewChangedFileCount = autoReviewFiles.length;
     ({
       skipReason: autoReviewSkipReason,
       reviewManifest: reviewManifestForAutoReview,
@@ -8157,6 +8164,8 @@ async function maybePublishPrPublicSurface(
       deliveryId: webhook.deliveryId,
       headSha: advisory.headSha ?? null,
       changedPaths: autoReviewChangedPaths,
+      addedLineCount: autoReviewAddedLineCount,
+      changedFileCount: autoReviewChangedFileCount,
     }));
     // review.changed_files_summary (#1957) + review.effort_score (#1955): both deterministic, no-AI — resolve
     // them here, UNCONDITIONALLY, rather than inside the aiReviewWillRun-gated closure below. These sections

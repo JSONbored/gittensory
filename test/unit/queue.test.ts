@@ -3339,6 +3339,54 @@ describe("queue processors", () => {
       expect(audit?.detail).toBe("review skipped (docs only)");
     });
 
+    it("skips AI review when review.auto_review.max_added_lines is exceeded (#2065)", async () => {
+      let aiCalls = 0;
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }; } } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env);
+      await upsertRepoFocusManifest(env, "JSONbored/gittensory", { review: { auto_review: { max_added_lines: 1 } } });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+        number: 80,
+        title: "feat: large change",
+        state: "open",
+        draft: false,
+        user: { login: "contributor" },
+        head: { sha: "a80" },
+        labels: [],
+        body: "Closes #1",
+      } as never);
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 80, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/80/files")) return Response.json([
+          { filename: "src/a.ts", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+a\n+b" },
+        ]);
+        if (url.endsWith("/pulls/80")) return Response.json({ number: 80, title: "feat: large change", state: "open", draft: false, user: { login: "contributor" }, head: { sha: "a80" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a80/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a80/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/issues/80/comments")) return method === "POST" ? Response.json({ id: 80 }, { status: 201 }) : Response.json([]);
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      await expect(
+        processJob(env, { type: "agent-regate-pr", deliveryId: "auto-review-skip-too-large", repoFullName: "JSONbored/gittensory", prNumber: 80, installationId: 123 }),
+      ).resolves.toBeUndefined();
+      expect(aiCalls).toBe(0);
+      const audit = await env.DB.prepare("select detail from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.ai_review_auto_review_skipped", "JSONbored/gittensory#80")
+        .first<{ detail: string }>();
+      expect(audit?.detail).toBe("review skipped (too large)");
+    });
+
     it("runs AI review with cached manifest when auto_review eligibility passes (#1954)", async () => {
       let aiCalls = 0;
       const env = createTestEnv({
