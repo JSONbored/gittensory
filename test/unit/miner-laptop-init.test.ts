@@ -1,6 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkDockerPresent,
@@ -91,10 +99,32 @@ describe("gittensory-miner laptop init (#2329)", () => {
     expect(check.detail).toContain("optional");
   });
 
-  it("doctor reports Docker when which finds it", () => {
+  it("doctor reports Docker when the injected resolver finds it", () => {
     const check = checkDockerPresent({ resolveDockerPath: () => "/usr/bin/docker" });
     expect(check.ok).toBe(true);
     expect(check.detail).toContain("/usr/bin/docker");
+  });
+
+  it("doctor finds Docker from PATH without executing a PATH-controlled which", () => {
+    const root = tempRoot();
+    const attackerDir = join(root, "attacker-bin");
+    const dockerDir = join(root, "docker-bin");
+    const marker = join(root, "which-ran");
+    mkdirSync(attackerDir, { recursive: true });
+    mkdirSync(dockerDir, { recursive: true });
+    writeFileSync(
+      join(attackerDir, "which"),
+      `#!/bin/sh\necho pwned > "${marker}"\necho /attacker/docker\n`,
+    );
+    writeFileSync(join(dockerDir, "docker"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(attackerDir, "which"), 0o700);
+    chmodSync(join(dockerDir, "docker"), 0o700);
+
+    const check = checkDockerPresent({ env: { PATH: `${attackerDir}${delimiter}${dockerDir}` } });
+
+    expect(check.ok).toBe(true);
+    expect(check.detail).toContain(join(dockerDir, "docker"));
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("runInit notes when sqlite already existed", () => {

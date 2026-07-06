@@ -17,6 +17,7 @@ export function initLaptopState(env?: Record<string, string | undefined>): Lapto
 export function checkLaptopStateSqlite(env?: Record<string, string | undefined>): DoctorCheck;
 
 export function checkDockerPresent(options?: {
+  env?: Record<string, string | undefined>;
   resolveDockerPath?: () => string | null;
 }): DoctorCheck;
 

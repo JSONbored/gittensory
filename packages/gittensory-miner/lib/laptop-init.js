@@ -1,7 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const defaultDbFileName = "laptop-state.sqlite3";
@@ -69,18 +68,25 @@ export function checkLaptopStateSqlite(env = process.env) {
   }
 }
 
+function findExecutableOnPath(name, env = process.env) {
+  const pathValue = typeof env.PATH === "string" ? env.PATH : "";
+  for (const pathEntry of pathValue.split(delimiter)) {
+    if (!pathEntry) continue;
+    const candidate = join(pathEntry, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep scanning: PATH often contains missing or unreadable entries.
+    }
+  }
+  return null;
+}
+
 /** Informational only — Docker is never required for laptop mode. */
 export function checkDockerPresent(options = {}) {
-  const resolveDockerPath = options.resolveDockerPath ?? (() => {
-    try {
-      return execFileSync("which", ["docker"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim() || null;
-    } catch {
-      return null;
-    }
-  });
+  const resolveDockerPath = options.resolveDockerPath
+    ?? (() => findExecutableOnPath("docker", options.env));
   const dockerPath = resolveDockerPath();
   return {
     name: "docker-present",
