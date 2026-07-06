@@ -166,10 +166,28 @@ function sanitizeEnrichmentPromptSection(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   const defanged = neutralizePromptInjection(trimmed).text;
-  return sanitizePublicComment(defanged).slice(
-    0,
-    MAX_ENRICHMENT_PROMPT_SECTION_CHARS,
-  );
+  try {
+    return sanitizePublicComment(defanged).slice(
+      0,
+      MAX_ENRICHMENT_PROMPT_SECTION_CHARS,
+    );
+  } catch {
+    const safeLines = defanged
+      .split("\n")
+      .filter((line) => {
+        try {
+          sanitizePublicComment(line);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .join("\n")
+      .trim();
+    return safeLines
+      ? safeLines.slice(0, MAX_ENRICHMENT_PROMPT_SECTION_CHARS)
+      : undefined;
+  }
 }
 
 export function resolveReesTransportTimeoutMs(value: string | undefined): number {

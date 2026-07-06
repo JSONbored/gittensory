@@ -490,6 +490,36 @@ describe("buildReviewEnrichment", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("drops non-public-safe enrichment lines without discarding the rest of the brief", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          json: async () => ({
+            promptSection: [
+              "## EXTERNAL REVIEW BRIEF",
+              "### Non-conforming commit subjects",
+              "- abc123 — unrecognized commit type: unsafe subject mentions wallet",
+              "### Dependency advisory",
+              "- package left-pad has CVE-2099-0001",
+            ].join("\n"),
+            systemSuffix: "verified CVE context",
+          }),
+        }) as Response,
+    ) as unknown as typeof fetch;
+
+    const result = await buildReviewEnrichment(
+      env({ REES_URL: "https://r" }),
+      input,
+    );
+
+    expect(result?.promptSection).toContain("## EXTERNAL REVIEW BRIEF");
+    expect(result?.promptSection).toContain("### Dependency advisory");
+    expect(result?.promptSection).toContain("CVE-2099-0001");
+    expect(result?.promptSection).not.toContain("unsafe subject");
+    expect(result?.systemSuffix).toContain("untrusted advisory context");
+  });
+
   it("undefined on a fetch throw (timeout/network) — fail-safe", async () => {
     globalThis.fetch = vi.fn(async () => {
       throw new Error("timeout");
