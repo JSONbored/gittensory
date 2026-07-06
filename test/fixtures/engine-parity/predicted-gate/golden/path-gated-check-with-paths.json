@@ -1,0 +1,20 @@
+{
+  "predicted": true,
+  "basis": "public_config",
+  "pack": "gittensor",
+  "conclusion": "failure",
+  "title": "Gittensory Orb Review Agent: Pre-merge check not satisfied: Tests for src",
+  "summary": "Pre-merge check not satisfied: Tests for src — Update the PR to satisfy the check, then re-run the gate.",
+  "readinessScore": 95,
+  "blockers": [
+    {
+      "code": "pre_merge_check_required",
+      "title": "Pre-merge check not satisfied: Tests for src",
+      "detail": "This PR does not satisfy the maintainer pre-merge check \"Tests for src\": the title must contain \"ZZZ-never\".",
+      "action": "Update the PR to satisfy the check, then re-run the gate."
+    }
+  ],
+  "warnings": [],
+  "funnel": null,
+  "note": "Predicted from the repo's public .gittensory.yml gate config + safe defaults. The maintainer may have private dashboard overrides not reflected here, and the dual-model AI-consensus blocker is only evaluated on a real PR. The slop score is NOT evaluated pre-submission (it needs the diff content) and may still fail the real gate. The size-hold prediction uses changed FILE count only, not changed LINE count (line-diff stats are not available pre-submission), so it may under-predict a hold for a PR with many changed lines across few files. Every author is gated the same: a configured hard blocker fails the gate regardless of confirmed-contributor status (which affects only on-chain scoring)."
+}
