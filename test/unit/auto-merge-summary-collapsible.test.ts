@@ -141,16 +141,43 @@ describe("deriveAutoMergeConditionsFromSignals", () => {
     }).find((row) => row.condition === "Gate passing");
     expect(neutral?.state).toBe("warn");
     expect(neutral?.evidence).toBe("Gate is not blocking this PR.");
+
+    const skipped = deriveAutoMergeConditionsFromSignals({
+      gate: gate({ enabled: true, conclusion: "skipped" }),
+      panelRows: [],
+    }).find((row) => row.condition === "Gate passing");
+    expect(skipped?.state).toBe("warn");
+    expect(skipped?.evidence).toBe("Gate is not blocking this PR.");
   });
 
-  it("covers CI failed without failingChecks and behind merge state (#2051 codecov)", () => {
-    const rows = deriveAutoMergeConditionsFromSignals({
+  it("covers CI failed without failingChecks, absent ciState, and behind merge state (#2051 codecov)", () => {
+    const failed = deriveAutoMergeConditionsFromSignals({
       gate: gate(),
       mergeReadiness: { ciState: "failed", mergeStateLabel: "behind" },
       panelRows: panelRowsPassing,
     });
-    expect(rows.find((row) => row.condition === "CI green")?.evidence).toBe("CI checks are failing.");
-    expect(rows.find((row) => row.condition === "Mergeable / clean")?.state).toBe("fail");
+    expect(failed.find((row) => row.condition === "CI green")?.evidence).toBe("CI checks are failing.");
+    expect(failed.find((row) => row.condition === "Mergeable / clean")?.state).toBe("fail");
+
+    const unresolvedCi = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      mergeReadiness: {},
+      panelRows: panelRowsPassing,
+    });
+    expect(unresolvedCi.find((row) => row.condition === "CI green")?.evidence).toBe("CI state was not resolved.");
+  });
+
+  it("reads warn/fail states from gateResult and linkedIssue panel rows (#2051 codecov)", () => {
+    const rows = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      mergeReadiness: { ciState: "passed", mergeStateLabel: "clean" },
+      panelRows: [
+        { key: "gateResult", cells: ["Gate result", "⚠️ Advisory only", "Advisory only.", "No action."] },
+        { key: "linkedIssue", cells: ["Linked issue", "❌ Missing", "No linked issue.", "Explain."] },
+      ],
+    });
+    expect(rows.find((row) => row.condition === "Gate passing")?.state).toBe("warn");
+    expect(rows.find((row) => row.condition === "Valid linked issue")?.state).toBe("fail");
   });
 
   it("formats panel evidence from result-only, detail-only, combined, and empty cells (#2051 codecov)", () => {
@@ -201,6 +228,22 @@ describe("buildUnifiedCommentBody autoMergeSummary wiring (#2051)", () => {
   it("does NOT add the section when autoMergeSummary is absent (flag-OFF parity)", () => {
     const body = buildUnifiedCommentBody(base);
     expect(body).not.toContain("Auto-merge conditions");
+  });
+
+  it("preserves pre-existing extraCollapsibles when autoMergeSummary is off (#2051 codecov)", () => {
+    const body = buildUnifiedCommentBody({
+      ...base,
+      extraCollapsibles: [{ title: "Signal definitions", body: "what each row means" }],
+    });
+    expect(body).not.toContain("Auto-merge conditions");
+    expect(body).toContain("Signal definitions");
+  });
+
+  it("appends only the auto-merge section when no other optional collapsibles are present (#2051 codecov)", () => {
+    const body = buildUnifiedCommentBody({ ...base, autoMergeSummary: true });
+    expect(body).toContain("Auto-merge conditions");
+    expect(body).not.toContain("Changed files");
+    expect(body).not.toContain("Visual preview");
   });
 
   it("coexists with Changed files and Visual preview collapsibles", () => {
