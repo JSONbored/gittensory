@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAutoMergeSummaryCollapsible,
   buildUnifiedReviewInput,
   deriveUnifiedStatus,
   type DualReviewNote,
@@ -275,6 +276,15 @@ describe("renderUnifiedReviewComment", () => {
     // Byte-identical-when-off: no reviewEffort field at all ⇒ the chip text never appears.
     const withoutEffort = renderUnifiedReviewComment({ ...base }, {});
     expect(withoutEffort).not.toContain("review effort:");
+  });
+
+  it("buildAutoMergeSummaryCollapsible escapes angle brackets in condition/evidence text (#2051)", () => {
+    const c = buildAutoMergeSummaryCollapsible([
+      { condition: "CI <script>", state: "fail", evidence: "blocked by <gate>" },
+    ]);
+    expect(c?.body).toContain("CI &lt;script&gt;");
+    expect(c?.body).toContain("blocked by &lt;gate&gt;");
+    expect(buildAutoMergeSummaryCollapsible([])).toBeNull();
   });
 
   it("lists failing check names + per-check details under a 'CI checks failing' section (FIX D3)", () => {

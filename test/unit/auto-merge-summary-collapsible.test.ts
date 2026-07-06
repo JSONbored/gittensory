@@ -113,6 +113,72 @@ describe("deriveAutoMergeConditionsFromSignals", () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it("covers gate fallback arms when the gateResult panel row is absent (#2051 codecov)", () => {
+    const success = deriveAutoMergeConditionsFromSignals({
+      gate: gate({ enabled: true, conclusion: "success" }),
+      panelRows: [],
+    }).find((row) => row.condition === "Gate passing");
+    expect(success?.state).toBe("ok");
+    expect(success?.evidence).toContain("No configured hard blocker");
+
+    const failure = deriveAutoMergeConditionsFromSignals({
+      gate: gate({ enabled: true, conclusion: "failure" }),
+      panelRows: [],
+    }).find((row) => row.condition === "Gate passing");
+    expect(failure?.state).toBe("fail");
+
+    const actionRequired = deriveAutoMergeConditionsFromSignals({
+      gate: gate({ enabled: true, conclusion: "action_required" }),
+      panelRows: [],
+    }).find((row) => row.condition === "Gate passing");
+    expect(actionRequired?.state).toBe("warn");
+    expect(actionRequired?.evidence).toContain("Install/config needs attention");
+
+    const neutral = deriveAutoMergeConditionsFromSignals({
+      gate: gate({ enabled: true, conclusion: "neutral" }),
+      panelRows: [],
+    }).find((row) => row.condition === "Gate passing");
+    expect(neutral?.state).toBe("warn");
+    expect(neutral?.evidence).toBe("Gate is not blocking this PR.");
+  });
+
+  it("covers CI failed without failingChecks and behind merge state (#2051 codecov)", () => {
+    const rows = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      mergeReadiness: { ciState: "failed", mergeStateLabel: "behind" },
+      panelRows: panelRowsPassing,
+    });
+    expect(rows.find((row) => row.condition === "CI green")?.evidence).toBe("CI checks are failing.");
+    expect(rows.find((row) => row.condition === "Mergeable / clean")?.state).toBe("fail");
+  });
+
+  it("formats panel evidence from result-only, detail-only, combined, and empty cells (#2051 codecov)", () => {
+    const combined = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      mergeReadiness: { ciState: "passed", mergeStateLabel: "clean" },
+      panelRows: [{ key: "linkedIssue", cells: ["Linked issue", "✅ Linked", "#42", "No action."] }],
+    });
+    expect(combined.find((row) => row.condition === "Valid linked issue")?.evidence).toContain("Linked — #42");
+
+    const resultOnly = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      panelRows: [{ key: "linkedIssue", cells: ["Linked issue", "✅ Linked", "", "No action."] }],
+    });
+    expect(resultOnly.find((row) => row.condition === "Valid linked issue")?.evidence).toBe("Linked");
+
+    const detailOnly = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      panelRows: [{ key: "linkedIssue", cells: ["Linked issue", "", "No linked issue context.", "Explain."] }],
+    });
+    expect(detailOnly.find((row) => row.condition === "Valid linked issue")?.evidence).toBe("No linked issue context.");
+
+    const empty = deriveAutoMergeConditionsFromSignals({
+      gate: gate(),
+      panelRows: [{ key: "linkedIssue", cells: ["Linked issue", "", "", "No action."] }],
+    });
+    expect(empty.find((row) => row.condition === "Valid linked issue")?.evidence).toBe("No details.");
+  });
 });
 
 describe("buildUnifiedCommentBody autoMergeSummary wiring (#2051)", () => {
