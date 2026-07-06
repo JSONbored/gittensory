@@ -18,7 +18,7 @@ const GENERATED = "2026-06-22T12:00:00.000Z";
 function pr(
   number: number,
   outcome: "merged" | "closed" | "open",
-  opts: { mergedAt?: string; updatedAt?: string; slopBand?: string; slopRisk?: number } = {},
+  opts: { mergedAt?: string; updatedAt?: string; createdAt?: string; slopBand?: string; slopRisk?: number } = {},
 ): PullRequestRecord {
   return {
     repoFullName: "owner/repo",
@@ -27,7 +27,7 @@ function pr(
     state: outcome === "open" ? "open" : "closed",
     mergedAt: opts.mergedAt ?? (outcome === "merged" ? "2026-06-20T00:00:00.000Z" : null),
     updatedAt: opts.updatedAt ?? "2026-06-20T00:00:00.000Z",
-    createdAt: "2026-06-01T00:00:00.000Z",
+    createdAt: opts.createdAt ?? "2026-06-01T00:00:00.000Z",
     slopBand: opts.slopBand,
     slopRisk: opts.slopRisk,
     labels: [],
@@ -159,7 +159,7 @@ describe("buildPublicQualityTrend", () => {
   });
 
   it("uses the Monday UTC week-start path for non-Sunday timestamps", () => {
-    expect(isoWeekStart(Date.parse("2026-06-16T12:00:00.000Z"))).toBe("2026-06-16");
+    expect(isoWeekStart(Date.parse("2026-06-16T12:00:00.000Z"))).toBe("2026-06-15");
   });
 });
 
