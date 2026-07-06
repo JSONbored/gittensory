@@ -20,7 +20,7 @@ import {
   runScheduledLoopWithMonitor,
   type OrbRelayDrainState,
 } from "../../src/selfhost/monitored-work";
-import type { OrbRelayRegistrationState } from "../../src/orb/broker-client";
+import { drainOrbRelay, type OrbRelayRegistrationState } from "../../src/orb/broker-client";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
 beforeEach(() => {
@@ -185,6 +185,24 @@ describe("self-host monitored recurring work", () => {
     });
 
     expect(state.lastDrainAtMs).toBeGreaterThanOrEqual(before);
+  });
+
+  it("does not stamp drain progress when the production broker drain gets a non-ok response", async () => {
+    const state: OrbRelayDrainState = { pendingAck: ["previous-delivery"], lastDrainAtMs: 1_000 };
+
+    await expect(
+      drainOrbRelayWithMonitor({
+        state,
+        relayEnv: { ORB_ENROLLMENT_SECRET: "s" },
+        env: {} as Env,
+        drain: (relayEnv, ack) => drainOrbRelay(relayEnv, ack, (async () => new Response("down", { status: 503 })) as typeof fetch),
+        enqueue: vi.fn(),
+        nowMs: 5_000,
+      }),
+    ).rejects.toThrow("orb_relay_drain_http_503");
+
+    expect(state.pendingAck).toEqual(["previous-delivery"]);
+    expect(state.lastDrainAtMs).toBe(1_000);
   });
 
   it("preserves pending Orb relay acks and skips the drain-progress stamp when the broker drain throws", async () => {

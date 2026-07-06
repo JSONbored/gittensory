@@ -231,7 +231,8 @@ export async function registerOrbRelayTargetWithRetry(
 
 /** Pull-mode drain (#secure-relay): fetch this install's queued events from the Orb, acking the previous batch's
  *  delivery ids so the Orb deletes them. Lets a NAT/tailnet engine receive events WITHOUT exposing an inbound
- *  endpoint. BEST-EFFORT — returns [] on a non-broker / unsafe-URL / non-ok / thrown case; the next tick retries. */
+ *  endpoint. BEST-EFFORT at the scheduler boundary — returns [] only when broker mode is off, and throws
+ *  on broker communication failures so monitoring does not record false drain progress. */
 export async function drainOrbRelay(
   env: { ORB_ENROLLMENT_SECRET?: string | undefined; ORB_BROKER_URL?: string | undefined },
   ack: string[] = [],
@@ -246,7 +247,7 @@ export async function drainOrbRelay(
       body: JSON.stringify({ ack }),
       signal: AbortSignal.timeout(15_000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) throw new Error(`orb_relay_drain_http_${res.status}`);
     const body = (await res.json()) as { events?: Array<{ deliveryId?: unknown; eventName?: unknown; rawBody?: unknown }> };
     const out: { deliveryId: string; eventName: string; rawBody: string }[] = [];
     for (const e of body.events ?? []) {
@@ -255,7 +256,8 @@ export async function drainOrbRelay(
       }
     }
     return out;
-  } catch {
-    return [];
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error("orb_relay_drain_failed");
   }
 }

@@ -382,10 +382,14 @@ describe("drainOrbRelay (pull-mode drain)", () => {
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ ack: ["prev-1"] });
   });
 
-  it("tolerates a missing events array (?? [] arm) and returns [] on non-ok / thrown / unsafe-URL", async () => {
+  it("tolerates a missing events array (?? [] arm)", async () => {
     expect(await drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s" }, [], (async () => Response.json({})) as typeof fetch)).toEqual([]);
-    expect(await drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s" }, [], (async () => new Response("no", { status: 403 })) as typeof fetch)).toEqual([]);
-    expect(await drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s" }, [], (async () => { throw new Error("down"); }) as typeof fetch)).toEqual([]);
-    expect(await drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s", ORB_BROKER_URL: "http://broker.example" }, [], (async () => { throw new Error("unsafe should not fetch"); }) as typeof fetch)).toEqual([]);
+  });
+
+  it("throws on non-ok / thrown / unsafe-URL so the monitor does not record false progress", async () => {
+    await expect(drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s" }, [], (async () => new Response("no", { status: 403 })) as typeof fetch)).rejects.toThrow("orb_relay_drain_http_403");
+    await expect(drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s" }, [], (async () => { throw new Error("down"); }) as typeof fetch)).rejects.toThrow("down");
+    await expect(drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s", ORB_BROKER_URL: "http://broker.example" }, [], (async () => { throw new Error("unsafe should not fetch"); }) as typeof fetch)).rejects.toThrow(/must use https/);
+    await expect(drainOrbRelay({ ORB_ENROLLMENT_SECRET: "s" }, [], (async () => Promise.reject("down")) as typeof fetch)).rejects.toThrow("orb_relay_drain_failed");
   });
 });
