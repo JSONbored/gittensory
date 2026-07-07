@@ -3035,6 +3035,42 @@ export async function listAgentAuditEvents(
   }));
 }
 
+// Unfiltered sibling of `listAgentAuditEvents`: same `repo#pr` targetKey correlation (exact match, not just
+// the repo-prefix range, since a single PR's full history is the whole point here), but with NO `eventType`
+// restriction -- every one of the ~140 event types this table records is eligible, not just the
+// `agent.action.%`/`agent.pending_action.%` subset the public audit-feed exposes. Maintainer-gated at the
+// route layer; this function itself does no authorization, matching every other list* helper in this file.
+export type AuditEventForTarget = {
+  eventType: string;
+  outcome: string;
+  actor: string | null;
+  detail: string | null;
+  createdAt: string;
+};
+
+export async function listAuditEventsForTarget(
+  env: Env,
+  options: { repoFullName: string; pullNumber: number; sinceIso?: string | undefined; limit?: number | undefined },
+): Promise<AuditEventForTarget[]> {
+  const limit = clampInteger(options.limit ?? 50, 1, 200);
+  const targetKey = `${options.repoFullName}#${options.pullNumber}`;
+  const conditions: SQL[] = [eq(sql`lower(${auditEvents.targetKey})`, targetKey.toLowerCase())];
+  if (options.sinceIso) conditions.push(gte(auditEvents.createdAt, options.sinceIso));
+  const rows = await getDb(env.DB)
+    .select({ eventType: auditEvents.eventType, outcome: auditEvents.outcome, actor: auditEvents.actor, detail: auditEvents.detail, createdAt: auditEvents.createdAt })
+    .from(auditEvents)
+    .where(and(...conditions))
+    .orderBy(desc(auditEvents.createdAt), desc(auditEvents.id))
+    .limit(limit);
+  return rows.map((row) => ({
+    eventType: row.eventType,
+    outcome: row.outcome,
+    actor: row.actor,
+    detail: row.detail,
+    createdAt: row.createdAt,
+  }));
+}
+
 export async function getFreshOfficialMinerDetection(env: Env, login: string, now = nowIso()): Promise<OfficialGittensorMinerDetection | null> {
   const [row] = await getDb(env.DB).select().from(officialMinerDetections).where(and(eq(officialMinerDetections.login, login.toLowerCase()), gte(officialMinerDetections.expiresAt, now))).limit(1);
   return row ? toOfficialMinerDetection(row) : null;

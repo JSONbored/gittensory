@@ -442,26 +442,43 @@ export function buildOpenApiSpec() {
     path: "/v1/repos/{owner}/{repo}/agent/audit-feed",
     responses: {
       200: {
-        description: "Maintainer-scoped agent audit feed (#784): executed actions + approval-queue decisions, newest first, public-safe action posture only. Supports ?since=ISO-8601&limit=1-200.",
+        description:
+          "Maintainer-scoped agent audit feed (#784): executed actions + approval-queue decisions, newest first, public-safe action posture only. Supports ?since=ISO-8601&limit=1-200. " +
+          "?pull=N opts into the unfiltered sibling query: every audit_events row for that one PR's targetKey (no eventType restriction), still maintainer-gated and detail-sanitized the same way.",
         content: {
           "application/json": {
-            schema: z.object({
-              repoFullName: z.string(),
-              events: z.array(
-                z.object({
-                  eventType: z.string(),
-                  pullNumber: z.number().nullable(),
-                  outcome: z.string(),
-                  actor: z.string().nullable(),
-                  detail: z.string().nullable(),
-                  createdAt: z.string(),
-                }),
-              ),
-            }),
+            schema: z.union([
+              z.object({
+                repoFullName: z.string(),
+                events: z.array(
+                  z.object({
+                    eventType: z.string(),
+                    pullNumber: z.number().nullable(),
+                    outcome: z.string(),
+                    actor: z.string().nullable(),
+                    detail: z.string().nullable(),
+                    createdAt: z.string(),
+                  }),
+                ),
+              }),
+              z.object({
+                repoFullName: z.string(),
+                pullNumber: z.number(),
+                events: z.array(
+                  z.object({
+                    eventType: z.string(),
+                    outcome: z.string(),
+                    actor: z.string().nullable(),
+                    detail: z.string().nullable(),
+                    createdAt: z.string(),
+                  }),
+                ),
+              }),
+            ]),
           },
         },
       },
-      400: { description: "Malformed since (not ISO-8601) or limit (not an integer in 1-200)" },
+      400: { description: "Malformed since (not ISO-8601), limit (not an integer in 1-200), or pull (not a positive integer)" },
       403: { description: "Insufficient role" },
     },
   });

@@ -292,4 +292,64 @@ describe("agent audit-feed route (#784)", () => {
     expect(body.events[0]?.detail).not.toMatch(/reward/i);
     expect(body.events[0]?.detail).toContain("private context");
   });
+
+  describe("?pull=N unfiltered target query", () => {
+    async function seedUnfilteredAudit(env: Env) {
+      // Unlike seedAudit above, none of these are agent.action.%/agent.pending_action.% -- proving the
+      // ?pull= branch carries NO eventType restriction (the whole point of listAuditEventsForTarget).
+      await recordAuditEvent(env, { eventType: "github_app.type_label_decision", actor: "gittensory", targetKey: "owner/repo#7", outcome: "completed", detail: "applied labels: gittensor:bug", createdAt: "2026-06-18T10:00:00.000Z" });
+      await recordAuditEvent(env, { eventType: "github_app.pr_visibility_skipped", actor: "x", targetKey: "owner/repo#7", outcome: "completed", detail: "not_official_gittensor_miner", createdAt: "2026-06-18T11:00:00.000Z" });
+      // excluded: a different PR on the same repo, and a same-number PR on a different repo.
+      await recordAuditEvent(env, { eventType: "github_app.type_label_decision", actor: "gittensory", targetKey: "owner/repo#8", outcome: "completed", createdAt: "2026-06-18T12:00:00.000Z" });
+      await recordAuditEvent(env, { eventType: "github_app.type_label_decision", actor: "gittensory", targetKey: "other/repo#7", outcome: "completed", createdAt: "2026-06-18T13:00:00.000Z" });
+    }
+
+    it("returns every event type for the single PR's targetKey, newest-first, excluding other targets", async () => {
+      const env = createTestEnv();
+      await seedUnfilteredAudit(env);
+      const res = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7", { headers: headers(env) }, env);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { repoFullName: string; pullNumber: number; events: Array<{ eventType: string; outcome: string }> };
+      expect(body.repoFullName).toBe("owner/repo");
+      expect(body.pullNumber).toBe(7);
+      expect(body.events.map((event) => event.eventType)).toEqual(["github_app.pr_visibility_skipped", "github_app.type_label_decision"]);
+    });
+
+    it("honors since and limit on the ?pull= branch", async () => {
+      const env = createTestEnv();
+      await seedUnfilteredAudit(env);
+      const since = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7&since=2026-06-18T10:30:00.000Z", { headers: headers(env) }, env);
+      expect(((await since.json()) as { events: unknown[] }).events).toHaveLength(1);
+      const limited = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7&limit=1", { headers: headers(env) }, env);
+      expect(((await limited.json()) as { events: unknown[] }).events).toHaveLength(1);
+    });
+
+    it("rejects a non-positive-integer pull with 400", async () => {
+      const env = createTestEnv();
+      for (const bad of ["0", "-1", "abc", "1.5"]) {
+        const res = await app.request(`/v1/repos/owner/repo/agent/audit-feed?pull=${bad}`, { headers: headers(env) }, env);
+        expect(res.status, `pull=${bad}`).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: "invalid_pull" });
+      }
+    });
+
+    it("still requires maintainer auth on the ?pull= branch", async () => {
+      const env = createTestEnv();
+      await seedUnfilteredAudit(env);
+      const noauth = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7", {}, env);
+      expect([401, 403]).toContain(noauth.status);
+      const { token } = await createSessionForGitHubUser(env, { login: "rando", id: 555 });
+      const forbidden = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7", { headers: { authorization: `Bearer ${token}` } }, env);
+      expect([401, 403]).toContain(forbidden.status);
+    });
+
+    it("scrubs forbidden terms from detail on the ?pull= branch too", async () => {
+      const env = createTestEnv();
+      await recordAuditEvent(env, { eventType: "github_app.type_label_decision", actor: "gittensory", targetKey: "owner/repo#7", outcome: "completed", detail: "reward estimate leaked", createdAt: "2026-06-18T10:00:00.000Z" });
+      const res = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7", { headers: headers(env) }, env);
+      const body = (await res.json()) as { events: Array<{ detail: string | null }> };
+      expect(body.events[0]?.detail).not.toMatch(/reward/i);
+      expect(body.events[0]?.detail).toContain("private context");
+    });
+  });
 });

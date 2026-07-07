@@ -50,6 +50,7 @@ import {
   getRepositorySettings,
   getPendingAgentAction,
   listAgentAuditEvents,
+  listAuditEventsForTarget,
   listPendingAgentActions,
   recordAuditEvent,
   getContributorEvidence,
@@ -2412,6 +2413,9 @@ export function createApp() {
 
   // #784 audit feed: the agent's executed actions + approval-queue decisions for this repo. Maintainer-scoped,
   // read-only, public-safe (action posture only — no trust/score metadata). `?since=ISO&limit=N` (max 200).
+  // `?pull=N` opts into the unfiltered sibling query (listAuditEventsForTarget): every audit_events row for
+  // that one PR's targetKey, not just the agent.action.%/agent.pending_action.% subset — still maintainer-gated
+  // by the same requireRepoMaintainer check above, just scoped to a single PR instead of the whole repo.
   app.get("/v1/repos/:owner/:repo/agent/audit-feed", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const gate = await requireRepoMaintainer(c, fullName);
@@ -2425,6 +2429,22 @@ export function createApp() {
       const parsed = Number(limitParam);
       if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) return c.json({ error: "invalid_limit", detail: "limit must be an integer between 1 and 200" }, 400);
       limit = parsed;
+    }
+    const pullParam = c.req.query("pull");
+    if (pullParam !== undefined) {
+      const pullNumber = Number(pullParam);
+      if (!Number.isInteger(pullNumber) || pullNumber <= 0) return c.json({ error: "invalid_pull", detail: "pull must be a positive integer" }, 400);
+      const targetEvents = await listAuditEventsForTarget(c.env, {
+        repoFullName: fullName,
+        pullNumber,
+        ...(since !== undefined ? { sinceIso: since } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return c.json({
+        repoFullName: fullName,
+        pullNumber,
+        events: targetEvents.map((event) => ({ ...event, detail: event.detail === null ? null : sanitizePublicComment(event.detail) })),
+      });
     }
     const events = await listAgentAuditEvents(c.env, {
       repoFullName: fullName,
