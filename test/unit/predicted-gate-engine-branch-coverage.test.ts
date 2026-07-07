@@ -380,6 +380,10 @@ describe("predicted-gate engine branch coverage (#2283)", () => {
 
     expect(internals.extractLinkedIssueNumbers("closes other/repo#9", REPO.fullName)).not.toContain(9);
     expect(internals.extractLinkedIssueNumbers(`closes ${REPO.fullName}#9`, REPO.fullName)).toContain(9);
+    const templateLine =
+      "- [ ] I linked a currently open issue this PR resolves (e.g. `Closes #123`) — a linked open issue is required for every contributor PR.";
+    expect(internals.extractLinkedIssueNumbers(templateLine, REPO.fullName)).toEqual([]);
+    expect(internals.extractLinkedIssueNumbers(`Closes #42\n\n${templateLine}`, REPO.fullName)).toEqual([42]);
 
     const issueQuality: IssueQualityReport = {
       repoFullName: REPO.fullName,
