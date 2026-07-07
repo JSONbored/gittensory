@@ -11,8 +11,13 @@
 // already produced through the public-safe filter (InlineFinding.body/suggestion are sanitized upstream by
 // composeInlineFindings before they ever reach here — this module adds no new free text of its own beyond the
 // fixed label/marker strings below).
-import { LOCAL_WRITE_BOUNDARY } from "../mcp/local-write-tools";
+import { buildFollowUpIssueSpec, LOCAL_WRITE_BOUNDARY } from "../mcp/local-write-tools";
 import type { InlineFinding } from "../services/ai-review";
+
+export type FixHandoffBuildOptions = {
+  /** When set, nit findings also carry a runnable follow-up-issue command (#2177 / #1962). Omitted ⇒ byte-identical. */
+  repoFullName?: string | undefined;
+};
 
 /** A single finding rendered as a structured, LOCAL-execution fix-handoff block. `line` is `0` when the
  *  finding has no commentable diff line (mirrors the codebase's existing path-only sentinel — see
@@ -33,21 +38,36 @@ export type FixHandoffBlock = {
  *  parse fix-handoff blocks in a comment body without depending on markdown structure alone. */
 const FIX_HANDOFF_MARKER = "<!-- gittensory:fix-handoff -->";
 
+function followUpIssueSection(finding: InlineFinding, repoFullName: string, line: number): string {
+  const spec = buildFollowUpIssueSpec({
+    repoFullName,
+    path: finding.path,
+    ...(line > 0 ? { line } : {}),
+    finding: finding.body,
+  });
+  return `\n\n**Or file a follow-up issue** (track this instead of fixing in this PR):\n\`\`\`bash\n${spec.command}\n\`\`\``;
+}
+
 /** PURE: build a single finding's fix-handoff block. Never throws; a finding whose `line` is not a positive
  *  integer (0, negative, non-finite — i.e. "no commentable line") still yields a valid PATH-ONLY block rather
  *  than being dropped, since the finding itself is still actionable context even without a line anchor. */
-export function buildFixHandoffBlock(finding: InlineFinding): FixHandoffBlock {
+export function buildFixHandoffBlock(finding: InlineFinding, options?: FixHandoffBuildOptions): FixHandoffBlock {
   const hasLine = Number.isInteger(finding.line) && finding.line > 0;
   const line = hasLine ? finding.line : 0;
   const location = hasLine ? `${finding.path}:${line}` : `${finding.path} (no specific line)`;
   const label = finding.severity === "blocker" ? "Blocker" : "Nit";
   const suggestedChange = finding.suggestion?.trim() || undefined;
   const suggestionBlock = suggestedChange ? `\n\nSuggested change:\n\`\`\`\n${suggestedChange}\n\`\`\`` : "";
+  const followUpBlock =
+    finding.severity === "nit" && options?.repoFullName
+      ? followUpIssueSection(finding, options.repoFullName, line)
+      : "";
   const body = [
     FIX_HANDOFF_MARKER,
     `**Fix handoff — ${label} at \`${location}\`**`,
     finding.body,
     suggestionBlock,
+    followUpBlock,
     `\n_${LOCAL_WRITE_BOUNDARY}_`,
   ]
     .filter((part) => part.length > 0)
@@ -65,6 +85,6 @@ export function buildFixHandoffBlock(finding: InlineFinding): FixHandoffBlock {
 
 /** PURE: build a fix-handoff block for every finding in order. Empty in ⇒ empty out — no-op when there is
  *  nothing to hand off. */
-export function buildFixHandoffBlocks(findings: InlineFinding[]): FixHandoffBlock[] {
-  return findings.map((finding) => buildFixHandoffBlock(finding));
+export function buildFixHandoffBlocks(findings: InlineFinding[], options?: FixHandoffBuildOptions): FixHandoffBlock[] {
+  return findings.map((finding) => buildFixHandoffBlock(finding, options));
 }

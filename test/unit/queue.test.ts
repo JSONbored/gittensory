@@ -18276,6 +18276,7 @@ describe("queue processors", () => {
               suggestions: [],
               inlineFindings: [
                 { path: "src/db.ts", line: 2, severity: "blocker", body: "This query is vulnerable to SQL injection.", suggestion: "Use a parameterized query." },
+                { path: "src/util.ts", line: 1, severity: "nit", body: "Consider extracting this into a shared helper." },
               ],
             }),
           }) as { response: string },
@@ -18296,7 +18297,10 @@ describe("queue processors", () => {
         return new Response("review:\n  inline_comments: true\n  fixHandoff: true\n");
       }
       if (url.includes("/pulls/9/files"))
-        return Response.json([{ filename: "src/db.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@ -1,1 +1,2 @@\n ctx\n+export const ok = true;" }]);
+        return Response.json([
+          { filename: "src/db.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@ -1,1 +1,2 @@\n ctx\n+export const ok = true;" },
+          { filename: "src/util.ts", status: "added", additions: 1, deletions: 0, changes: 1, patch: "@@ -0,0 +1,1 @@\n+export const helper = true;" },
+        ]);
       if (url.endsWith("/pulls/9")) return Response.json({ number: 9, title: "Add query helper", state: "open", user: { login: "contributor" }, head: { sha: "a9" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
       if (url.includes("/commits/a9/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/a9/status")) return Response.json({ state: "success", statuses: [] });
@@ -18327,6 +18331,14 @@ describe("queue processors", () => {
     expect(unifiedCommentBody).toContain("Fix handoff — Blocker at `src/db.ts:2`"); // the per-finding block header + location anchor
     expect(unifiedCommentBody).toContain("This query is vulnerable to SQL injection."); // the finding, handed off verbatim
     expect(unifiedCommentBody).toContain("Suggested change:"); // its suggestion carried through
+    expect(unifiedCommentBody).toContain("Or file a follow-up issue"); // nit findings carry the follow-up-issue local-write command
+    expect(unifiedCommentBody).toContain("gh issue create --repo 'JSONbored/gittensory'");
+    expect(unifiedCommentBody).toContain("Consider extracting this into a shared helper.");
+    expect(unifiedCommentBody).toContain("Fix handoff — Nit at `src/util.ts:1`");
+    // the blocker block itself does not defer — follow-up text appears only on the nit block below it
+    expect(unifiedCommentBody.indexOf("Or file a follow-up issue")).toBeGreaterThan(
+      unifiedCommentBody.indexOf("This query is vulnerable to SQL injection."),
+    );
   });
 
   // FIX B + FIX D3 at the processor call site: a unified comment for a PR whose CI has a FAILED check, with the

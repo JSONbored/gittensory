@@ -68,6 +68,35 @@ describe("buildFixHandoffBlock (#2175)", () => {
     expect(block.instruction).toBe("Add a guard for the empty-array case.");
     expect(block.body).toContain("Add a guard for the empty-array case.");
   });
+
+  it("appends a follow-up-issue command for nit findings when repoFullName is supplied (#2177)", () => {
+    const block = buildFixHandoffBlock(finding({ severity: "nit", body: "Rename this helper for clarity." }), {
+      repoFullName: "o/r",
+    });
+    expect(block.body).toContain("Or file a follow-up issue");
+    expect(block.body).toContain("gh issue create");
+    expect(block.body).toContain("Follow up: src/a.ts:12");
+    expect(block.body).toContain("Rename this helper for clarity.");
+  });
+
+  it("does NOT append a follow-up-issue command for blockers (fix in this PR, not defer)", () => {
+    const block = buildFixHandoffBlock(finding({ severity: "blocker" }), { repoFullName: "o/r" });
+    expect(block.body).not.toContain("Or file a follow-up issue");
+    expect(block.body).not.toContain("gh issue create");
+  });
+
+  it("omits the follow-up-issue command when repoFullName is absent (flag-OFF / caller parity)", () => {
+    const block = buildFixHandoffBlock(finding({ severity: "nit" }));
+    expect(block.body).not.toContain("Or file a follow-up issue");
+  });
+
+  it("follow-up-issue command uses the path-only location when the nit has no commentable line", () => {
+    const block = buildFixHandoffBlock(finding({ severity: "nit", line: 0, body: "Consider splitting this module." }), {
+      repoFullName: "o/r",
+    });
+    expect(block.body).toContain("Follow up: src/a.ts'");
+    expect(block.body).not.toContain("src/a.ts:0");
+  });
 });
 
 describe("buildFixHandoffBlocks (#2175)", () => {

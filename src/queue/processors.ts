@@ -10179,7 +10179,7 @@ async function maybePublishPrPublicSurface(
         // present ONLY on a cache-miss review with inline comments enabled — so a cache hit never re-emits them,
         // exactly like findingCategories above. Flag-OFF ⇒ omitted ⇒ the rendered comment is byte-identical.
         ...(fixHandoffEnabledForReview && aiReview?.inlineFindings?.length
-          ? { fixHandoffBlocks: buildFixHandoffBlocks(aiReview.inlineFindings) }
+          ? { fixHandoffBlocks: buildFixHandoffBlocks(aiReview.inlineFindings, { repoFullName }) }
           : {}),
         maxFindingsCaps: reviewConfig.maxFindings,
         commentVerbosity: reviewConfig.commentVerbosity,
