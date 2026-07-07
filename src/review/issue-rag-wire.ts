@@ -20,6 +20,7 @@ function cleanLabels(labels: string[] | undefined): string[] {
     .slice(0, MAX_ISSUE_LABELS);
 }
 
+// Intentionally pre-built and currently unreached: no miner-side issue-analysis caller exists yet (#2320).
 export function buildIssueRagQuery(input: IssueRagQueryInput): { queryText: string } {
   const sections: string[] = [];
   const title = input.title.trim();

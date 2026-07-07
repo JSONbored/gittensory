@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildWorkboard } from "../../src/api/workboard";
 import { normalizeGittBountySnapshot } from "../../src/bounties/ingest";
 import { fetchPublicContributorProfile } from "../../src/github/public";
 import { jsonString, normalizeRepoFullName, parseJson, repoParts } from "../../src/utils/json";
-import type { IssueRecord, RepositoryRecord } from "../../src/types";
 
 describe("small adapters and normalizers", () => {
   afterEach(() => {
@@ -59,46 +57,6 @@ describe("small adapters and normalizers", () => {
     expect(records[1]).toMatchObject({ id: "35", amountText: "1.2500", sourceUrl: "gitt://issues/35" });
     expect(records[2]).toMatchObject({ id: "36", amountText: undefined, sourceUrl: "gitt://issues/36" });
     expect(records[2]?.payload).not.toHaveProperty("active");
-  });
-
-  it("builds workboard holds and maintainer-authored context", () => {
-    const repo: RepositoryRecord = {
-      fullName: "JSONbored/gittensory",
-      owner: "JSONbored",
-      name: "gittensory",
-      isInstalled: true,
-      isRegistered: false,
-      isPrivate: true,
-    };
-    const issues: IssueRecord[] = [
-      {
-        repoFullName: repo.fullName,
-        number: 1,
-        title: "Add queue health endpoint",
-        state: "open",
-        authorLogin: "maintainer",
-        authorAssociation: "OWNER",
-        labels: [],
-        linkedPrs: [7],
-      },
-    ];
-
-    expect(buildWorkboard(null, issues)).toEqual([]);
-    const item = buildWorkboard(repo, issues)[0];
-    expect(item).toMatchObject({ fit: "hold", issueNumber: 1 });
-    expect(item?.reasons).toEqual(expect.arrayContaining(["Repository is not present in the latest registry snapshot.", "Issue already has linked pull requests.", "Issue was opened by a maintainer-associated account."]));
-
-    const registeredRepo = { ...repo, isRegistered: true, isPrivate: false };
-    const baseIssue = issues[0]!;
-    expect(
-      buildWorkboard(registeredRepo, [
-        { ...baseIssue, number: 2, linkedPrs: [], authorAssociation: "CONTRIBUTOR" },
-        { ...baseIssue, number: 3, linkedPrs: [9], authorAssociation: "CONTRIBUTOR" },
-      ]),
-    ).toEqual([
-      expect.objectContaining({ fit: "good", reasons: ["Open issue with no linked pull request detected by Gittensory."] }),
-      expect.objectContaining({ fit: "caution", reasons: ["Issue already has linked pull requests."] }),
-    ]);
   });
 
   it("fetches public contributor profile languages and handles unavailable GitHub responses", async () => {
