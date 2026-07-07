@@ -76,4 +76,47 @@ describe("buildFocusManifestValidation (#2057)", () => {
       testExpectations: ["npm test"],
     });
   });
+
+  it("normalizes every optional manifest section and honors a custom source", () => {
+    const result = buildFocusManifestValidation({
+      source: "api_record",
+      content: `
+preferredLabels: [help wanted]
+issueDiscoveryPolicy: encouraged
+settings:
+  commentMode: all_prs
+review:
+  profile: chill
+features:
+  rag: true
+contentLane:
+  entryFileGlob: data/*.json
+  collectionField: records
+repoDocGeneration:
+  enabled: true
+  scope: [agents]
+reviewRecap:
+  enabled: true
+  cadenceDays: 14
+`,
+    });
+    expect(result.status).toBe("ok");
+    expect(result.normalized).toMatchObject({
+      source: "api_record",
+      preferredLabels: ["help wanted"],
+      issueDiscoveryPolicy: "encouraged",
+      settings: { commentMode: "all_prs" },
+      review: { profile: "chill" },
+      features: { rag: true },
+      contentLane: { entryFileGlob: "data/*.json", collectionField: "records" },
+      repoDocGeneration: { enabled: true, scope: ["agents"] },
+      reviewRecap: { enabled: true, cadenceDays: 14 },
+    });
+  });
+
+  it("returns error when manifest content is not a mapping", () => {
+    const result = buildFocusManifestValidation({ content: "[1, 2, 3]" });
+    expect(result.status).toBe("error");
+    expect(result.warnings.join(" ")).toMatch(/must be a mapping/i);
+  });
 });
