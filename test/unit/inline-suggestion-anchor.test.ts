@@ -32,6 +32,10 @@ describe("addedLinesByPath + isSuggestionAnchorable (#2140)", () => {
     expect(isSuggestionAnchorable({ path: "src/missing.ts", line: 1 }, addedLines)).toBe(false);
   });
 
+  it("returns false when the file path is absent from the added-line map (#2141)", () => {
+    expect(isSuggestionAnchorable({ path: "src/unknown.ts", line: 1, endLine: 2 }, new Map())).toBe(false);
+  });
+
   it("omits files with empty or non-string patches", () => {
     const addedLines = addedLinesByPath([
       { path: "src/empty.ts", payload: { patch: "" } },

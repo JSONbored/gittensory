@@ -43,6 +43,7 @@ type InlineFinding = {
   severity: "blocker" | "nit";
   body: string;
   suggestion?: string;
+  endLine?: number;
   category?: "security" | "correctness" | "performance" | "maintainability" | "tests" | "style";
 };
 type ModelReviewShape = {
@@ -3101,6 +3102,21 @@ describe("pure helpers", () => {
         }),
       )?.inlineFindings,
     ).toEqual([]);
+  });
+
+  it("composeInlineFindings carries endLine through compose and merge (#2141)", () => {
+    const out = composeInlineFindings([
+      reviewWithFindings([
+        { path: "src/a.ts", line: 1, endLine: 3, severity: "nit", body: "Multi-line note." },
+      ]),
+      reviewWithFindings([
+        { path: "src/a.ts", line: 1, severity: "blocker", body: "Stronger body." },
+        { path: "src/a.ts", line: 1, endLine: 4, severity: "nit", body: "Weaker with wider range." },
+      ]),
+    ]);
+    expect(out).toEqual([
+      { path: "src/a.ts", line: 1, endLine: 3, severity: "blocker", body: "Stronger body." },
+    ]);
   });
 
   it("composeInlineFindings MERGES same-(path,line) findings across reviewers: max severity, suggestion carried from whichever had it; distinct lines untouched (#2158)", () => {
