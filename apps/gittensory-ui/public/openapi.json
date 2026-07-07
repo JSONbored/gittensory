@@ -8895,9 +8895,6 @@
           "backfillEnabled": {
             "type": "boolean"
           },
-          "privateTrustEnabled": {
-            "type": "boolean"
-          },
           "badgeEnabled": {
             "type": "boolean"
           },
@@ -9336,7 +9333,6 @@
           "includeMaintainerAuthors",
           "requireLinkedIssue",
           "backfillEnabled",
-          "privateTrustEnabled",
           "commandAuthorization"
         ]
       },

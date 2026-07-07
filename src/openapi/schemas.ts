@@ -718,7 +718,6 @@ export const RepositorySettingsSchema = z
     includeMaintainerAuthors: z.boolean(),
     requireLinkedIssue: z.boolean(),
     backfillEnabled: z.boolean(),
-    privateTrustEnabled: z.boolean(),
     badgeEnabled: z.boolean().optional(),
     publicQualityMetrics: z.boolean().optional(),
     commandAuthorization: z.object({

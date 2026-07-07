@@ -607,9 +607,6 @@ settings:
   # Bool. Default: true.
   backfillEnabled: true
 
-  # Use private trust signals in scoring. Bool. Default: true.
-  privateTrustEnabled: true
-
   # Render a README status badge for the repo. Bool. Default: false.
   badgeEnabled: false
 

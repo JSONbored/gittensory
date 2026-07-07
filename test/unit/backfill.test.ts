@@ -1155,7 +1155,6 @@ describe("GitHub backfill", () => {
       checkRunMode: "enabled",
       checkRunDetailLevel: "standard",
       backfillEnabled: false,
-      privateTrustEnabled: true,
     });
 
     const result = await backfillRegisteredRepositories(env);
@@ -3017,7 +3016,6 @@ describe("GitHub backfill", () => {
       checkRunMode: "enabled",
       checkRunDetailLevel: "standard",
       backfillEnabled: false,
-      privateTrustEnabled: true,
     });
 
     await expect(enqueueRepositoryOpenDataBackfill(env, { repoFullName: "missing/repo", requestedBy: "api" })).resolves.toMatchObject({ status: "skipped" });
@@ -3030,7 +3028,6 @@ describe("GitHub backfill", () => {
       checkRunMode: "enabled",
       checkRunDetailLevel: "standard",
       backfillEnabled: true,
-      privateTrustEnabled: true,
     });
     await upsertRepoSyncSegment(env, {
       repoFullName: "JSONbored/gittensory",

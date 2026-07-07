@@ -681,7 +681,6 @@ const repositorySettingsSchema = z.object({
   includeMaintainerAuthors: z.boolean().default(false),
   requireLinkedIssue: z.boolean().default(false),
   backfillEnabled: z.boolean().default(true),
-  privateTrustEnabled: z.boolean().default(true),
   badgeEnabled: z.boolean().default(false),
   publicQualityMetrics: z.boolean().default(false),
   commandAuthorization: z
@@ -700,9 +699,9 @@ const repositorySettingsSchema = z.object({
 
 // #130 maintainer self-serve settings editor. A PATCH-style subset: every field optional so the maintainer
 // dashboard can save just the group it changed. Excludes the secret-bearing aiReview* group (set via the
-// dedicated /ai-review + /ai-key routes) and the operator-only scoring internals (backfillEnabled,
-// privateTrustEnabled). The handler loads current settings and merges, since upsertRepositorySettings
-// defaults any absent field rather than preserving it.
+// dedicated /ai-review + /ai-key routes) and the operator-only scoring internal (backfillEnabled). The
+// handler loads current settings and merges, since upsertRepositorySettings defaults any absent field
+// rather than preserving it.
 const maintainerSettingsSchema = z
   .object({
     commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
@@ -3823,7 +3822,6 @@ export function createApp() {
         includeMaintainerAuthors: parsed.data.includeMaintainerAuthors,
         requireLinkedIssue: parsed.data.requireLinkedIssue,
         backfillEnabled: parsed.data.backfillEnabled,
-        privateTrustEnabled: parsed.data.privateTrustEnabled,
         badgeEnabled: parsed.data.badgeEnabled,
         publicQualityMetrics: parsed.data.publicQualityMetrics,
         commandAuthorization: normalizeCommandAuthorizationPolicy(parsed.data.commandAuthorization).policy,

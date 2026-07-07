@@ -16885,7 +16885,6 @@ describe("queue processors", () => {
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
       backfillEnabled: true,
-      privateTrustEnabled: true,
     });
     await processJob(env, {
       type: "github-webhook",
@@ -16916,7 +16915,6 @@ describe("queue processors", () => {
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
       backfillEnabled: true,
-      privateTrustEnabled: true,
     });
     await processJob(env, {
       type: "github-webhook",
@@ -16964,7 +16962,6 @@ describe("queue processors", () => {
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
       backfillEnabled: true,
-      privateTrustEnabled: true,
     });
     await processJob(env, {
       type: "github-webhook",
@@ -17041,7 +17038,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
       autonomy: { update_branch: "auto" },
     });
     let postedBody = "";
@@ -17226,7 +17222,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
       autonomy: { update_branch: "auto" },
     });
     let postedBody = "";
@@ -17370,7 +17365,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
       autonomy: { update_branch: "auto" },
     });
     let postedBody = "";
@@ -17543,7 +17537,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
       autonomy: { update_branch: "auto" },
     });
     let postedBody = "";
@@ -17723,7 +17716,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
       autonomy: { update_branch: "auto" },
       linkedIssueGateMode: "block",
     });
@@ -17888,7 +17880,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
       autonomy: { update_branch: "auto" },
       qualityGateMode: "advisory",
       qualityGateMinScore: 100,
@@ -18290,7 +18281,6 @@ describe("queue processors", () => {
       checkRunDetailLevel: "minimal",
       gateCheckMode: "enabled",
       backfillEnabled: true,
-      privateTrustEnabled: true,
     });
     // Seed a FAILED check summary with a per-check WHY (codecov-style) so listCheckSummaries returns it and the
     // unified site populates failingDetails. (The PR row + headSha must match for the check to associate.)

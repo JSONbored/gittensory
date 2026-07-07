@@ -305,7 +305,6 @@ describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
     includeMaintainerAuthors: "includeMaintainerAuthors:",
     requireLinkedIssue: "requireLinkedIssue:",
     backfillEnabled: "backfillEnabled:",
-    privateTrustEnabled: "privateTrustEnabled:",
     autonomy: "autonomy:",
     autoMaintain: "autoMaintain:",
     agentPaused: "agentPaused:",
@@ -1755,7 +1754,6 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
         includeMaintainerAuthors: true,
         requireLinkedIssue: true,
         backfillEnabled: false,
-        privateTrustEnabled: true,
       },
     });
     expect(m.present).toBe(true);
@@ -1777,7 +1775,6 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
       includeMaintainerAuthors: true,
       requireLinkedIssue: true,
       backfillEnabled: false,
-      privateTrustEnabled: true,
     });
   });
 

@@ -309,7 +309,6 @@ export type RepositorySettings = {
   includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;
   backfillEnabled: boolean;
-  privateTrustEnabled: boolean;
   /** Opt-in for the public, unauthenticated README status badge (#541). Always populated by the DB layer
    *  (default false); optional so existing settings fixtures/callers need not be touched. */
   badgeEnabled?: boolean | undefined;

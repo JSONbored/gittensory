@@ -102,7 +102,6 @@ export const repositorySettings = sqliteTable("repository_settings", {
   includeMaintainerAuthors: integer("include_maintainer_authors", { mode: "boolean" }).notNull().default(false),
   requireLinkedIssue: integer("require_linked_issue", { mode: "boolean" }).notNull().default(false),
   backfillEnabled: integer("backfill_enabled", { mode: "boolean" }).notNull().default(true),
-  privateTrustEnabled: integer("private_trust_enabled", { mode: "boolean" }).notNull().default(true),
   badgeEnabled: integer("badge_enabled", { mode: "boolean" }).notNull().default(false),
   publicQualityMetrics: integer("public_quality_metrics", { mode: "boolean" }).notNull().default(false),
   commandAuthorizationJson: text("command_authorization_json").notNull().default("{}"),

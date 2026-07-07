@@ -40,7 +40,6 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     includeMaintainerAuthors: false,
     requireLinkedIssue: false,
     backfillEnabled: true,
-    privateTrustEnabled: true,
     aiReviewMode: "off",
     aiReviewByok: false,
     aiReviewAllAuthors: false, closeOwnerAuthors: false,
