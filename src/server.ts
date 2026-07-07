@@ -1026,7 +1026,9 @@ async function main(): Promise<void> {
         drainInFlight = false;
       }
     };
-    void drainRelay();
+    void drainRelay().catch((error) =>
+      captureError(error, { kind: "orb_relay_drain" }),
+    );
     // 30s matches broker-client's request timeout so a slow/degraded broker's in-flight drain has fully
     // timed out (or completed) before the next tick would otherwise pile another request on top of it.
     setInterval(
