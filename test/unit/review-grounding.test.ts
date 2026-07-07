@@ -270,6 +270,45 @@ describe("review-grounding: fetchFullFileContents (injected FileFetcher, fail-sa
     expect(out).toEqual([{ path: "src/new.ts", text: "export const hidden = true;" }]);
   });
 
+  describe("diffFullyCoversFile", () => {
+    it("returns false for multiple hunks (an unseen gap sits between them)", () => {
+      expect(
+        diffFullyCoversFile({
+          filename: "src/multi.ts",
+          status: "modified",
+          patch: "@@ -1,2 +1,2 @@\n-a1\n+b1\n@@ -10,2 +10,2 @@\n-a2\n+b2",
+          additions: 2,
+          deletions: 2,
+        }),
+      ).toBe(false);
+    });
+
+    it("handles the bare single-line hunk header shorthand (no comma count)", () => {
+      // `@@ -1 +1 @@` means count 1 on both sides -- a one-line file rewritten in place.
+      expect(
+        diffFullyCoversFile({
+          filename: "src/one-line.ts",
+          status: "modified",
+          patch: "@@ -1 +1 @@\n-old\n+new",
+          additions: 1,
+          deletions: 1,
+        }),
+      ).toBe(true);
+    });
+
+    it("returns false when the hunk does not start at line 1 on either side (leading unchanged lines exist)", () => {
+      expect(
+        diffFullyCoversFile({
+          filename: "src/tail.ts",
+          status: "modified",
+          patch: "@@ -5,2 +5,2 @@\n-old\n+new",
+          additions: 1,
+          deletions: 1,
+        }),
+      ).toBe(false);
+    });
+  });
+
   it("degrades to skipping a file when the fetcher throws (never throws itself)", async () => {
     const fetcher: FileFetcher = {
       getFileContent: async (path) => {

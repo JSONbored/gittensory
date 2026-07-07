@@ -308,6 +308,21 @@ describe("review-grounding wired into the AI reviewer (flag GITTENSORY_REVIEW_GR
     fetchSpy.mockRestore();
   });
 
+  it("FLAG-ON: a file record with no status still grounds (toGroundingFiles' status field is optional)", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_GROUNDING: "true", GITHUB_PUBLIC_TOKEN: "ghp_test" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("export const A = 1;", { status: 200 }));
+    const noStatusFile: PullRequestFileRecord = { repoFullName: "acme/widgets", pullNumber: 7, path: "src/a.ts", additions: 1, deletions: 0, changes: 1, payload: {} };
+    const out = await buildReviewGroundingText(env, {
+      repoFullName: "acme/widgets",
+      headSha: "sha7",
+      files: [noStatusFile],
+      checks: [check()],
+      installationId: null,
+    });
+    expect(out.promptSection).toContain("export const A = 1;");
+    fetchSpy.mockRestore();
+  });
+
   it("FLAG-ON fail-safe: a throwing fetch degrades to no file section (never throws), CI still grounds", async () => {
     const env = createTestEnv({ GITTENSORY_REVIEW_GROUNDING: "true" });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
