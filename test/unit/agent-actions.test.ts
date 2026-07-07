@@ -1560,16 +1560,30 @@ describe("closeConcreteEvidence — concrete-evidence exemption from the close-p
     expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true, closeRequiresMergeableState: true });
   });
 
-  it("a deterministic linked-issue-overlap duplicate (linkedDuplicateCount > 0) is concrete evidence, but NOT conflict-justified", () => {
+  it("a deterministic linked-issue-overlap duplicate (linkedDuplicateCount > 0) is concrete evidence, but NOT conflict-justified — and IS duplicate-still-open-justified (#dup-winner-staleness)", () => {
     const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], linkedDuplicateCount: 1 } }));
     // Concrete evidence (duplicate) does NOT imply closeRequiresMergeableState -- that field is specifically
     // about whether a base conflict was part of the reason, not whether the close is "trustworthy" in general.
-    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true, closeRequiresMergeableState: false });
+    // closeRequiresDuplicateStillOpen IS true here -- this close's justification depends on a sibling PR's live
+    // state, so the executor/approval-queue's live recheck (#dup-winner-staleness) must fire for it.
+    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: true, closeRequiresMergeableState: false, closeRequiresDuplicateStillOpen: true });
   });
 
-  it("linkedDuplicateCount absent (nullish ?? 0) does NOT count as concrete on its own", () => {
+  it("linkedDuplicateCount absent (nullish ?? 0) does NOT count as concrete on its own, and closeRequiresDuplicateStillOpen is explicitly false (#dup-winner-staleness)", () => {
     const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [] } }));
-    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: false });
+    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeConcreteEvidence: false, closeRequiresDuplicateStillOpen: false });
+  });
+
+  it("a named duplicate-cluster winner (linkedDuplicateWinnerNumber) is persisted as duplicateWinnerPrNumber so the live recheck knows which sibling to re-verify (#dup-winner-staleness)", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], linkedDuplicateCount: 1, linkedDuplicateWinnerNumber: 42 } }));
+    expect(closeOf(plan)).toMatchObject({ closeKind: "heuristic", closeRequiresDuplicateStillOpen: true, duplicateWinnerPrNumber: 42 });
+  });
+
+  it("an unnamed duplicate winner (linkedDuplicateWinnerNumber null — flag off or an ambiguous election) omits duplicateWinnerPrNumber entirely (no stray key), even though closeRequiresDuplicateStillOpen is true (#dup-winner-staleness)", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], linkedDuplicateCount: 1, linkedDuplicateWinnerNumber: null } }));
+    const close = closeOf(plan);
+    expect(close).toMatchObject({ closeKind: "heuristic", closeRequiresDuplicateStillOpen: true });
+    expect(close).not.toHaveProperty("duplicateWinnerPrNumber");
   });
 
   it("a committed secret (secret_leak) is concrete evidence via gateBlockerCodes", () => {

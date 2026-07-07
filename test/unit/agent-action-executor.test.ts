@@ -38,11 +38,14 @@ vi.mock("../../src/github/app", async (importOriginal) => ({
 // existing test needs to override it; the tests below explicitly set it to exercise the staleness-denial path.
 // The actuation-time live review-thread re-check (#review-thread-staleness) defaults to a single still-unresolved
 // blocker for the same reason -- individual tests below override it to exercise the staleness-denial path.
+// The actuation-time live duplicate-winner-still-open re-check (#dup-winner-staleness) defaults to "open" (the
+// named winning sibling is still open, i.e. the duplicate justification still holds) for the same reason.
 vi.mock("../../src/github/backfill", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/github/backfill")>()),
   fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, hasMissingRequiredContext: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null })),
   fetchLivePullRequestMergeState: vi.fn(async () => "dirty" as const),
   fetchLiveReviewThreadBlockers: vi.fn(async () => [{ title: "still unresolved", scannerFinding: false }]),
+  fetchLivePullRequestState: vi.fn(async () => "open" as const),
   refreshInstallationHealthForInstallation: vi.fn(async () => null),
 }));
 
@@ -51,7 +54,7 @@ import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github
 import { ensurePullRequestAssignee } from "../../src/github/assignees";
 import { fetchPullRequestFreshness } from "../../src/github/pr-freshness";
 import { createInstallationToken } from "../../src/github/app";
-import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLiveReviewThreadBlockers, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
+import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestState, fetchLiveReviewThreadBlockers, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
 import {
   actionParams,
   applyModerationEscalationForRule,
@@ -620,6 +623,133 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [replayed]);
     expect(outcomes[0]?.outcome).toBe("denied");
     expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#dup-winner-staleness): a duplicate-justified heuristic close is DENIED when the named winning sibling PR is no longer open at actuation time", async () => {
+    const env = createTestEnv({});
+    const dupClose: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "duplicate of open PR #42",
+      closeComment: "closing",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: true,
+      duplicateWinnerPrNumber: 42,
+    };
+    vi.mocked(fetchLivePullRequestState).mockResolvedValueOnce("closed");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dupClose]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(outcomes[0]?.detail).toContain("duplicate-cluster winner #42 is no longer open");
+    expect(closePullRequest).not.toHaveBeenCalled();
+    expect(fetchLivePullRequestState).toHaveBeenCalledWith(env, "owner/repo", 42, expect.anything(), expect.anything());
+  });
+
+  it("a duplicate-justified heuristic close proceeds when the named winning sibling PR is still open (#dup-winner-staleness)", async () => {
+    const env = createTestEnv({});
+    const dupClose: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "duplicate of open PR #42",
+      closeComment: "closing",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: true,
+      duplicateWinnerPrNumber: 42,
+    };
+    vi.mocked(fetchLivePullRequestState).mockResolvedValueOnce("open");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dupClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+  });
+
+  it("a duplicate-justified heuristic close fails open (still proceeds) when the live duplicate-winner-state read is ambiguous/unresolved (#dup-winner-staleness)", async () => {
+    const env = createTestEnv({});
+    const dupClose: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "duplicate of open PR #42",
+      closeComment: "closing",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: true,
+      duplicateWinnerPrNumber: 42,
+    };
+    // A failed/ambiguous fetch resolves to undefined -- not proof the sibling closed, so the close must not be
+    // silently blocked by an inconclusive live read (mirrors the mergeable-state recheck's own fail-open case).
+    vi.mocked(fetchLivePullRequestState).mockRejectedValueOnce(new Error("GitHub API transient 502"));
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dupClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+  });
+
+  it("a duplicate-justified close with NO named winner (closeRequiresDuplicateStillOpen true, duplicateWinnerPrNumber absent) skips the live recheck entirely -- no cheap single-PR signal to check (#dup-winner-staleness)", async () => {
+    const env = createTestEnv({});
+    const dupClose: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "duplicate of another open PR",
+      closeComment: "closing",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: true,
+    };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [dupClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(fetchLivePullRequestState).not.toHaveBeenCalled();
+  });
+
+  it("a non-duplicate heuristic close (closeRequiresDuplicateStillOpen false) skips the live duplicate-winner recheck entirely (#dup-winner-staleness)", async () => {
+    const env = createTestEnv({});
+    const gateClose: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "policy gate blocker",
+      closeComment: "closing",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: false,
+    };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [gateClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(fetchLivePullRequestState).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#dup-winner-staleness): closeRequiresDuplicateStillOpen and duplicateWinnerPrNumber round-trip through the persist/replay round trip so a staged duplicate close still re-checks live winner state", async () => {
+    const env = createTestEnv({});
+    const dupClose: PlannedAgentAction = {
+      actionClass: "close",
+      requiresApproval: false,
+      reason: "duplicate of open PR #42",
+      closeComment: "closing",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: true,
+      duplicateWinnerPrNumber: 42,
+    };
+    const persisted = actionParams(dupClose);
+    expect(persisted.closeRequiresDuplicateStillOpen).toBe(true);
+    expect(persisted.duplicateWinnerPrNumber).toBe(42);
+    const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: dupClose.reason });
+    expect(replayed.closeRequiresDuplicateStillOpen).toBe(true);
+    expect(replayed.duplicateWinnerPrNumber).toBe(42);
+    vi.mocked(fetchLivePullRequestState).mockResolvedValueOnce("closed");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [replayed]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("closeRequiresDuplicateStillOpen and duplicateWinnerPrNumber are omitted from persisted params when absent on the planned action (no stray keys)", () => {
+    const ambiguousClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "verdict failed", closeComment: "closing", closeKind: "heuristic" };
+    const persisted = actionParams(ambiguousClose);
+    expect(persisted).not.toHaveProperty("closeRequiresDuplicateStillOpen");
+    expect(persisted).not.toHaveProperty("duplicateWinnerPrNumber");
   });
 
   it("LIVE merge is denied when live CI has since turned failing (#2128)", async () => {

@@ -16,7 +16,7 @@ import { isAuthorBlacklisted } from "../settings/contributor-blacklist";
 import { classifyMergeFailure, MERGE_RETRY_CAP } from "./merge-failure";
 import { notifyActionToDiscord, notifyActionToSlack, type NotifyOutcome } from "./notify-discord";
 import { cancelInFlightWorkflowRunsForHeadSha, createInstallationToken, githubErrorStatus, isGitHubRateLimitedError } from "../github/app";
-import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLiveReviewThreadBlockers, mergeRequiredCiContexts, refreshInstallationHealthForInstallation } from "../github/backfill";
+import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestState, fetchLiveReviewThreadBlockers, mergeRequiredCiContexts, refreshInstallationHealthForInstallation } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import { ensurePullRequestAssignee } from "../github/assignees";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../github/labels";
@@ -388,18 +388,31 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
     // "Resolve conversation" on GitHub during a slow review pass clears it before this mutation runs, same as
     // an unrelated PR clearing a base conflict. Same immediate, same-pass execution path gap as #3863 had.
     const requiresLiveThreadRecheck = action.actionClass === "close" && action.closeKind === "heuristic" && action.closeRequiresThreadResolved === true;
-    if (requiresLiveCiRecheck || requiresLiveMergeableRecheck || requiresLiveThreadRecheck) {
+    // #dup-winner-staleness: a duplicate-justified heuristic close (closeRequiresDuplicateStillOpen === true) is
+    // likewise read from the planning-pass snapshot -- otherOpenPullRequests is reconciled ONCE up front
+    // (reconcileLiveDuplicateSiblings), before the often-slow AI-review/gate-evaluation pass runs, and never
+    // re-verified before this mutation. Unlike a conflict, the fact that can go stale here lives on a SIBLING
+    // PR (it can be closed/merged independently, asynchronously, any time after this pass started), so only a
+    // close that named a SPECIFIC winning sibling (duplicateWinnerPrNumber) has a cheap single-PR live signal
+    // to re-check; one that didn't (flag off, or an ambiguous election) has no equivalently cheap re-derivation
+    // and is left as a no-op here, matching closeRequiresMergeableState's own "false ⇒ skip" scoping above.
+    const requiresLiveDuplicateRecheck =
+      action.actionClass === "close" && action.closeKind === "heuristic" && action.closeRequiresDuplicateStillOpen === true && action.duplicateWinnerPrNumber !== undefined;
+    if (requiresLiveCiRecheck || requiresLiveMergeableRecheck || requiresLiveThreadRecheck || requiresLiveDuplicateRecheck) {
       const ciToken = await createInstallationToken(env, ctx.installationId).catch(() => undefined);
       const admissionKey = githubRateLimitAdmissionKeyForToken(env, ciToken, ctx.installationId);
       // mergeRequiredCiContexts(null, ...) -- no live branch-protection re-fetch here, just the maintainer's own
       // configured expectedCiContexts (or null/fold-all when unset), matching the "no branch protection" arm of
       // the planning pass's own merge (mergeRequiredCiContexts is pure and already exported for that call site).
-      const [liveCi, liveMergeableState, liveThreadBlockers] = await Promise.all([
+      const [liveCi, liveMergeableState, liveThreadBlockers, liveWinnerState] = await Promise.all([
         requiresLiveCiRecheck
           ? fetchLiveCiAggregate(env, ctx.repoFullName, expectedHeadSha, ciToken, mergeRequiredCiContexts(null, ctx.expectedCiContexts), admissionKey)
           : Promise.resolve(undefined),
         requiresLiveMergeableRecheck ? fetchLivePullRequestMergeState(env, ctx.repoFullName, ctx.pullNumber, ciToken, admissionKey) : Promise.resolve(undefined),
         requiresLiveThreadRecheck ? fetchLiveReviewThreadBlockers(env, ctx.repoFullName, ctx.pullNumber, ciToken, admissionKey) : Promise.resolve(undefined),
+        requiresLiveDuplicateRecheck
+          ? fetchLivePullRequestState(env, ctx.repoFullName, action.duplicateWinnerPrNumber!, ciToken, admissionKey).catch(() => undefined)
+          : Promise.resolve(undefined),
       ]);
       // The planner itself only ever stages a merge when ciState === "passed" exactly (reviewGood in
       // agent-actions.ts; "pending" short-circuits to no actions at all upstream) -- the live re-check must
@@ -430,7 +443,14 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
         requiresLiveThreadRecheck && liveThreadBlockers !== undefined && liveThreadBlockers.length === 0
           ? "the review thread(s) that justified this close are now all resolved"
           : null;
-      const staleReason = ciStaleReason ?? mergeableStaleReason ?? threadStaleReason;
+      // Only a CONFIRMED non-"open" clears a duplicate-justified close -- a failed/ambiguous fetch (undefined)
+      // fails open exactly like the mergeable-state recheck above, so a transient GitHub hiccup never wrongly
+      // spares a close that is, in fact, still justified.
+      const duplicateStaleReason =
+        requiresLiveDuplicateRecheck && liveWinnerState !== undefined && liveWinnerState !== "open"
+          ? `duplicate-cluster winner #${action.duplicateWinnerPrNumber} is no longer open`
+          : null;
+      const staleReason = ciStaleReason ?? mergeableStaleReason ?? threadStaleReason ?? duplicateStaleReason;
       if (staleReason) {
         await audit("denied", `${staleReason} — action not executed`);
         continue;
@@ -881,6 +901,11 @@ export function actionParams(action: PlannedAgentAction): AgentPendingActionPara
     // Round-trip the review-thread dependency likewise: only a thread-justified close needs the accept-time /
     // pre-mutation live thread-blocker recheck (see the field's doc comment on AgentPendingActionParams).
     ...(action.closeRequiresThreadResolved !== undefined ? { closeRequiresThreadResolved: action.closeRequiresThreadResolved } : {}),
+    // Round-trip the duplicate-PR dependency likewise: only a duplicate-justified close needs the live
+    // duplicate-still-open recheck (#dup-winner-staleness, see the field's doc comment on AgentPendingActionParams).
+    ...(action.closeRequiresDuplicateStillOpen !== undefined ? { closeRequiresDuplicateStillOpen: action.closeRequiresDuplicateStillOpen } : {}),
+    // Round-trip the named winning sibling so the recheck re-verifies THAT PR specifically on replay too.
+    ...(action.duplicateWinnerPrNumber !== undefined ? { duplicateWinnerPrNumber: action.duplicateWinnerPrNumber } : {}),
     // Round-trip the concrete-evidence tag so the breaker's exemption still applies when a staged close accepts.
     ...(action.closeConcreteEvidence !== undefined ? { closeConcreteEvidence: action.closeConcreteEvidence } : {}),
   };

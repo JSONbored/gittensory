@@ -21591,6 +21591,82 @@ describe("queue processors", () => {
     expect(winnerAdvisory?.findings_json ?? "").toContain("duplicate_pr_risk");
   });
 
+  it("REGRESSION (#dup-winner-slop-drift): maybePublishPrPublicSurface's slop penalty uses the LIVE-reconciled siblings, not a raw stale-cached read — a stale-cached-open lower sibling that is actually CLOSED on GitHub must not deny this PR winner status / slop-penalize it for the cluster", async () => {
+    // GITTENSORY_DUPLICATE_WINNER ON. PR #95 (this PR, being reviewed) links issue #1; PR #90 (LOWER-numbered,
+    // same linked issue) is cached `open` in the DB (a missed/delayed `closed` webhook), but GitHub's LIVE state
+    // for #90 is actually `closed`. Before the fix, maybePublishPrPublicSurface's own duplicate-winner election
+    // read the raw, un-reconciled `listPullRequests` result (still showing #90 as open) and so wrongly denied
+    // #95 winner status, applying the duplicateClusterMembership slop penalty (weight 15, persisted slop_band
+    // "low") even though the gate's OWN reconciled otherOpenPullRequests (used to build the advisory/gate
+    // disposition) had already correctly dropped #90. After the fix, both paths agree: #95 is the winner (no
+    // open siblings once reconciled) and carries NO duplicate-cluster slop penalty (slop_band "clean").
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_DUPLICATE_WINNER: "true" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+      duplicatePrGateMode: "block",
+      slopGateMode: "advisory",
+    });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "Cache the registry sync", state: "open", user: { login: "maintainer" }, author_association: "OWNER", body: "We should cache the registry fetch." });
+    // Stale-cached-open sibling: the DB still says #90 is open (the closed webhook was missed/delayed).
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 90, title: "Older attempt at the cache fix", state: "open", user: { login: "other" }, author_association: "CONTRIBUTOR", head: { sha: "sib90" }, labels: [], body: "Fixes #1" });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 95, title: "Fix the cache", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "win95" }, labels: [], body: "Fixes #1\n\nValidation: npm test" });
+
+    let liveStateFetches90 = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // The LIVE state of the lower sibling #90 is CLOSED, contradicting the stale-cached "open" DB row --
+      // reconcileLiveDuplicateSiblings must discover this via a genuine live fetch, not the cache.
+      if (/\/pulls\/90(?:\?|$)/.test(url)) {
+        liveStateFetches90 += 1;
+        return Response.json({ number: 90, state: "closed" });
+      }
+      // Includes a test-file change alongside the code change so missingTestEvidence never confounds the
+      // duplicateClusterMembership assertion below — this test isolates the ONE slop signal under test.
+      if (url.includes("/pulls/95/files"))
+        return Response.json([
+          { filename: "src/cache.ts", status: "modified", additions: 12, deletions: 0, changes: 12 },
+          { filename: "test/unit/cache.test.ts", status: "modified", additions: 8, deletions: 0, changes: 8 },
+        ]);
+      if (url.includes("/commits/win95/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "PATCH") return Response.json({ id: 970 });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 970 }, { status: 201 });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "dup-winner-slop-drift",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 95, title: "Fix the cache", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "win95" }, labels: [], body: "Fixes #1\n\nValidation: npm test" },
+      },
+    });
+
+    // A genuine live reconciliation happened (proving the fix reads live state, not the stale cache).
+    expect(liveStateFetches90).toBeGreaterThan(0);
+    // #95 is correctly credited as the cluster winner: no duplicateClusterMembership slop penalty persisted.
+    const winnerPr = await env.DB.prepare("select slop_risk, slop_band from pull_requests where repo_full_name = ? and number = ?").bind("JSONbored/gittensory", 95).first<{ slop_risk: number | null; slop_band: string | null }>();
+    expect(winnerPr?.slop_band).toBe("clean");
+    expect(winnerPr?.slop_risk).toBe(0);
+  });
+
   it("overrides the Gate to neutral for THIS commit only when a real write/admin maintainer runs gate-override", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);

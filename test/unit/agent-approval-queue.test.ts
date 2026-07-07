@@ -37,6 +37,9 @@ vi.mock("../../src/github/backfill", async (importOriginal) => ({
   // Defaults to "no live blockers left" so the existing accept tests stay deterministic; individual tests below
   // override this to exercise the thread-staleness supersede path.
   fetchLiveReviewThreadBlockers: vi.fn(async () => []),
+  // The duplicate-winner-still-open re-check (#dup-winner-staleness) defaults to "open" (the named winning
+  // sibling is still open, i.e. the duplicate justification still holds) so existing tests stay deterministic.
+  fetchLivePullRequestState: vi.fn(async () => "open"),
 }));
 // resolveLinkedIssueHardRule defaults to the REAL implementation, which is a safe no-op here: loadLinkedIssueHardRules
 // (also real, unmocked) always returns the all-off default config, so the real resolver returns undefined (not
@@ -52,7 +55,7 @@ vi.mock("../../src/review/linked-issue-hard-rules", async (importOriginal) => {
 import { createPullRequestReview, mergePullRequest } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel } from "../../src/github/labels";
 import { createInstallationToken } from "../../src/github/app";
-import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision, fetchLiveReviewThreadBlockers } from "../../src/github/backfill";
+import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision, fetchLivePullRequestState, fetchLiveReviewThreadBlockers } from "../../src/github/backfill";
 import { resolveLinkedIssueHardRule } from "../../src/review/linked-issue-hard-rules";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { actionParams, executeAgentMaintenanceActions, pendingActionToPlanned, type AgentActionExecutionContext } from "../../src/services/agent-action-executor";
@@ -845,17 +848,17 @@ describe("agent approval queue (#779)", () => {
     expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ ciState: "pending", mergeableState: "clean" });
   });
 
-  it("REGRESSION (gate review): a duplicate/slop/blocker-only close (no conflict, no review thread) is never touched by the mergeable-state/thread recheck", async () => {
+  it("REGRESSION (gate review): a slop/blocker-only close (no conflict, no review thread, no duplicate justification) is never touched by the mergeable-state, thread, or duplicate-winner recheck", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval" } });
     await seedInstallation(env);
     await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
-    // mergeableState reads "clean" (the default mock) and this close was NEVER conflict- or thread-justified
-    // (closeRequiresMergeableState: false, closeRequiresThreadResolved: false) -- a duplicate/slop/blocker
-    // close's mergeability/review-thread state was never the signal that justified it, so it must execute as
-    // staged rather than being superseded just because the PR happens to have clean mergeability (the
-    // gate-review-flagged over-broad-predicate regression). Narrowed by #review-thread-staleness to also cover
-    // the new review-thread exemption -- this close stays exempt from BOTH live rechecks.
+    // mergeableState reads "clean" (the default mock) and this close was NEVER conflict-, thread-, or
+    // duplicate-justified (closeRequiresMergeableState: false, closeRequiresThreadResolved: false,
+    // closeRequiresDuplicateStillOpen absent) -- a slop/blocker close's mergeability/review-thread/duplicate
+    // status was never the signal that justified it, so it must execute as staged rather than being superseded
+    // just because the PR happens to have clean mergeability (the gate-review-flagged over-broad-predicate
+    // regression). Covers all three live-recheck exemptions in one test since they share the same shape.
     const { action } = await createPendingAgentActionIfAbsent(env, {
       repoFullName: "owner/repo",
       pullNumber: 7,
@@ -863,14 +866,14 @@ describe("agent approval queue (#779)", () => {
       actionClass: "close",
       autonomyLevel: "auto_with_approval",
       params: {
-        closeComment: "duplicate of another open PR",
+        closeComment: "slop score too high",
         closeKind: "heuristic",
         closeRequiresCiState: "not_required",
         closeRequiresMergeableState: false,
         closeRequiresThreadResolved: false,
         expectedHeadSha: "h7",
       },
-      reason: "duplicate of another open PR",
+      reason: "slop score too high",
     });
 
     const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
@@ -879,12 +882,13 @@ describe("agent approval queue (#779)", () => {
     expect(result.executionOutcome).toBe("completed");
     const { closePullRequest } = await import("../../src/github/pr-actions");
     expect(closePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7);
-    // No live recheck was even attempted for this close -- it isn't scoped by closeRequiresMergeableState or
-    // closeRequiresThreadResolved.
+    // No live recheck was even attempted for this close -- it isn't scoped by closeRequiresMergeableState,
+    // closeRequiresThreadResolved, or closeRequiresDuplicateStillOpen.
     expect(fetchLiveCiAggregate).not.toHaveBeenCalled();
     expect(fetchLivePullRequestMergeState).not.toHaveBeenCalled();
     expect(fetchLivePullRequestReviewDecision).not.toHaveBeenCalled();
     expect(fetchLiveReviewThreadBlockers).not.toHaveBeenCalled();
+    expect(fetchLivePullRequestState).not.toHaveBeenCalled();
   });
 
   it("REGRESSION (#review-thread-staleness): a review-thread-only close (closeRequiresThreadResolved: true) DOES trigger the live rechecks", async () => {
@@ -1035,6 +1039,100 @@ describe("agent approval queue (#779)", () => {
     expect(result.executionOutcome).toBe("completed");
     const { closePullRequest } = await import("../../src/github/pr-actions");
     expect(closePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7);
+  });
+
+  it("REGRESSION (#dup-winner-staleness): a duplicate-justified close naming a specific winning sibling is DENIED (superseded) when that sibling is no longer open at accept time", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    // Queues exactly 2 responses (Once, not a persistent mockResolvedValue): the accept-time recheck here AND
+    // the executor's own actuation-time recheck each consume one call and must see the SAME "no longer open"
+    // state for this test's premise to hold (mirrors the #3863 mergeable-state test's own precedent).
+    vi.mocked(fetchLivePullRequestState).mockResolvedValueOnce("closed").mockResolvedValueOnce("closed");
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "close",
+      autonomyLevel: "auto_with_approval",
+      params: {
+        closeComment: "duplicate of open PR #42",
+        closeKind: "heuristic",
+        closeRequiresCiState: "not_required",
+        closeRequiresMergeableState: false,
+        closeRequiresDuplicateStillOpen: true,
+        duplicateWinnerPrNumber: 42,
+        expectedHeadSha: "h7",
+      },
+      reason: "duplicate of open PR #42",
+    });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+
+    expect(result.status).toBe("rejected");
+    expect(result.executionOutcome).toBe("stale_disposition");
+    const { closePullRequest } = await import("../../src/github/pr-actions");
+    expect(closePullRequest).not.toHaveBeenCalled();
+    const audit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = ?").bind("agent.pending_action.superseded").first<{ detail: string; metadata_json: string }>();
+    expect(audit?.detail).toContain("duplicate-cluster winner #42 is no longer open");
+    expect(JSON.parse(audit?.metadata_json ?? "{}")).toMatchObject({ duplicateWinnerState: "closed" });
+  });
+
+  it("a duplicate-justified close naming a specific winning sibling proceeds when that sibling is still open at accept time (#dup-winner-staleness)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "close",
+      autonomyLevel: "auto_with_approval",
+      params: {
+        closeComment: "duplicate of open PR #42",
+        closeKind: "heuristic",
+        closeRequiresCiState: "not_required",
+        closeRequiresMergeableState: false,
+        closeRequiresDuplicateStillOpen: true,
+        duplicateWinnerPrNumber: 42,
+        expectedHeadSha: "h7",
+      },
+      reason: "duplicate of open PR #42",
+    });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    const { closePullRequest } = await import("../../src/github/pr-actions");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7);
+    expect(fetchLivePullRequestState).toHaveBeenCalledWith(env, "owner/repo", 42, expect.anything(), expect.anything());
+  });
+
+  it("a duplicate-justified close with NO named winner (duplicateWinnerPrNumber absent) skips the duplicate-winner recheck entirely at accept time (#dup-winner-staleness)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { close: "auto_with_approval" } });
+    await seedInstallation(env);
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "x" });
+    const { action } = await createPendingAgentActionIfAbsent(env, {
+      repoFullName: "owner/repo",
+      pullNumber: 7,
+      installationId: 5,
+      actionClass: "close",
+      autonomyLevel: "auto_with_approval",
+      params: { closeComment: "duplicate of another open PR", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: false, closeRequiresDuplicateStillOpen: true, expectedHeadSha: "h7" },
+      reason: "duplicate of another open PR",
+    });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    const { closePullRequest } = await import("../../src/github/pr-actions");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7);
+    expect(fetchLivePullRequestState).not.toHaveBeenCalled();
   });
 
   it("REGRESSION (gate review): a LEGACY heuristic close row (closeRequiresMergeableState undefined, staged before the field existed) still gets the live recheck", async () => {
@@ -1404,6 +1502,29 @@ describe("agent approval queue (#779)", () => {
     expect(
       actionParams({ actionClass: "close", requiresApproval: false, reason: "x", closeComment: "C", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: true }),
     ).toEqual({ closeComment: "C", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: true });
+    // closeRequiresDuplicateStillOpen and duplicateWinnerPrNumber must ALSO round-trip (#dup-winner-staleness)
+    // -- without them, a replayed duplicate-justified close would lose the discriminators the approval queue's
+    // accept-time duplicate-winner recheck depends on.
+    expect(
+      actionParams({
+        actionClass: "close",
+        requiresApproval: false,
+        reason: "x",
+        closeComment: "C",
+        closeKind: "heuristic",
+        closeRequiresCiState: "not_required",
+        closeRequiresMergeableState: false,
+        closeRequiresDuplicateStillOpen: true,
+        duplicateWinnerPrNumber: 42,
+      }),
+    ).toEqual({
+      closeComment: "C",
+      closeKind: "heuristic",
+      closeRequiresCiState: "not_required",
+      closeRequiresMergeableState: false,
+      closeRequiresDuplicateStillOpen: true,
+      duplicateWinnerPrNumber: 42,
+    });
   });
 
   it("lists all pending actions unfiltered and stores a null reason when omitted", async () => {

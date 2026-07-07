@@ -116,6 +116,19 @@ export type PlannedAgentAction = {
   // justification -- see the doc comment on AgentPendingActionParams in types.ts. Mirrors
   // closeRequiresMergeableState's own discipline: ALWAYS set for a heuristic close (never omitted).
   closeRequiresThreadResolved?: boolean;
+  // True when a duplicate-PR justification (linkedDuplicateCount > 0) was part of this close's reasons --
+  // mirrors closeRequiresMergeableState's discipline: ALWAYS set (never omitted) for a freshly planned
+  // heuristic close, so `undefined` on a replayed row unambiguously means "legacy row, predates this field".
+  // Unlike a conflict, this justification depends on a SIBLING PR's live state, not this PR's own -- the
+  // recheck (agent-action-executor.ts / agent-approval-queue.ts) re-verifies duplicateWinnerPrNumber below,
+  // when a specific one was named, rather than re-deriving the whole cluster (#dup-winner-staleness).
+  closeRequiresDuplicateStillOpen?: boolean;
+  // The specific sibling PR number this close named as the duplicate-cluster winner (dupWinnerLinkedDuplicateWinnerNumber),
+  // persisted so the recheck above can re-verify THAT PR specifically instead of re-running the full election.
+  // Absent when the election named no specific winner (GITTENSORY_DUPLICATE_WINNER off, or an ambiguous
+  // election) even though closeRequiresDuplicateStillOpen is true -- the recheck has no cheap single-PR signal
+  // in that case and is a no-op, matching the legacy (pre-dup-winner) behavior for that configuration.
+  duplicateWinnerPrNumber?: number;
   // For a "heuristic" close: true when the close is backed by CONCRETE, non-judgment evidence — a committed
   // secret, a failing/red CI run, a base conflict, a deterministic linked-issue-overlap duplicate, or a
   // rule-based lane/manifest/pre-merge rejection — rather than any AI/model-derived verdict or a fuzzy score.
@@ -180,6 +193,13 @@ const CONCRETE_EVIDENCE_BLOCKER_CODES = new Set<string>([
  *  wrongly classified as concrete). */
 function hasConcreteCloseEvidence(input: AgentActionPlanInput, ciFailed: boolean, isConflict: boolean): boolean {
   if (ciFailed || isConflict) return true;
+  // A duplicate-PR link stays concrete evidence even now that the close has its own live staleness recheck
+  // (closeRequiresDuplicateStillOpen, see the field's doc comment) -- exactly the same relationship isConflict
+  // above already has with #3863's live mergeable-state recheck. The breaker exists to catch a SYSTEMATICALLY
+  // WRONG judgment call (an AI verdict that's often mistaken), not to guard against an otherwise-correct
+  // deterministic fact going STALE between planning and actuation -- that staleness risk is what the recheck
+  // itself closes. A duplicate-issue-link, like a base conflict, is still a deterministic, zero-hallucination
+  // fact about the linked-issue graph; it just needs to be re-verified fresh, which it now is.
   if ((input.pr.linkedDuplicateCount ?? 0) > 0) return true;
   return (input.gateBlockerCodes ?? []).some((code) => CONCRETE_EVIDENCE_BLOCKER_CODES.has(code) && !AI_JUDGMENT_BLOCKER_CODES.has(code));
 }
@@ -1166,6 +1186,13 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       closeRequiresMergeableState: isConflict,
       // Always explicit (never omitted), mirroring closeRequiresCiState's own discipline above.
       closeRequiresThreadResolved: isReviewThreadJustified,
+      // Always explicit (never omitted), mirroring closeRequiresMergeableState's own discipline -- a duplicate
+      // justification depends on a SIBLING PR's live state, which can change independently of this PR between
+      // planning and actuation (#dup-winner-staleness).
+      closeRequiresDuplicateStillOpen: (input.pr.linkedDuplicateCount ?? 0) > 0,
+      // Only set when the election named a SPECIFIC winning sibling -- omitted (not null) when there is none,
+      // matching expectedHeadSha's own "absent, not null" convention for an optional pin.
+      ...(input.pr.linkedDuplicateWinnerNumber != null ? { duplicateWinnerPrNumber: input.pr.linkedDuplicateWinnerNumber } : {}),
     });
   }
   // else: guarded → manual; not-good OWNER/automation → manual; action-required/unverified → manual;

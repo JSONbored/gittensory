@@ -3322,6 +3322,7 @@ async function reReviewStoredPullRequest(
         repo,
         settings,
         advisory,
+        otherOpenPullRequests,
         {
           deliveryId,
           baseSha: live?.base?.sha ?? null,
@@ -5881,6 +5882,7 @@ async function processGitHubWebhook(
                 repo,
                 settings,
                 advisory,
+                otherOpenPullRequests,
                 {
                   deliveryId,
                   authorType: payloadPullRequest.user?.type,
@@ -7676,6 +7678,12 @@ async function maybePublishPrPublicSurface(
   repo: Awaited<ReturnType<typeof getRepository>>,
   settings: Awaited<ReturnType<typeof getRepositorySettings>>,
   advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>,
+  // The SAME live-reconciled open siblings the gate's own duplicate-close decision uses (reconcileLiveDuplicateSiblings,
+  // built by the caller before this function runs — see reReviewStoredPullRequest / handlePullRequestWebhook /
+  // buildAuthorizedPrActionAdvisory). Threaded in rather than re-derived so the duplicate-winner election below
+  // (#dup-winner) agrees with the gate BY CONSTRUCTION instead of computing its own, separately-stale answer
+  // from a raw, un-reconciled DB read (#dup-winner-slop-drift).
+  otherOpenPullRequests: PullRequestRecord[],
   webhook: {
     deliveryId: string;
     authorType?: string | undefined;
@@ -8305,13 +8313,16 @@ async function maybePublishPrPublicSurface(
       registryEverSynced,
     );
     // Duplicate-winner adjudication (#dup-winner): compute the winner ONCE for this review run from the SAME
-    // open-only sibling source the gate uses, and thread the flag/result consistently into readiness, the slop
-    // penalty (below), and the public panel builders (further down) so they agree by construction. Flag-OFF
-    // (default) ⇒ duplicateWinnerEnabled is false and isDupWinner is false ⇒ every guard short-circuits
-    // (byte-identical).
+    // live-RECONCILED open-only sibling source the gate's own close decision uses (otherOpenPullRequests, threaded
+    // in by the caller via reconcileLiveDuplicateSiblings — NOT repoPullRequests, a raw un-reconciled read of the
+    // cached `state` column that can still say "open" for a sibling GitHub already closed, e.g. a missed/delayed
+    // webhook), and thread the flag/result consistently into readiness, the slop penalty (below), and the public
+    // panel builders (further down) so they agree by construction with the actual close decision
+    // (#dup-winner-slop-drift). Flag-OFF (default) ⇒ duplicateWinnerEnabled is false and isDupWinner is false ⇒
+    // every guard short-circuits (byte-identical).
     const linkedDuplicatePrsForGate = linkedIssueDuplicatePullRequestRecordsForGate(
       pr,
-      repoPullRequests,
+      otherOpenPullRequests,
     );
     const duplicateWinnerEnabled = env.GITTENSORY_DUPLICATE_WINNER === "true";
     const isDupWinner =
@@ -10638,7 +10649,7 @@ async function maybeProcessPrPanelRetrigger(
     return true;
   }
 
-  const { repo, advisory } = await buildAuthorizedPrActionAdvisory(
+  const { repo, advisory, otherOpenPullRequests } = await buildAuthorizedPrActionAdvisory(
     env,
     repoFullName,
     pr,
@@ -10694,6 +10705,7 @@ async function maybeProcessPrPanelRetrigger(
     repo,
     settings,
     advisory,
+    otherOpenPullRequests,
     {
       deliveryId,
       action: "manual_retrigger",
@@ -10825,11 +10837,25 @@ export async function buildAuthorizedPrActionAdvisory(
 ): Promise<{
   repo: Awaited<ReturnType<typeof getRepository>>;
   advisory: ReturnType<typeof buildPullRequestAdvisory>;
+  // Reconciled open siblings (#dup-winner-staleness), returned so a caller that also needs to invoke
+  // maybePublishPrPublicSurface (the panel-retrigger path) can reuse the SAME reconciled set instead of
+  // re-deriving it from a second, un-reconciled read.
+  otherOpenPullRequests: PullRequestRecord[];
 }> {
-  const [repo, otherOpenPullRequests] = await Promise.all([
+  const [repo, cachedOtherOpenPullRequests] = await Promise.all([
     getRepository(env, repoFullName),
     listOtherOpenPullRequests(env, repoFullName, pr.number),
   ]);
+  // #dup-winner-staleness: reconcile the cached open-PR read against GitHub's live state, same as the main
+  // webhook path (reReviewStoredPullRequest / handlePullRequestWebhook) -- an authorized PR action (gate-
+  // override / panel retrigger) must see the same ground truth, not a second, independently-stale snapshot.
+  const otherOpenPullRequests = await reconcileLiveDuplicateSiblings(
+    env,
+    repo?.installationId ?? null,
+    repoFullName,
+    pr,
+    cachedOtherOpenPullRequests,
+  );
   // Mirror the main webhook path: thread linked-issue authors + the open-reference check so an authorized PR
   // action (gate-override / panel retrigger) honors the same self-authored-linked-issue block AND stale-
   // issue-link countermeasure. installationId comes from the repo record. (#self-authored-parity, #unlinked-issue-guardrail-followup)
@@ -10847,7 +10873,7 @@ export async function buildAuthorizedPrActionAdvisory(
     confirmedNoOpenLinkedIssue,
     linkedIssueAuthorLogins,
   });
-  return { repo, advisory };
+  return { repo, advisory, otherOpenPullRequests };
 }
 
 function isCheckedPrPanelRetrigger(body: string | null | undefined): boolean {

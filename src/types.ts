@@ -1165,14 +1165,14 @@ export type AgentPendingActionParams = {
   // so `undefined` unambiguously means a LEGACY row staged before this field existed, not "not CI-driven".
   closeRequiresCiState?: "failed" | "not_required";
   // True when a base conflict (mergeable_state: "dirty") was part of this heuristic close's justification --
-  // one of the few non-CI close reasons (alongside closeRequiresThreadResolved below) the approval queue's
-  // accept-time live recheck has a cheap, reliable live signal for. Other non-CI heuristic reasons (duplicate
-  // PR, slop score, a gate-verdict blocker not backed by a review thread) have no equivalently cheap live
-  // re-derivation, so decidePendingAgentAction only reruns its mergeable-state/review-decision staleness check
-  // when this is true -- gating it on closeRequiresCiState === "not_required" alone (any non-CI reason) instead
-  // would supersede EVERY duplicate/slop/blocker-only close whose mergeability simply happens to read "clean"
-  // (which most never-conflicted PRs already are), even though their actual justification never depended on
-  // mergeability and may still be live (gate review finding).
+  // one of three non-CI close reasons (alongside closeRequiresThreadResolved and closeRequiresDuplicateStillOpen
+  // below) the approval queue's accept-time live recheck has a cheap, reliable live signal for. Slop score and a
+  // gate-verdict blocker not backed by one of the above have no equivalently cheap live re-derivation, so
+  // decidePendingAgentAction only reruns its mergeable-state/review-decision staleness check when this is true --
+  // gating it on closeRequiresCiState === "not_required" alone (any non-CI reason) instead would supersede EVERY
+  // duplicate/slop/blocker-only close whose mergeability simply happens to read "clean" (which most
+  // never-conflicted PRs already are), even though their actual justification never depended on mergeability and
+  // may still be live (gate review finding).
   // ALWAYS set (never omitted) for a freshly planned heuristic close, mirroring closeRequiresCiState's own
   // discipline -- so `undefined` unambiguously means a legacy row staged before this field existed.
   closeRequiresMergeableState?: boolean;
@@ -1185,6 +1185,16 @@ export type AgentPendingActionParams = {
   // not an ambiguous legacy row; the accept-time/actuation-time rechecks below scope on it with a strict
   // `=== true`, not the broader `!== false` closeRequiresMergeableState needs for its own legacy-row case.
   closeRequiresThreadResolved?: boolean;
+  // True when a duplicate-PR justification (linkedDuplicateCount > 0) was part of this heuristic close's
+  // reasons -- see PlannedAgentAction.closeRequiresDuplicateStillOpen in agent-actions.ts for the full
+  // rationale (#dup-winner-staleness). ALWAYS set (never omitted) for a freshly planned heuristic close,
+  // mirroring closeRequiresMergeableState's own discipline.
+  closeRequiresDuplicateStillOpen?: boolean;
+  // The specific sibling PR number named as the duplicate-cluster winner, persisted so the recheck can
+  // re-verify THAT PR specifically instead of re-deriving the whole cluster. See
+  // PlannedAgentAction.duplicateWinnerPrNumber in agent-actions.ts. Absent when the election named no
+  // specific winner even though closeRequiresDuplicateStillOpen is true.
+  duplicateWinnerPrNumber?: number;
   // Persisted so the close-precision breaker's concrete-evidence exemption (see
   // PlannedAgentAction.closeConcreteEvidence) still applies correctly when a staged heuristic close is later
   // accepted -- without this, EVERY staged close would silently fall back to "not concrete" at accept-time and

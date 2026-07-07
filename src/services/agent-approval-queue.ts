@@ -6,7 +6,7 @@ import { executeAgentMaintenanceActions, pendingActionToPlanned } from "./agent-
 import { downgradeCloseToHold, downgradeMergeToHold, isProtectedAutomationAuthor, type PlannedAgentAction } from "../settings/agent-actions";
 import { findBlacklistEntry } from "../settings/contributor-blacklist";
 import { isCloseHoldOnly, isHoldOnly } from "../review/outcomes-wire";
-import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision, fetchLiveReviewThreadBlockers, mergeRequiredCiContexts } from "../github/backfill";
+import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision, fetchLivePullRequestState, fetchLiveReviewThreadBlockers, mergeRequiredCiContexts } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import type { AgentPendingActionParams, AgentPendingActionRecord } from "../types";
 
@@ -194,12 +194,12 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   // For close, scoped to closeRequiresMergeableState !== false -- i.e. `true` (a base-conflict-justified
   // heuristic close) OR `undefined` (a LEGACY row staged before this field existed, whose original
   // justification is unknown). NOT the broader closeRequiresCiState === "not_required" (any non-CI reason).
-  // A duplicate/slop/blocker-only close (closeRequiresMergeableState === false, always explicit per the
-  // field's own doc comment) has no cheap live re-derivation, so it is intentionally left out of this
-  // recheck. But `undefined` must NOT be treated the same as `false`: a strict `=== true` comparison would
-  // silently skip the live recheck for any pre-existing auto_with_approval close row staged before this
-  // field was introduced, even one that WAS originally conflict-justified -- exactly the safety gap this
-  // recheck exists to close. Fail toward "revalidate" for the unknown case, not "skip" (gate review finding).
+  // A slop/blocker-only close (closeRequiresMergeableState === false, always explicit per the field's own doc
+  // comment) has no cheap live re-derivation, so it is intentionally left out of this recheck. But `undefined`
+  // must NOT be treated the same as `false`: a strict `=== true` comparison would silently skip the live
+  // recheck for any pre-existing auto_with_approval close row staged before this field was introduced, even
+  // one that WAS originally conflict-justified -- exactly the safety gap this recheck exists to close. Fail
+  // toward "revalidate" for the unknown case, not "skip" (gate review finding).
   const isMergeableRecheck = pending.actionClass === "close" && pending.params.closeKind === "heuristic" && pending.params.closeRequiresMergeableState !== false;
   // Mirrors isMergeableRecheck's LIVE-SIGNAL shape (#review-thread-staleness) but deliberately scoped to
   // `=== true`, not `!== false`: unlike closeRequiresMergeableState, closeRequiresThreadResolved has NO
@@ -209,32 +209,48 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   // ambiguous legacy row, so there is no equivalent "fail toward revalidate" case to guard against.
   const isThreadRecheck = pending.actionClass === "close" && pending.params.closeKind === "heuristic" && pending.params.closeRequiresThreadResolved === true;
   const shouldRecheckLiveDisposition = pr?.headSha && (pending.actionClass === "merge" || isMergeableRecheck || isThreadRecheck);
-  if (shouldRecheckLiveDisposition) {
+  // #dup-winner-staleness: a duplicate-justified heuristic close naming a SPECIFIC winning sibling has its own
+  // cheap live signal (is that PR still open?), independent of the merge/conflict/thread rechecks above -- gated
+  // separately since a row can be duplicate-justified without also being conflict- or thread-justified (and
+  // vice versa), and does not depend on pr?.headSha the way the others do (it checks a SIBLING PR's state).
+  const shouldRecheckLiveDuplicateWinner =
+    pending.actionClass === "close" &&
+    pending.params.closeKind === "heuristic" &&
+    pending.params.closeRequiresDuplicateStillOpen === true &&
+    pending.params.duplicateWinnerPrNumber !== undefined;
+  if (shouldRecheckLiveDisposition || shouldRecheckLiveDuplicateWinner) {
     const token = await createInstallationToken(env, pending.installationId).catch(() => undefined);
     const admissionKey = githubRateLimitAdmissionKeyForToken(env, token, pending.installationId);
     // Promise.allSettled, not Promise.all: each live re-check is independently best-effort (per the comment
     // above), so ONE transient rejection must fail open on that specific check, not throw the whole accept
     // out of decidePendingAgentAction. A settled-rejected check is treated the same as "nothing concerning
     // found" -- exactly what each function's own internal fail-safe catch already resolves to on success.
-    const [ciResult, mergeableResult, reviewResult, threadResult] = await Promise.allSettled([
-      // mergeRequiredCiContexts(null, ...) -- no live branch-protection re-fetch here, just the maintainer's own
-      // configured expectedCiContexts (or null/fold-all when unset), so this accept-time re-check honors the
-      // same required-contexts view the original plan was evaluated against (#selfhost-ci-verification).
-      fetchLiveCiAggregate(env, pending.repoFullName, pr.headSha, token, mergeRequiredCiContexts(null, settings.expectedCiContexts), admissionKey),
-      fetchLivePullRequestMergeState(env, pending.repoFullName, pending.pullNumber, token, admissionKey),
-      fetchLivePullRequestReviewDecision(env, pending.repoFullName, pending.pullNumber, token, admissionKey),
+    // The CI/mergeable/review calls are no-ops (Promise.resolve(undefined)) when shouldRecheckLiveDisposition is
+    // false (block entered ONLY for a duplicate-only recheck); the thread/duplicate calls are independently
+    // gated on their own specific flags, mirroring the executor's own same-pattern conditional-Promise.all in
+    // agent-action-executor.ts.
+    const [ciResult, mergeableResult, reviewResult, threadResult, duplicateWinnerResult] = await Promise.allSettled([
+      shouldRecheckLiveDisposition
+        ? // mergeRequiredCiContexts(null, ...) -- no live branch-protection re-fetch here, just the maintainer's own
+          // configured expectedCiContexts (or null/fold-all when unset), so this accept-time re-check honors the
+          // same required-contexts view the original plan was evaluated against (#selfhost-ci-verification).
+          fetchLiveCiAggregate(env, pending.repoFullName, pr!.headSha, token, mergeRequiredCiContexts(null, settings.expectedCiContexts), admissionKey)
+        : Promise.resolve(undefined),
+      shouldRecheckLiveDisposition ? fetchLivePullRequestMergeState(env, pending.repoFullName, pending.pullNumber, token, admissionKey) : Promise.resolve(undefined),
+      shouldRecheckLiveDisposition ? fetchLivePullRequestReviewDecision(env, pending.repoFullName, pending.pullNumber, token, admissionKey) : Promise.resolve(undefined),
       isThreadRecheck ? fetchLiveReviewThreadBlockers(env, pending.repoFullName, pending.pullNumber, token, admissionKey) : Promise.resolve(undefined),
+      shouldRecheckLiveDuplicateWinner ? fetchLivePullRequestState(env, pending.repoFullName, pending.params.duplicateWinnerPrNumber!, token, admissionKey) : Promise.resolve(undefined),
     ]);
     // A REJECTED promise stays undefined (fail-open — the read itself failed, not a genuine CI signal); a
     // FULFILLED promise reporting anything other than "passed" (failed, pending, or unverified) is a real,
     // non-stale-tolerant signal that the staged merge's justification no longer holds (#2126).
-    const ciState = ciResult.status === "fulfilled" ? ciResult.value.ciState : undefined;
+    const ciState = ciResult.status === "fulfilled" ? ciResult.value?.ciState : undefined;
     const mergeableState = mergeableResult.status === "fulfilled" ? mergeableResult.value : undefined;
     // Tracked separately from reviewDecision's VALUE: a REJECTED promise also resolves reviewDecision to
     // undefined below, which must not be indistinguishable from "fetched successfully and confirmed not
     // CHANGES_REQUESTED" -- otherwise a transient read failure silently satisfies the close-staleness check
     // below instead of failing open on it (gate review finding).
-    const reviewFetchSucceeded = reviewResult.status === "fulfilled";
+    const reviewFetchSucceeded = reviewResult.status === "fulfilled" && shouldRecheckLiveDisposition;
     const reviewDecision = reviewFetchSucceeded ? reviewResult.value : undefined;
     // Tracked separately from the VALUE for the same reason as reviewFetchSucceeded above: a REJECTED promise
     // also resolves to undefined, which must not read as "confirmed no threads remain" -- fetchLiveReviewThreadBlockers
@@ -243,12 +259,16 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
     const threadFetchSucceeded = threadResult.status === "fulfilled";
     const liveThreadBlockers = threadFetchSucceeded ? threadResult.value : undefined;
     const threadsNowResolved = isThreadRecheck && threadFetchSucceeded && (liveThreadBlockers?.length ?? 0) === 0;
-    // Gated on isMergeableRecheck explicitly (not just "reached the close branch"): a thread-only close
-    // (isThreadRecheck true, isMergeableRecheck false) also reaches this branch now, and mergeableState reads
-    // "clean" for most never-conflicted PRs by default -- without this gate, a thread-only close would be
-    // wrongly superseded as if it were conflict-justified merely because mergeability happens to read clean
-    // (the SAME over-broad-predicate class the #2478 gate review already caught once for closeRequiresMergeableState).
+    // Gated on isMergeableRecheck explicitly (not just "reached the close branch"): a thread- or duplicate-only
+    // close also reaches this branch now, and mergeableState reads "clean" for most never-conflicted PRs by
+    // default -- without this gate, a thread- or duplicate-only close would be wrongly superseded as if it were
+    // conflict-justified merely because mergeability happens to read clean (the SAME over-broad-predicate class
+    // the #2478 gate review already caught once for closeRequiresMergeableState).
     const mergeableNowCleared = isMergeableRecheck && reviewFetchSucceeded && mergeableState === "clean" && reviewDecision !== "CHANGES_REQUESTED";
+    // Only a CONFIRMED non-"open" clears a duplicate-justified close -- a rejected/failed fetch (undefined)
+    // fails open exactly like every other live re-check in this function, so a transient GitHub hiccup never
+    // wrongly spares a close that is, in fact, still justified.
+    const duplicateWinnerState = duplicateWinnerResult.status === "fulfilled" ? duplicateWinnerResult.value : undefined;
     const staleReason =
       pending.actionClass === "merge"
         ? ciState !== undefined && ciState !== "passed"
@@ -258,18 +278,21 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
             : reviewDecision === "CHANGES_REQUESTED"
               ? "a reviewer has since requested changes"
               : null
-        : // Only reached when closeRequiresMergeableState !== false or closeRequiresThreadResolved === true (see
-          // shouldRecheckLiveDisposition above), so CI state is irrelevant to this specific close's justification
-          // and the only live signals that matter are whether the conflict has cleared or the thread(s) resolved --
-          // each gated individually below (mergeableNowCleared / threadsNowResolved) so a close justified by only
-          // ONE of the two axes is never wrongly cleared by the other axis's unrelated live state.
+        : // Only reached when closeRequiresMergeableState !== false, closeRequiresThreadResolved === true, or
+          // closeRequiresDuplicateStillOpen === true (see shouldRecheckLiveDisposition/shouldRecheckLiveDuplicateWinner
+          // above), so CI state is irrelevant to this specific close's justification and the only live signals
+          // that matter are whether the conflict cleared, the thread(s) resolved, or the duplicate winner closed --
+          // each gated individually below (mergeableNowCleared / threadsNowResolved / the duplicate check) so a
+          // close justified by only ONE axis is never wrongly cleared by another axis's unrelated live state.
           // reviewFetchSucceeded is required alongside the value check -- see its own comment above -- so a failed
           // live-review read fails open instead of masquerading as "confirmed no changes requested".
           mergeableNowCleared
           ? "the conflict that justified this close has since cleared"
           : threadsNowResolved
             ? "the review thread(s) that justified this close are now all resolved"
-            : null;
+            : shouldRecheckLiveDuplicateWinner && duplicateWinnerState !== undefined && duplicateWinnerState !== "open"
+              ? `duplicate-cluster winner #${pending.params.duplicateWinnerPrNumber} is no longer open`
+              : null;
     if (staleReason) {
       await setPendingAgentActionStatus(env, pending.id, { status: "rejected", decidedBy: input.decidedBy });
       await recordAuditEvent(env, {
@@ -284,6 +307,7 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
           mergeableState: mergeableState ?? null,
           reviewDecision: reviewDecision ?? null,
           liveThreadBlockerCount: liveThreadBlockers?.length ?? null,
+          duplicateWinnerState: duplicateWinnerState ?? null,
         },
       });
       return { status: "rejected", action: { ...pending, status: "rejected", decidedBy: input.decidedBy }, executionOutcome: "stale_disposition" };
