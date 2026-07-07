@@ -94,7 +94,12 @@ export async function pruneExpiredRecords(
 
 export type SignalSnapshotDedupeResult = { signalType: string; deleted: number };
 
-const LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES = ["repo-culture-profile", "repo-doc-refresh-attempt"] as const;
+const LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES = [
+  "repo-culture-profile",
+  "repo-doc-refresh-attempt",
+  "repo-focus-manifest",
+  "repo-public-focus-manifest",
+] as const;
 
 /**
  * signal_snapshots has no dedup: `generate-signal-snapshots` inserts a NEW row per (signal_type,

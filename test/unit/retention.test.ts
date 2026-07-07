@@ -4,6 +4,7 @@ import { getDb } from "../../src/db/client";
 import { dedupeSignalSnapshots, pruneExpiredRecords, RETENTION_POLICY } from "../../src/db/retention";
 import { agentContextSnapshots, aiUsageEvents, webhookEvents } from "../../src/db/schema";
 import { processJob, runRetentionPrune } from "../../src/queue/processors";
+import { REPO_FOCUS_MANIFEST_SIGNAL, REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
 const NOW = Date.parse("2026-06-13T00:00:00.000Z");
@@ -159,6 +160,25 @@ describe("dedupeSignalSnapshots", () => {
     expect(await countSignalSnapshots(env, "queue-health")).toBe(1);
     const remaining = await env.DB.prepare("SELECT id FROM signal_snapshots WHERE signal_type = ?").bind("repo-culture-profile").first<{ id: string }>();
     expect(remaining?.id).toBe("s-3");
+  });
+
+  it("dedupes private and public focus-manifest cache snapshots (regression for storage exhaustion)", async () => {
+    const env = createTestEnv();
+    await insertSignalSnapshot(env, "private-old", REPO_FOCUS_MANIFEST_SIGNAL, "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "private-latest", REPO_FOCUS_MANIFEST_SIGNAL, "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+    await insertSignalSnapshot(env, "public-old", REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL, "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "public-latest", REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL, "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+
+    const results = await dedupeSignalSnapshots(env);
+
+    expect(results).toEqual([
+      { signalType: REPO_FOCUS_MANIFEST_SIGNAL, deleted: 1 },
+      { signalType: REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL, deleted: 1 },
+    ]);
+    expect(await countSignalSnapshots(env, REPO_FOCUS_MANIFEST_SIGNAL)).toBe(1);
+    expect(await countSignalSnapshots(env, REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL)).toBe(1);
+    const rows = await env.DB.prepare("SELECT id FROM signal_snapshots ORDER BY signal_type, id").all<{ id: string }>();
+    expect(rows.results.map((row) => row.id)).toEqual(["private-latest", "public-latest"]);
   });
 
   it("preserves bounded history for signal types read as historical series", async () => {
