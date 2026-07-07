@@ -876,6 +876,14 @@ type AiRunCorrelation = {
   anthropicModel?: string | undefined;
 };
 
+/** True for the self-host CLI adapter's own non-transient timeout signal (`src/selfhost/ai.ts`'s
+ *  `throw new Error("subscription_cli_timeout")`, thrown after a `claude-code`/`codex` subprocess is SIGKILLed
+ *  at its effort-based deadline). Distinguishes it from a genuinely transient failure (a dropped connection, a
+ *  malformed response) that's still worth retrying up to the full budget. */
+function isSubscriptionCliTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message === "subscription_cli_timeout";
+}
+
 /** One reviewer opinion (whichever provider `env.AI` resolves to — self-host Codex/Claude Code/etc, or the
  *  legacy Workers-AI pair) with a per-slot reliable fallback and a 3× retry on the primary. */
 async function runWorkersOpinion(
@@ -976,6 +984,12 @@ async function runWorkersOpinion(
           }),
         );
         lastError = error;
+        // A CLI timeout is not transient -- the same model retrying the same oversized/complex diff will almost
+        // certainly time out again. Stop retrying THIS model (the fallback below still gets its own full retry
+        // budget, since a different model/config may not share the same timeout) instead of burning up to 3x
+        // the full effort-timeout in subprocess time for zero additional chance of success (#gaming-tactic-draft-cycle
+        // audit finding: this inner retry count is distinct from c7073949's outer cross-sweep-tick cap).
+        if (isSubscriptionCliTimeout(error)) break;
       }
     }
   }
@@ -1616,6 +1630,8 @@ async function runDualAiTieBreakJudgeCall(
           status: "provider_error",
           error: errorMessage(error),
         });
+        // See runWorkersOpinion's identical guard: a CLI timeout will not resolve by retrying the same model.
+        if (isSubscriptionCliTimeout(error)) break;
       }
     }
   }

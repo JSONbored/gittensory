@@ -2675,6 +2675,21 @@ describe("pure helpers", () => {
       expect(diagnostics.some((d) => d.status === "provider_error")).toBe(true);
     });
 
+    it("runDualAiTieBreakJudgeCall stops retrying a model after ONE subscription_cli_timeout, but the fallback still gets its full retry budget (#gaming-tactic-draft-cycle)", async () => {
+      let primaryAttempts = 0;
+      const run = vi.fn(async (model: string) => {
+        if (model === "fallback") return { response: '{"favored":"reviewer_1"}' };
+        primaryAttempts += 1;
+        throw new Error("subscription_cli_timeout");
+      });
+      const env = createTestEnv({ AI: { run } as unknown as Ai });
+      const diagnostics: Array<{ status: string; model: string }> = [];
+      const parsed = await runDualAiTieBreakJudgeCall(env, "primary", "fallback", blockedA, clean, false, diagnostics as never);
+      expect(parsed?.verdict).toBe("reviewer_1");
+      expect(primaryAttempts).toBe(1); // NOT 3 -- the timeout short-circuits further retries of this model.
+      expect(run).toHaveBeenCalledTimes(2); // 1 primary (timed out) + 1 fallback (succeeded on its first try).
+    });
+
     it("resolveDualAiTieBreakWithOrderStability returns inconclusive when judge output never parses", async () => {
       const run = vi.fn(async () => ({ response: "not-json" }));
       const env = createTestEnv({ AI: { run } as unknown as Ai });
@@ -2791,6 +2806,34 @@ describe("pure helpers", () => {
     );
     expect(parsed.review?.assessment).toContain("reasonable");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("runWorkersOpinion stops retrying a model after ONE subscription_cli_timeout, but the fallback still gets its full retry budget (#gaming-tactic-draft-cycle)", async () => {
+    let primaryAttempts = 0;
+    const run = vi.fn(async (model: string) => {
+      if (model === "fallback") return { response: reviewJson() };
+      primaryAttempts += 1;
+      throw new Error("subscription_cli_timeout");
+    });
+    const env = createTestEnv({ AI: { run } as unknown as Ai });
+    const diagnostics: Array<{ status: string; model: string }> = [];
+    const parsed = await runWorkersOpinion(env, "primary", "fallback", "sys", "user", 256, diagnostics as never);
+    expect(parsed.review?.assessment).toContain("reasonable");
+    expect(primaryAttempts).toBe(1); // NOT 3 -- the timeout short-circuits further retries of this model.
+    expect(run).toHaveBeenCalledTimes(2); // 1 primary (timed out) + 1 fallback (succeeded on its first try).
+  });
+
+  it("runWorkersOpinion still retries a genuinely transient (non-timeout) error up to the full budget", async () => {
+    let attempts = 0;
+    const run = vi.fn(async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("connection reset");
+      return { response: reviewJson() };
+    });
+    const env = createTestEnv({ AI: { run } as unknown as Ai });
+    const parsed = await runWorkersOpinion(env, "m", "m", "sys", "user", 256);
+    expect(parsed.review?.assessment).toContain("reasonable");
+    expect(attempts).toBe(3);
   });
 
   it("forwards correlation + self-host ai_model override fields into ai.run's options, omitting absent ones (#selfhost-ai-model-override)", async () => {
