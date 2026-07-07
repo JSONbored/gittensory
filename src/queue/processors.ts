@@ -5591,6 +5591,7 @@ async function processGitHubWebhook(
     }
 
     if (eventName === "issue_comment" && (await maybeProcessResolveCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
+    if (eventName === "issue_comment" && (await maybeProcessExplainCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (
       eventName === "issue_comment" &&
       (await maybeProcessConfigurationCommand(env, deliveryId, payload))
@@ -10663,6 +10664,86 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   await createOrUpdateAgentCommandComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation, mode);
   await recordAuditEvent(env, { eventType: "github_app.finding_resolved", actor: req.actor, targetKey, outcome: "completed", detail: `Marked ${resolvedLabel} as resolved.`, metadata: { deliveryId, repoFullName: req.repoFullName, scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } });
   await recordGithubProductUsage(env, "finding_resolved", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); return true; }
+
+/**
+ * `@gittensory explain <finding>` (#2169, part of #1960): a contributor/maintainer asks for more detail on a
+ * specific posted review finding. Read-only — it looks the finding up in THIS PR's current advisory (the same
+ * source `resolve` acts on) and echoes its ALREADY-generated, public-safe rationale; it deliberately runs NO
+ * model (new generation is a separate maintainer-owned budget concern) and mutates nothing, so — like the
+ * `configuration` info command — it posts regardless of the agent action mode. Requires naming a specific finding:
+ * an absent argument (which `normalizeResolveFindingRef` reads as `whole_pr`) is a skip, not "explain everything".
+ * An unknown id gets a public-safe not-found note rather than a silent no-op. Returns true once it owns the event.
+ */
+async function maybeProcessExplainCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  const command = parseGittensoryMentionCommand(payload.comment?.body);
+  if (!command || command.name !== "explain") return false;
+  const { classifyPrCommandRequest } = await import("../github/pr-command-request");
+  const { normalizeResolveFindingRef, selectWarningsForResolve } = await import("../review/review-memory-wire");
+  const req = classifyPrCommandRequest(payload, getInstallationId(payload));
+  if (!req.ok) {
+    await recordFindingExplainedSkip(env, deliveryId, req.repoFullName, req.targetKey, req.actor, req.reason);
+    return true;
+  }
+  const targetKey = `${req.repoFullName}#${req.pr.number}`;
+  const [pr, settings] = await Promise.all([getPullRequest(env, req.repoFullName, req.pr.number), resolveRepositorySettings(env, req.repoFullName)]);
+  if (!pr) {
+    await recordFindingExplainedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "cached_pr_missing");
+    return true;
+  }
+  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "explain" as GittensoryMentionCommandName, settings, pr });
+  if (!authorization.authorized) {
+    await recordAuditEvent(env, { eventType: "github_app.finding_explained_denied", actor: req.actor, targetKey, outcome: "denied", detail: authorization.reason, metadata: { deliveryId, repoFullName: req.repoFullName, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "explain") } });
+    await recordGithubProductUsage(env, "finding_explained_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind } });
+    return true;
+  }
+  const findingRef = normalizeResolveFindingRef(command.argument);
+  if (!findingRef.ok) {
+    await recordFindingExplainedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, findingRef.reason);
+    return true;
+  }
+  if (findingRef.scope === "whole_pr") {
+    // Unlike `resolve`, `explain` needs a specific target — an empty argument is a skip, not "explain all findings".
+    await recordFindingExplainedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "missing_finding_argument");
+    return true;
+  }
+  const { advisory } = await buildAuthorizedPrActionAdvisory(env, req.repoFullName, pr, settings);
+  await appendPublishedAiReviewFindingsForResolve(env, req.repoFullName, pr, settings.aiReviewMode, advisory);
+  const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
+  const selection = selectWarningsForResolve(gate.warnings, findingRef);
+  if (selection.reason === "finding_not_found") {
+    const notFound = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **No review finding \`${findingRef.findingCode}\` on this PR**`, "> That id is not among this PR's current review findings — re-run `@gittensory explain <finding-id>` with an id from the review summary.", "", "---", gittensoryFooter()].join("\n"));
+    await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, notFound);
+    await recordFindingExplainedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "finding_not_found");
+    return true;
+  }
+  const body = sanitizePublicComment(
+    [
+      AGENT_COMMAND_COMMENT_MARKER,
+      "",
+      `> [!NOTE]`,
+      `> **Explanation of \`${findingRef.findingCode}\` for @${req.actor}**`,
+      "",
+      ...selection.findings.flatMap((finding) => [
+        `### ${finding.title}`,
+        "",
+        finding.publicText ?? finding.detail,
+        ...(finding.action ? ["", `**Suggested action:** ${finding.action}`] : []),
+        "",
+      ]),
+      "---",
+      gittensoryFooter(),
+    ].join("\n"),
+  );
+  await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, body);
+  await recordAuditEvent(env, { eventType: "github_app.finding_explained", actor: req.actor, targetKey, outcome: "completed", detail: `Explained \`${findingRef.findingCode}\` for ${targetKey}.`, metadata: { deliveryId, repoFullName: req.repoFullName, findingCode: findingRef.findingCode, explainedCount: selection.findings.length } });
+  await recordGithubProductUsage(env, "finding_explained", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { findingCode: findingRef.findingCode, explainedCount: selection.findings.length } });
+  return true;
+}
+
+async function recordFindingExplainedSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
+  await recordAuditEvent(env, { eventType: "github_app.finding_explained_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
+  await recordGithubProductUsage(env, "finding_explained_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
+}
 
 async function appendPublishedAiReviewFindingsForResolve(
   env: Env,

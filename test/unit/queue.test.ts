@@ -23298,6 +23298,216 @@ describe("queue processors", () => {
     });
   });
 
+  // #2169 (part of #1960): `@gittensory explain <finding>` echoes an already-generated finding's public-safe
+  // rationale on the PR thread — read-only, no model call, no mutation. Mirrors the `resolve` harness above.
+  describe("@gittensory explain (#2169)", () => {
+    async function seedExplainPr(env: Env, repoFullName: string, prNumber: number, headSha: string) {
+      const slash = repoFullName.indexOf("/");
+      const owner = repoFullName.slice(0, slash);
+      const name = repoFullName.slice(slash + 1);
+      await upsertRepositoryFromGitHub(env, { name, full_name: repoFullName, private: false, owner: { login: owner } }, 123);
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: true, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: prNumber, title: "Explain me", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: headSha }, labels: [], body: "No linked issue on purpose" });
+    }
+    const explainWebhook = (repoFullName: string, prNumber: number, body: string, actor: string, opts: { association?: string; bot?: boolean; action?: string } = {}) => ({
+      type: "github-webhook" as const,
+      deliveryId: `explain-${prNumber}-${actor}`,
+      eventName: "issue_comment" as const,
+      payload: {
+        action: opts.action ?? "created",
+        installation: { id: 123, account: { login: repoFullName.slice(0, repoFullName.indexOf("/")), id: 1, type: "User" } },
+        repository: { name: repoFullName.slice(repoFullName.indexOf("/") + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, repoFullName.indexOf("/")) } },
+        issue: { number: prNumber, title: "Explain me", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: prNumber * 10, body, author_association: opts.association ?? "NONE", user: { login: actor, type: opts.bot ? "Bot" : "User" } },
+        sender: { login: actor, type: opts.bot ? "Bot" : "User" },
+      },
+    }) as unknown as Parameters<typeof processJob>[1];
+
+    it("echoes a named finding's stored rationale to an authorized maintainer + records finding_explained (no mutation)", async () => {
+      const repoFullName = "JSONbored/explain-2169-echo";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedExplainPr(env, repoFullName, 2169, "explain-2169-echo");
+      await putCachedAiReview(env, repoFullName, 2169, "explain-2169-echo", "advisory", {
+        notes: "The cached AI review found a public issue.",
+        reviewerCount: 2,
+        findings: [{ code: "ai_review_split", severity: "warning", title: "AI reviewers disagree", detail: "One reviewer flagged a likely defect that needs maintainer triage." }],
+      });
+      let postedBody = "";
+      const calls = { comments: 0, checkPatches: 0 };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/2169/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/2169/comments") && method === "POST") { calls.comments += 1; postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 21690 }); }
+        if (url.includes("/check-runs") && method === "PATCH") { calls.checkPatches += 1; return Response.json({ id: 1 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2169, "@gittensory explain ai_review_split", "maintainer"));
+
+      expect(calls.comments).toBe(1);
+      expect(calls.checkPatches).toBe(0); // read-only: never touches the gate check-run
+      expect(postedBody).toContain("Explanation of `ai_review_split`");
+      expect(postedBody).toContain("AI reviewers disagree"); // the finding's stored title
+      expect(postedBody).toContain("One reviewer flagged a likely defect"); // its stored rationale, echoed verbatim
+      const explained = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("github_app.finding_explained").first<{ outcome: string; metadata_json: string }>();
+      expect(explained?.outcome).toBe("completed");
+      expect(JSON.parse(explained?.metadata_json ?? "{}")).toMatchObject({ findingCode: "ai_review_split", explainedCount: 1 });
+    });
+
+    it("echoes a deterministic finding's rationale AND its suggested action", async () => {
+      const repoFullName = "JSONbored/explain-2169-action";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      // seedExplainPr sets requireLinkedIssue + a body with no linked issue, so the gate yields the deterministic
+      // `missing_linked_issue` warning, which carries a `detail` AND an `action` (src/rules/advisory.ts).
+      await seedExplainPr(env, repoFullName, 2176, "explain-2169-action");
+      let postedBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/2176/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/2176/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 21760 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2176, "@gittensory explain missing_linked_issue", "maintainer"));
+
+      expect(postedBody).toContain("No linked issue detected"); // title
+      expect(postedBody).toContain("Suggested action:"); // the finding's action is rendered
+      expect(postedBody).toContain("link it explicitly in the PR body"); // the action text, echoed
+      const explained = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.finding_explained").first<{ outcome: string }>();
+      expect(explained?.outcome).toBe("completed");
+    });
+
+    it("posts a public-safe not-found note when the finding id is unknown", async () => {
+      const repoFullName = "JSONbored/explain-2169-missing";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedExplainPr(env, repoFullName, 2170, "explain-2169-missing");
+      let postedBody = "";
+      let posted = false;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/2170/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/2170/comments") && method === "POST") { posted = true; postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 21700 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2170, "@gittensory explain readiness_score_below_threshold", "maintainer"));
+
+      expect(posted).toBe(true);
+      expect(postedBody).toContain("No review finding `readiness_score_below_threshold`");
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.finding_explained_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("finding_not_found");
+    });
+
+    it.each([
+      ["missing argument", "@gittensory explain", "missing_finding_argument"],
+      ["malformed finding id", "@gittensory explain ../escape", "malformed_finding_id"],
+    ] as const)("skips (no comment) when the maintainer supplies %s", async (_label, body, reason) => {
+      const repoFullName = "JSONbored/explain-2169-skip";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedExplainPr(env, repoFullName, 2171, "explain-2169-skip");
+      let posted = false;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/comments") && method === "POST") { posted = true; return Response.json({ id: 1 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2171, body, "maintainer"));
+
+      expect(posted).toBe(false);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.finding_explained_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe(reason);
+    });
+
+    it("denies a non-maintainer — no explanation posted, records finding_explained_denied", async () => {
+      const repoFullName = "JSONbored/explain-2169-deny";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedExplainPr(env, repoFullName, 2172, "explain-2169-deny");
+      let posted = false;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/org-member/permission")) return Response.json({ permission: "read" });
+        if (url.includes("/comments")) { posted = true; return Response.json({ id: 1 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2172, "@gittensory explain ai_review_split", "org-member", { association: "MEMBER" }));
+
+      expect(posted).toBe(false);
+      const denied = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.finding_explained_denied").first<{ outcome: string }>();
+      expect(denied).toMatchObject({ outcome: "denied" });
+    });
+
+    it("records a classifier skip for a bot-authored explain command, never acting on it", async () => {
+      const repoFullName = "JSONbored/explain-2169-bot";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedExplainPr(env, repoFullName, 2173, "explain-2169-bot");
+      let posted = false;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString().includes("/comments")) posted = true;
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2173, "@gittensory explain ai_review_split", "some-bot[bot]", { bot: true }));
+
+      expect(posted).toBe(false);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.finding_explained_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("bot_author");
+    });
+
+    it("skips with cached_pr_missing when the referenced PR is not in the local store", async () => {
+      const repoFullName = "JSONbored/explain-2169-nopr";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      // Register the repo + settings but NOT the PR row, so getPullRequest returns null.
+      await upsertRepositoryFromGitHub(env, { name: "explain-2169-nopr", full_name: repoFullName, private: false, owner: { login: "JSONbored" } }, 123);
+      await upsertRepositorySettings(env, { repoFullName, gateCheckMode: "enabled", aiReviewMode: "advisory" });
+      let posted = false;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString().includes("/comments")) posted = true;
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2174, "@gittensory explain ai_review_split", "maintainer"));
+
+      expect(posted).toBe(false);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.finding_explained_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("cached_pr_missing");
+    });
+
+    it("declines (returns false) for a non-explain comment and for a plain non-mention comment", async () => {
+      const repoFullName = "JSONbored/explain-2169-decline";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await seedExplainPr(env, repoFullName, 2175, "explain-2169-decline");
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/2175/comments") && !url.includes("POST")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, explainWebhook(repoFullName, 2175, "just a normal comment, no mention", "maintainer"));
+      await processJob(env, explainWebhook(repoFullName, 2175, "@gittensory configuration", "maintainer"));
+
+      // The explain handler never claimed either comment — no explain audit rows at all.
+      const explainRows = await env.DB.prepare("select count(*) as n from audit_events where event_type like 'github_app.finding_explained%'").first<{ n: number }>();
+      expect(explainRows?.n).toBe(0);
+    });
+  });
+
   it("a #1960 action-command verb with no dispatch handler wired yet (e.g. pause) is bailed out of the Q&A answer-card path, not misrendered as help (#2160)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
