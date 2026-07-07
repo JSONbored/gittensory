@@ -47,6 +47,10 @@ export type JobMessage =
       // webhook-driven caller sets this; it exists so a manual trigger has a supported way to force a fresh
       // pass instead of reusing a recent (possibly disputed) result.
       force?: boolean | undefined;
+      /** The head SHA this job was dispatched to repair; present only on priority-repair dispatches.
+       *  Used by regatePullRequest to record the repair attempt at execution time (not dispatch time)
+       *  so the cap in surfaceRepairPriorityPullNumbers counts actual runs, not queued jobs. */
+      repairHeadSha?: string | undefined;
     }
   | {
       type: "refresh-registry";

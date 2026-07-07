@@ -1080,6 +1080,7 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // One bounded re-gate unit fanned out by the sweep (#audit-sweep-fanout): re-review + stamp a single PR.
       await regatePullRequest(
         env,
+        message.repairHeadSha,
         message.repoFullName,
         message.prNumber,
         message.installationId,
@@ -1461,7 +1462,7 @@ async function refreshOpenPullRequestsForScheduledSweep(
 // surfaceRepairPriorityPullNumbers has no memory of prior attempts -- if the repair keeps failing for the SAME
 // head SHA (e.g. every AI-provider attempt times out), it would otherwise re-select that PR forever, burning a
 // fresh review attempt every cycle for zero output. These two constants cap that: once a SHA has already had
-// REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA dispatches recorded, it drops back to ordinary staleness-gated candidacy
+const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 5;
 // (still eventually re-checked, just not on every tick) and a single REGATE_REPAIR_EXHAUSTED_EVENT_TYPE audit
 // event is recorded so the stuck PR is visible instead of silently retried forever. A new commit changes the
 // head SHA, which resets the count naturally (the target key is scoped to repo+PR+SHA).
@@ -1870,24 +1871,15 @@ async function sweepRepoRegate(
       const job: JobMessage = {
         type: "agent-regate-pr",
         deliveryId: isPriorityRepair
+        // #orb-retry-storm: pass the repair SHA so regatePullRequest can record the attempt at
+        // execution time (after rate-limit admission), not here at dispatch time.  Jobs that are
+        // deferred or dropped before they run no longer count against the per-SHA cap.
+        ...(isPriorityRepair && pr.headSha ? { repairHeadSha: pr.headSha } : {}),
           ? `regate-repair:${repoFullName}#${pr.number}`
           : `regate-sweep:${repoFullName}#${pr.number}`,
         repoFullName,
         prNumber: pr.number,
         installationId: sweepInstallationId,
-        ...(pr.createdAt ? { prCreatedAt: pr.createdAt } : {}),
-      };
-      const delaySeconds = Math.min(index * 10, 600);
-      await (delaySeconds > 0
-        ? env.JOBS.send(job, { delaySeconds })
-        : env.JOBS.send(job));
-      // #orb-retry-storm: record every priority-repair dispatch so surfaceRepairPriorityPullNumbers can cap
-      // how many times the SAME head SHA gets bounced back through this bypass (see its own comment above).
-      /* v8 ignore next -- isPriorityRepair is only true for a pr.number surfaceRepairPriorityPullNumbers added to priorityPullNumbers, which requires that same pr to have a truthy headSha; `&& pr.headSha` only satisfies its optional TS type. */
-      if (isPriorityRepair && pr.headSha) {
-        await recordAuditEvent(env, {
-          eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
-          actor: "gittensory",
           targetKey: regateRepairTargetKey(repoFullName, pr.number, pr.headSha),
           outcome: "queued",
           detail: `outage-repair re-review dispatched for ${repoFullName}#${pr.number}`,
@@ -2097,6 +2089,7 @@ async function sweepRepoBacklogConvergence(
 // per-PR job always re-evaluates the head.
 async function regatePullRequest(
   env: Env,
+  repairHeadSha?: string,
   repoFullName: string,
   prNumber: number,
   installationId: number,
@@ -2124,10 +2117,25 @@ async function regatePullRequest(
     await env.JOBS.send(
       {
         type: "agent-regate-pr",
+        ...(repairHeadSha ? { repairHeadSha } : {}),
         deliveryId,
         repoFullName,
         prNumber,
         installationId,
+  }
+  // #orb-retry-storm: record the repair attempt NOW — after rate-limit admission — so the cap in
+  // surfaceRepairPriorityPullNumbers counts actual executions, not queued dispatches that may have
+  // been deferred or dropped before running (the old dispatch-time recording let rate-limit deferrals
+  // exhaust the 2-attempt budget without ever trying the repair).
+  if (repairHeadSha) {
+    await recordAuditEvent(env, {
+      eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
+      actor: "gittensory",
+      targetKey: regateRepairTargetKey(repoFullName, prNumber, repairHeadSha),
+      outcome: "started",
+      detail: `outage-repair re-review executing for ${repoFullName}#${prNumber}`,
+      metadata: { repoFullName, prNumber, headSha: repairHeadSha },
+    });
         ...(prCreatedAt ? { prCreatedAt } : {}),
         ...(force ? { force: true } : {}),
       },
