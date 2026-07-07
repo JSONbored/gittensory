@@ -27,6 +27,7 @@
 
 import { createInstallationToken } from "../github/app";
 import { githubRateLimitAdmissionKeyForInstallation, timeoutFetch, type GitHubRateLimitAdmissionKey } from "../github/client";
+import { incr } from "../selfhost/metrics";
 import { isConfigFile, isDependencyManifestFile } from "../signals/path-matchers";
 import { repoParts } from "../utils/json";
 import { createReviewAdapters } from "./adapters";
@@ -315,7 +316,11 @@ export async function indexRepo(
     );
     return { indexed: upserted, files: filesIndexed, capped };
   } catch (error) {
-    console.log(JSON.stringify({ ev: "rag_index_repo_error", repo: repo.fullName, message: String(error).slice(0, 200) }));
+    // ERROR level + counter (#3894): previously a no-`level` console.log invisible to Sentry, and this
+    // failure class had no metric at all -- gittensory_qdrant_errors_total only fires inside the Qdrant
+    // adapter itself, so an upstream failure here (GitHub tree/contents fetch, chunking) never counted.
+    console.error(JSON.stringify({ level: "error", event: "rag_index_repo_error", ev: "rag_index_repo_error", repo: repo.fullName, message: String(error).slice(0, 200) }));
+    incr("gittensory_rag_pipeline_errors_total", { op: "index_repo" });
     return empty;
   }
 }
@@ -378,7 +383,9 @@ export async function reindexChangedPaths(
     );
     return { indexed: upserted, files: filesIndexed, capped };
   } catch (error) {
-    console.log(JSON.stringify({ ev: "rag_reindex_paths_error", repo: repo.fullName, message: String(error).slice(0, 200) }));
+    // ERROR level + counter (#3894): see indexRepo's catch above -- same invisible-to-Sentry, no-metric fix.
+    console.error(JSON.stringify({ level: "error", event: "rag_reindex_paths_error", ev: "rag_reindex_paths_error", repo: repo.fullName, message: String(error).slice(0, 200) }));
+    incr("gittensory_rag_pipeline_errors_total", { op: "reindex_paths" });
     return empty;
   }
 }

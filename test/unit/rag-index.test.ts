@@ -6,6 +6,7 @@ import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import * as githubApp from "../../src/github/app";
 import { githubRateLimitAdmissionKeyForInstallation, latestGitHubRestRateLimitObservation } from "../../src/github/client";
+import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createTestEnv, TestD1Database } from "../helpers/d1";
 
 // A valid bge-m3-width (1024-d) embedding vector — embedTexts rejects any other width.
@@ -278,6 +279,26 @@ describe("indexRepo: full repo index (tree → chunk → embed → upsert)", () 
     // No `results` key at all → exercises the `?? []` defensive arm.
     allReturn = {};
     await expect(indexRepo(env, PROJECT, REPO)).resolves.toEqual({ indexed: 0, files: 0, capped: false });
+  });
+
+  it("a Cloudflare binding access that throws degrades to nothing indexed (indexRepo's own outer catch) + surfaces it at ERROR for Sentry with a counter (#3894)", async () => {
+    const { env } = indexEnv();
+    resetMetrics();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A binding CAN throw on access in real Workers runtime edge cases (revoked/misconfigured binding).
+    // Every I/O step inside indexRepo already self-catches (fetchRepoTree, fetchFileText, upsertChunks,
+    // resolveReadToken, ...), so this is the one realistic way to reach the function's own outer catch.
+    const throwingEnv = new Proxy(env, {
+      get(target, prop, receiver) {
+        if (prop === "VECTORIZE") throw new Error("binding access boom");
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    await expect(indexRepo(throwingEnv as typeof env, PROJECT, REPO)).resolves.toEqual({ indexed: 0, files: 0, capped: false });
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.level === "error" && p.event === "rag_index_repo_error" && p.ev === "rag_index_repo_error")).toBe(true);
+    expect(await renderMetrics()).toContain('gittensory_rag_pipeline_errors_total{op="index_repo"}');
+    errSpy.mockRestore();
   });
 });
 
@@ -569,6 +590,25 @@ describe("reindexChangedPaths: delete + re-upsert only the changed paths", () =>
     await expect(reindexChangedPaths(env, PROJECT, REPO, [])).resolves.toEqual({ indexed: 0, files: 0, capped: false });
     expect(vec.deleted.length).toBe(0);
     expect(vec.upserted.length).toBe(0);
+  });
+
+  it("a Cloudflare binding access that throws degrades to nothing indexed (reindexChangedPaths' own outer catch) + surfaces it at ERROR for Sentry with a counter (#3894)", async () => {
+    const { env } = indexEnv();
+    resetMetrics();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Same rationale as indexRepo's equivalent test above: every I/O step here already self-catches, so a
+    // binding access throw is the one realistic way to reach this function's own outer catch.
+    const throwingEnv = new Proxy(env, {
+      get(target, prop, receiver) {
+        if (prop === "VECTORIZE") throw new Error("binding access boom");
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    await expect(reindexChangedPaths(throwingEnv as typeof env, PROJECT, REPO, ["src/a.ts"])).resolves.toEqual({ indexed: 0, files: 0, capped: false });
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.level === "error" && p.event === "rag_reindex_paths_error" && p.ev === "rag_reindex_paths_error")).toBe(true);
+    expect(await renderMetrics()).toContain('gittensory_rag_pipeline_errors_total{op="reindex_paths"}');
+    errSpy.mockRestore();
   });
 });
 

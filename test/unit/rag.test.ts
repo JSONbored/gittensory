@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   bm25Rerank,
   bm25Scores,
@@ -469,8 +469,13 @@ describe("rag: upsertChunks (embed + vector upsert + chunk-text store)", () => {
   });
 
   it("returns 0 (no throw) when the vector upsert fails (#fail-safe)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const vector = { upsert: async () => { throw new Error("vectorize down"); } } as unknown as VectorAdapter;
     expect(await upsertChunks({ storage: storageStub(), vector, inference: ai1024 }, "p", "o/r", chunks)).toBe(0);
+    // #3894: previously a no-level console.log, invisible to Sentry.
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.level === "error" && p.event === "review_context_fetch_failed" && p.contextType === "rag" && p.ev === "rag_upsert_error")).toBe(true);
+    errSpy.mockRestore();
   });
 });
 
@@ -510,8 +515,13 @@ describe("rag: deleteChunksForPaths (incremental re-index of changed files)", ()
   });
 
   it("swallows a storage failure (fail-safe; never throws)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const storage = { prepare: () => { throw new Error("d1 down"); }, batch: async () => undefined } as unknown as StorageAdapter;
     await expect(deleteChunksForPaths({ storage }, "p", "o/r", ["src/a.ts"])).resolves.toBeUndefined();
+    // #3894: previously a no-level console.log, invisible to Sentry.
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.level === "error" && p.event === "review_context_fetch_failed" && p.contextType === "rag" && p.ev === "rag_delete_error")).toBe(true);
+    errSpy.mockRestore();
   });
 
   it("treats a SELECT result with NO `results` key as zero ids (the `rows.results ?? []` fallback)", async () => {
@@ -535,14 +545,24 @@ describe("rag: storage/inference catch paths return their fail-safe defaults", (
   });
 
   it("embedTexts returns null when inference throws", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const inference: InferenceAdapter = { run: async () => { throw new Error("ai down"); } };
     expect(await embedTexts(inference, ["hi"])).toBeNull();
+    // #3894: previously a no-level console.log, invisible to Sentry.
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.level === "error" && p.event === "review_context_fetch_failed" && p.contextType === "rag" && p.ev === "rag_embed_error")).toBe(true);
+    errSpy.mockRestore();
   });
 
   it("readChunkTexts returns an empty Map when the storage read throws", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const storage = { prepare: () => { throw new Error("d1 down"); }, batch: async () => undefined } as unknown as StorageAdapter;
     const map = await readChunkTexts(storage, ["id-1"]);
     expect(map.size).toBe(0);
+    // #3894: previously a no-level console.log, invisible to Sentry.
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.level === "error" && p.event === "review_context_fetch_failed" && p.contextType === "rag" && p.ev === "rag_chunk_read_error")).toBe(true);
+    errSpy.mockRestore();
   });
 
   it("readChunkTexts short-circuits on an empty id list", async () => {
