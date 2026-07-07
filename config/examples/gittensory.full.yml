@@ -355,6 +355,13 @@ gate:
 # Review output controls. These tune review output without changing the
 # deterministic gate policy above. Omit the block to keep the byte-identical
 # defaults.
+#
+# SELF-HOST ONLY (`review.shared_config`, #2046): when `GITTENSORY_REPO_CONFIG_DIR` is mounted,
+# place a shared review base at `${GITTENSORY_REPO_CONFIG_DIR}/_shared/.gittensory.yml` (see
+# `config/examples/shared.gittensory.yml`). Per-repo `review:` keys overlay it field-by-field —
+# repo value wins when set, shared fills gaps, defaults stay byte-identical. Absent shared base is
+# the common case and changes nothing. A malformed shared base warns and is ignored (never blocks a
+# review). The loader records provenance at runtime in `review.sharedConfigSource` (not a YAML key).
 review:
   # Deterministic AI review eligibility filters (`review.auto_review`, #1954 / #2038–#2065). Each knob quietly
   # skips the advisory AI review for matching PRs — never a gate failure. When the Orb review check is enabled,

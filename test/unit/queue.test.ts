@@ -6861,12 +6861,13 @@ describe("queue processors", () => {
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9407);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     // PR 1: missing its current Gate check for its current head -- would ordinarily be flagged outage-repair
-    // priority on every tick. Pre-seed 3 prior repair-attempt audit events for this EXACT head SHA to simulate a
-    // review that keeps failing (e.g. a timeout) and never publishes a completed gate check.
+    // priority on every tick. Pre-seed REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA=5 (#3998) prior repair-attempt audit
+    // events for this EXACT head SHA to simulate a review that keeps failing (e.g. a timeout) and never
+    // publishes a completed gate check.
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Stuck repair", state: "open", user: { login: "c" }, head: { sha: "stuck-sha" }, labels: [], body: "" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 1, "stuck-sha");
     const targetKey = "owner/agent-repo#1#stuck-sha";
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       await repositoriesModule.recordAuditEvent(env, {
         eventType: "agent.sweep.regate.repair_attempt",
         actor: "gittensory",
@@ -6894,12 +6895,12 @@ describe("queue processors", () => {
       const attempts = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
         .bind("agent.sweep.regate.repair_attempt", targetKey)
         .first<{ n: number }>();
-      expect(attempts?.n).toBe(3);
+      expect(attempts?.n).toBe(5);
       // Sentry-visible signal (via the structured-log forwarder) fires exactly once alongside the audit event.
       const exhaustedLogs = errors.mock.calls.filter(([line]) => typeof line === "string" && line.includes("regate_repair_exhausted"));
       expect(exhaustedLogs).toHaveLength(1);
       const logged = JSON.parse(exhaustedLogs[0]![0] as string) as Record<string, unknown>;
-      expect(logged).toMatchObject({ level: "error", event: "regate_repair_exhausted", repo: "owner/agent-repo", pullNumber: 1, headSha: "stuck-sha", attempts: 3 });
+      expect(logged).toMatchObject({ level: "error", event: "regate_repair_exhausted", repo: "owner/agent-repo", pullNumber: 1, headSha: "stuck-sha", attempts: 5 });
     } finally {
       errors.mockRestore();
     }
@@ -6920,14 +6921,18 @@ describe("queue processors", () => {
 
     const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
     expect(fanned.map((job) => job.deliveryId)).toContain("regate-repair:owner/agent-repo#2");
+    // #orb-retry-storm (#3998): repair_attempt is now recorded at EXECUTION time (inside regatePullRequest,
+    // after rate-limit admission), not at dispatch time -- a deferred/dropped fan-out no longer counts against
+    // the cap. The sweep only dispatches the per-PR job above; it must actually run for the attempt to land.
+    await processJob(env, fanned.find((job) => job.deliveryId === "regate-repair:owner/agent-repo#2")!);
     const attemptsAfterFirst = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
       .bind("agent.sweep.regate.repair_attempt", targetKey)
       .first<{ n: number }>();
     expect(attemptsAfterFirst?.n).toBe(1);
 
-    // Manually push this SHA over the cap, then run the sweep twice more -- the exhausted event must be recorded
-    // only once even though the PR is (re-)evaluated on every tick.
-    for (let i = 0; i < 2; i += 1) {
+    // Manually push this SHA over the REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA=5 cap (#3998), then run the sweep twice
+    // more -- the exhausted event must be recorded only once even though the PR is (re-)evaluated on every tick.
+    for (let i = 0; i < 4; i += 1) {
       await repositoriesModule.recordAuditEvent(env, {
         eventType: "agent.sweep.regate.repair_attempt",
         actor: "gittensory",
@@ -27344,7 +27349,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     // #terminal-outcome-audit: the disposition counter's "close" action_class, with the actual gate-blocker
     // code (missing_linked_issue, from the default linkedIssueGateMode:block + no-linked-issue body) as the
     // bounded blocker_class -- proof this reaches the real gate.blockers, not just a hardcoded label.
-    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="close",autonomy_level="auto",blocker_class="missing_linked_issue"} 1');
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="close",autonomy_level="auto",blocker_class="missing_linked_issue",repo="redacted-1"} 1');
     const nativeDecision = await env.DB.prepare("select decision, summary, source from review_audit where event_type = 'gate_decision' and target_id = ?").bind(`${REPO}#60`).first<{ decision: string; summary: string; source: string }>();
     expect(nativeDecision).toMatchObject({ decision: "close", summary: "missing_linked_issue", source: "gittensory-native" });
   });
@@ -27387,7 +27392,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
 
     expect(seen.merged).toBe(false);
     expect(seen.closed).toBe(false);
-    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="auto",blocker_class="guardrail_hold"} 1');
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="auto",blocker_class="guardrail_hold",repo="redacted-1"} 1');
     const holdAudit = await env.DB.prepare("select metadata_json from audit_events where event_type = 'agent.action.hold' order by created_at desc limit 1").first<{ metadata_json: string }>();
     expect(JSON.parse(holdAudit?.metadata_json ?? "{}")).toMatchObject({
       repoFullName: REPO,
@@ -27515,7 +27520,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     const mergeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.merge'").first<{ n: number }>();
     expect(mergeAudit?.n).toBeGreaterThanOrEqual(1);
     // #terminal-outcome-audit: the disposition counter's "merge" action_class, on the actual live call site.
-    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="merge",autonomy_level="auto",blocker_class="none"} 1');
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="merge",autonomy_level="auto",blocker_class="none",repo="redacted-1"} 1');
   });
 
   // #terminal-outcome-audit: end-to-end proof that the LIVE runAgentMaintenancePlanAndExecute call site (not just
@@ -27589,7 +27594,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
     // early return -- this is the exact "hold, but no audit_events row at all" shape (the breaker downgrade
     // leaves no merge/close action) that previously had zero aggregate signal. close autonomy is unset in this
     // repo's settings (only merge/approve are configured), so it resolves to the default "observe".
-    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="observe",blocker_class="none"} 1');
+    expect(await renderMetrics()).toContain('gittensory_agent_disposition_total{action_class="hold",autonomy_level="observe",blocker_class="none",repo="redacted-1"} 1');
     const holdAudit = await env.DB.prepare("select detail, metadata_json from audit_events where event_type = 'agent.action.hold' order by created_at desc limit 1").first<{ detail: string; metadata_json: string }>();
     expect(holdAudit?.detail).toBe("auto-action held by precision circuit breaker");
     expect(JSON.parse(holdAudit?.metadata_json ?? "{}")).toMatchObject({

@@ -106,7 +106,10 @@ describe("predicted-gate engine module coverage (#2283)", () => {
   });
 
   it("exercises duplicate-winner election helpers", () => {
-    expect(isDuplicateClusterWinnerByClaim({ number: 1, createdAt: "2026-01-01T00:00:00.000Z" }, [{ number: 2, createdAt: "2026-01-02T00:00:00.000Z" }])).toBe(true);
+    // #dup-winner anti-backdating: createdAt is deliberately NOT an ordering signal (a contributor can edit an
+    // old placeholder PR to add a linked issue later), so a pair with only createdAt and no linkedIssueClaimedAt
+    // has no comparable claim time and fails closed, regardless of which createdAt is earlier.
+    expect(isDuplicateClusterWinnerByClaim({ number: 1, createdAt: "2026-01-01T00:00:00.000Z" }, [{ number: 2, createdAt: "2026-01-02T00:00:00.000Z" }])).toBe(false);
     expect(
       isDuplicateClusterWinnerByClaim(
         { number: 2, linkedIssueClaimedAt: "2026-01-02T00:00:00.000Z" },
@@ -124,8 +127,10 @@ describe("predicted-gate engine module coverage (#2283)", () => {
         { number: 1, createdAt: "2026-01-01T00:00:00.000Z" },
         [{ number: 2, createdAt: "2026-01-01T00:00:00.000Z" }],
       ),
-    ).toBe(true);
-    expect(resolveDuplicateClusterWinnerNumber({ number: 2, createdAt: "2026-01-02T00:00:00.000Z" }, [{ number: 1, createdAt: "2026-01-01T00:00:00.000Z" }])).toBe(1);
+    ).toBe(false);
+    // Same fail-closed reasoning: resolveDuplicateClusterWinnerNumber mirrors isDuplicateClusterWinnerByClaim,
+    // so a createdAt-only pair with no linkedIssueClaimedAt is not a determinable election either.
+    expect(resolveDuplicateClusterWinnerNumber({ number: 2, createdAt: "2026-01-02T00:00:00.000Z" }, [{ number: 1, createdAt: "2026-01-01T00:00:00.000Z" }])).toBeNull();
     expect(resolveDuplicateClusterWinnerNumber({ number: 1, createdAt: null }, [{ number: 2, createdAt: null }])).toBeNull();
   });
 
