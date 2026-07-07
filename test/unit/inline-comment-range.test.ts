@@ -29,6 +29,18 @@ describe("everyLineInSet (#2141)", () => {
   });
 });
 
+describe("rightLinesByPath (#2141)", () => {
+  it("omits files with empty or non-string patches", () => {
+    const map = rightLinesByPath([
+      { path: "src/empty.ts", payload: { patch: "" } },
+      { path: "src/bad.ts", payload: { patch: 42 as unknown as string } },
+      { path: "src/a.ts", payload: { patch: multiPatch } },
+    ]);
+    expect(map.size).toBe(1);
+    expect(map.has("src/a.ts")).toBe(true);
+  });
+});
+
 describe("resolveInlineCommentAnchor (#2141)", () => {
   const files = [{ path: "src/a.ts", payload: { patch: multiPatch } }];
 
@@ -44,6 +56,23 @@ describe("resolveInlineCommentAnchor (#2141)", () => {
   it("downgrades to the start line when any line in the range is not commentable", () => {
     const rightLines = rightLinesByPath([{ path: "src/a.ts", payload: { patch: mixedPatch } }]);
     expect(resolveInlineCommentAnchor({ path: "src/a.ts", line: 2, endLine: 99 }, rightLines)).toEqual({
+      start: 2,
+      end: 2,
+      multiLine: false,
+    });
+  });
+
+  it("downgrades when the file path is missing from the RIGHT-side line map", () => {
+    expect(resolveInlineCommentAnchor({ path: "src/missing.ts", line: 1, endLine: 3 }, new Map())).toEqual({
+      start: 1,
+      end: 1,
+      multiLine: false,
+    });
+  });
+
+  it("keeps a single-line anchor when the range collapses to one commentable line", () => {
+    const rightLines = rightLinesByPath(files);
+    expect(resolveInlineCommentAnchor({ path: "src/a.ts", line: 2 }, rightLines)).toEqual({
       start: 2,
       end: 2,
       multiLine: false,

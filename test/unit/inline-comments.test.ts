@@ -333,6 +333,41 @@ describe("postInlineReviewComments (#inline-comments, fail-safe)", () => {
     expect(calls[0]?.body).toMatchObject({ event: "COMMENT", commit_id: "headsha", comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "**Nit:** guard this" }] });
   });
 
+  it("posts multi-line inline comments with start_line/start_side (#2141)", async () => {
+    const multiFiles = [{ path: "src/a.ts", payload: { patch: "@@ -1,0 +1,2 @@\n+one\n+two" } }];
+    const multiFindings: InlineFinding[] = [
+      { path: "src/a.ts", line: 1, endLine: 2, severity: "nit", body: "Replace both.", suggestion: "one\ntwo" },
+    ];
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/pulls/3/reviews")) return Response.json({ id: 5 });
+      return new Response("unexpected", { status: 500 });
+    });
+    expect(
+      await postInlineReviewComments(envWithKey(), {
+        ...base,
+        commitId: "headsha",
+        files: multiFiles,
+        findings: multiFindings,
+        suggestionsEnabled: true,
+      }),
+    ).toEqual({ posted: 1 });
+    expect(calls[0]?.body).toMatchObject({
+      comments: [
+        {
+          path: "src/a.ts",
+          line: 2,
+          start_line: 1,
+          start_side: "RIGHT",
+          side: "RIGHT",
+        },
+      ],
+    });
+  });
+
   it("swallows an API error (the gate is never affected), reports 0 posted, and surfaces it at ERROR for Sentry (#5)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
