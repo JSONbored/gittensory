@@ -184,12 +184,17 @@ function formatCiSection(c: ReviewCiSummary): string {
 
 function formatFilesSection(files: ChangedFileContent[]): string {
   const blocks = files.map((file) => {
-    if (file.truncated) return `### ${file.path}\n(omitted — too large to inline; review this file from the diff)`;
+    const path = safeGroundingPath(file.path);
+    if (file.truncated) return `### ${path}\n(omitted — too large to inline; review this file from the diff)`;
     const text = neutralizePromptInjection(file.text).text;
     const fence = safeMarkdownFence(text);
-    return `### ${file.path}\n${fence}\n${text}\n${fence}`;
+    return `### ${path}\n${fence}\n${text}\n${fence}`;
   });
   return ["FULL FILE CONTENT (post-change, head ref — check here before claiming any symbol is undefined/unused):", "", blocks.join("\n\n")].join("\n");
+}
+
+function safeGroundingPath(path: string): string {
+  return neutralizePromptInjection(path).text.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 }
 
 function safeMarkdownFence(text: string): string {
