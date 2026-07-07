@@ -313,6 +313,8 @@ export async function getPublicStats(
   // homepage reflects the whole fleet. No excludeAccount here (see the file header) -- reversals/weekly stay
   // own-ledger-only (the Orb aggregate only captures merged/closed, not reversals or a trailing-7-day split). The
   // total grows automatically as more installations register, self-hosted or otherwise.
+  // Snapshot before Orb merge: effort SQL only covers allowlisted own-ledger publishes, while `reviewed`
+  // below includes Orb fleet outcomes folded into totals.merged/closed.
   const ownLedgerReviewed = reviewedOf(totals);
   const orb = await getOrbGlobalStats(env);
   totals.merged += orb.merged;
