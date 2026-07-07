@@ -10397,6 +10397,7 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   const findingRef = normalizeResolveFindingRef(command.reason);
   if (!findingRef.ok) { await recordAuditEvent(env, { eventType: "github_app.finding_resolved_skipped", actor: req.actor, targetKey, outcome: "completed", detail: findingRef.reason, metadata: { deliveryId, repoFullName: req.repoFullName, reason: findingRef.reason } }); await recordGithubProductUsage(env, "finding_resolved_skipped", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "skipped", metadata: { reason: findingRef.reason } }); return true; }
   const { advisory } = await buildAuthorizedPrActionAdvisory(env, req.repoFullName, pr, settings);
+  await appendPublishedAiReviewFindingsForResolve(env, req.repoFullName, pr, settings.aiReviewMode, advisory);
   const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
   const selection = selectWarningsForResolve(gate.warnings, findingRef);
   if (selection.reason === "finding_not_found") { await recordAuditEvent(env, { eventType: "github_app.finding_resolved_skipped", actor: req.actor, targetKey, outcome: "completed", detail: selection.reason, metadata: { deliveryId, repoFullName: req.repoFullName, reason: selection.reason } }); await recordGithubProductUsage(env, "finding_resolved_skipped", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "skipped", metadata: { reason: selection.reason } }); return true; }
@@ -10411,6 +10412,29 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   await createOrUpdateAgentCommandComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation, mode);
   await recordAuditEvent(env, { eventType: "github_app.finding_resolved", actor: req.actor, targetKey, outcome: "completed", detail: `Marked ${resolvedLabel} as resolved.`, metadata: { deliveryId, repoFullName: req.repoFullName, scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } });
   await recordGithubProductUsage(env, "finding_resolved", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); return true; }
+
+async function appendPublishedAiReviewFindingsForResolve(
+  env: Env,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  aiReviewMode: string,
+  advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>,
+): Promise<void> {
+  const cachedReview = await getCachedAiReview(env, repoFullName, pr.number, advisory.headSha, aiReviewMode).catch(
+    /* v8 ignore next -- fail-open parity with the main review path: a stale AI cache read must not block resolve. */
+    () => null,
+  );
+  const publishedReview = cachedReview && hasPublicReviewAssessment(cachedReview.notes)
+    ? cachedReview
+    : await getLatestPublishedAiReview(env, repoFullName, pr.number, aiReviewMode).catch(
+      /* v8 ignore next -- fail-open parity with frozen-review reuse; resolve still handles deterministic findings. */
+      () => null,
+    );
+  if (publishedReview && hasPublicReviewAssessment(publishedReview.notes)) {
+    advisory.findings.push(...publishedReview.findings);
+  }
+}
+
 /**
  * `@gittensory plan` (#issue-coding-plan, flag-gated by GITTENSORY_REVIEW_PLANNER). On a MAINTAINER's comment on
  * an ISSUE (not a PR), generate a concise implementation plan from the issue text via Workers AI and post it as an

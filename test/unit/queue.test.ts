@@ -22260,6 +22260,7 @@ describe("queue processors", () => {
         gateCheckMode: "enabled",
         requireLinkedIssue: true,
         linkedIssueGateMode: "advisory",
+        aiReviewMode: "advisory",
       });
       await upsertPullRequestFromGitHub(env, repoFullName, {
         number: prNumber,
@@ -22343,6 +22344,94 @@ describe("queue processors", () => {
         category: "missing_linked_issue",
         createdBy: "maintainer",
       });
+    });
+
+    it("records a suppression for a current cached AI review warning", async () => {
+      const repoFullName = "JSONbored/resolve-1964-ai-cached";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_MEMORY: "true" });
+      await seedResolvePr(env, repoFullName, 1974, "resolve-1964-ai-cached");
+      await upsertRepoFocusManifest(env, repoFullName, { review: { memory: true } });
+      await putCachedAiReview(env, repoFullName, 1974, "resolve-1964-ai-cached", "advisory", {
+        notes: "The cached AI review found a public issue.",
+        reviewerCount: 2,
+        findings: [{ code: "ai_review_split", severity: "warning", title: "AI reviewers disagree", detail: "One reviewer flagged a likely defect that needs maintainer triage." }],
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/1974/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/1974/comments") && method === "POST") return Response.json({ id: 19741 });
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "resolve-1974-ai-cached",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "resolve-1964-ai-cached", full_name: repoFullName, private: false, owner: { login: "JSONbored" } },
+          issue: { number: 1974, title: "Resolve me", state: "open", user: { login: "contributor" }, pull_request: {} },
+          comment: { id: 19740, body: "@gittensory resolve ai_review_split", author_association: "NONE", user: { login: "maintainer", type: "User" } },
+          sender: { login: "maintainer", type: "User" },
+        },
+      });
+
+      const suppressions = await listReviewSuppressions(env, repoFullName);
+      expect(suppressions).toHaveLength(1);
+      expect(suppressions[0]).toMatchObject({ category: "ai_review_split", createdBy: "maintainer" });
+      const resolved = await env.DB.prepare("select metadata_json from audit_events where event_type = ?")
+        .bind("github_app.finding_resolved")
+        .first<{ metadata_json: string }>();
+      expect(JSON.parse(resolved?.metadata_json ?? "{}")).toMatchObject({ findingCode: "ai_review_split", resolvedWarningCount: 1, recordedSuppressionCount: 1 });
+    });
+
+    it("falls back to the last published public AI review when the current cached review has no public assessment", async () => {
+      const repoFullName = "JSONbored/resolve-1964-ai-published";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_MEMORY: "true" });
+      await seedResolvePr(env, repoFullName, 1975, "resolve-1964-ai-current");
+      await upsertRepoFocusManifest(env, repoFullName, { review: { memory: true } });
+      await putCachedAiReview(env, repoFullName, 1975, "resolve-1964-ai-old", "advisory", {
+        notes: "The published AI review found a public consensus defect.",
+        reviewerCount: 2,
+        findings: [{ code: "ai_consensus_defect", severity: "warning", title: "AI reviewers agree on a defect", detail: "Both reviewers flagged the same likely defect for maintainer triage." }],
+      });
+      await markAiReviewPublished(env, repoFullName, 1975, "resolve-1964-ai-old");
+      await putCachedAiReview(env, repoFullName, 1975, "resolve-1964-ai-current", "advisory", {
+        notes: "",
+        reviewerCount: 2,
+        findings: [{ code: "ai_review_split", severity: "warning", title: "Hidden", detail: "No public assessment." }],
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/1975/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/1975/comments") && method === "POST") return Response.json({ id: 19751 });
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "resolve-1975-ai-published",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "resolve-1964-ai-published", full_name: repoFullName, private: false, owner: { login: "JSONbored" } },
+          issue: { number: 1975, title: "Resolve me", state: "open", user: { login: "contributor" }, pull_request: {} },
+          comment: { id: 19750, body: "@gittensory resolve ai_consensus_defect", author_association: "NONE", user: { login: "maintainer", type: "User" } },
+          sender: { login: "maintainer", type: "User" },
+        },
+      });
+
+      const suppressions = await listReviewSuppressions(env, repoFullName);
+      expect(suppressions).toHaveLength(1);
+      expect(suppressions[0]?.category).toBe("ai_consensus_defect");
     });
 
     it("records finding_resolved without a suppression write when review.memory is OFF (operator kill-switch)", async () => {
