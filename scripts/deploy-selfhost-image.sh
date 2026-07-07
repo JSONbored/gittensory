@@ -97,6 +97,12 @@ cat >"$override_file" <<YAML
 services:
   $SERVICE:
     image: "$IMAGE"
+    # An operator's own docker-compose.override.yml may define a \`build:\` block for this service (e.g. a
+    # local INSTALL_AI_CLIS customization) -- when BOTH build and image are present, \`up --no-build\` still
+    # prefers a pre-existing project-scoped build artifact over the pulled image, silently ignoring it. Reset
+    # unsets any build config from every earlier -f file so the pulled image always wins. Harmless no-op when
+    # no build: block exists at all.
+    build: !reset null
 YAML
 
 mapfile -t compose_args < <(compose_file_args)
