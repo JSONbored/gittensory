@@ -1792,6 +1792,10 @@ describe("local MCP git metadata collection", () => {
       expect(isTestFile(file)).toBe(false);
       expect(isCodeFile(file)).toBe(false);
     }
+    // #3889 follow-up: .kts source must count as code in the MCP copy now that isSourcePath knows it.
+    expect(isCodeFile("app/Build.kts")).toBe(true);
+    expect(isTestFile("build/SettingsTests.kts")).toBe(true);
+    expect(isCodeFile("build/SettingsTests.kts")).toBe(false);
   });
 
   it("extracts linked issues only from standalone closing keywords, not keyword substrings", async () => {

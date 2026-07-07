@@ -614,7 +614,7 @@ function isGeneratedCodeFile(file) {
 }
 
 export function isCodeFile(file) {
-  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(file) && !isTestFile(file) && !isGeneratedCodeFile(file);
+  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|kts|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(file) && !isTestFile(file) && !isGeneratedCodeFile(file);
 }
 
 function numberValue(value) {

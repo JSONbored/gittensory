@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   classifyChangedFile,
+  isCodeFile,
   isDependencyManifestFile,
   isConfigFile,
   isDocsFile,
@@ -23,6 +24,25 @@ describe("path-matchers.ts never imports from local-branch.ts", () => {
   it("has no import statement referencing ./local-branch", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../src/signals/path-matchers.ts"), "utf8");
     expect(source).not.toMatch(/from\s+["']\.\/local-branch["']/);
+  });
+});
+
+describe("isCodeFile extension sets", () => {
+  it("keeps isSourcePath core extensions and EXTENDED_SOURCE_EXTENSION disjoint", () => {
+    const testEvidenceSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../src/signals/test-evidence.ts"), "utf8");
+    const pathMatchersSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../src/signals/path-matchers.ts"), "utf8");
+    const coreMatch = testEvidenceSource.match(/SOURCE_FILE_EXTENSION = \/\\\.\(([^)]+)\)\$\/i/);
+    const extendedMatch = pathMatchersSource.match(/EXTENDED_SOURCE_EXTENSION = \/\\\.\(([^)]+)\)\$\/i/);
+    expect(coreMatch).not.toBeNull();
+    expect(extendedMatch).not.toBeNull();
+    const coreExts = new Set(coreMatch![1]!.split("|"));
+    const extendedExts = new Set(extendedMatch![1]!.split("|"));
+    expect([...coreExts].filter((ext) => extendedExts.has(ext))).toEqual([]);
+  });
+
+  it("classifies .kts Gradle Kotlin-script source as code via the core matcher", () => {
+    expect(isCodeFile("app/Build.kts")).toBe(true);
+    expect(isCodeFile("build/SettingsTests.kts")).toBe(false);
   });
 });
 

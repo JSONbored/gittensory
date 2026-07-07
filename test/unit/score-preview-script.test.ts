@@ -213,6 +213,28 @@ describe("gittensor-score-preview.mjs classifier parity with the server", () => 
     expect(py.nonCodeTokenScore).toBe(0);
   });
 
+  it("classifies Kotlin-script source and class-suffix .kts tests in both .mjs and .py previews", () => {
+    const files = [
+      { path: "app/Build.kts", additions: 9, deletions: 0 },
+      { path: "build/SettingsTests.kts", additions: 4, deletions: 0 },
+    ];
+    const mjs = runPreview(files);
+    expect(mjs.sourceTokenScore).toBe(9);
+    expect(mjs.testTokenScore).toBe(4);
+    expect(mjs.nonCodeTokenScore).toBe(0);
+
+    const python = findPython();
+    if (!python) return;
+    const env = { ...process.env };
+    delete env.GITTENSOR_ROOT;
+    const res = spawnSync(python, [scriptPy], { input: JSON.stringify({ changedFiles: files }), encoding: "utf8", env });
+    expect(res.status, res.stderr).toBe(0);
+    const py = JSON.parse(res.stdout);
+    expect(py.sourceTokenScore).toBe(9);
+    expect(py.testTokenScore).toBe(4);
+    expect(py.nonCodeTokenScore).toBe(0);
+  });
+
   it("does not misclassify a *.test.mjs.map source-map as a test (extension anchored to end-of-path, matching the server)", () => {
     // A substring match on ".test.mjs" wrongly flagged non-tests like dist/widget.test.mjs.map; the rule must be
     // end-anchored like isTestPath. It's a source-map — neither test nor code — so it counts as non-code.
