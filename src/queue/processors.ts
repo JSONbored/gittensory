@@ -3466,14 +3466,10 @@ async function prReadyForReview(
     // Staleness cap: inferred or unreadable pending CI can otherwise defer FOREVER (orphaned required context,
     // transiently unreadable pages, fork check that never reports). Past the cap we stop deferring and let the
     // gate FINALIZE so the PR surfaces. A trusted required/base-repo visibly queued/in_progress CI signal is
-    // active CI, though, so never cut in front of it. A required context that never appeared in any page this
-    // fetch read to completion (hasMissingRequiredContext) has NO webhook to ever wait for — nothing fires
-    // check_run/check_suite "completed" for a context name that structurally never runs (a path-filtered
-    // workflow, a mistyped branch-protection context) — so it gets a much shorter cap than genuinely active or
-    // merely unreadable/non-required pending CI (#selfhost-ci-deferral-staleness). first-seen is tracked in the
-    // self-host Redis transient cache per PR+headSha (a new push = a fresh window, and the SAME key anchors
-    // both cap classes so a pending reason that changes class mid-window doesn't reset the clock); a cache
-    // miss degrades to the old defer. (#ci-stuck-finalize)
+    // active CI, though, so never cut in front of it. first-seen is tracked in the self-host Redis transient
+    // cache per PR+headSha (a new push = a fresh window, and the SAME key anchors both cap classes so a pending
+    // reason that changes class mid-window doesn't reset the clock); a cache miss degrades to the old defer.
+    // (#ci-stuck-finalize)
     const deferCapMs = ci.hasMissingRequiredContext ? MISSING_REQUIRED_CONTEXT_DEFER_MS : STUCK_CI_DEFER_MS;
     if (
       ci.hasVisiblePending ||
@@ -3485,6 +3481,18 @@ async function prReadyForReview(
         targetKey: `${repoFullName}#${pr.number}`,
         outcome: "queued",
         detail: "CI still running — review deferred until all checks finish",
+        metadata: { deliveryId, repoFullName },
+      }).catch(() => undefined);
+      return false;
+    }
+    if (ci.hasMissingRequiredContext) {
+      await recordAuditEvent(env, {
+        eventType: "github_app.review_deferred_ci_pending",
+        actor: "gittensory",
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "queued",
+        detail:
+          "Required CI context is still missing — review deferred instead of publishing a passing gate before expected CI reports",
         metadata: { deliveryId, repoFullName },
       }).catch(() => undefined);
       return false;

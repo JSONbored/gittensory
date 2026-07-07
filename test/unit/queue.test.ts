@@ -1891,16 +1891,16 @@ describe("queue processors", () => {
     }
   });
 
-  it("finalizes a missing-required-context PR within minutes, well before the old 30-minute stale-CI cap (#selfhost-ci-deferral-staleness)", async () => {
+  it("keeps deferring a missing-required-context PR after the short surfacing cap (#selfhost-ci-deferral-staleness)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto", update_branch: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Missing required context, past short cap", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, base: { ref: "main" }, labels: [], body: "Closes #1" });
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
-    // 3 minutes elapsed: past the new 2-minute missing-required-context cap, but nowhere near the old 30-minute
-    // cap — this is the key regression proving #selfhost-ci-deferral-staleness actually shortens the wait
-    // instead of the PR sitting deferred for up to half an hour on a context that will never post.
+    // 3 minutes elapsed: past the 2-minute missing-required-context surfacing cap, but nowhere near the old
+    // 30-minute stale-CI cap. Missing required contexts must still not publish a passing gate before expected CI
+    // reports, because the review check may itself be branch-protection-required.
     await env.SELFHOST_TRANSIENT_CACHE?.set(
       "ci-pending-first-seen:owner/agent-repo#7:a7",
       String(Date.now() - 3 * 60 * 1000),
@@ -1934,11 +1934,15 @@ describe("queue processors", () => {
     try {
       await processJob(env, { type: "agent-regate-pr", deliveryId: "missing-context-past-short-cap", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001 });
 
-      expect(gateChecks).toBeGreaterThan(0);
+      expect(gateChecks).toBe(0);
+      const deferred = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
+        .bind("github_app.review_deferred_ci_pending")
+        .first<{ n: number }>();
       const finalized = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?")
         .bind("github_app.review_finalized_ci_stuck")
         .first<{ n: number }>();
-      expect(finalized?.n).toBe(1);
+      expect(deferred?.n).toBe(1);
+      expect(finalized?.n).toBe(0);
     } finally {
       liveCiSpy.mockRestore();
       requiredContextsSpy.mockRestore();
