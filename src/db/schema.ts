@@ -151,9 +151,17 @@ export const repositorySettings = sqliteTable("repository_settings", {
   moderationRulesJson: text("moderation_rules_json"),
   moderationWarningLabel: text("moderation_warning_label"),
   moderationBannedLabel: text("moderation_banned_label"),
-  // Review-evasion protection (#review-evasion-protection): off by default. reviewEvasionLabel mirrors
-  // blacklistLabel/reviewNagLabel's shape -- NOT NULL with a string default; "no label" is a
-  // `.gittensory.yml`-only override, never persisted here.
+  // Review-evasion protection (#review-evasion-protection). reviewEvasionLabel mirrors blacklistLabel/
+  // reviewNagLabel's shape -- NOT NULL with a string default; "no label" is a `.gittensory.yml`-only
+  // override, never persisted here.
+  //
+  // #4011: this raw column-level DEFAULT ('off') is intentionally left unchanged even though the actual
+  // resolved default is now 'close' (protection ON) -- upsertRepositorySettings is the ONLY writer and
+  // always resolves an explicit value through normalizeReviewEvasionProtection (its own doc comment has
+  // the full reasoning), so this raw default never fires through any live write path. Rebuilding it would
+  // need a full create-copy-drop-rename table migration for zero behavioral effect (SQLite has no ALTER
+  // COLUMN SET DEFAULT) -- see migration 0102's doc comment for the identical lesson already learned on
+  // linked_issue_gate_mode. Don't "fix" this value without re-reading that reasoning first.
   reviewEvasionProtection: text("review_evasion_protection").notNull().default("off"),
   reviewEvasionLabel: text("review_evasion_label").notNull().default("review-evasion"),
   reviewEvasionComment: integer("review_evasion_comment", { mode: "boolean" }).notNull().default(true),

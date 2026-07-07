@@ -564,7 +564,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       moderationRules: undefined,
       moderationWarningLabel: undefined,
       moderationBannedLabel: undefined,
-      reviewEvasionProtection: "off",
+      reviewEvasionProtection: "close", // #4011: default-ON -- see normalizeReviewEvasionProtection's doc comment
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
       screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [] },
@@ -7055,8 +7055,19 @@ function normalizeReviewNagPolicy(value: string | null | undefined): "off" | "ho
 // Review-evasion protection (#review-evasion-protection): binary off|close, mirroring reviewNagPolicy's
 // shape minus the "hold" tier (an evasion attempt is always re-closed as the App when enabled, never merely
 // held -- there is no partial-enforcement mode).
+//
+// #4011: default-ON, the deliberate exception to every other field in this file defaulting conservatively
+// (off/false/advisory). A repo that hasn't discovered and explicitly set this field got ZERO self-close/
+// draft-dodge/repeated-cycling protection under the old "off" default -- a real, already-exploited gaming
+// vector (see gittensory-ai-review-repeat-spend-and-draft-gaming-fix). Any value other than the explicit
+// opt-out "off" (including undefined/garbage) now resolves to "close": protected unless a repo deliberately
+// turns it off, not unprotected unless a repo discovers and turns it on. This is the ONLY reachable default
+// for this field -- the raw schema.ts column-level DEFAULT and the SQLite DDL default are never reached by
+// any live write path (upsertRepositorySettings always resolves and supplies an explicit value through this
+// exact function; see migration 0102's doc comment for the same lesson learned on a sibling field), so
+// changing them would have zero effect and was deliberately left alone.
 function normalizeReviewEvasionProtection(value: string | null | undefined): "off" | "close" {
-  return value === "close" ? "close" : "off";
+  return value === "off" ? "off" : "close";
 }
 
 // Config-driven before/after screenshot-table gate (#2006): the row stores whenLabels/whenPaths as JSON string

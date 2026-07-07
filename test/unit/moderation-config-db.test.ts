@@ -237,9 +237,9 @@ describe("per-repo moderation settings DB round-trip (#selfhost-mod-engine)", ()
 });
 
 describe("per-repo review-evasion protection settings DB round-trip (#review-evasion-protection)", () => {
-  it("defaults to off/review-evasion/true for an unconfigured repo", async () => {
+  it("defaults to close/review-evasion/true for an unconfigured repo (#4011: default-ON)", async () => {
     const settings = await getRepositorySettings(createTestEnv(), "owner/none");
-    expect(settings.reviewEvasionProtection).toBe("off");
+    expect(settings.reviewEvasionProtection).toBe("close");
     expect(settings.reviewEvasionLabel).toBe("review-evasion");
     expect(settings.reviewEvasionComment).toBe(true);
   });
@@ -274,10 +274,18 @@ describe("per-repo review-evasion protection settings DB round-trip (#review-eva
     expect(settings.reviewEvasionComment).toBe(false);
   });
 
-  it("a malformed raw DB value for review_evasion_protection normalizes to 'off' on read (defensive against a direct SQL write bypassing app-level validation)", async () => {
+  it("a malformed raw DB value for review_evasion_protection normalizes to 'close' on read (#4011: only the explicit opt-out 'off' is honored; anything else, including a bypassed-validation bogus value, fails safe to protected)", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "owner/repo" });
     await env.DB.prepare("UPDATE repository_settings SET review_evasion_protection = 'bogus' WHERE repo_full_name = ?").bind("owner/repo").run();
+    const settings = await getRepositorySettings(env, "owner/repo");
+    expect(settings.reviewEvasionProtection).toBe("close");
+  });
+
+  it("the explicit opt-out 'off' is honored on read even after a direct SQL write (#4011)", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo" });
+    await env.DB.prepare("UPDATE repository_settings SET review_evasion_protection = 'off' WHERE repo_full_name = ?").bind("owner/repo").run();
     const settings = await getRepositorySettings(env, "owner/repo");
     expect(settings.reviewEvasionProtection).toBe("off");
   });

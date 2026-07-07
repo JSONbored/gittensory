@@ -5854,7 +5854,7 @@ async function processGitHubWebhook(
       // Review-evasion protection (#review-evasion-protection): a contributor closing their OWN PR while
       // gittensory has an ACTIVE review pass running is dodging the one-shot review, not making an ordinary
       // close. Runs regardless of the general draft-dodge/reopen-reclose gates above -- it is its own
-      // independent enforcement, config-gated on settings.reviewEvasionProtection (off by default).
+      // independent enforcement, config-gated on settings.reviewEvasionProtection (close by default, #4011).
       if (payload.action === "closed" && installationId) {
         await maybeCloseReviewEvasionSelfClose(
           env,
@@ -11770,7 +11770,7 @@ async function closeReviewEvasionSelfCloseIfActive(
   payload: GitHubWebhookPayload,
   settings: RepositorySettings,
 ): Promise<void> {
-  if ((settings.reviewEvasionProtection ?? "off") !== "close") return;
+  if (settings.reviewEvasionProtection === "off") return; // #4011: default-ON -- only the explicit opt-out bails
   const closer = (payload.sender?.login ?? "").toLowerCase();
   const authorLogin = (pr.authorLogin ?? "").toLowerCase();
   // Only the PR's OWN author closing their OWN PR is a self-close-evasion candidate -- a third party (e.g. a
@@ -12016,7 +12016,7 @@ async function closeReviewEvasionDraftConversionIfActive(
   payload: GitHubWebhookPayload,
   settings: RepositorySettings,
 ): Promise<void> {
-  if ((settings.reviewEvasionProtection ?? "off") !== "close") return;
+  if (settings.reviewEvasionProtection === "off") return; // #4011: default-ON -- only the explicit opt-out bails
   const converter = (payload.sender?.login ?? "").toLowerCase();
   const authorLogin = (pr.authorLogin ?? "").toLowerCase();
   // Only the PR's OWN author converting their OWN PR to draft is a draft-conversion-evasion candidate -- a
@@ -12205,7 +12205,7 @@ async function maybeCloseRepeatedDraftCycling(
   // fires on the >=2nd author-driven conversion of a `reviewEvasionProtection: close` repo, which is rare -- an
   // unconditional lock claim on every converted_to_draft webhook would add avoidable contention with the two
   // siblings above on every repo that never enabled this feature, or on every first-time conversion.
-  if ((settings.reviewEvasionProtection ?? "off") !== "close") return;
+  if (settings.reviewEvasionProtection === "off") return; // #4011: default-ON -- only the explicit opt-out bails
   if (draftConversionCount < 2) return;
   const actuationLock = await claimPrActuationLock(env, repoFullName, pr.number);
   if (!actuationLock.acquired) {

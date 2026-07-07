@@ -25616,7 +25616,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       expect(audit?.n).toBe(0); // no decision recorded either way -- the queue retry owns the deferred decision
     });
 
-    it("does nothing when reviewEvasionProtection is off (the default)", async () => {
+    it("does nothing when reviewEvasionProtection is explicitly off (#4011: the only respected opt-out)", async () => {
       const calls: Array<{ url: string; method: string }> = [];
       stubEvasionFetch(calls);
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
@@ -25969,10 +25969,12 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       expect(reopenAudit?.detail).toContain("one-shot");
     });
 
-    it("does nothing when reviewEvasionProtection is unset (undefined, not just 'off')", async () => {
-      // upsertRepositorySettings coalesces undefined -> "off" at write time (mirrors reviewEvasionLabel/
-      // reviewEvasionComment's own write-time defaulting below), so the only way to get `undefined` past that
-      // coalescing and into the handler is to mock the resolved-settings layer directly.
+    it("STILL protects when reviewEvasionProtection is unset (undefined, not an explicit 'off') (#4011: default-ON)", async () => {
+      // upsertRepositorySettings coalesces undefined -> "close" at write time (mirrors reviewEvasionLabel/
+      // reviewEvasionComment's own write-time defaulting below), and the consuming handler's own fallback
+      // (settings.reviewEvasionProtection === "off") treats anything but an explicit "off" as protected too --
+      // so the only way to get `undefined` past BOTH layers and into the handler is to mock the resolved-
+      // settings layer directly, confirming neither layer silently reintroduces the old off-by-default gap.
       const calls: Array<{ url: string; method: string }> = [];
       stubEvasionFetch(calls);
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
@@ -25983,7 +25985,8 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
 
       await processJob(env, { type: "github-webhook", deliveryId: "self-close-protection-unset", eventName: "pull_request", payload: closedPayload("contributor") });
 
-      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const patches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"));
+      expect(patches.length).toBeGreaterThanOrEqual(2); // reopen then re-close, same as an explicit "close"
     });
 
     it("does nothing when the webhook payload has no sender", async () => {
@@ -26363,7 +26366,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       expect(strike?.n).toBe(0);
     });
 
-    it("does nothing when reviewEvasionProtection is unset (undefined, not just 'off')", async () => {
+    it("STILL protects when reviewEvasionProtection is unset (undefined, not an explicit 'off') (#4011: default-ON)", async () => {
       const calls: Array<{ url: string; method: string }> = [];
       stubEvasionFetch(calls);
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
@@ -26374,7 +26377,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
 
       await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-protection-unset", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
 
-      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
     });
 
     it("does nothing when the webhook payload has no sender", async () => {
@@ -26567,7 +26570,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
     });
 
-    it("does nothing when reviewEvasionProtection is unset (undefined, not just 'off'), even after a repeated cycle", async () => {
+    it("STILL enforces the repeated-cycle close when reviewEvasionProtection is unset (undefined, not an explicit 'off') (#4011: default-ON)", async () => {
       const calls: Array<{ url: string; method: string }> = [];
       stubEvasionFetch(calls);
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
@@ -26576,9 +26579,12 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionProtection: undefined });
 
       await processJob(env, { type: "github-webhook", deliveryId: "draft-cycle-unset-1", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false); // first conversion never closes
+
       await processJob(env, { type: "github-webhook", deliveryId: "draft-cycle-unset-2", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
 
-      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const patches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"));
+      expect(patches).toHaveLength(1); // second conversion closes, same as an explicit "close"
     });
 
     it("REGRESSION (gate-flagged): does not enforce against a THIRD PARTY repeatedly converting someone else's PR to draft", async () => {
