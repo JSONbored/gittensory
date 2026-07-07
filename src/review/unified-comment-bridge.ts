@@ -571,17 +571,19 @@ export type ImpactMapSummaryInput = { changedModule: string; affectedModules: st
  *  as a trailing "+N more" instead of silently truncating with no indication more exist. */
 const MAX_RENDERED_AFFECTED_MODULES = 5;
 
-/** Public-safe inline-code escaping for a file path cell — mirrors `buildBeforeAfterCollapsible`'s
- *  `markdownCode`: backtick/backslash/pipe/angle-bracket neutralized so an adversarial path can't break out of
- *  the table or the inline-code span. Impact-map paths originate from the repo's own RAG-indexed file tree
- *  (never raw user input), but this is defense-in-depth, matching the discipline every other path-rendering
- *  helper in this file already applies. */
+/** Public-safe inline-code rendering for a file path table cell. Impact-map paths can include
+ *  contributor-controlled filenames, so choose a code-span delimiter longer than any run inside the
+ *  value instead of trying to backslash-escape backticks (Markdown does not honor that inside code spans).
+ *  Normalize row-breaking controls and entity-escape table/HTML metacharacters before wrapping. */
 function markdownPathCode(value: string): string {
-  return `\`${value
-    .replace(/\\/g, "\\\\")
-    .replace(/`/g, "\\`")
-    .replace(/\|/g, "\\|")
-    .replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"))}\``;
+  const safeValue = value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+    .replace(/\|/g, "&#124;")
+    .replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"));
+  const longestBacktickRun = Math.max(0, ...Array.from(safeValue.matchAll(/`+/g), (match) => match[0].length));
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  return `${delimiter} ${safeValue} ${delimiter}`;
 }
 
 /**

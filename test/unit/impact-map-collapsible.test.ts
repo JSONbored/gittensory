@@ -30,24 +30,24 @@ describe("buildImpactMapCollapsible (#2185)", () => {
     expect(c).not.toBeNull();
     expect(c?.title).toBe("Impact map");
     expect(c?.body).toContain("| Changed module | Symbols | Plausibly affected |");
-    expect(c?.body).toContain("`src/review/impact-map.ts`");
+    expect(c?.body).toContain("` src/review/impact-map.ts `");
     expect(c?.body).toContain("computeImpactMap");
-    expect(c?.body).toContain("`src/review/impact-map-wire.ts`");
-    expect(c?.body).toContain("`src/queue/processors.ts`");
+    expect(c?.body).toContain("` src/review/impact-map-wire.ts `");
+    expect(c?.body).toContain("` src/queue/processors.ts `");
   });
 
   it("renders a dash for callers when a row somehow has none", () => {
     const c = buildImpactMapCollapsible([{ changedModule: "src/a.ts", affectedModules: ["src/b.ts"], callers: [] }]);
-    expect(c?.body).toContain("| `src/a.ts` | — |");
+    expect(c?.body).toContain("| ` src/a.ts ` | — |");
   });
 
   it("caps rendered affected modules with a '+N more' overflow line", () => {
     const many = Array.from({ length: 8 }, (_, i) => `src/caller${i}.ts`);
     const c = buildImpactMapCollapsible([{ changedModule: "src/a.ts", affectedModules: many, callers: ["a"] }]);
     const body = c?.body ?? "";
-    expect(body).toContain("`src/caller0.ts`");
-    expect(body).toContain("`src/caller4.ts`");
-    expect(body).not.toContain("`src/caller5.ts`");
+    expect(body).toContain("` src/caller0.ts `");
+    expect(body).toContain("` src/caller4.ts `");
+    expect(body).not.toContain("src/caller5.ts");
     expect(body).toContain("(+3 more)");
   });
 
@@ -58,7 +58,23 @@ describe("buildImpactMapCollapsible (#2185)", () => {
 
   it("escapes a hostile-looking path so it can't break out of the table/inline-code span", () => {
     const c = buildImpactMapCollapsible([{ changedModule: "src/`weird|<path>.ts", affectedModules: ["src/b.ts"], callers: ["a"] }]);
-    expect(c?.body).toContain("src/\\`weird\\|&lt;path&gt;.ts");
+    expect(c?.body).toContain("`` src/`weird&#124;&lt;path&gt;.ts ``");
+  });
+
+  it("normalizes path newlines so attacker markdown stays in the impact-map table row", () => {
+    const c = buildImpactMapCollapsible([
+      {
+        changedModule: "src/safe`\r\n\n### fake bot guidance\n[run patch](https://evil.example/pwn).ts",
+        affectedModules: ["src/also`unsafe\n|spoof.ts"],
+        callers: ["a"],
+      },
+    ]);
+    const body = c?.body ?? "";
+
+    expect(body).toContain("`` src/safe` ### fake bot guidance [run patch](https://evil.example/pwn).ts ``");
+    expect(body).toContain("`` src/also`unsafe &#124;spoof.ts ``");
+    expect(body).not.toContain("\n### fake bot guidance");
+    expect(body).not.toContain("\n|spoof.ts");
   });
 
   it("returns null for an empty entry list (no empty table)", () => {
