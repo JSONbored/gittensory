@@ -54,15 +54,13 @@ export type RegateSweepOrderMode = "staleness" | "oldest-first";
  * `oldest-first`'s sort key alone cannot advance past an already-dispatched PR — without something else, the
  * same oldest `max` PRs would recur every sweep forever.
  *
- * `oldest-first` instead excludes whichever PR(s) hold the CURRENT candidate pool's single most-recent
- * `lastRegatedAt` value — i.e. whichever PR(s) this repo's immediately preceding sweep dispatched (every
- * candidate in one dispatch is stamped with the exact same `lastRegatedAt`, see markPullRequestsRegated),
- * deferring them until an even-newer dispatch supersedes them. This is a RELATIVE comparison within the pool
- * on every call, never an absolute time window against `now` — so, unlike a fixed freshness window, it holds
- * regardless of how far apart consecutive sweeps actually run (a delayed/backpressured sweep, or dry-run/pause
- * suppressing GitHub's `updatedAt` entirely), giving `oldest-first` the same timing-independent, full-coverage-
- * in-ceil(open/max)-sweeps guarantee `staleness` has. Selection-time only: real-time webhook-driven review is
- * not gated by this sort and can still process any PR out of order at any moment.
+ * `oldest-first` therefore drains never-regated PRs before cycling already-regated ones: while any eligible
+ * non-priority PR lacks `lastRegatedAt`, the candidate pool is narrowed to those never-regated PRs (plus any
+ * priority repairs). That preserves deterministic creation-order backlog recovery and covers a large initial
+ * backlog in ceil(open/max) sweeps. Once every eligible PR has been swept at least once, it falls back to the
+ * staleness key so continued periodic re-gating keeps converging instead of pinning the oldest PRs forever.
+ * Selection-time only: real-time webhook-driven review is not gated by this sort and can still process any PR
+ * out of order at any moment.
  */
 export function selectRegateCandidates(input: {
   pulls: PullRequestRecord[];
@@ -77,7 +75,9 @@ export function selectRegateCandidates(input: {
   const max = input.max ?? SWEEP_MAX_PRS;
   const orderMode = input.orderMode ?? "staleness";
   const nowMs = Date.parse(input.now);
-  const freshCutoff = Number.isFinite(nowMs) ? nowMs - freshnessWindowMs : Number.NaN;
+  const freshCutoff = Number.isFinite(nowMs)
+    ? nowMs - freshnessWindowMs
+    : Number.NaN;
   // Don't-race-webhook guard: a PR whose GitHub `updatedAt` is within the window was almost certainly just gated
   // by its webhook. A missing/unparseable timestamp = not recently touched = eligible (epoch).
   const webhookFreshness = (pr: PullRequestRecord): number => {
@@ -88,7 +88,9 @@ export function selectRegateCandidates(input: {
   // PR sorts maximally stale and is picked first; ties broken by PR number. This is the convergence key — it
   // advances on every sweep regardless of whether GitHub writes are suppressed.
   const regateProgress = (pr: PullRequestRecord): number => {
-    const regated = pr.lastRegatedAt ? Date.parse(pr.lastRegatedAt) : Number.NaN;
+    const regated = pr.lastRegatedAt
+      ? Date.parse(pr.lastRegatedAt)
+      : Number.NaN;
     if (Number.isFinite(regated)) return regated;
     const created = pr.createdAt ? Date.parse(pr.createdAt) : Number.NaN;
     return Number.isFinite(created) ? created : 0;
@@ -101,7 +103,6 @@ export function selectRegateCandidates(input: {
     const created = pr.createdAt ? Date.parse(pr.createdAt) : Number.NaN;
     return Number.isFinite(created) ? created : 0;
   };
-  const orderKey = orderMode === "oldest-first" ? creationOrder : regateProgress;
   const priorityPullNumbers =
     input.priorityPullNumbers instanceof Set
       ? input.priorityPullNumbers
@@ -111,40 +112,36 @@ export function selectRegateCandidates(input: {
   const eligible = input.pulls
     .filter((pr) => pr.state === "open" && !pr.isDraft)
     .filter((pr) => {
-      if (
-        input.priorityBypassesFreshness &&
-        priorityPullNumbers.has(pr.number)
-      )
+      if (input.priorityBypassesFreshness && priorityPullNumbers.has(pr.number))
         return true;
       if (!Number.isFinite(freshCutoff)) return true;
       return webhookFreshness(pr) <= freshCutoff;
     });
-  // Most-recent-dispatch exclusion (#3815, "oldest-first" mode only — see the doc comment above): find the
-  // single latest lastRegatedAt value across the currently-eligible pool, then defer whichever PR(s) hold it.
-  // A pool with no lastRegatedAt at all (nothing ever dispatched) has no most-recent value, so nothing defers.
-  let mostRecentRegatedMs = Number.NEGATIVE_INFINITY;
-  if (orderMode === "oldest-first") {
-    for (const pr of eligible) {
-      const regated = pr.lastRegatedAt ? Date.parse(pr.lastRegatedAt) : Number.NaN;
-      if (Number.isFinite(regated) && regated > mostRecentRegatedMs) mostRecentRegatedMs = regated;
-    }
-  }
-  // Only called (via deferredCount/the final filter below) when orderMode is already "oldest-first" — the
-  // caller gates on that, so this never needs its own mode check.
-  const isMostRecentlyDispatched = (pr: PullRequestRecord): boolean => {
-    if (input.priorityBypassesFreshness && priorityPullNumbers.has(pr.number)) return false;
-    const regated = pr.lastRegatedAt ? Date.parse(pr.lastRegatedAt) : Number.NaN;
-    return Number.isFinite(regated) && regated === mostRecentRegatedMs;
+  const hasBeenRegated = (pr: PullRequestRecord): boolean => {
+    const regated = pr.lastRegatedAt
+      ? Date.parse(pr.lastRegatedAt)
+      : Number.NaN;
+    return Number.isFinite(regated);
   };
-  const deferredCount = orderMode === "oldest-first" ? eligible.filter(isMostRecentlyDispatched).length : 0;
-  // Starvation guard: only actually defer when doing so still leaves at least one candidate. If EVERY eligible
-  // PR ties on the same lastRegatedAt (e.g. a small backlog whose entire open-PR count fits in one sweep, so
-  // every PR was dispatched together last time), deferring all of them would starve the sweep forever with
-  // nothing better to fall back to — proceed with the full pool instead.
-  const shouldDefer = deferredCount > 0 && deferredCount < eligible.length;
-  return eligible
-    .filter((pr) => !shouldDefer || !isMostRecentlyDispatched(pr))
-    .sort((a, b) => repairPriority(a) - repairPriority(b) || orderKey(a) - orderKey(b) || a.number - b.number)
+  const hasRepairPriority = (pr: PullRequestRecord): boolean =>
+    priorityPullNumbers.has(pr.number);
+  const oldestFirstInitialDrain =
+    orderMode === "oldest-first" &&
+    eligible.some((pr) => !hasBeenRegated(pr) && !hasRepairPriority(pr));
+  const candidates = oldestFirstInitialDrain
+    ? eligible.filter((pr) => !hasBeenRegated(pr) || hasRepairPriority(pr))
+    : eligible;
+  const orderKey =
+    orderMode === "oldest-first" && oldestFirstInitialDrain
+      ? creationOrder
+      : regateProgress;
+  return candidates
+    .sort(
+      (a, b) =>
+        repairPriority(a) - repairPriority(b) ||
+        orderKey(a) - orderKey(b) ||
+        a.number - b.number,
+    )
     .slice(0, Math.max(0, max));
 }
 
@@ -156,7 +153,11 @@ export function selectRegateCandidates(input: {
  * drains, so without this guard a second full sweep would pile duplicate per-PR jobs onto the unfinished one. A
  * missing/never-regated/unparseable timestamp means no sweep is in flight (proceed). Pure + deterministic.
  */
-export function isRegateSweepDraining(latestRegatedAt: string | null | undefined, now: string, windowMs: number = SWEEP_FRESHNESS_MS): boolean {
+export function isRegateSweepDraining(
+  latestRegatedAt: string | null | undefined,
+  now: string,
+  windowMs: number = SWEEP_FRESHNESS_MS,
+): boolean {
   if (!latestRegatedAt) return false;
   const stampedMs = Date.parse(latestRegatedAt);
   const nowMs = Date.parse(now);
