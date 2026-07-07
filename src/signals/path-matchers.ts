@@ -1,4 +1,4 @@
-import { isTestPath } from "./test-evidence";
+import { isSourcePath, isTestPath } from "./test-evidence";
 
 // Pure, deterministic path matchers for slop classification (#561). Siblings to `isTestFile` /
 // `isTestPath`: they identify changed files that are NOT genuine hand-authored effort — machine-
@@ -15,22 +15,16 @@ export function isTestFile(file: string): boolean {
   return isTestPath(file);
 }
 
-/** cs/swift/groovy/php plus C/C++/Objective-C round out the native/JVM/.NET/Swift/PHP set: isTestPath already
- *  recognizes their `SomethingTest(s)`/`Spec` test files, so their source must count as code too —
- *  otherwise a C#/Swift/Groovy/PHP/native source file is neither test nor code in the local scorer.
- *  vue/svelte/astro align with review/rag.ts CODE_EXT_RE, review/visual/paths.ts, and rules/advisory.ts
- *  isCodePath so every classifier agrees. cc/hpp round out the C++ set alongside cpp/c/h (rag.ts already
- *  indexes all four). dart aligns with rag.ts and test-evidence's *_test.dart convention (hand-authored
- *  .dart is source; generated .g.dart/.freezed.dart/.gr.dart part files stay non-code, mirroring the
- *  packages/gittensory-mcp and gittensor-score-preview classifiers, #3724). */
+// Extensions recognized as code outside test-evidence's isSourcePath core set (php, native, front-end
+// frameworks, Dart). isSourcePath owns the JVM/.NET/Swift/Groovy/Kotlin-script set symmetric with isTestPath.
+const EXTENDED_SOURCE_EXTENSION = /\.(php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i;
+
+/** cs/swift/groovy/kts plus php, C/C++/Objective-C, vue/svelte/astro, and dart — see isSourcePath for the
+ *  canonical JVM/.NET/Swift/Groovy/Kotlin-script matcher kept symmetric with isTestPath. Generated Dart part
+ *  files (.g.dart/.freezed.dart/.gr.dart) stay non-code (#3724). */
 export function isCodeFile(file: string): boolean {
-  return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(
-      file,
-    ) &&
-    !isTestFile(file) &&
-    !/\.(g|freezed|gr)\.dart$/i.test(file)
-  );
+  if (isSourcePath(file)) return true;
+  return EXTENDED_SOURCE_EXTENSION.test(file) && !isTestFile(file) && !/\.(g|freezed|gr)\.dart$/i.test(file);
 }
 
 function normalize(path: string): string {

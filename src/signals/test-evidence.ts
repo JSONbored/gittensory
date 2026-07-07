@@ -16,6 +16,19 @@ export function isTestPath(file: string): boolean {
   );
 }
 
+// Canonical hand-authored-source extensions — the SOURCE-side sibling of isTestPath's class-suffix rule.
+// The two matchers MUST stay symmetric: isTestPath recognizes java/kt/kts/scala/cs/swift/groovy test files,
+// so this set lists those same languages. Otherwise a C#/Swift/Groovy/Kotlin-script SOURCE change is classified
+// as neither code nor test and silently escapes both the missing-tests gate signals and token scoring.
+const SOURCE_FILE_EXTENSION = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|kts|scala|java|cs|swift|groovy|go|sql)$/i;
+
+/** True iff `file` is a hand-authored program-source file: a recognized source extension that is not itself a
+ *  test file. The single source of truth for every `isCodeFile` in the signals layer, so the source/test
+ *  classifiers can never drift (the same way isCodeFile's `isTestFile` wrappers all delegate to isTestPath). */
+export function isSourcePath(file: string): boolean {
+  return SOURCE_FILE_EXTENSION.test(file) && !isTestPath(file);
+}
+
 export function hasLocalTestEvidence(input: { tests?: string[] | undefined; testFiles?: string[] | undefined }): boolean {
   return (input.tests ?? []).length > 0 || (input.testFiles ?? []).some((file) => isTestPath(file));
 }

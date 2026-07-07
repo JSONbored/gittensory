@@ -122,6 +122,7 @@ describe("isCodeFile", () => {
       "Api/Controllers/UserController.cs",
       "Sources/App/Router.swift",
       "src/main/groovy/Pipeline.groovy",
+      "app/Build.kts",
       // PHP source — isTestPath already recognizes PHPUnit/PHPSpec `SomethingTest`/`Spec`
       // files, so PHP source must count as code too (else it is neither test nor code).
       "app/Http/Controllers/UserController.php",
@@ -165,6 +166,8 @@ describe("isCodeFile", () => {
       "app/Service/PaymentTest.php",
       // Dart co-located *_test.dart is test evidence, not source.
       "lib/models/user_test.dart",
+      "gradle/CartSpec.groovy",
+      "build/SettingsTests.kts",
     ]) {
       expect(isCodeFile(path)).toBe(false);
     }

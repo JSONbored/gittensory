@@ -456,6 +456,21 @@ describe("world-class backend signals", () => {
     expect(result.findings.map((finding) => finding.code)).not.toContain("missing_test_evidence");
   });
 
+  it("flags missing test evidence for Kotlin-script source (isTestPath already knows .kts tests)", () => {
+    const result = buildPreflightResult(
+      {
+        repoFullName: repo.fullName,
+        title: "Tune Gradle Kotlin build script",
+        body: "Fixes #7",
+        changedFiles: ["app/Build.kts"],
+      },
+      repo,
+      issues,
+      pullRequests,
+    );
+    expect(result.findings.map((finding) => finding.code)).toContain("missing_test_evidence");
+  });
+
   it("gates public comments to detected contributors and sanitizes comment text", () => {
     const currentPr = pullRequests[0]!;
     const priorPr: PullRequestRecord = {
