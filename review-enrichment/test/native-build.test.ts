@@ -29,6 +29,19 @@ const pypiAdd = (name, version = "1.0.0") => ({
     },
   ],
 });
+const pypiAdds = (count) => ({
+  repoFullName: "o/r",
+  prNumber: 1,
+  files: [
+    {
+      path: "requirements.txt",
+      patch: `@@ -1,0 +1,${count} @@\n${Array.from(
+        { length: count },
+        (_, i) => `+native${i}==1.0.0`,
+      ).join("\n")}`,
+    },
+  ],
+});
 const jsonResponse = (body, init) => new Response(JSON.stringify(body), init);
 const npmFetch = (meta) => async () =>
   jsonResponse({
@@ -225,6 +238,28 @@ test("scanNativeBuild: the query cap counts only queryable changes (skips don't 
   });
   assert.equal(findings.length, 1);
   assert.equal(findings[0].package, "bcrypt");
+});
+
+test("scanNativeBuild bounds concurrent registry fetches below the total query cap", async () => {
+  let active = 0;
+  let maxActive = 0;
+  let started = 0;
+  const findings = await scanNativeBuild(
+    pypiAdds(10),
+    async () => {
+      started += 1;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return jsonResponse({ urls: [{ packagetype: "sdist" }] });
+    },
+    { limits: { maxQueries: 10 } },
+  );
+
+  assert.equal(started, 10);
+  assert.equal(maxActive, 4);
+  assert.equal(findings.length, 10);
 });
 
 test("scanNativeBuild: a PyPI PEP 440 (non-semver) sdist-only version is flagged", async () => {

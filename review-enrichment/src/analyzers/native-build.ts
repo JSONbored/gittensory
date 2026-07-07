@@ -15,6 +15,7 @@ import { boundedFetchJson } from "../external-fetch.js";
 const MAX_QUERIES = 25;
 const MAX_NPM_VERSION_JSON_BYTES = 256 * 1024;
 const MAX_PYPI_VERSION_JSON_BYTES = 2 * 1024 * 1024;
+const MAX_CONCURRENT_REGISTRY_QUERIES = 4;
 const INSTALL_HOOKS = ["preinstall", "install", "postinstall"];
 // Tokens in an install-lifecycle script that indicate a native toolchain runs on install.
 const NATIVE_TOOL_RE =
@@ -175,6 +176,27 @@ async function fetchJson(
   return response.ok ? response.data : null;
 }
 
+async function mapWithConcurrency<T, U>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<U>,
+): Promise<U[]> {
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await fn(items[index]!);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 /** Analyzer entrypoint: added/changed deps → registry metadata → only the versions with a native-build install cost. */
 export async function scanNativeBuild(
   req: EnrichRequest,
@@ -186,8 +208,10 @@ export async function scanNativeBuild(
   const changes = extractDependencyChanges(req.files ?? [])
     .filter(isQueryable)
     .slice(0, options.limits?.maxQueries ?? MAX_QUERIES);
-  const results = await Promise.all(
-    changes.map(async (change): Promise<NativeBuildFinding | null> => {
+  const results = await mapWithConcurrency(
+    changes,
+    MAX_CONCURRENT_REGISTRY_QUERIES,
+    async (change): Promise<NativeBuildFinding | null> => {
       if (options.signal?.aborted) return null;
 
       if (change.ecosystem === "npm") {
@@ -233,7 +257,7 @@ export async function scanNativeBuild(
         }
       }
       return null;
-    }),
+    },
   );
   const findings = results.filter((f): f is NativeBuildFinding => f !== null);
   return findings;
