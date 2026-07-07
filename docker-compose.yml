@@ -229,9 +229,15 @@ services:
       resources:
         limits:
           memory: "${POSTGRES_MEM_LIMIT:-2g}"
+    # start_period (#3898): pg_isready's failed-probe count applies from the very first check unless a
+    # start_period grace is set. A genuinely cold initdb (first pull, slow disk, low-memory VPS, creating
+    # the pgvector extension) can plausibly take longer than the 5x10s=50s this healthcheck otherwise
+    # allows before Docker marks the service unhealthy and fails every downstream service_healthy gate.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gittensory"]
       interval: 10s
+      timeout: 5s
+      start_period: 20s
       retries: 5
 
   # ── PgBouncer (--profile pgbouncer) ───────────────────────────────────────
@@ -264,6 +270,7 @@ services:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432"]
       interval: 10s
       timeout: 5s
+      start_period: 15s
       retries: 5
 
   # Postgres internals exporter. Starts with the Postgres profiles so Prometheus can scrape it when
