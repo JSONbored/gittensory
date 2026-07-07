@@ -153,20 +153,23 @@ function toRankedEntry(
 async function resolveDiscoveryGithubToken(
   env: Env,
   targets: readonly FindOpportunitiesTarget[],
-): Promise<string | null> {
-  if (env.GITHUB_PUBLIC_TOKEN) return env.GITHUB_PUBLIC_TOKEN;
+): Promise<{ token: string | null; reposByFullName: Map<string, Awaited<ReturnType<typeof getRepository>>> }> {
+  const reposByFullName = new Map<string, Awaited<ReturnType<typeof getRepository>>>();
   for (const target of targets) {
     const fullName = `${target.owner}/${target.repo}`;
-    const repo = await getRepository(env, fullName);
+    reposByFullName.set(fullName, await getRepository(env, fullName));
+  }
+  if (env.GITHUB_PUBLIC_TOKEN) return { token: env.GITHUB_PUBLIC_TOKEN, reposByFullName };
+  for (const repo of reposByFullName.values()) {
     const installationId = repo?.installationId;
     if (!installationId) continue;
     try {
-      return await createInstallationToken(env, installationId);
+      return { token: await createInstallationToken(env, installationId), reposByFullName };
     } catch {
       continue;
     }
   }
-  return null;
+  return { token: null, reposByFullName };
 }
 
 export async function runFindOpportunities(
@@ -186,12 +189,10 @@ export async function runFindOpportunities(
   const appliedLane = parsed.goalSpec?.lane?.trim() || undefined;
 
   const targets = parsed.targets ?? [];
-  const token = await resolveDiscoveryGithubToken(env, targets);
+  const { token, reposByFullName } = await resolveDiscoveryGithubToken(env, targets);
   if (!token && targets.length > 0) {
-    const anyInstalled = await Promise.all(
-      targets.map(async (target) => Boolean(await getRepository(env, `${target.owner}/${target.repo}`))),
-    );
-    if (!anyInstalled.some(Boolean)) {
+    const anyInstalled = [...reposByFullName.values()].some(Boolean);
+    if (!anyInstalled) {
       return {
         status: "github_token_unavailable",
         ranked: [],
@@ -231,8 +232,9 @@ export async function runFindOpportunities(
   }
 
   const repoFullNames = [...new Set(issues.map((issue) => issue.repoFullName))];
-  const goalSpecsByRepo = buildGoalSpecsByRepo(repoFullNames, parsed.goalSpec);
-  const ranked = rankCandidateIssuesWithSummary(issues, goalSpecsByRepo ? { goalSpecsByRepo } : {});
+  const ranked = rankCandidateIssuesWithSummary(issues, {
+    goalSpecsByRepo: buildGoalSpecsByRepo(repoFullNames, parsed.goalSpec),
+  });
   const filtered = ranked.issues
     .map(toRankedEntry)
     .filter((entry) => entry.rankScore >= minRankScore)

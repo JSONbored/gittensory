@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSessionForGitHubUser, type AuthIdentity } from "../../src/auth/security";
+import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { GittensoryMcp } from "../../src/mcp/server";
 import { createTestEnv } from "../helpers/d1";
 
@@ -46,8 +48,8 @@ const issue = (number: number) => ({
   html_url: `https://github.com/acme/allowed/issues/${number}`,
 });
 
-async function connect(env: Env) {
-  const server = new GittensoryMcp(env).createServer();
+async function connect(env: Env, identity?: AuthIdentity) {
+  const server = new GittensoryMcp(env, identity).createServer();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: "gittensory-find-opportunities-test", version: "0.1.0" }, { capabilities: {} });
@@ -111,5 +113,39 @@ describe("MCP gittensory_find_opportunities", () => {
     expect(data.ranked.map((entry) => `${entry.owner}/${entry.repo}`)).toEqual(["acme/allowed"]);
     expect(data.ranked[0]?.aiPolicyAllowed).toBe(true);
     expect(JSON.stringify(data)).not.toMatch(/wallet|hotkey|reward estimate|trust score/i);
+  });
+
+  it("rejects cross-repo search for non-operator sessions", async () => {
+    const env = createTestEnv();
+    const { session } = await createSessionForGitHubUser(env, { login: "miner1", id: 1 });
+    const client = await connect(env, { kind: "session", actor: "miner1", session });
+
+    const result = await client.callTool({
+      name: "gittensory_find_opportunities",
+      arguments: { searchQuery: "test coverage" },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/cross-repo opportunity search/i);
+  });
+
+  it("rejects extension-contributor sessions for search and out-of-scope targets", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "private-roadmap", full_name: "victimco/private-roadmap", private: true, owner: { login: "victimco" } });
+    const { session } = await createSessionForGitHubUser(env, { login: "contributor-dev", id: 555 }, { scopes: ["extension:contributor_context"] });
+    const client = await connect(env, { kind: "session", actor: "contributor-dev", session });
+
+    const search = await client.callTool({
+      name: "gittensory_find_opportunities",
+      arguments: { searchQuery: "test coverage" },
+    });
+    expect(search.isError).toBe(true);
+    expect(JSON.stringify(search.content)).toMatch(/cross-repo opportunity search/i);
+
+    const targets = await client.callTool({
+      name: "gittensory_find_opportunities",
+      arguments: { targets: [{ owner: "victimco", repo: "private-roadmap" }] },
+    });
+    expect(targets.isError).toBe(true);
+    expect(JSON.stringify(targets.content)).toMatch(/session cannot access this repository/i);
   });
 });

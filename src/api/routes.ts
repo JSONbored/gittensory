@@ -908,9 +908,7 @@ export function createApp() {
     // Contributor extension tokens are STRICTLY self-only: like the pull-context token above, they are
     // confined to their own surface and may not reach any other path (control-panel /v1/app/*, the
     // session-mint endpoint, etc.). Without this they would be LESS confined than the maintainer token.
-    if (isExtensionContributorScopedSession(identity) && !isExtensionContributorContextPath(c.req.path) && c.req.path !== OPPORTUNITIES_FIND_PATH) {
-      return c.json({ error: "insufficient_scope" }, 403);
-    }
+    if (isExtensionContributorScopedSession(identity) && !isExtensionContributorContextPath(c.req.path)) return c.json({ error: "insufficient_scope" }, 403);
     return next();
   });
 
@@ -5386,13 +5384,12 @@ async function requireExtensionPullContextRepoAccess(
 async function requireDiscoveryAccessForApi(c: ProtectedRouteContext, identity: AuthIdentity): Promise<Response | null> {
   if (identity.kind === "session") {
     if (isAuthorizedGitHubSessionLogin(c.env, identity.actor)) return null;
-    if (isExtensionContributorScopedSession(identity)) return null;
     const scope = await loadControlPanelAccessScope(c.env, identity.actor);
     if (scope.operator) return null;
-    return c.json({ error: "cross_repo_search_requires_discovery_access" }, 403);
+    return c.json({ error: "forbidden", reason: "cross_repo_search_requires_discovery_access" }, 403);
   }
   if (identity.kind === "static" && identity.actor === "mcp" && !isMcpReadUnscoped(c.env.MCP_READ_REPO_ALLOWLIST)) {
-    return c.json({ error: "cross_repo_search_requires_unscoped_mcp_read" }, 403);
+    return c.json({ error: "forbidden", reason: "cross_repo_search_requires_unscoped_mcp_read" }, 403);
   }
   return null;
 }

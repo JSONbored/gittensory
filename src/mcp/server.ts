@@ -2234,9 +2234,9 @@ export class GittensoryMcp {
   private async requireDiscoveryAccess(): Promise<void> {
     if (this.identity.kind === "session") {
       if (isAuthorizedGitHubSessionLogin(this.env, this.identity.actor)) return;
-      if (this.identity.session.scopes.includes("extension:contributor_context")) return;
       const scope = await this.loadSessionAccessScope();
       if (scope.operator) return;
+      throw new Error("Forbidden: cross-repo opportunity search requires operator or unscoped MCP read access.");
     }
     if (this.identity.kind === "static" && this.identity.actor === "mcp" && !isMcpReadUnscoped(this.env.MCP_READ_REPO_ALLOWLIST)) {
       throw new Error("Forbidden: cross-repo opportunity search requires unscoped MCP read access.");

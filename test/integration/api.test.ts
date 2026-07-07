@@ -1227,6 +1227,22 @@ describe("api routes", () => {
       reason: "targets_or_search_query_required",
     });
 
+    const { token: minerSessionToken } = await createSessionForGitHubUser(env, { login: "ordinary-mcp-user", id: 4243 });
+    const minerSearchForbidden = await app.request(
+      "/v1/opportunities/find",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${minerSessionToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ searchQuery: "test coverage" }),
+      },
+      env,
+    );
+    expect(minerSearchForbidden.status).toBe(403);
+    await expect(minerSearchForbidden.json()).resolves.toMatchObject({
+      error: "forbidden",
+      reason: "cross_repo_search_requires_discovery_access",
+    });
+
     // Agent-native slop self-checks (mirror the gittensory_check_slop_risk / gittensory_check_issue_slop MCP tools).
     const slopRisk = await app.request(
       "/v1/lint/slop-risk",
@@ -4022,6 +4038,30 @@ describe("api routes", () => {
     await expect(privateIssueFit.json()).resolves.toMatchObject({ error: "forbidden_repo" });
     const privateIssueBadges = await app.request("/v1/extension/contributors/contributor-dev/issue-badges?owner=victim-org&repo=secret", { headers: bearer }, env);
     expect(privateIssueBadges.status).toBe(403);
+
+    const extensionFindOpportunities = await app.request(
+      "/v1/opportunities/find",
+      {
+        method: "POST",
+        headers: { ...bearer, "content-type": "application/json" },
+        body: JSON.stringify({ searchQuery: "test coverage" }),
+      },
+      env,
+    );
+    expect(extensionFindOpportunities.status).toBe(403);
+    await expect(extensionFindOpportunities.json()).resolves.toMatchObject({ error: "insufficient_scope" });
+
+    const extensionTargetedFind = await app.request(
+      "/v1/opportunities/find",
+      {
+        method: "POST",
+        headers: { ...bearer, "content-type": "application/json" },
+        body: JSON.stringify({ targets: [{ owner: "octo", repo: "demo" }] }),
+      },
+      env,
+    );
+    expect(extensionTargetedFind.status).toBe(403);
+    await expect(extensionTargetedFind.json()).resolves.toMatchObject({ error: "insufficient_scope" });
     await expect(privateIssueBadges.json()).resolves.toMatchObject({ error: "forbidden_repo" });
     expect((await app.request("/v1/extension/contributors/contributor-dev/pr-status?owner=victim-org&repo=secret&pullNumber=101", { headers: bearer }, env)).status).toBe(403);
     expect((await app.request("/v1/extension/contributors/contributor-dev/pr-status?owner=victim-org&repo=secret&pullNumber=999", { headers: bearer }, env)).status).toBe(403);
