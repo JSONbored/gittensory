@@ -91,11 +91,15 @@ export async function pruneExpiredRecords(
 
 export type SignalSnapshotDedupeResult = { signalType: string; deleted: number };
 
+const LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES = ["repo-culture-profile", "repo-doc-refresh-attempt"] as const;
+
 /**
  * signal_snapshots has no dedup: `generate-signal-snapshots` inserts a NEW row per (signal_type,
  * target_key) on every run rather than replacing the prior one, so within RETENTION_POLICY's 90-day
  * age window a key can accumulate hundreds of superseded snapshots (#3810 -- 342,243 rows for 2,183
- * distinct keys contributed to hitting D1's size cap). This keeps only the latest row per
+ * distinct keys contributed to hitting D1's size cap). Only latest-only cache signal types are
+ * deduped; historical series such as queue-health and contributor-decision-pack keep their bounded
+ * RETENTION_POLICY history for trend/change readers. This keeps only the latest row per
  * (signal_type, target_key), batched PER signal_type (not one table-wide window-function delete) so
  * each statement stays within D1's per-statement CPU budget -- the same batching split used during
  * the incident's manual remediation. "Latest" is the highest rowid per key: signal_snapshots is
@@ -111,7 +115,11 @@ export async function dedupeSignalSnapshots(
   const maxPerType = options.maxPerType ?? MAX_DELETED_PER_TABLE;
   const results: SignalSnapshotDedupeResult[] = [];
 
-  const types = await env.DB.prepare("SELECT DISTINCT signal_type FROM signal_snapshots").all<{ signal_type: string }>();
+  const placeholders = LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES.map((_, index) => `?${index + 1}`).join(", ");
+  const types = await env.DB.prepare(`SELECT DISTINCT signal_type FROM signal_snapshots WHERE signal_type IN (${placeholders})`)
+    .bind(...LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES)
+    .all<{ signal_type: string }>();
+
   for (const { signal_type: signalType } of types.results) {
     const staleCondition = `signal_type = ?1 AND rowid NOT IN (SELECT MAX(rowid) FROM signal_snapshots WHERE signal_type = ?1 GROUP BY target_key)`;
 

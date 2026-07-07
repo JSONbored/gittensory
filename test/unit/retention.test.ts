@@ -119,71 +119,84 @@ describe("dedupeSignalSnapshots", () => {
 
   it("dry-run counts duplicates per signal_type without deleting anything", async () => {
     const env = createTestEnv();
-    await insertSignalSnapshot(env, "s-1", "repo_culture", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
-    await insertSignalSnapshot(env, "s-2", "repo_culture", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
-    await insertSignalSnapshot(env, "s-3", "repo_culture", "other/repo", "2026-06-01T00:00:00.000Z"); // distinct key, not a duplicate
+    await insertSignalSnapshot(env, "s-1", "repo-culture-profile", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-2", "repo-culture-profile", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-3", "repo-culture-profile", "other/repo", "2026-06-01T00:00:00.000Z"); // distinct key, not a duplicate
     const results = await dedupeSignalSnapshots(env, { dryRun: true });
-    expect(results).toEqual([{ signalType: "repo_culture", deleted: 1 }]);
+    expect(results).toEqual([{ signalType: "repo-culture-profile", deleted: 1 }]);
     expect(await countSignalSnapshots(env)).toBe(3); // nothing actually deleted
   });
 
-  it("keeps only the highest-rowid row per (signal_type, target_key) and leaves other signal_types untouched", async () => {
+  it("keeps only the highest-rowid row for latest-only signal types and preserves historical signal types", async () => {
     const env = createTestEnv();
-    await insertSignalSnapshot(env, "s-1", "repo_culture", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
-    await insertSignalSnapshot(env, "s-2", "repo_culture", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
-    await insertSignalSnapshot(env, "s-3", "repo_culture", "JSONbored/gittensory", "2026-06-03T00:00:00.000Z"); // latest, kept
-    await insertSignalSnapshot(env, "s-4", "burden_forecast", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z"); // sole row, kept
+    await insertSignalSnapshot(env, "s-1", "repo-culture-profile", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-2", "repo-culture-profile", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-3", "repo-culture-profile", "JSONbored/gittensory", "2026-06-03T00:00:00.000Z"); // latest, kept
+    await insertSignalSnapshot(env, "s-4", "queue-health", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z"); // historical type, not deduped
 
     const results = await dedupeSignalSnapshots(env);
-    expect(results.find((r) => r.signalType === "repo_culture")?.deleted).toBe(2);
-    expect(results.find((r) => r.signalType === "burden_forecast")?.deleted).toBe(0);
-    expect(await countSignalSnapshots(env, "repo_culture")).toBe(1);
-    expect(await countSignalSnapshots(env, "burden_forecast")).toBe(1);
-    const remaining = await env.DB.prepare("SELECT id FROM signal_snapshots WHERE signal_type = ?").bind("repo_culture").first<{ id: string }>();
+    expect(results.find((r) => r.signalType === "repo-culture-profile")?.deleted).toBe(2);
+    expect(results.find((r) => r.signalType === "queue-health")).toBeUndefined();
+    expect(await countSignalSnapshots(env, "repo-culture-profile")).toBe(1);
+    expect(await countSignalSnapshots(env, "queue-health")).toBe(1);
+    const remaining = await env.DB.prepare("SELECT id FROM signal_snapshots WHERE signal_type = ?").bind("repo-culture-profile").first<{ id: string }>();
     expect(remaining?.id).toBe("s-3");
+  });
+
+  it("preserves bounded history for signal types read as historical series", async () => {
+    const env = createTestEnv();
+    await insertSignalSnapshot(env, "decision-prev", "contributor-decision-pack", "alice", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "decision-current", "contributor-decision-pack", "alice", "2026-06-02T00:00:00.000Z");
+    await insertSignalSnapshot(env, "queue-old", "queue-health", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "queue-current", "queue-health", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+
+    expect(await dedupeSignalSnapshots(env)).toEqual([]);
+
+    expect(await countSignalSnapshots(env, "contributor-decision-pack")).toBe(2);
+    expect(await countSignalSnapshots(env, "queue-health")).toBe(2);
   });
 
   it("deletes across multiple batches per signal_type and stops at the per-type cap", async () => {
     const env = createTestEnv();
     for (let i = 0; i < 6; i++) {
-      await insertSignalSnapshot(env, `s-${i}`, "repo_culture", "JSONbored/gittensory", `2026-06-0${i + 1}T00:00:00.000Z`);
+      await insertSignalSnapshot(env, `s-${i}`, "repo-culture-profile", "JSONbored/gittensory", `2026-06-0${i + 1}T00:00:00.000Z`);
     }
     // The 6th insert (highest generated_at, inserted last so it also has the highest rowid) is kept, leaving 5
     // duplicates; batchSize 2 forces multiple full (changes === batchSize) delete iterations before maxPerType 4
     // is reached, so the loop continues past its first batch instead of stopping there.
     const results = await dedupeSignalSnapshots(env, { batchSize: 2, maxPerType: 4 });
-    expect(results).toEqual([{ signalType: "repo_culture", deleted: 4 }]); // 2 + 2, then cap reached
-    expect(await countSignalSnapshots(env, "repo_culture")).toBe(2); // 1 kept + 1 duplicate left for the next run
+    expect(results).toEqual([{ signalType: "repo-culture-profile", deleted: 4 }]); // 2 + 2, then cap reached
+    expect(await countSignalSnapshots(env, "repo-culture-profile")).toBe(2); // 1 kept + 1 duplicate left for the next run
   });
 
   it("dry-run falls back to 0 when the count query returns no row (defensive ?? 0 arm)", async () => {
     const noRowEnv = {
       DB: {
         prepare: (sql: string) => ({
-          all: async () => ({ results: [{ signal_type: "repo_culture" }] }), // the DISTINCT signal_type query
-          bind: (..._binds: unknown[]) => ({
-            first: async () => undefined, // count query returns no row → `row?.n ?? 0` fallback fires
-          }),
+          bind: (..._binds: unknown[]) =>
+            sql.includes("SELECT DISTINCT")
+              ? { all: async () => ({ results: [{ signal_type: "repo-culture-profile" }] }) }
+              : { first: async () => undefined }, // count query returns no row → `row?.n ?? 0` fallback fires
         }),
       },
     } as unknown as Env;
     const results = await dedupeSignalSnapshots(noRowEnv, { dryRun: true });
-    expect(results).toEqual([{ signalType: "repo_culture", deleted: 0 }]);
+    expect(results).toEqual([{ signalType: "repo-culture-profile", deleted: 0 }]);
   });
 
   it("falls back to 0 changes when a delete run() result lacks meta (defensive ?? 0 arm)", async () => {
     const noMetaEnv = {
       DB: {
         prepare: (sql: string) => ({
-          all: async () => ({ results: [{ signal_type: "repo_culture" }] }), // the DISTINCT signal_type query
-          bind: (..._binds: unknown[]) => ({
-            run: async () => ({}), // no meta → `result.meta?.changes ?? 0` fallback fires, so changes = 0 < batchSize
-          }),
+          bind: (..._binds: unknown[]) =>
+            sql.includes("SELECT DISTINCT")
+              ? { all: async () => ({ results: [{ signal_type: "repo-culture-profile" }] }) }
+              : { run: async () => ({}) }, // no meta → `result.meta?.changes ?? 0` fallback fires, so changes = 0 < batchSize
         }),
       },
     } as unknown as Env;
     const results = await dedupeSignalSnapshots(noMetaEnv);
-    expect(results).toEqual([{ signalType: "repo_culture", deleted: 0 }]);
+    expect(results).toEqual([{ signalType: "repo-culture-profile", deleted: 0 }]);
   });
 });
 
@@ -201,11 +214,11 @@ describe("runRetentionPrune + processJob", () => {
   it("processJob prune-retention deletes, dedupes signal_snapshots, and audits both", async () => {
     const env = createTestEnv();
     await seed(env);
-    await insertSignalSnapshot(env, "s-1", "repo_culture", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
-    await insertSignalSnapshot(env, "s-2", "repo_culture", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-1", "repo-culture-profile", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-2", "repo-culture-profile", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
     await processJob(env, { type: "prune-retention", requestedBy: "schedule" });
     expect(await countWebhook(env)).toBe(3);
-    expect(await countSignalSnapshots(env, "repo_culture")).toBe(1);
+    expect(await countSignalSnapshots(env, "repo-culture-profile")).toBe(1);
     const audit = await env.DB.prepare("SELECT outcome, detail FROM audit_events WHERE event_type = ?").bind("retention.prune").first<{ outcome: string; detail: string }>();
     expect(audit?.outcome).toBe("success");
     expect(audit?.detail).toMatch(/deduped 1 signal_snapshots row/);
@@ -217,8 +230,8 @@ describe("retention preview route", () => {
     const app = createApp();
     const env = createTestEnv();
     await seed(env);
-    await insertSignalSnapshot(env, "s-1", "repo_culture", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
-    await insertSignalSnapshot(env, "s-2", "repo_culture", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-1", "repo-culture-profile", "JSONbored/gittensory", "2026-06-01T00:00:00.000Z");
+    await insertSignalSnapshot(env, "s-2", "repo-culture-profile", "JSONbored/gittensory", "2026-06-02T00:00:00.000Z");
     const res = await app.request("/v1/internal/retention/preview", { headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` } }, env);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -230,7 +243,7 @@ describe("retention preview route", () => {
     expect(body.totalEligible).toBeGreaterThanOrEqual(1);
     expect(body.eligible.find((r) => r.table === "webhook_events")).toBeUndefined();
     expect(body.totalSignalSnapshotDuplicates).toBe(1);
-    expect(body.signalSnapshotDuplicates).toEqual([{ signalType: "repo_culture", deleted: 1 }]);
+    expect(body.signalSnapshotDuplicates).toEqual([{ signalType: "repo-culture-profile", deleted: 1 }]);
     expect(await countWebhook(env)).toBe(3); // preview is read-only
     expect(await countSignalSnapshots(env)).toBe(2); // preview is read-only
   });
