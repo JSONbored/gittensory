@@ -429,6 +429,33 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
     expect(manifest.review.securityFocus).toBe(true);
   });
 
+  it("lets a higher-priority review null clear an inherited shared review block", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  footer:\n    text: shared footer\n  tone: house-tone\n");
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review: null\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    const manifest = parseFocusManifestContent(loaded!.content!);
+    expect(manifest.review.present).toBe(false);
+    expect(manifest.review.footerText).toBeNull();
+    expect(manifest.review.tone).toBeNull();
+  });
+
+  it("lets a higher-priority non-mapping review value replace an inherited shared review block", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  footer:\n    text: shared footer\n  tone: house-tone\n");
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review: false\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    const manifest = parseFocusManifestContent(loaded!.content!);
+    expect(manifest.review.present).toBe(false);
+    expect(manifest.review.footerText).toBeNull();
+    expect(manifest.review.tone).toBeNull();
+    expect(manifest.warnings).toContain('Manifest field "review" must be a mapping; ignoring it.');
+  });
+
   it("sets sharedConfigSource when only the shared base is present for a repo", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));

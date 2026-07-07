@@ -126,6 +126,10 @@ function stripReviewKey(mapping: Record<string, unknown>): Record<string, unknow
   return rest;
 }
 
+function hasReviewKey(mapping: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(mapping, "review");
+}
+
 function extractReviewMapping(mapping: Record<string, unknown>): Record<string, unknown> | null {
   const { review } = mapping;
   if (review === undefined || review === null) return null;
@@ -207,10 +211,10 @@ function combineConfigLayersWithMeta(
 
   let mergedReview: unknown;
   for (const layer of parsedLayers) {
-    const review = extractReviewMapping(layer.mapping);
-    if (review === null) continue;
+    if (!hasReviewKey(layer.mapping)) continue;
+    const { review } = layer.mapping;
     mergedReview = mergedReview === undefined ? review : mergeConfigOverlay(mergedReview, review);
-    if (layer.kind === "shared" && layer.sourcePath) sharedConfigSource = layer.sourcePath;
+    if (layer.kind === "shared" && extractReviewMapping(layer.mapping) && layer.sourcePath) sharedConfigSource = layer.sourcePath;
   }
   if (mergedReview !== undefined) mergedBody.review = mergedReview;
 
