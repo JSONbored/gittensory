@@ -191,7 +191,7 @@ describe("GitHubProjectsAdapter (#3184)", () => {
           data: {
             repositoryOwner: {
               __typename: "Organization",
-              projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap" }], pageInfo: { hasNextPage: false, endCursor: null } },
+              projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } },
             },
           },
         });
@@ -204,7 +204,7 @@ describe("GitHubProjectsAdapter (#3184)", () => {
     expect(result).toEqual([{ id: "PVT_1", title: "Self-host reliability roadmap" }]);
   });
 
-  it("listOpenProjects excludes closed Projects v2 boards (regression: gate-flagged closed-board leak, #3184)", async () => {
+  it("listOpenProjects excludes closed and private Projects v2 boards (regression: gate-flagged closed-board leak, #3184)", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
@@ -215,8 +215,9 @@ describe("GitHubProjectsAdapter (#3184)", () => {
               __typename: "Organization",
               projectsV2: {
                 nodes: [
-                  { id: "PVT_open", title: "Open roadmap", closed: false },
-                  { id: "PVT_closed", title: "Closed roadmap", closed: true },
+                  { id: "PVT_open", title: "Open roadmap", closed: false, public: true },
+                  { id: "PVT_closed", title: "Closed roadmap", closed: true, public: true },
+                  { id: "PVT_private", title: "Secret customer roadmap", closed: false, public: false },
                 ],
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
@@ -254,11 +255,11 @@ describe("GitHubProjectsAdapter (#3184)", () => {
         const body = JSON.parse(String(init?.body ?? "{}")) as { variables?: { after?: string | null } };
         if (!body.variables?.after) {
           return Response.json({
-            data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Page one project" }], pageInfo: { hasNextPage: true, endCursor: "cursor-2" } } } },
+            data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Page one project", closed: false, public: true }], pageInfo: { hasNextPage: true, endCursor: "cursor-2" } } } },
           });
         }
         return Response.json({
-          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_2", title: "Page two project" }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_2", title: "Page two project", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
         });
       }
       return new Response("unexpected", { status: 500 });
@@ -439,7 +440,7 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       if (url.includes("/milestones")) return Response.json([]);
       if (url.endsWith("/graphql")) {
         return Response.json({
-          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap" }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
         });
       }
       if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
@@ -474,7 +475,7 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       if (url.includes("/milestones")) return Response.json([{ number: 14, title: "Self-host reliability roadmap" }]);
       if (url.endsWith("/graphql")) {
         return Response.json({
-          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap" }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
         });
       }
       if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
@@ -541,7 +542,7 @@ describe("maybeSuggestProjectOrMilestoneMatch (#3183/#3184)", () => {
       if (url.includes("/milestones")) return new Response("boom", { status: 500 });
       if (url.endsWith("/graphql")) {
         return Response.json({
-          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap" }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
         });
       }
       if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);

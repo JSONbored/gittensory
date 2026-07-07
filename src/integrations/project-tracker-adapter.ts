@@ -134,7 +134,7 @@ export class GitHubMilestonesAdapter implements ProjectTrackerAdapter {
 // Both gaps degrade the SAME way -- an empty projects list, never a crash or a wrong match -- so no special
 // handling is needed to stay safe; only visibility (this comment + the PR notes) documents the gap.
 
-type ProjectV2Node = { id: string; title: string; closed: boolean };
+type ProjectV2Node = { id: string; title: string; closed: boolean; public: boolean };
 
 type ListOpenProjectsGraphQlResponse = {
   repositoryOwner: {
@@ -204,7 +204,7 @@ export class GitHubProjectsAdapter implements ProjectTrackerAdapter {
             __typename
             ... on Organization {
               projectsV2(first: 100, after: $after, orderBy: {field: TITLE, direction: ASC}) {
-                nodes { id title closed }
+                nodes { id title closed public }
                 pageInfo { hasNextPage endCursor }
               }
             }
@@ -214,7 +214,7 @@ export class GitHubProjectsAdapter implements ProjectTrackerAdapter {
       );
       const projectsV2 = response.repositoryOwner?.projectsV2;
       if (!projectsV2) break; // owner is a User (or has zero projects) -- see the module-level comment above.
-      projects.push(...projectsV2.nodes.filter((project) => !project.closed));
+      projects.push(...projectsV2.nodes.filter((project) => !project.closed && project.public));
       if (!projectsV2.pageInfo.hasNextPage) break;
       after = projectsV2.pageInfo.endCursor;
     }
