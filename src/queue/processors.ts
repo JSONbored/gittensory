@@ -1468,7 +1468,7 @@ async function refreshOpenPullRequestsForScheduledSweep(
 // head SHA, which resets the count naturally (the target key is scoped to repo+PR+SHA).
 const REGATE_REPAIR_ATTEMPT_EVENT_TYPE = "agent.sweep.regate.repair_attempt";
 const REGATE_REPAIR_EXHAUSTED_EVENT_TYPE = "agent.sweep.regate.repair_exhausted";
-const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 2;
+const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 5;
 const REGATE_REPAIR_ATTEMPT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 function regateRepairTargetKey(repoFullName: string, prNumber: number, headSha: string): string {
