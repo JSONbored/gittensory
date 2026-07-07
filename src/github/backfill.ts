@@ -2664,7 +2664,7 @@ export async function fetchNamedCheckRunConclusion(
 
 // Minimal structural shape the CI reducer needs from a check-run — a superset of the REST GitHubCheckRunPayload
 // (so REST payloads assign directly) AND buildable from the GraphQL CheckRun node (which has no `id`). `started_at`
-// is carried specifically so the reducer can dedupe a re-run job's stale entry (see dedupeLatestCheckRunsByName) —
+// is carried specifically so the reducer can dedupe a re-run job's stale entry (see dedupeLatestCheckRunsByIdentity) —
 // both the REST payload and the GraphQL query populate it, so it is the one recency signal available on EITHER path.
 type LiveCiCheckRun = {
   name: string;
@@ -2674,45 +2674,59 @@ type LiveCiCheckRun = {
   started_at?: string | null;
   output?: { title?: unknown; summary?: unknown };
   app?: { slug?: string | null } | null;
+  check_suite?: { id?: number | string | null; databaseId?: number | string | null } | null;
 };
 type LiveCiStatus = { context?: string | null; state?: string | null; description?: string | null; target_url?: string | null };
 type LiveCiSuite = { status?: string | null; app?: { slug?: string | null } | null };
 
 /**
- * Collapse re-run duplicates so classification only ever sees ONE entry per check-run `name`. GitHub's check-runs
- * API (both `/check-runs` REST and the GraphQL `statusCheckRollup`) can return MULTIPLE entries with the same name
- * when a job is re-run (e.g. "Re-run failed jobs" after a flake) — the stale run is NOT removed or replaced, it is
- * left in the list alongside the new one. Without this step the classification loop below would push the stale
- * run's failure into `failingDetails` even though the same-named job now currently passes, resolving `ciState` to
- * "failed" on a commit whose CI is actually green (reproduced empirically against a real commit in this repo: a
- * "Deploy UI preview version" check-run appeared twice, once `conclusion: "failure"` from the original run and once
- * `conclusion: "skipped"` from the re-run, and the un-deduped reducer read it as failed).
+ * Collapse re-run duplicates so classification only ever sees ONE entry per logical check-run attempt stream.
+ * GitHub's check-runs API (both `/check-runs` REST and the GraphQL `statusCheckRollup`) can return MULTIPLE
+ * entries for the same logical check after a job is re-run (e.g. "Re-run failed jobs" after a flake) — the stale
+ * run is NOT removed or replaced, it is left in the list alongside the new one. Without this step the classification
+ * loop below would push the stale run's failure into `failingDetails` even though that exact check now currently
+ * passes.
  *
- * Tiebreak by `started_at` (ISO-8601, string-comparable in chronological order) when BOTH candidates have one —
- * GitHub sets `started_at` at check-run creation time, so it is a direct recency signal available on both the REST
- * payload and (once queried) the GraphQL node; unlike a numeric `id`, it exists on the shared `LiveCiCheckRun` shape
- * the GraphQL path can actually populate (GraphQL check-run nodes have no exposed `id`). When either candidate is
- * missing `started_at` (a queued run that has not started yet has none), array order is the fallback: GitHub does
- * not document a stable ordering contract for `/check-runs`, so this deliberately does not assume "returned last is
- * newest" as a general rule — it only breaks a genuine tie, and last-standing is at least as good a default as
- * first-standing when no timestamp is available.
+ * The identity key deliberately includes the check suite, not just `name`: check-run names are display labels, not a
+ * uniqueness boundary, and different apps/workflows/suites can legitimately publish the same name. If the suite id is
+ * absent, the run is left undeduped so an observed failure cannot be hidden by an unrelated later success.
+ *
+ * Tiebreak by `started_at` (ISO-8601, string-comparable in chronological order) when BOTH candidates have one. When
+ * either candidate is missing `started_at` (a queued run that has not started yet has none), array order is the
+ * fallback: GitHub does not document a stable ordering contract for `/check-runs`, so this deliberately does not
+ * assume "returned last is newest" as a general rule — it only breaks a genuine tie, and last-standing is at least
+ * as good a default as first-standing when no timestamp is available.
  */
-function dedupeLatestCheckRunsByName(checkRuns: ReadonlyArray<LiveCiCheckRun>): LiveCiCheckRun[] {
-  const latestByName = new Map<string, LiveCiCheckRun>();
+function checkRunDedupeKey(run: LiveCiCheckRun): string | null {
+  const suiteId = run.check_suite?.id ?? run.check_suite?.databaseId ?? null;
+  if (suiteId == null || suiteId === "") return null;
+  return `${run.name}\0${(run.app?.slug ?? "").toLowerCase()}\0${String(suiteId)}`;
+}
+
+function dedupeLatestCheckRunsByIdentity(checkRuns: ReadonlyArray<LiveCiCheckRun>): LiveCiCheckRun[] {
+  const output: LiveCiCheckRun[] = [];
+  const indexByIdentity = new Map<string, number>();
   for (const run of checkRuns) {
-    const existing = latestByName.get(run.name);
-    if (!existing) {
-      latestByName.set(run.name, run);
+    const key = checkRunDedupeKey(run);
+    if (!key) {
+      output.push(run);
       continue;
     }
+    const existingIndex = indexByIdentity.get(key);
+    if (existingIndex == null) {
+      indexByIdentity.set(key, output.length);
+      output.push(run);
+      continue;
+    }
+    const existing = output[existingIndex]!;
     if (run.started_at && existing.started_at) {
-      if (run.started_at >= existing.started_at) latestByName.set(run.name, run);
+      if (run.started_at >= existing.started_at) output[existingIndex] = run;
     } else {
       // No comparable timestamp on one or both sides — keep the later array entry (see doc above).
-      latestByName.set(run.name, run);
+      output[existingIndex] = run;
     }
   }
-  return [...latestByName.values()];
+  return output;
 }
 
 /**
@@ -2722,8 +2736,8 @@ function dedupeLatestCheckRunsByName(checkRuns: ReadonlyArray<LiveCiCheckRun>): 
  * differs (#1941), which is what keeps the flag-gated GraphQL path semantically equivalent to the proven REST one.
  * `fetchSuites` is invoked ONLY when the cheaper sources are fully settled (no failure, no pending, no incomplete
  * read), mirroring the REST path's conditional suites read so neither path pays for it on an already-decided PR; it
- * returns the suite list, or null when that read is unreadable (fail-closed). Check-runs are deduped by name
- * (`dedupeLatestCheckRunsByName`) before classification so a re-run job's stale duplicate can never masquerade as a
+ * returns the suite list, or null when that read is unreadable (fail-closed). Check-runs are deduped by check-run identity
+ * (`dedupeLatestCheckRunsByIdentity`) before classification so a re-run job's stale duplicate can never masquerade as a
  * current failure; classic commit-statuses are NOT deduped here because GitHub's Combined Status API is documented
  * to already return exactly one entry per unique context (the most recent), so this duplicate-name failure mode
  * does not apply to `statuses`.
@@ -2752,10 +2766,10 @@ async function reduceLiveCiAggregate(
   let sawFirstPartyCheckRun = false;
   const seenContextNames = new Set<string>();
 
-  // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks). Deduped by name FIRST (dedupeLatestCheckRunsByName)
-  // so a re-run job's stale duplicate entry can never contribute its own failingDetails/pending signal alongside
-  // the current one.
-  for (const run of dedupeLatestCheckRunsByName(checkRuns)) {
+  // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks). Deduped by check-run identity first, so a
+  // re-run job's stale duplicate entry can never contribute its own failingDetails/pending signal alongside the
+  // current one, without collapsing unrelated checks that merely share a display name.
+  for (const run of dedupeLatestCheckRunsByIdentity(checkRuns)) {
     seenContextNames.add(run.name); // mark BEFORE bot-check skip: a bot-owned required context is "seen"
     if ((run.app?.slug ?? "").toLowerCase() === "github-actions") sawFirstPartyCheckRun = true;
     if (isOwnGitHubAppCheckRun(env, run)) continue; // never wait on the bot's own Gate/Context check-runs
@@ -2952,7 +2966,7 @@ export async function fetchLiveCiAggregateViaGraphQl(
   if (!headSha || !token) return null;
   const [owner, name] = repoFullName.split("/");
   if (!owner || !name) return null;
-  const query = `query GittensoryLiveCiRollup { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { object(oid: ${JSON.stringify(headSha)}) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status startedAt detailsUrl title summary checkSuite { app { slug } } } ... on StatusContext { context state description targetUrl } } pageInfo { hasNextPage } } } checkSuites(first: 100) { nodes { status app { slug } } } } } } }`;
+  const query = `query GittensoryLiveCiRollup { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { object(oid: ${JSON.stringify(headSha)}) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status startedAt detailsUrl title summary checkSuite { databaseId app { slug } } } ... on StatusContext { context state description targetUrl } } pageInfo { hasNextPage } } } checkSuites(first: 100) { nodes { status app { slug } } } } } } }`;
   const result = await githubGraphQl<{
     data?: {
       repository?: {
@@ -2968,7 +2982,7 @@ export async function fetchLiveCiAggregateViaGraphQl(
                 detailsUrl?: string | null;
                 title?: string | null;
                 summary?: string | null;
-                checkSuite?: { app?: { slug?: string | null } | null } | null;
+                checkSuite?: { databaseId?: number | null; app?: { slug?: string | null } | null } | null;
                 context?: string | null;
                 state?: string | null;
                 description?: string | null;
@@ -3007,7 +3021,7 @@ export async function fetchLiveCiAggregateViaGraphQl(
       // Field-name mapping only (detailsUrl→details_url, startedAt→started_at, title/summary→output.*,
       // checkSuite.app→app); the reducer lowercases GraphQL's UPPERCASE conclusion/status enums, so no case
       // handling is needed here. `started_at` is carried through so reduceLiveCiAggregate's re-run dedup
-      // (dedupeLatestCheckRunsByName) has the same recency signal on this path as it does on REST.
+      // (dedupeLatestCheckRunsByIdentity) has the same recency signal on this path as it does on REST.
       checkRuns.push({
         name: node.name ?? "",
         conclusion: node.conclusion ?? null,
@@ -3016,6 +3030,7 @@ export async function fetchLiveCiAggregateViaGraphQl(
         started_at: node.startedAt ?? null,
         output: { title: node.title ?? undefined, summary: node.summary ?? undefined },
         app: { slug: node.checkSuite?.app?.slug ?? null },
+        check_suite: { databaseId: node.checkSuite?.databaseId ?? null },
       });
     } else if (node.__typename === "StatusContext") {
       statuses.push({ context: node.context ?? null, state: node.state ?? null, description: node.description ?? null, target_url: node.targetUrl ?? null });

@@ -4848,8 +4848,8 @@ describe("GitHub backfill", () => {
           if (url.includes("/check-runs?")) {
             return Response.json({
               check_runs: [
-                { id: 85478132562, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z" },
-                { id: 85485221438, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z" },
+                { id: 85478132562, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z", check_suite: { id: 4401 } },
+                { id: 85485221438, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z", check_suite: { id: 4401 } },
               ],
             });
           }
@@ -4871,8 +4871,8 @@ describe("GitHub backfill", () => {
           if (url.includes("/check-runs?")) {
             return Response.json({
               check_runs: [
-                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "success", started_at: "2026-07-06T20:56:33Z" },
-                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T21:34:29Z" },
+                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "success", started_at: "2026-07-06T20:56:33Z", check_suite: { id: 4401 } },
+                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T21:34:29Z", check_suite: { id: 4401 } },
               ],
             });
           }
@@ -4896,8 +4896,8 @@ describe("GitHub backfill", () => {
           if (url.includes("/check-runs?")) {
             return Response.json({
               check_runs: [
-                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z" },
-                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z" },
+                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z", check_suite: { id: 4401 } },
+                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z", check_suite: { id: 4401 } },
               ],
             });
           }
@@ -4912,6 +4912,28 @@ describe("GitHub backfill", () => {
         expect(aggregate.failingDetails).toEqual([]);
       });
 
+      it("does not discard failing same-name check-runs from a different suite", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 1, name: "security", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z", app: { slug: "required-security-ci" }, check_suite: { id: 9001 } },
+                { id: 2, name: "security", status: "completed", conclusion: "success", started_at: "2026-07-06T21:34:29Z", app: { slug: "colliding-helper-ci" }, check_suite: { id: 9002 } },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["security"]));
+
+        expect(aggregate.ciState).toBe("failed");
+        expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "security" })]);
+      });
+
       it("falls back to array order when neither duplicate has a started_at (queued runs have none)", async () => {
         const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
         vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -4919,8 +4941,8 @@ describe("GitHub backfill", () => {
           if (url.includes("/check-runs?")) {
             return Response.json({
               check_runs: [
-                { id: 1, name: "flaky", status: "completed", conclusion: "failure", started_at: null },
-                { id: 2, name: "flaky", status: "completed", conclusion: "success", started_at: null },
+                { id: 1, name: "flaky", status: "completed", conclusion: "failure", started_at: null, check_suite: { id: 4401 } },
+                { id: 2, name: "flaky", status: "completed", conclusion: "success", started_at: null, check_suite: { id: 4401 } },
               ],
             });
           }
