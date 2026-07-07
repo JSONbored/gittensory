@@ -136,21 +136,51 @@ SQL
 }
 
 # Incremental fast-path (#3895): a live review pipeline is bursty -- most 30s cycles change nothing since the
-# last export, yet the full rebuild below re-exports and re-imports every row of every table every time. That
-# cost grows without bound as ai_usage_events (an append-only log of every AI call) accumulates -- measured on
-# a real self-host instance at 91GB of cumulative block I/O in 37 hours. A cheap COUNT+MAX fingerprint per
-# table is orders of magnitude cheaper than the full COPY/SELECT+INSERT rebuild, so skip the whole rebuild
-# when the fingerprint matches the last run's AND a last-good $OUT_DB already exists. Fails OPEN: any error or
-# missing piece while computing the fingerprint falls through to the existing full-rebuild path unchanged --
-# this is purely an optimization, never a new failure mode or a new way to serve stale data.
+# last export, yet the full rebuild below re-exports and re-imports every row of every table every time. Hash
+# the complete source rows for mutable tables (pull_requests, review_targets) since an in-place UPDATE can
+# leave row count and max(updated_at) unchanged; use a cheap count+max aggregate for insert-only tables
+# (review_audit, ai_usage_events) since nothing ever edits a row in place there, and ai_usage_events grows
+# without bound so a full dump/hash on every cycle would reproduce the unbounded I/O #3895 was fixing. Skip
+# the rebuild only when that fingerprint matches the last run's AND the last-good $OUT_DB still passes
+# SQLite's quick_check. Fails OPEN: any error or missing piece while computing the fingerprint or validating
+# the output falls through to the existing full-rebuild path unchanged -- this is purely an optimization,
+# never a new failure mode or a new way to serve stale data.
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    cat >/dev/null
+    return 1
+  fi
+}
+
+sqlite_table_fingerprint() {
+  tbl="$1"
+  sqlite3 "$APP_DB" ".dump $tbl" | hash_stdin
+}
+
+# review_audit/ai_usage_events are insert-only event/audit logs (nothing ever UPDATEs a row in
+# place), so a row count + max(created_at) aggregate can never miss a real change -- and unlike
+# the full-dump hash above, it stays O(1)-ish instead of O(row-count) as ai_usage_events grows
+# without bound. pull_requests/review_targets DO receive in-place UPDATEs (e.g. a title or state
+# change that doesn't necessarily bump updated_at in lockstep), so those still need the full
+# content hash to catch an edit a count+max aggregate would silently miss.
+sqlite_append_only_fingerprint() {
+  tbl="$1"
+  sqlite3 "$APP_DB" "SELECT COUNT(*) || ':' || COALESCE(MAX(created_at), '') FROM $tbl"
+}
+
 sqlite_source_fingerprint() {
   [ -s "$APP_DB" ] || return 1
   fp=""
-  for spec in "pull_requests:updated_at" "review_audit:created_at" "review_targets:updated_at" "ai_usage_events:created_at"; do
-    tbl="${spec%%:*}"
-    col="${spec#*:}"
+  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events"; do
     if source_table_exists "$tbl"; then
-      val="$(sqlite3 "$APP_DB" "SELECT COUNT(*) || ':' || COALESCE(MAX($col), '') FROM $tbl")" || return 1
+      case "$tbl" in
+        review_audit | ai_usage_events) val="$(sqlite_append_only_fingerprint "$tbl")" || return 1 ;;
+        *) val="$(sqlite_table_fingerprint "$tbl")" || return 1 ;;
+      esac
     else
       val="absent"
     fi
@@ -159,19 +189,32 @@ sqlite_source_fingerprint() {
   printf '%s' "$fp"
 }
 
+# Mirrors sqlite_append_only_fingerprint's reasoning: review_audit/ai_usage_events are insert-only,
+# so count+max is sufficient and avoids scanning+serializing every row on every fast-path check.
+pg_append_only_fingerprint() {
+  tbl="$1"
+  pg_scalar "SELECT COUNT(*) || ':' || COALESCE(MAX(created_at)::text, '') FROM $tbl"
+}
+
 pg_source_fingerprint() {
   fp=""
-  for spec in "pull_requests:updated_at" "review_audit:created_at" "review_targets:updated_at" "ai_usage_events:created_at"; do
-    tbl="${spec%%:*}"
-    col="${spec#*:}"
+  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events"; do
     if pg_table_exists "$tbl"; then
-      val="$(pg_scalar "SELECT COUNT(*) || ':' || COALESCE(MAX($col)::text, '') FROM $tbl")" || return 1
+      case "$tbl" in
+        review_audit | ai_usage_events) val="$(pg_append_only_fingerprint "$tbl")" || return 1 ;;
+        *) val="$(pg_scalar "SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\n' ORDER BY row_to_json(t)::text), '')) FROM $tbl t")" || return 1 ;;
+      esac
     else
       val="absent"
     fi
     fp="$fp;$tbl=$val"
   done
   printf '%s' "$fp"
+}
+
+reporting_db_ok() {
+  [ -s "$OUT_DB" ] || return 1
+  sqlite3 "$OUT_DB" "PRAGMA quick_check;" 2>/dev/null | grep -qx "ok"
 }
 
 # Persist the fingerprint that was actually just exported, so the NEXT run's fast-path check above compares
@@ -196,7 +239,7 @@ else
   CURRENT_FINGERPRINT="$(sqlite_source_fingerprint)" || CURRENT_FINGERPRINT=""
 fi
 
-if [ -n "$CURRENT_FINGERPRINT" ] && [ -s "$OUT_DB" ] && [ -s "$FINGERPRINT_FILE" ] && [ "$(cat "$FINGERPRINT_FILE")" = "$CURRENT_FINGERPRINT" ]; then
+if [ -n "$CURRENT_FINGERPRINT" ] && reporting_db_ok && [ -s "$FINGERPRINT_FILE" ] && [ "$(cat "$FINGERPRINT_FILE")" = "$CURRENT_FINGERPRINT" ]; then
   echo "reporting export skipped: source unchanged since last export"
   exit 0
 fi

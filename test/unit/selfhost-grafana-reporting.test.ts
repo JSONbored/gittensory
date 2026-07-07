@@ -697,6 +697,94 @@ esac
     expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("2");
   });
 
+  it("redoes the rebuild when an in-place SQLite source edit keeps the row count and max timestamp unchanged", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+        author_login TEXT, merged_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES ('JSONbored/gittensory', 5004, 'old title', 'open', 'JSONbored', NULL, '2026-07-06T00:00:00Z', '2026-07-06T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+    runExporter(root, appDb, outDb);
+    expect(sqlite(outDb, "SELECT title FROM review_targets WHERE number = 5004;")).toBe("old title");
+
+    sqlite(appDb, "UPDATE pull_requests SET title = 'new title' WHERE number = 5004;");
+    const second = runExporter(root, appDb, outDb);
+    expect(second).toContain("reporting export complete");
+    expect(sqlite(outDb, "SELECT title FROM review_targets WHERE number = 5004;")).toBe("new title");
+  });
+
+  it("still detects a new ai_usage_events row via the cheap count+max fast path (#3895: no full-table dump for insert-only tables)", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE ai_usage_events (
+        feature TEXT NOT NULL, model TEXT NOT NULL, provider TEXT, effort TEXT, status TEXT NOT NULL,
+        estimated_neurons INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0, detail TEXT, metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO ai_usage_events (feature, model, status, metadata_json, created_at)
+      VALUES ('ai_review_pr', 'codex', 'ok', '{}', '2026-07-06T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+    const first = runExporter(root, appDb, outDb);
+    expect(first).toContain("reporting export complete");
+    expect(sqlite(outDb, "SELECT count(*) FROM ai_usage_events;")).toBe("1");
+
+    const skipped = runExporter(root, appDb, outDb);
+    expect(skipped).toContain("reporting export skipped: source unchanged since last export");
+
+    sqlite(
+      appDb,
+      "INSERT INTO ai_usage_events (feature, model, status, metadata_json, created_at) VALUES ('ai_slop_pr', 'claude-code', 'ok', '{}', '2026-07-06T00:01:00Z');",
+    );
+    const second = runExporter(root, appDb, outDb);
+    expect(second).toContain("reporting export complete");
+    expect(sqlite(outDb, "SELECT count(*) FROM ai_usage_events;")).toBe("2");
+  });
+
+  it("redoes the rebuild instead of preserving a corrupted last-good reporting DB", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+        author_login TEXT, merged_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES ('JSONbored/gittensory', 5005, 'valid PR', 'open', 'JSONbored', NULL, '2026-07-06T00:00:00Z', '2026-07-06T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+    runExporter(root, appDb, outDb);
+    writeFileSync(outDb, "not a sqlite database");
+
+    const second = runExporter(root, appDb, outDb);
+    expect(second).toContain("reporting export complete");
+    expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
+    expect(sqlite(outDb, "SELECT title FROM review_targets WHERE number = 5005;")).toBe("valid PR");
+  });
+
   it("skips the rebuild on a second run when the Postgres source is unchanged", () => {
     const root = tmpRoot();
     const outDb = join(root, "reporting.sqlite");
