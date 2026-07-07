@@ -17,6 +17,11 @@ describe("rightSideLinesFromPatch (#2159)", () => {
     expect([...rightSideLinesFromPatch(patch)].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
     expect(rightSideLinesFromPatch("").size).toBe(0);
   });
+
+  it("ignores trailing split artifacts and preamble before the first hunk", () => {
+    expect([...rightSideLinesFromPatch("@@ -1,1 +1,2 @@\n ctx\n+added2\n")].sort((a, b) => a - b)).toEqual([1, 2]);
+    expect(rightSideLinesFromPatch("preamble only").size).toBe(0);
+  });
 });
 
 describe("inlineFindingCategory + compareInlineFindingPriority (#2159)", () => {
