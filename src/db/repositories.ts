@@ -631,8 +631,8 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewNagLabel: row.reviewNagLabel,
     reviewNagMonitoredMentions: parseAutoCloseExemptLogins(row.reviewNagMonitoredMentionsJson),
     autoCloseExemptLogins: parseAutoCloseExemptLogins(row.autoCloseExemptLoginsJson),
-    requireFreshRebaseWindowMinutes: normalizeOpenItemCap(row.requireFreshRebaseWindowMinutes),
-    accountAgeThresholdDays: normalizeOpenItemCap(row.accountAgeThresholdDays),
+    requireFreshRebaseWindowMinutes: normalizePositiveIntOrNull(row.requireFreshRebaseWindowMinutes),
+    accountAgeThresholdDays: normalizePositiveIntOrNull(row.accountAgeThresholdDays),
     newAccountLabel: row.newAccountLabel,
     commandRateLimitPolicy: normalizeCommandRateLimitPolicy(row.commandRateLimitPolicy),
     commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(row.commandRateLimitMaxPerWindow, 20),
@@ -751,8 +751,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     reviewNagLabel: settings.reviewNagLabel ?? "review-nag-cooldown",
     reviewNagMonitoredMentions: normalizeAutoCloseExemptLogins(settings.reviewNagMonitoredMentions).logins,
     autoCloseExemptLogins: normalizeAutoCloseExemptLogins(settings.autoCloseExemptLogins).logins,
-    requireFreshRebaseWindowMinutes: normalizeOpenItemCap(settings.requireFreshRebaseWindowMinutes),
-    accountAgeThresholdDays: normalizeOpenItemCap(settings.accountAgeThresholdDays),
+    requireFreshRebaseWindowMinutes: normalizePositiveIntOrNull(settings.requireFreshRebaseWindowMinutes),
+    accountAgeThresholdDays: normalizePositiveIntOrNull(settings.accountAgeThresholdDays),
     newAccountLabel: settings.newAccountLabel ?? "new-account",
     commandRateLimitPolicy: normalizeCommandRateLimitPolicy(settings.commandRateLimitPolicy),
     commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitMaxPerWindow, 20),
@@ -2718,14 +2718,16 @@ export async function recordModerationViolation(env: Env, args: { eventType: str
   return true;
 }
 
-// #gate-flagged: same non-clamping, non-rounding shape as normalizeOpenItemCap, PLUS an upper bound --
-// unlike an ordinary open-item cap, this value feeds Date arithmetic on the LIVE close path
-// (`Date.now() - violationDecayDays * 86400000`); an unbounded value (e.g. a typo adding extra zeros) can
-// overflow into an Invalid Date, and calling .toISOString() on an Invalid Date THROWS, crashing the close.
-// Clamped (Math.min), not dropped to null, mirroring normalizeReviewNagCooldownDays' own clamping shape for
-// the same "still meaningful, just bounded" family of day-count settings.
+// #gate-flagged: same non-rounding shape as normalizePositiveIntOrNull, PLUS its OWN upper bound -- unlike an
+// ordinary open-item cap, this value feeds Date arithmetic on the LIVE close path (`Date.now() -
+// violationDecayDays * 86400000`); an unbounded value (e.g. a typo adding extra zeros) can overflow into an
+// Invalid Date, and calling .toISOString() on an Invalid Date THROWS, crashing the close. Clamped (Math.min),
+// not dropped to null, mirroring normalizeReviewNagCooldownDays' own clamping shape for the same "still
+// meaningful, just bounded" family of day-count settings. Deliberately calls normalizePositiveIntOrNull, NOT
+// normalizeOpenItemCap: the latter's 100-row cap is specific to the live-verification sample budget and has
+// nothing to do with this setting's own, much larger MAX_MODERATION_VIOLATION_DECAY_DAYS ceiling.
 function normalizeModerationDecayDays(value: number | null | undefined): number | null {
-  const parsed = normalizeOpenItemCap(value);
+  const parsed = normalizePositiveIntOrNull(value);
   return parsed === null ? null : Math.min(parsed, MAX_MODERATION_VIOLATION_DECAY_DAYS);
 }
 
@@ -6816,13 +6818,25 @@ function normalizeQualityGateMinScore(value: number | null | undefined): number 
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-// A per-contributor open-item cap (#2270) counts discrete open PRs/issues, not a 0-100 score, so unlike
-// normalizeQualityGateMinScore it is not rounded — a fractional or non-positive value is a malformed cap
-// (there's no such thing as "allow 2.5 open PRs"), so it is dropped to null (no cap). Valid counts are
-// clamped to the fixed live-verification sample budget so the cap cannot exceed the rows enforcement sees.
-function normalizeOpenItemCap(value: number | null | undefined): number | null {
+// A discrete positive count (not a 0-100 score), so unlike normalizeQualityGateMinScore it is not rounded —
+// a fractional or non-positive value is malformed (there's no such thing as "allow 2.5 open PRs") and is
+// dropped to null. Shared by callers with entirely different upper bounds (or none at all) — see
+// normalizeOpenItemCap for the one that clamps to the live-verification sample budget, and
+// normalizeModerationDecayDays for one with its own, unrelated ceiling.
+function normalizePositiveIntOrNull(value: number | null | undefined): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) return null;
-  return Math.min(value, MAX_CONTRIBUTOR_OPEN_ITEM_CAP);
+  return value;
+}
+
+// A per-contributor open-item cap (#2270): valid counts are clamped to the fixed live-verification sample
+// budget so the cap cannot exceed the rows enforcement sees. Only for caps that are actually enforced against
+// that sample (contributorOpenPrCap/contributorOpenIssueCap) — an unrelated positive-int setting that happens
+// to reuse the same validation shape must call normalizePositiveIntOrNull directly, not this function, or it
+// silently inherits a 100-row ceiling that has nothing to do with its own semantics (gate-flagged: this is
+// exactly how normalizeModerationDecayDays's unrelated 3650-day ceiling got clamped down to 100 by mistake).
+function normalizeOpenItemCap(value: number | null | undefined): number | null {
+  const parsed = normalizePositiveIntOrNull(value);
+  return parsed === null ? null : Math.min(parsed, MAX_CONTRIBUTOR_OPEN_ITEM_CAP);
 }
 
 function parsePublicSurface(value: string): RepositorySettings["publicSurface"] {

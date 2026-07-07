@@ -338,6 +338,15 @@ describe("data spine repositories", () => {
     expect((await getRepositorySettings(env, "owner/rebasewindowrepo")).requireFreshRebaseWindowMinutes).toBe(30); // update persists
     await upsertRepositorySettings(env, { repoFullName: "owner/rebasewindowrepo", requireFreshRebaseWindowMinutes: 2.5 as never });
     expect((await getRepositorySettings(env, "owner/rebasewindowrepo")).requireFreshRebaseWindowMinutes).toBeNull();
+    // REGRESSION: this is a minutes-based freshness window, not a live-verification-sample-bounded count like
+    // contributorOpenPrCap above -- it must NOT inherit that unrelated cap's 100 ceiling.
+    await upsertRepositorySettings(env, { repoFullName: "owner/rebasewindowrepo", requireFreshRebaseWindowMinutes: 500 });
+    expect((await getRepositorySettings(env, "owner/rebasewindowrepo")).requireFreshRebaseWindowMinutes).toBe(500);
+    // #1936 minimum account-age gate: no row and no override both default to null (never enforced); round-trips,
+    // and (REGRESSION, same reasoning as requireFreshRebaseWindowMinutes above) is not capped at 100.
+    expect((await getRepositorySettings(env, "missing/repo")).accountAgeThresholdDays).toBeNull();
+    await upsertRepositorySettings(env, { repoFullName: "owner/accountagerepo", accountAgeThresholdDays: 365 });
+    expect((await getRepositorySettings(env, "owner/accountagerepo")).accountAgeThresholdDays).toBe(365);
     // #2463 review-nag cooldown + shared exemption list: no row and no override both default to off/3/5/the
     // default label/empty exemption list.
     expect(await getRepositorySettings(env, "missing/repo")).toMatchObject({
