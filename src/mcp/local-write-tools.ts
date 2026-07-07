@@ -126,7 +126,8 @@ export function buildFollowUpIssueSpec(input: {
   finding: string;
   label?: string | null | undefined;
 }): LocalWriteActionSpec {
-  const location = input.line && input.line > 0 ? `${input.path}:${input.line}` : input.path;
+  const safePath = stripMachineMarkers(input.path);
+  const location = input.line && input.line > 0 ? `${safePath}:${input.line}` : safePath;
   const safeFinding = stripMachineMarkers(input.finding).slice(0, FOLLOW_UP_ISSUE_BODY_MAX);
   const title = `Follow up: ${location}`.slice(0, FOLLOW_UP_ISSUE_TITLE_MAX);
   const body = `Deferred review finding at \`${location}\`:\n\n${safeFinding}`.slice(0, FOLLOW_UP_ISSUE_BODY_MAX);

@@ -136,6 +136,18 @@ describe("buildFollowUpIssueSpec (#2177)", () => {
     expect(s.command).toContain("Null check missing.");
   });
 
+  it("strips embedded HTML-comment markers from the path before composing public issue content", () => {
+    const s = buildFollowUpIssueSpec({
+      repoFullName: "o/r",
+      path: "src/a<!-- hidden path payload -->.ts",
+      line: 42,
+      finding: "Null check missing.",
+    });
+    expect(s.command).not.toContain("<!--");
+    expect(s.inputs.title).toBe("Follow up: src/a.ts:42");
+    expect(s.inputs.body).toContain("Deferred review finding at `src/a.ts:42`");
+  });
+
   it("POSIX-escapes an embedded single quote in the composed title/body", () => {
     const s = buildFollowUpIssueSpec({ repoFullName: "o/r", path: "src/a.ts", line: 1, finding: "it's broken" });
     expect(s.command).toContain("it'\\''s broken");
