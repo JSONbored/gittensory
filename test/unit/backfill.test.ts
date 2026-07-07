@@ -254,8 +254,14 @@ describe("GitHub backfill", () => {
             nodes: [{ __typename: "PullRequest", mergedAt: "2026-05-24T00:00:00Z", labels: { nodes: [{ name: "bug" }] }, body: "Fixes #1" }],
           },
           r_JSONbored_gittensory_open: {
-            issueCount: 2,
-            nodes: [{ __typename: "PullRequest", updatedAt: "2026-04-01T00:00:00Z", labels: { nodes: [{ name: "ci" }] }, body: "" }],
+            issueCount: 3,
+            nodes: [
+              { __typename: "PullRequest", updatedAt: "2026-04-01T00:00:00Z", labels: { nodes: [{ name: "ci" }] }, body: "" },
+              { __typename: "PullRequest", updatedAt: "2026-04-02T00:00:00Z", labels: { nodes: [{ name: "ci" }] }, body: "Fixes #2" },
+              // REGRESSION: no `body` field at all (GitHub omits it, not just an empty string) -- exercises
+              // the `node.body ?? ""` nullish fallback the unlinkedPullRequests count feeds into.
+              { __typename: "PullRequest", updatedAt: "2026-04-03T00:00:00Z", labels: { nodes: [{ name: "ci" }] } },
+            ],
           },
           r_JSONbored_gittensory_issues: {
             issueCount: 12,
@@ -270,7 +276,7 @@ describe("GitHub backfill", () => {
     expect(result).toMatchObject({ repoCount: 1, updatedRepoStats: 1, warnings: [] });
     expect(authHeaders).toContain("Bearer public-token");
     expect(await listContributorRepoStats(env, "JSONbored")).toMatchObject([
-      { repoFullName: "JSONbored/gittensory", pullRequests: 50, mergedPullRequests: 47, openPullRequests: 2, issues: 12, unlinkedPullRequests: 1 },
+      { repoFullName: "JSONbored/gittensory", pullRequests: 50, mergedPullRequests: 47, openPullRequests: 3, issues: 12, unlinkedPullRequests: 2 },
     ]);
   });
 
