@@ -125,16 +125,35 @@ docker compose --profile postgres --profile observability --profile backup up -d
         <code>docker compose --profile observability up -d</code> always starts clean even before
         you've configured anywhere to send notifications. This is intentional — the shipped config
         can&apos;t bake in a Slack/Discord/email destination that works for everyone — but it means
-        nothing pages anyone until you edit <code>alertmanager/alertmanager.yml</code> yourself.
-        Treat this as a required step, not an optional one, for any deployment you expect to run
-        unattended.
+        nothing pages anyone until you enable a real receiver. Treat this as a required step, not an
+        optional one, for any deployment you expect to run unattended.
       </p>
       <p>
-        The fastest verified path: create a Discord channel webhook (channel settings → Integrations
-        → Webhooks → New Webhook), then uncomment the <code>discord</code> receiver block in{" "}
-        <code>alertmanager/alertmanager.yml</code> and point the root route at it. Slack, email, and
-        a generic webhook receiver (for PagerDuty or a custom handler) are also ready to uncomment
-        in the same file.
+        Don&apos;t edit the committed <code>alertmanager/alertmanager.yml</code> in place — deploys
+        <code>git pull</code> this repo, so a local edit to a tracked file either blocks the next
+        pull or gets silently overwritten by it. Instead, copy it to a gitignored{" "}
+        <code>alertmanager/alertmanager.local</code> (matches the existing <code>*.local</code>{" "}
+        ignore rule) and make your receiver/route changes there — the fastest verified path is
+        uncommenting the <code>discord</code> receiver block and pointing the root route at it,
+        using <code>webhook_url_file: /etc/alertmanager/discord_url</code> so the webhook URL itself
+        lives in its own gitignored file next to it, never in a file docker-compose.yml or git ever
+        tracks. Slack, email, and a generic webhook receiver (for PagerDuty or a custom handler) are
+        also ready to uncomment in the same template. Then point Alertmanager at your local copy via{" "}
+        <code>docker-compose.override.yml</code>:
+      </p>
+      <CodeBlock
+        lang="yaml"
+        code={`services:
+  alertmanager:
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.local"
+      - "--storage.path=/alertmanager"`}
+      />
+      <p>
+        Restart with <code>docker compose up -d --no-deps alertmanager</code> to pick up both files.
+        The whole <code>alertmanager/</code> directory is mounted read-only into the container, so
+        any gitignored file you add there (the local config, a secret file it references) shows up
+        at the same path with no docker-compose.yml edit required.
       </p>
       <p>
         Until you do, alerts are still visible without any extra setup: open Grafana and check the{" "}

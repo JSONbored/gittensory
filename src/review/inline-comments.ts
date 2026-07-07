@@ -10,8 +10,9 @@
 
 import { createPullRequestReviewComments } from "../github/pr-actions";
 import { isConvergenceRepoAllowed } from "./cutover-gate";
-import { classifyFindingCategory } from "./finding-category-classify";
-import { shouldShowInlineFinding } from "./finding-severity-filter";
+import { formatInlineCommentSeverityLabel } from "./inline-comment-label";
+import { selectAnchoredInlineFindings } from "./inline-comments-select";
+export { rightSideLinesFromPatch } from "./inline-comments-select";
 import type { InlineFinding } from "../services/ai-review";
 import type { ReviewFindingSeverity } from "../signals/focus-manifest";
 import type { AgentActionMode } from "../settings/agent-execution";
@@ -63,32 +64,6 @@ export type ReviewInlineComment = { path: string; line: number; side: "RIGHT"; b
 
 /** Hard cap on inline comments posted per PR review — a focused review leaves a handful of precise notes, not a
  *  wall (the model is also asked to be selective, and composeInlineFindings already caps at 10). */
-const MAX_INLINE_COMMENTS = 10;
-
-/** PURE: the set of NEW-file (RIGHT-side) line numbers a unified-diff patch makes commentable — every added
- *  ("+") and context (" ") line inside a hunk. GitHub 422s an inline comment whose line is NOT one of these, so
- *  {@link selectInlineComments} validates each finding against this set. Deleted ("-") lines are LEFT-side only
- *  and excluded; the "\ No newline at end of file" marker is skipped. Mirrors firstAddedLineFromPatch's
- *  hunk-header regex (advisory.ts). */
-export function rightSideLinesFromPatch(patch: string): Set<number> {
-  const lines = new Set<number>();
-  let right = 0;
-  for (const raw of patch.split("\n")) {
-    const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
-    if (header?.[1]) {
-      right = Number.parseInt(header[1], 10);
-      continue;
-    }
-    if (right === 0) continue; // preamble before the first hunk header
-    const marker = raw[0];
-    // `undefined` ⇒ an empty "" element (a trailing-newline split artifact, NOT a real diff line — a blank
-    // context line is " ", a single space); "-" ⇒ deleted (LEFT side only); "\\" ⇒ the "no newline" marker.
-    if (marker === undefined || marker === "-" || marker === "\\") continue;
-    lines.add(right); // added ("+") or context (" ") line → occupies a RIGHT-side line number
-    right += 1;
-  }
-  return lines;
-}
 
 /** GitHub's suggested-change syntax requires the LITERAL ` ```suggestion ` fence; if the suggestion text itself
  *  contains a triple-backtick run, embedding it verbatim would prematurely close the fence and corrupt the
@@ -103,16 +78,15 @@ function safeSuggestionBlock(suggestion: string | undefined): string {
 
 /** The inline comment body: a compact severity (+ optional category) label + the finding, plus a one-click GitHub
  *  suggested-change block when the finding carries a `suggestion` AND the caller has suggestions enabled (#1956).
- *  When `categoriesEnabled` (#1958), the label gets a parenthetical category tag — the model's own `category` when
- *  it emitted one in the fixed enum, else the deterministic fallback (`classifyFindingCategory`), so the tag is
- *  never sometimes-present. Public-safe by construction — both the body and the suggestion were already run
- *  through the public-safe filter by composeInlineFindings before they reached here; `category` is a fixed enum
- *  literal, never free text. */
+ *  When `categoriesEnabled` (#1958 / #2149), the label carries a title-cased category tag (`Blocker · Security`) —
+ *  the model's own `category` when it emitted one in the fixed enum, else the deterministic fallback
+ *  (`classifyFindingCategory`), so the tag is never sometimes-present. Public-safe by construction — both the body
+ *  and the suggestion were already run through the public-safe filter by composeInlineFindings before they reached
+ *  here; `category` is a fixed enum literal, never free text. */
 function formatInlineBody(finding: InlineFinding, suggestionsEnabled: boolean, categoriesEnabled = false): string {
-  const label = finding.severity === "blocker" ? "Blocker" : "Nit";
-  const categoryTag = categoriesEnabled ? ` (${finding.category ?? classifyFindingCategory(finding)})` : "";
+  const label = formatInlineCommentSeverityLabel(finding, categoriesEnabled);
   const suggestionBlock = suggestionsEnabled ? safeSuggestionBlock(finding.suggestion) : "";
-  return `**${label}${categoryTag}:** ${finding.body}${suggestionBlock}`;
+  return `**${label}:** ${finding.body}${suggestionBlock}`;
 }
 
 /** PURE: turn the model's line-anchored findings into GitHub inline review comments, dropping any whose
@@ -128,25 +102,18 @@ export function selectInlineComments(
   suggestionsEnabled = false,
   categoriesEnabled = false,
   minFindingSeverity: ReviewFindingSeverity | null | undefined = null,
+  perCategoryCap: number | null | undefined = null,
 ): ReviewInlineComment[] {
-  const rightLinesByPath = new Map<string, Set<number>>();
-  for (const file of files) {
-    const patch = typeof file.payload?.patch === "string" ? file.payload.patch : "";
-    if (patch) rightLinesByPath.set(file.path, rightSideLinesFromPatch(patch));
-  }
-  const out: ReviewInlineComment[] = [];
-  const seen = new Set<string>();
-  for (const finding of findings) {
-    if (!shouldShowInlineFinding(finding.severity, minFindingSeverity)) continue;
-    if (out.length >= MAX_INLINE_COMMENTS) break;
-    const validLines = rightLinesByPath.get(finding.path);
-    if (!validLines || !validLines.has(finding.line)) continue; // not a commentable diff line → drop (no 422)
-    const key = `${finding.path}:${finding.line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ path: finding.path, line: finding.line, side: "RIGHT", body: formatInlineBody(finding, suggestionsEnabled, categoriesEnabled) });
-  }
-  return out;
+  const selected = selectAnchoredInlineFindings(findings, files, {
+    minFindingSeverity,
+    perCategoryCap,
+  });
+  return selected.map((finding) => ({
+    path: finding.path,
+    line: finding.line,
+    side: "RIGHT" as const,
+    body: formatInlineBody(finding, suggestionsEnabled, categoriesEnabled),
+  }));
 }
 
 /** Post the model's inline findings as ONE quiet, non-blocking review (`event: COMMENT`) on the PR. Fully
@@ -166,6 +133,7 @@ export async function postInlineReviewComments(
     suggestionsEnabled?: boolean | undefined;
     categoriesEnabled?: boolean | undefined;
     minFindingSeverity?: ReviewFindingSeverity | null | undefined;
+    perCategoryCap?: number | null | undefined;
   },
 ): Promise<{ posted: number }> {
   const comments = selectInlineComments(
@@ -174,6 +142,7 @@ export async function postInlineReviewComments(
     args.suggestionsEnabled,
     args.categoriesEnabled,
     args.minFindingSeverity,
+    args.perCategoryCap,
   );
   if (comments.length === 0 || !args.commitId) return { posted: 0 };
   try {
@@ -205,6 +174,7 @@ export async function maybePostInlineComments(
     suggestionsEnabled?: boolean | undefined;
     categoriesEnabled?: boolean | undefined;
     minFindingSeverity?: ReviewFindingSeverity | null | undefined;
+    perCategoryCap?: number | null | undefined;
   },
 ): Promise<void> {
   if (!args.inlineCommentsEnabled) return;
@@ -221,5 +191,6 @@ export async function maybePostInlineComments(
     suggestionsEnabled: args.suggestionsEnabled,
     categoriesEnabled: args.categoriesEnabled,
     minFindingSeverity: args.minFindingSeverity,
+    perCategoryCap: args.perCategoryCap,
   });
 }

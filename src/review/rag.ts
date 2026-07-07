@@ -300,7 +300,11 @@ export async function embedTexts(inference: InferenceAdapter | undefined, texts:
     }
     return out;
   } catch (error) {
-    console.log(JSON.stringify({ ev: "rag_embed_error", message: String(error).slice(0, 200) }));
+    // ERROR level (#3894): an embedding-provider failure previously logged at console.log with no `level`,
+    // invisible to the central Sentry forwarder -- mirrors the already-fixed retrieveContextWithMetrics
+    // catch below. Shares its `review_context_fetch_failed`/contextType:"rag" umbrella so both are
+    // searchable together, plus the specific `ev` tag for log continuity.
+    console.error(JSON.stringify({ level: "error", event: "review_context_fetch_failed", contextType: "rag", ev: "rag_embed_error", message: String(error).slice(0, 200) }));
     return null;
   }
 }
@@ -332,7 +336,8 @@ export async function upsertChunks(infra: RagInfra, project: string, repo: strin
     await db.batch(stmts);
     return chunks.length;
   } catch (error) {
-    console.log(JSON.stringify({ ev: "rag_upsert_error", message: String(error).slice(0, 200) }));
+    // ERROR level (#3894): see embedTexts's catch above -- same invisible-to-Sentry fix, same umbrella.
+    console.error(JSON.stringify({ level: "error", event: "review_context_fetch_failed", contextType: "rag", ev: "rag_upsert_error", message: String(error).slice(0, 200) }));
     return 0;
   }
 }
@@ -360,7 +365,8 @@ export async function deleteChunksForPaths(infra: RagInfra, project: string, rep
       await db.prepare(`DELETE FROM repo_chunks WHERE id IN (${batch.map(() => "?").join(",")})`).bind(...batch).run();
     }
   } catch (error) {
-    console.log(JSON.stringify({ ev: "rag_delete_error", message: String(error).slice(0, 200) }));
+    // ERROR level (#3894): see embedTexts's catch above -- same invisible-to-Sentry fix, same umbrella.
+    console.error(JSON.stringify({ level: "error", event: "review_context_fetch_failed", contextType: "rag", ev: "rag_delete_error", message: String(error).slice(0, 200) }));
   }
 }
 
@@ -565,7 +571,8 @@ export async function readChunkTexts(storage: StorageAdapter, ids: string[]): Pr
       .all<{ id: string; text: string }>();
     for (const r of rows.results ?? []) map.set(r.id, r.text);
   } catch (error) {
-    console.log(JSON.stringify({ ev: "rag_chunk_read_error", message: String(error).slice(0, 200) }));
+    // ERROR level (#3894): see embedTexts's catch above -- same invisible-to-Sentry fix, same umbrella.
+    console.error(JSON.stringify({ level: "error", event: "review_context_fetch_failed", contextType: "rag", ev: "rag_chunk_read_error", message: String(error).slice(0, 200) }));
   }
   return map;
 }

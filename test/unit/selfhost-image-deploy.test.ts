@@ -49,7 +49,7 @@ if [ "$1" = "compose" ]; then
         prev="$arg"
       done
       if [ -n "$last_file" ]; then
-        grep 'image:' "$last_file" >> "$DOCKER_IMAGES"
+        cat "$last_file" >> "$DOCKER_IMAGES"
       fi
       exit 0
       ;;
@@ -153,6 +153,9 @@ describe("self-host image deploy script", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(harness.envPath, "utf8")).toContain(`GITTENSORY_IMAGE=${expected}`);
       expect(harness.readImages()).toContain(`image: "${expected}"`);
+      // REGRESSION: without this reset, an operator's own docker-compose.override.yml build: block for this
+      // service silently wins over the pulled image at `up --no-build` time (found deploying live).
+      expect(harness.readImages()).toContain("build: !reset null");
       expect(harness.readCalls()).toContain("up -d --no-build --no-deps gittensory");
       expect(harness.readCalls()).not.toContain(" build ");
     } finally {

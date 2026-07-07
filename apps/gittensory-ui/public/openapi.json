@@ -9242,8 +9242,42 @@
             "type": "string",
             "nullable": true
           },
-          "publicQualityMetrics": {
-            "type": "boolean"
+          "screenshotTableGate": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "whenLabels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "whenPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "close",
+                  "request_changes",
+                  "comment"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "enabled",
+              "whenLabels",
+              "whenPaths",
+              "action"
+            ]
           },
           "regateSweepOrderMode": {
             "type": "string",
@@ -9251,6 +9285,9 @@
               "staleness",
               "oldest-first"
             ]
+          },
+          "publicQualityMetrics": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -9971,15 +10008,15 @@
                   "commandOverrides"
                 ]
               },
-              "publicQualityMetrics": {
-                "type": "boolean"
-              },
               "regateSweepOrderMode": {
                 "type": "string",
                 "enum": [
                   "staleness",
                   "oldest-first"
                 ]
+              },
+              "publicQualityMetrics": {
+                "type": "boolean"
               }
             },
             "required": [

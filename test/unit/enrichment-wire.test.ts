@@ -717,17 +717,17 @@ describe("resolveReesAnalyzers", () => {
 
 describe("resolveEnrichmentLinkedIssueNumbers", () => {
   it("prefers explicit linkedIssues over body parsing", () => {
-    expect(resolveEnrichmentLinkedIssueNumbers([7], "Fixes #42")).toEqual([7]);
+    expect(resolveEnrichmentLinkedIssueNumbers([7], "Fixes #42", "owner/repo")).toEqual([7]);
   });
 
   it("parses Fixes #N from the PR body when linkedIssues is empty", () => {
-    expect(resolveEnrichmentLinkedIssueNumbers([], "Fixes #42\nCloses #99")).toEqual([42, 99]);
-    expect(resolveEnrichmentLinkedIssueNumbers(undefined, "Resolves #3")).toEqual([3]);
+    expect(resolveEnrichmentLinkedIssueNumbers([], "Fixes #42\nCloses #99", "owner/repo")).toEqual([42, 99]);
+    expect(resolveEnrichmentLinkedIssueNumbers(undefined, "Resolves #3", "owner/repo")).toEqual([3]);
   });
 
   it("returns an empty list when neither source yields issue numbers", () => {
-    expect(resolveEnrichmentLinkedIssueNumbers([], "no issue refs")).toEqual([]);
-    expect(resolveEnrichmentLinkedIssueNumbers(undefined, undefined)).toEqual([]);
+    expect(resolveEnrichmentLinkedIssueNumbers([], "no issue refs", "owner/repo")).toEqual([]);
+    expect(resolveEnrichmentLinkedIssueNumbers(undefined, undefined, "owner/repo")).toEqual([]);
   });
 });
 

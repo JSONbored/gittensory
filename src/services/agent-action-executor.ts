@@ -16,7 +16,7 @@ import { isAuthorBlacklisted } from "../settings/contributor-blacklist";
 import { classifyMergeFailure, MERGE_RETRY_CAP } from "./merge-failure";
 import { notifyActionToDiscord, notifyActionToSlack, type NotifyOutcome } from "./notify-discord";
 import { cancelInFlightWorkflowRunsForHeadSha, createInstallationToken, githubErrorStatus, isGitHubRateLimitedError } from "../github/app";
-import { fetchLiveCiAggregate, mergeRequiredCiContexts, refreshInstallationHealthForInstallation } from "../github/backfill";
+import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLiveReviewThreadBlockers, mergeRequiredCiContexts, refreshInstallationHealthForInstallation } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import { ensurePullRequestAssignee } from "../github/assignees";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../github/labels";
@@ -35,6 +35,7 @@ import {
   type ModerationRuleType,
 } from "../settings/moderation-rules";
 import { incr } from "../selfhost/metrics";
+import { captureError } from "../selfhost/sentry";
 
 // The agent actor name on every audit record — the App acts on the maintainer's behalf per their configured
 // autonomy (the config IS the authorization; there is no human commenter to authorize, unlike #824).
@@ -362,9 +363,11 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
     //    guard above only re-checks head SHA/state, not CI. GitHub's own merge endpoint enforces
     //    branch-protection REQUIRED checks server-side, but only as a backstop when a repo actually configures
     //    them; a red-CI close has no server-side check at all. Re-read live CI right before the mutation so a
-    //    check that flipped in this narrow window is never acted on from stale information. Non-CI closes
-    //    (gate verdict, duplicate/slop, conflict, linked-issue hard-rule, blacklist) are exempt — their adverse
-    //    signal does not depend on CI still being red.
+    //    check that flipped in this narrow window is never acted on from stale information. Non-CI closes whose
+    //    justification has no cheap live re-derivation (gate verdict, duplicate/slop, linked-issue hard-rule,
+    //    blacklist) are exempt from THIS specific CI recheck — their adverse signal does not depend on CI still
+    //    being red. A base conflict and an unresolved review thread DO have cheap live signals and get their own
+    //    dedicated rechecks below (requiresLiveMergeableRecheck / requiresLiveThreadRecheck) instead.
     //    A heuristic close staged BEFORE #2478 has no closeRequiresCiState at all -- that field didn't exist yet
     //    -- so `undefined` here is genuinely ambiguous (a legacy CI-driven close and a legacy non-CI close are
     //    byte-identical in storage). The planner now ALWAYS sets the field going forward (never omits it), so
@@ -372,28 +375,62 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
     //    failed) rather than skipping the recheck, which would let a stale CI-driven close silently execute
     //    after CI recovers (flagged by the gate's own review of #2478).
     const isAmbiguousLegacyHeuristicClose = action.actionClass === "close" && action.closeKind === "heuristic" && action.closeRequiresCiState === undefined;
-    if (action.actionClass === "merge" || (action.actionClass === "close" && action.closeRequiresCiState === "failed") || isAmbiguousLegacyHeuristicClose) {
+    const requiresLiveCiRecheck = action.actionClass === "merge" || (action.actionClass === "close" && action.closeRequiresCiState === "failed") || isAmbiguousLegacyHeuristicClose;
+    // #3863: a base-conflict-justified heuristic close (closeRequiresMergeableState === true) is read from the
+    // SAME planning-pass snapshot as the CI check above -- an unrelated PR merging into the base branch during
+    // a slow review pass (AI review, gate evaluation) can clear the conflict before this mutation runs, and
+    // nothing re-verified it right before acting. The approval-queue's accept-time path already does this SAME
+    // live re-check for a STAGED close (agent-approval-queue.ts); this is the immediate, same-pass execution
+    // path, which had no equivalent.
+    const requiresLiveMergeableRecheck = action.actionClass === "close" && action.closeKind === "heuristic" && action.closeRequiresMergeableState === true;
+    // #review-thread-staleness: mirrors requiresLiveMergeableRecheck's exact shape (#3863) -- a review-thread-
+    // justified heuristic close is read from the SAME planning-pass snapshot, and a contributor clicking
+    // "Resolve conversation" on GitHub during a slow review pass clears it before this mutation runs, same as
+    // an unrelated PR clearing a base conflict. Same immediate, same-pass execution path gap as #3863 had.
+    const requiresLiveThreadRecheck = action.actionClass === "close" && action.closeKind === "heuristic" && action.closeRequiresThreadResolved === true;
+    if (requiresLiveCiRecheck || requiresLiveMergeableRecheck || requiresLiveThreadRecheck) {
       const ciToken = await createInstallationToken(env, ctx.installationId).catch(() => undefined);
       const admissionKey = githubRateLimitAdmissionKeyForToken(env, ciToken, ctx.installationId);
       // mergeRequiredCiContexts(null, ...) -- no live branch-protection re-fetch here, just the maintainer's own
       // configured expectedCiContexts (or null/fold-all when unset), matching the "no branch protection" arm of
       // the planning pass's own merge (mergeRequiredCiContexts is pure and already exported for that call site).
-      const liveCi = await fetchLiveCiAggregate(env, ctx.repoFullName, expectedHeadSha, ciToken, mergeRequiredCiContexts(null, ctx.expectedCiContexts), admissionKey);
+      const [liveCi, liveMergeableState, liveThreadBlockers] = await Promise.all([
+        requiresLiveCiRecheck
+          ? fetchLiveCiAggregate(env, ctx.repoFullName, expectedHeadSha, ciToken, mergeRequiredCiContexts(null, ctx.expectedCiContexts), admissionKey)
+          : Promise.resolve(undefined),
+        requiresLiveMergeableRecheck ? fetchLivePullRequestMergeState(env, ctx.repoFullName, ctx.pullNumber, ciToken, admissionKey) : Promise.resolve(undefined),
+        requiresLiveThreadRecheck ? fetchLiveReviewThreadBlockers(env, ctx.repoFullName, ctx.pullNumber, ciToken, admissionKey) : Promise.resolve(undefined),
+      ]);
       // The planner itself only ever stages a merge when ciState === "passed" exactly (reviewGood in
       // agent-actions.ts; "pending" short-circuits to no actions at all upstream) -- the live re-check must
       // require the SAME exact state, not just "not failed". Otherwise a check that regressed to pending or
       // became unreadable (unverified) between planning and actuation would still merge, on the assumption
       // that only an explicit failure invalidates the plan.
-      const staleReason =
-        action.actionClass === "merge"
-          ? liveCi.ciState !== "passed"
-            ? `live CI is no longer passing (now: ${liveCi.ciState})`
+      const ciStaleReason = !requiresLiveCiRecheck
+        ? null
+        : action.actionClass === "merge"
+          ? liveCi!.ciState !== "passed"
+            ? `live CI is no longer passing (now: ${liveCi!.ciState})`
             : null
           // isAmbiguousLegacyHeuristicClose falls back to "failed" (the old unconditional requirement); an
           // explicitly-tagged fresh close compares against its own recorded requirement.
-          : liveCi.ciState !== (action.closeRequiresCiState ?? "failed")
-            ? `CI state changed since planning (now: ${liveCi.ciState})`
+          : liveCi!.ciState !== (action.closeRequiresCiState ?? "failed")
+            ? `CI state changed since planning (now: ${liveCi!.ciState})`
             : null;
+      // Only a CONFIRMED "clean" clears a conflict-justified close -- an ambiguous/unresolvable live read
+      // (unknown, unstable, blocked, or a failed fetch, which resolves to undefined) is not proof the conflict
+      // resolved, matching the approval-queue's own fail-safe-toward-keeping-the-close precedent (#3863).
+      const mergeableStaleReason =
+        requiresLiveMergeableRecheck && liveMergeableState === "clean" ? "the base-branch conflict that justified this close has since cleared" : null;
+      // Only a CONFIRMED empty result clears a thread-justified close -- fetchLiveReviewThreadBlockers already
+      // fails open to [] on its own internal GraphQL error, so `undefined` here means the Promise.resolve(undefined)
+      // no-op arm (requiresLiveThreadRecheck was false) rather than a genuine "no threads left" signal, matching
+      // the mergeable-state recheck's own fail-safe-toward-keeping-the-close precedent above.
+      const threadStaleReason =
+        requiresLiveThreadRecheck && liveThreadBlockers !== undefined && liveThreadBlockers.length === 0
+          ? "the review thread(s) that justified this close are now all resolved"
+          : null;
+      const staleReason = ciStaleReason ?? mergeableStaleReason ?? threadStaleReason;
       if (staleReason) {
         await audit("denied", `${staleReason} — action not executed`);
         continue;
@@ -435,6 +472,14 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       // after the gate publishes. A possibly-transient failure is retried up to MERGE_RETRY_CAP, then held.
       if (action.actionClass === "merge" && ctx.headSha) {
         await handleMergeFailure(env, ctx, error);
+      } else {
+        // Non-merge action classes have no retry loop -- a single failure here is already this pass's terminal
+        // outcome (the planner may re-attempt on the next sweep if the underlying condition clears itself), so
+        // it is captured immediately rather than only on eventual exhaustion. Mirrors handleMergeFailure's own
+        // terminal-hold capture below and the "a real failure the maintainer must see" convention already used
+        // for review-pass failures (selfhost/sentry.ts's captureReviewFailure, queue/processors.ts). Previously
+        // this class of failure was audit-log-only, invisible without a manual audit_events query.
+        captureError(error, { kind: "agent_action_execution_failed", repo: ctx.repoFullName, pr: ctx.pullNumber, installationId: ctx.installationId, actionClass: action.actionClass });
       }
       // #2265: a permission-looking 403 on a PR-write mutation can mean the LOCAL installations.permissions
       // snapshot is stale after a maintainer-initiated downgrade (GitHub sends no downgrade webhook). Rate-limit
@@ -675,6 +720,9 @@ export async function executeIssueMaintenanceActions(env: Env, ctx: IssueActionE
       await audit("completed", action.reason);
     } catch (error) {
       await audit("error", errorMessage(error));
+      // Mirrors executeAgentMaintenanceActions's non-merge capture below -- issue-side label/close has no retry
+      // loop either, so a single failure here is already this pass's terminal outcome.
+      captureError(error, { kind: "agent_issue_action_execution_failed", repo: ctx.repoFullName, issue: ctx.issueNumber, installationId: ctx.installationId, actionClass: action.actionClass });
     }
   }
 
@@ -703,6 +751,11 @@ async function handleMergeFailure(env: Env, ctx: AgentActionExecutionContext, er
   }
   if (!terminal) return;
   await markPullRequestMergeBlocked(env, ctx.repoFullName, ctx.pullNumber, headSha, reason);
+  // A merge held for a human is the terminal outcome of this whole retry sequence -- exactly the "a real
+  // failure the maintainer must see" case captureReviewFailure already covers for an exhausted AI review pass.
+  // Fires once per hold (not per retry attempt), so a transient failure that resolves within MERGE_RETRY_CAP
+  // never reaches Sentry at all.
+  captureError(error, { kind: "agent_merge_blocked", repo: ctx.repoFullName, pr: ctx.pullNumber, installationId: ctx.installationId, reason: reason.slice(0, 280) });
   await recordAuditEvent(env, {
     eventType: "agent.action.merge_blocked",
     actor: AGENT_ACTOR,
@@ -825,6 +878,9 @@ export function actionParams(action: PlannedAgentAction): AgentPendingActionPara
     // Round-trip the mergeable-state dependency likewise: only a conflict-justified close needs the approval
     // queue's accept-time mergeable-state recheck (see the field's doc comment on AgentPendingActionParams).
     ...(action.closeRequiresMergeableState !== undefined ? { closeRequiresMergeableState: action.closeRequiresMergeableState } : {}),
+    // Round-trip the review-thread dependency likewise: only a thread-justified close needs the accept-time /
+    // pre-mutation live thread-blocker recheck (see the field's doc comment on AgentPendingActionParams).
+    ...(action.closeRequiresThreadResolved !== undefined ? { closeRequiresThreadResolved: action.closeRequiresThreadResolved } : {}),
     // Round-trip the concrete-evidence tag so the breaker's exemption still applies when a staged close accepts.
     ...(action.closeConcreteEvidence !== undefined ? { closeConcreteEvidence: action.closeConcreteEvidence } : {}),
   };

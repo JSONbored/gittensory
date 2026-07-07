@@ -7,7 +7,7 @@
 - [ ] The PR title follows `type(scope): short summary` Conventional Commit format, for example `fix(api): restore profile access checks`.
 - [ ] This PR is focused and does not mix unrelated backend, UI, MCP, docs, dependency, and deploy changes.
 - [ ] This follows `CONTRIBUTING.md` and does not reintroduce GitHub Pages, VitePress, `site/`, or `CNAME`.
-- [ ] I linked an issue, or this is small enough that the summary explains why an issue is not needed.
+- [ ] I linked a currently open issue this PR resolves (e.g. `Closes #123`) — a linked open issue is required for every contributor PR.
 
 ## Validation
 

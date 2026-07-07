@@ -97,6 +97,7 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_qdrant_queries_total", { help: "Qdrant vector query attempts.", type: "counter" }],
   ["gittensory_qdrant_upserts_total", { help: "Qdrant vector upserted item count.", type: "counter" }],
   ["gittensory_qdrant_errors_total", { help: "Qdrant vector operation errors.", type: "counter" }],
+  ["gittensory_rag_pipeline_errors_total", { help: "RAG index-population pipeline errors (repo/path indexing), by op.", type: "counter" }],
   ["gittensory_orb_events_exported_total", { help: "Orb events exported from the self-host runtime.", type: "counter" }],
   ["gittensory_orb_export_errors_total", { help: "Orb event export errors.", type: "counter" }],
   ["gittensory_orb_relay_drains_total", { help: "Orb relay drain outcomes.", type: "counter" }],

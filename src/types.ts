@@ -197,6 +197,15 @@ export type JobMessage =
       requestedBy: "schedule" | "api" | "test";
     }
   | {
+      // Self-heal (flag-gated by GITTENSORY_PR_RECONCILIATION). List-diff GitHub's open PR numbers against the
+      // local table for every acting-autonomy repo — a much tighter cadence than backfillRegisteredRepositories's
+      // 6-hour freshness window — and catch up (fetch + upsert + regate) any PR number GitHub has that the local
+      // table doesn't (a silently-lost "opened" webhook). Enqueued on a short interval ONLY when the flag is ON
+      // (index.ts), so flag-OFF this job never exists.
+      type: "reconcile-open-prs";
+      requestedBy: "schedule" | "api" | "test";
+    }
+  | {
       // Convergence (self-improve / auto-tune, flag-gated by GITTENSORY_REVIEW_SELFTUNE). Run the ported
       // self-improvement loop over gittensory's review-outcome data — compute tuning recommendations,
       // SHADOW-SOAK any strictly-tightening one, and AUTO-PROMOTE it to live only after the soak window passes
@@ -990,8 +999,26 @@ export type RepositorySettings = {
   /** Review-evasion protection: whether to post the public explanation comment before the enforcement close.
    *  Default true. */
   reviewEvasionComment?: boolean | undefined;
+  /** Config-driven before/after screenshot-table gate (#2006): a DETERMINISTIC check (no AI, zero hallucination
+   *  risk) that a contributor visual/frontend PR's body contains a markdown table with before/after image
+   *  markup, scoped to the repo's configured labels/paths (`whenLabels`/`whenPaths`, OR-matched). Off by
+   *  default (`enabled: false`) -- opt in per repo, mirroring every other anti-abuse mechanism's shape. See
+   *  `review/screenshot-table-gate.ts` for the normalizer and the pure evaluator. */
+  screenshotTableGate?: ScreenshotTableGateConfig | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
+};
+
+export type ScreenshotTableGateAction = "close" | "request_changes" | "comment";
+
+/** Per-repo config for the before/after screenshot-table gate (#2006). See {@link RepositorySettings.screenshotTableGate}
+ *  and `review/screenshot-table-gate.ts` for the normalizer + pure evaluator. */
+export type ScreenshotTableGateConfig = {
+  enabled: boolean;
+  whenLabels: string[];
+  whenPaths: string[];
+  action: ScreenshotTableGateAction;
+  message?: string | undefined;
 };
 
 export type CommandAuthorizationRole = "maintainer" | "collaborator" | "pr_author" | "confirmed_miner";
@@ -1131,23 +1158,33 @@ export type AgentPendingActionParams = {
   // (#2127), and the actuation-time live-CI re-check (#2364) — which only applies to a heuristic close — still
   // fires correctly once the row is replayed through pendingActionToPlanned, rather than silently skipping for
   // a lost discriminator.
-  closeKind?: "linked-issue-hard-rule" | "blacklist" | "contributor_cap" | "review_nag" | "heuristic";
+  closeKind?: "linked-issue-hard-rule" | "blacklist" | "contributor_cap" | "review_nag" | "screenshot_table" | "heuristic";
   // For a CI-driven heuristic close, persist the CI state that must still hold when the staged action replays
   // (#2364). This is separate from closeKind because heuristic closes also cover non-CI adverse signals.
   // ALWAYS set (to "failed" or "not_required") for a freshly planned heuristic close (#2478) -- never omitted --
   // so `undefined` unambiguously means a LEGACY row staged before this field existed, not "not CI-driven".
   closeRequiresCiState?: "failed" | "not_required";
   // True when a base conflict (mergeable_state: "dirty") was part of this heuristic close's justification --
-  // the ONLY non-CI close reason the approval queue's accept-time live recheck has a cheap, reliable live
-  // signal for. Other non-CI heuristic reasons (duplicate PR, slop score, a gate-verdict blocker) have no
-  // equivalently cheap live re-derivation, so decidePendingAgentAction only reruns its mergeable-state/
-  // review-decision staleness check when this is true -- gating it on closeRequiresCiState === "not_required"
-  // alone (any non-CI reason) instead would supersede EVERY duplicate/slop/blocker-only close whose
-  // mergeability simply happens to read "clean" (which most never-conflicted PRs already are), even though
-  // their actual justification never depended on mergeability and may still be live (gate review finding).
+  // one of the few non-CI close reasons (alongside closeRequiresThreadResolved below) the approval queue's
+  // accept-time live recheck has a cheap, reliable live signal for. Other non-CI heuristic reasons (duplicate
+  // PR, slop score, a gate-verdict blocker not backed by a review thread) have no equivalently cheap live
+  // re-derivation, so decidePendingAgentAction only reruns its mergeable-state/review-decision staleness check
+  // when this is true -- gating it on closeRequiresCiState === "not_required" alone (any non-CI reason) instead
+  // would supersede EVERY duplicate/slop/blocker-only close whose mergeability simply happens to read "clean"
+  // (which most never-conflicted PRs already are), even though their actual justification never depended on
+  // mergeability and may still be live (gate review finding).
   // ALWAYS set (never omitted) for a freshly planned heuristic close, mirroring closeRequiresCiState's own
   // discipline -- so `undefined` unambiguously means a legacy row staged before this field existed.
   closeRequiresMergeableState?: boolean;
+  // True when an unresolved GitHub review thread (REVIEW_THREAD_BLOCKER_CODE) was part of this heuristic
+  // close's justification -- the SAME staleness class as closeRequiresMergeableState (#3863) but for a
+  // contributor RESOLVING the thread on GitHub instead of the base branch becoming mergeable again. ALWAYS set
+  // (never omitted) for a freshly planned heuristic close, mirroring closeRequiresMergeableState's own
+  // discipline. Unlike closeRequiresMergeableState, this field has NO pre-existing legacy rows -- it is
+  // introduced alongside its only producer, so `undefined` here unambiguously means "not thread-justified",
+  // not an ambiguous legacy row; the accept-time/actuation-time rechecks below scope on it with a strict
+  // `=== true`, not the broader `!== false` closeRequiresMergeableState needs for its own legacy-row case.
+  closeRequiresThreadResolved?: boolean;
   // Persisted so the close-precision breaker's concrete-evidence exemption (see
   // PlannedAgentAction.closeConcreteEvidence) still applies correctly when a staged heuristic close is later
   // accepted -- without this, EVERY staged close would silently fall back to "not concrete" at accept-time and

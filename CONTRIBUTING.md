@@ -39,7 +39,7 @@ observations, not commitments or a service-level guarantee — reviews happen wh
 **One-shot, merge-ready as-is.** We do not request changes or iterate on contributor PRs — a PR is
 merged exactly as it stands or it is closed; there is no "changes requested" back-and-forth. Before CI
 we rebase your branch onto `main` with a **merge commit**, then review **after** CI completes — so a
-rebase conflict, or any red CI (including **~97% patch coverage, branch-counted, enforced by Codecov**),
+rebase conflict, or any red CI (including **99% patch coverage, branch-counted, enforced by Codecov**),
 closes the PR. Recover by opening a **fresh, corrected PR**. PRs touching guarded paths (CI config, the
 review engine, migrations, and similar — the set varies) are held for manual review rather than
 auto-acted.
@@ -47,11 +47,15 @@ auto-acted.
 **If we close your PR by mistake, that's on us.** We may reopen or re-review at our discretion as time
 permits — there is no fixed window, and opening a fresh PR is usually fastest.
 
-**Don't ask for or chase reviews.** The queue is automated and best-effort, and the gate posts its own
-status and reasoning on your PR — read that first. Do **not** DM, @-mention, or comment asking for a
-review or status: it will not speed anything up and **will deprioritize your PR — expect at least 5 days
-added to its place in the manual queue.** Persistent pestering (here, Discord, or elsewhere) is a
-conduct violation and may get the PR closed and the account blocked.
+**Don't ask for or chase reviews.** The queue is automated and best-effort, and every auto-merge or
+auto-close comes with a detailed bot comment on your PR explaining exactly what passed or what was
+wrong — read that first. Do **not** DM, @-mention, or comment asking for a review or status: it will
+not speed anything up and **will deprioritize your PR — expect at least 5 days added to its place in
+the manual queue.** Persistent pestering (here, Discord, or elsewhere) is a conduct violation and may
+get the PR closed and the account blocked.
+
+**Contributors are limited to 2 open PRs at a time.** Close or wait for one to resolve before opening
+a third.
 
 **Scoring and rewards are not ours to grant.** Contribution scoring and any Gittensor rewards are set by
 the subnet's on-chain hyperparameters and validators, not by this repo. Merging a PR is not a promise of
@@ -98,13 +102,14 @@ Do not open PRs for:
   farm Gittensor rewards is a hard violation and results in a **permanent block from contributing
   across all of our repositories**. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
-Filing your own issue and then opening a PR that resolves it is welcome, and a PR with no linked
-issue is fine — neither is farming. What is against policy is **using more than one account you
-control (alt / sock-puppet accounts) — e.g. one account opening issues for another to "resolve" —
-to inflate contribution credit**, along with manufacturing low-value/slop issues and bulk
-point-chasing PRs. Farmed work earns no linked-issue bonus, and repeat or any confirmed
-multi-account farming is closed on sight and blocked. Enforcement is proportional; the full ladder
-is in [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+Filing your own issue and then opening a PR that resolves it is welcome — that is not farming. A
+linked, currently open issue is required on every PR regardless; there is no exemption for opening
+one yourself first. What is against policy is **using more than one account you control (alt /
+sock-puppet accounts) — e.g. one account opening issues for another to "resolve" — to inflate
+contribution credit**, along with manufacturing low-value/slop issues and bulk point-chasing PRs.
+Farmed work earns no linked-issue bonus, and repeat or any confirmed multi-account farming is
+closed on sight and blocked. Enforcement is proportional; the full ladder is in
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Before Opening A PR
 
@@ -122,7 +127,8 @@ Every PR should include:
 
 - A Conventional Commit-style title in the form `type(scope): short summary`.
 - A clear summary of what changed and why.
-- A linked issue or a short explanation for why no issue is needed.
+- A link to a currently open issue this PR resolves (e.g. `Closes #123`) — there is no exemption
+  for explaining why an issue isn't needed.
 - The exact validation commands run from the repo root.
 - JPG/JPEG or PNG screenshot evidence for visible UI, frontend, docs, or extension changes,
   attached in the PR description as organized, captioned, clickable thumbnails. SVG screenshots
@@ -157,7 +163,7 @@ npm audit --audit-level=moderate
 ```
 
 `npm run test:ci` runs the normal combined gate. The coverage requirement is **patch coverage**:
-every line your PR adds or changes must be **97%+ covered** (statements, branches, functions, lines).
+every line your PR adds or changes must be **99%+ covered** (statements, branches, functions, lines).
 This is enforced by Codecov's `codecov/patch` status check, which looks only at your diff — so it
 depends solely on your own changes and is unaffected by what else merges. Run `npm run test:coverage`
 locally when you change behavior and make sure your new branches, fallback paths, and sanitizer rules

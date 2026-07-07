@@ -387,6 +387,7 @@ import {
   loadRepoFocusManifest,
   loadRepoFocusManifests,
   loadRepoReviewContext,
+  mapWithConcurrencyLimit,
 } from "../signals/focus-manifest-loader";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { getLastRepoDocRefreshAttemptedAtBulk, performRepoDocRefresh } from "../github/repo-doc-refresh-runner";
@@ -490,8 +491,10 @@ import {
 } from "../review/linked-issue-hard-rules";
 import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guardrail-config";
 import { resolveUnlinkedIssueMatchDisposition } from "../review/unlinked-issue-guardrail";
+import { DEFAULT_SCREENSHOT_TABLE_GATE, evaluateScreenshotTableGate } from "../review/screenshot-table-gate";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
+import { isPrReconciliationEnabled, runOpenPrReconciliation } from "../review/pr-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import {
   isCloseHoldOnly,
@@ -1118,6 +1121,12 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // work here too. Fails safe internally — never throws into the queue.
       if (isSweepWatchdogEnabled(env)) await runSweepLivenessWatchdog(env);
       return;
+    case "reconcile-open-prs":
+      // Self-heal (flag GITTENSORY_PR_RECONCILIATION). Defense-in-depth: the cron only ENQUEUES this when the
+      // flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does
+      // zero work here too. Fails safe internally — never throws into the queue.
+      if (isPrReconciliationEnabled(env)) await runOpenPrReconciliation(env);
+      return;
     case "selftune":
       // Convergence (self-improve / auto-tune, flag GITTENSORY_REVIEW_SELFTUNE). Defense-in-depth: the cron only
       // ENQUEUES this when the flag is ON, but a stale in-flight job that lands after a flag-flip must still
@@ -1235,6 +1244,16 @@ async function fanOutRepoSignalSnapshotJobs(
   });
 }
 
+// Bounded concurrency for the per-repo settings+drain-state resolution below (#3899) — matches
+// REPO_FOCUS_MANIFEST_MAX_CONCURRENT_LOADS, the same "many small per-repo D1/KV reads" shape.
+export const SWEEP_FANOUT_RESOLUTION_CONCURRENCY = 4;
+
+type SweepFanoutResolutionOutcome =
+  | { kind: "ineligible" }
+  | { kind: "draining" }
+  | { kind: "configured"; repo: { fullName: string; installationId?: number } }
+  | { kind: "errored" };
+
 // #777 scheduled re-gate sweep. The cron (index.ts) enqueues one fan-out job hourly; this enqueues a per-repo
 // sweep job for every repo that opted the agent in (an acting autonomy level). Mirrors the signal-snapshot
 // fan-out so each repo's sweep runs as its own bounded, retryable queue message.
@@ -1273,46 +1292,54 @@ async function fanOutAgentRegateSweepJobs(
       ...(typeof repo?.installationId === "number" ? { installationId: repo.installationId } : {}),
     });
   }
+  // #3899: resolve every repo's settings + drain-state CONCURRENTLY (bounded), not one at a time. Each repo
+  // costs resolveRepositorySettings's own 3 parallel round-trips plus a 4th getLatestRegatedAt read; awaiting
+  // that serially per repo made this whole prefix scale linearly with repo count, before the per-repo dispatch
+  // below (already parallel) even started. Reuses the same bounded worker-pool helper loadRepoFocusManifests
+  // already relies on for the same "many small per-repo D1/KV reads" shape.
+  const outcomes = await mapWithConcurrencyLimit(
+    [...byKey.values()],
+    SWEEP_FANOUT_RESOLUTION_CONCURRENCY,
+    async (repo): Promise<SweepFanoutResolutionOutcome> => {
+      const repoFullName = repo.fullName;
+      // #audit-sweep-fanout-isolation: one repo's settings/draining-check failure (a transient D1 read error, say)
+      // must not throw and abort resolution for every OTHER repo's independent worker — return an "errored"
+      // outcome for just this repo (it gets picked up again next tick) instead of rejecting.
+      try {
+        const settings = await resolveRepositorySettings(env, repoFullName);
+        if (
+          !(
+            isConvergenceRepoAllowed(env, repoFullName) ||
+            isAgentConfigured(settings.autonomy)
+          )
+        )
+          return { kind: "ineligible" };
+        // In-flight guard (#audit-sweep-fanout): skip a repo whose prior sweep is still draining — its per-PR jobs are
+        // mid-flight and stamping last_regated_at as they run, so the freshest stamp being within the sweep window
+        // means a sweep is active. Re-arming now would enqueue duplicate per-PR jobs for the not-yet-drained
+        // candidates, so this is what finally stops the 2-min cron piling a second full sweep on an unfinished one.
+        if (isRegateSweepDraining(await getLatestRegatedAt(env, repoFullName), now)) return { kind: "draining" };
+        return { kind: "configured", repo };
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "sweep_fanout_repo_check_failed",
+            repository: repoFullName,
+            error: errorMessage(error),
+          }),
+        );
+        return { kind: "errored" };
+      }
+    },
+  );
   const configured: Array<{ fullName: string; installationId?: number }> = [];
   let skippedDraining = 0;
   let skippedErrored = 0;
-  for (const repo of byKey.values()) {
-    const repoFullName = repo.fullName;
-    // #audit-sweep-fanout-isolation: one repo's settings/draining-check failure (a transient D1 read error, say)
-    // must not throw out of this loop and abort the fan-out for EVERY OTHER already-iterated-and-pending repo —
-    // it previously did, since an uncaught throw here escapes the whole function before the dispatch loop below
-    // ever runs. Skip just this repo (it gets picked up again next tick) and keep going.
-    try {
-      const settings = await resolveRepositorySettings(env, repoFullName);
-      if (
-        !(
-          isConvergenceRepoAllowed(env, repoFullName) ||
-          isAgentConfigured(settings.autonomy)
-        )
-      )
-        continue;
-      // In-flight guard (#audit-sweep-fanout): skip a repo whose prior sweep is still draining — its per-PR jobs are
-      // mid-flight and stamping last_regated_at as they run, so the freshest stamp being within the sweep window
-      // means a sweep is active. Re-arming now would enqueue duplicate per-PR jobs for the not-yet-drained
-      // candidates, so this is what finally stops the 2-min cron piling a second full sweep on an unfinished one.
-      if (
-        isRegateSweepDraining(await getLatestRegatedAt(env, repoFullName), now)
-      ) {
-        skippedDraining += 1;
-        continue;
-      }
-      configured.push(repo);
-    } catch (error) {
-      skippedErrored += 1;
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "sweep_fanout_repo_check_failed",
-          repository: repoFullName,
-          error: errorMessage(error),
-        }),
-      );
-    }
+  for (const outcome of outcomes) {
+    if (outcome.kind === "configured") configured.push(outcome.repo);
+    else if (outcome.kind === "draining") skippedDraining += 1;
+    else if (outcome.kind === "errored") skippedErrored += 1;
   }
   await Promise.all(
     configured.map((repo, index) => {
@@ -2708,6 +2735,24 @@ async function runAgentMaintenancePlanAndExecute(
     settings.contributorBlacklist,
   );
 
+  // Screenshot-table gate (#2006): a DETERMINISTIC check (no AI) that an in-scope (label/path-matched)
+  // contributor visual/frontend PR's body contains a before/after screenshot table. Off by default
+  // (settings.screenshotTableGate.enabled === false), so the pure evaluator below is effectively free for the
+  // common case. Only "close" is wired as an enforcement action here (the other configured actions stay
+  // advisory, matching the issue's phased rollout) -- the ternary below is the ONLY place that reads `.action`.
+  /* v8 ignore next -- defensive: resolveRepositorySettings always populates screenshotTableGate (getRepositorySettings's DB defaults), so this fallback is unreachable in practice. */
+  const screenshotTableGateConfig = settings.screenshotTableGate ?? DEFAULT_SCREENSHOT_TABLE_GATE;
+  const screenshotTableGateResult = evaluateScreenshotTableGate({
+    config: screenshotTableGateConfig,
+    prBody: pr.body,
+    prLabels: pr.labels,
+    changedFiles: changedPaths,
+  });
+  const screenshotTableMatch =
+    screenshotTableGateResult.violated && screenshotTableGateConfig.action === "close"
+      ? { matched: true, reason: screenshotTableGateResult.reason }
+      : undefined;
+
   // Account-age throttle (#2561, anti-abuse): a friction/visibility signal for the classic ban-evasion pattern
   // (a banned login gets a fresh account the same day) — NEVER an automatic close on account age alone. Off
   // (null accountAgeThresholdDays, the default) ⇒ this block is a no-op, no extra GitHub API call at all.
@@ -2764,7 +2809,7 @@ async function runAgentMaintenancePlanAndExecute(
   // way to opt out of the PER-REPO cap specifically, even though `.gittensory.yml`'s own doc comment already
   // promised this reuse (auto-close-exempt.ts).
   if (typeof contributorOpenPrCap === "number" && pr.authorLogin && !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) {
-    // Complete author-scoped set (not the duplicate-analysis 100-row sample), with every counted sibling
+    // Fixed-budget author-scoped set (the lowest-numbered sibling sample), with every counted sibling
     // positively LIVE-confirmed still open before it counts toward an irreversible close decision (#2270
     // busy-repo bypass fix). Runs unconditionally now -- not just for isNewAccount -- since a stale-DB-row
     // false positive is exactly as wrong for an established contributor as for a new one; this supersedes the
@@ -2773,12 +2818,12 @@ async function runAgentMaintenancePlanAndExecute(
     const otherAuthorOpenPullRequests = await listOtherOpenPullRequestsForAuthor(env, repoFullName, pr.number, pr.authorLogin);
     const confirmedOpen = new Set<number>();
     // Bounded concurrency (security review finding): an unbounded Promise.all here scales with the author's
-    // OWN open-PR count, not a fixed small number -- an author with dozens of open PRs would fire that many
+    // OWN open-PR sample, not a fixed small number -- an author with dozens of open PRs would fire that many
     // concurrent GitHub calls from a single webhook, and the delivery-order-guard wake below re-triggers this
     // same block for every over-cap sibling, compounding into near-quadratic API growth that can exhaust the
-    // installation's rate-limit budget. Every entry must still be verified (the exact over-cap PR numbers
-    // below depend on the complete confirmed-open set, not just "is the count over cap"), so this bounds
-    // concurrency rather than stopping early, mirroring mapWithConcurrency's other callers in this file.
+    // installation's rate-limit budget. Every sampled entry must still be verified (the exact over-cap PR
+    // numbers below depend on the confirmed-open sample, not just "is the count over cap"), so this bounds
+    // concurrency in addition to the repository query's total row cap.
     await mapWithConcurrency(otherAuthorOpenPullRequests, CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY, async (other) => {
       const liveState = await fetchLivePullRequestState(env, repoFullName, other.number, token, admissionKey).catch(() => undefined);
       if (liveState === "open") confirmedOpen.add(other.number);
@@ -2794,8 +2839,8 @@ async function runAgentMaintenancePlanAndExecute(
     }
     // Webhook-delivery-order guard (#2479 gate finding): delivery order is not guaranteed to match PR creation
     // order, so a sibling PR's own webhook can process before THIS PR exists in the DB and wrongly conclude the
-    // author is within the cap. Use the complete author-scoped set (not the duplicate-analysis 100-row sample)
-    // and only siblings positively confirmed open, matching the issue-cap fail-safe close contract.
+    // author is within the cap. Use the fixed-budget author-scoped set and only siblings positively confirmed
+    // open, matching the issue-cap fail-safe close contract.
     const otherOverCapSiblingNumbers = otherAuthorOpenPullRequests
       .filter((other) => confirmedOpen.has(other.number) && overCapNumbers.has(other.number))
       .map((other) => other.number);
@@ -2862,6 +2907,7 @@ async function runAgentMaintenancePlanAndExecute(
       : {}),
     // Always threaded (the DB layer populates it, default "slop"); the planner applies its own fallback.
     blacklistLabel: settings.blacklistLabel,
+    ...(screenshotTableMatch !== undefined ? { screenshotTableMatch } : {}),
     ...(contributorCapMatch !== undefined ? { contributorCapMatch } : {}),
     // Always threaded (the DB layer populates it, default "over-contributor-limit"); the planner applies its
     // own fallback.
@@ -5037,13 +5083,11 @@ async function countLiveOpenWithConcurrencyUntil(
 // fan-out, same shape as GLOBAL_OPEN_ITEM_LIVE_CHECK_CONCURRENCY above.
 const NOTIFY_EVALUATE_EVENT_CONCURRENCY = 5;
 
-// The per-repo contributor-cap live-verification (#2270 busy-repo bypass fix) walks the author's COMPLETE
-// open-PR set on this repo, not a fixed small number -- an author with dozens of open PRs would otherwise fire
-// that many concurrent fetchLivePullRequestState calls from a single webhook, and the delivery-order-guard
-// wake below re-triggers this same check for every over-cap sibling, compounding into near-quadratic API
-// growth across one busy author's siblings (security review finding). Every entry must still be verified (the
-// exact over-cap PR numbers depend on the complete confirmed-open set, not just whether the count is over
-// cap), so this bounds concurrency via mapWithConcurrency rather than stopping early.
+// The per-repo contributor-cap live-verification (#2270 busy-repo bypass fix) walks a fixed-size author-scoped
+// sibling sample. An author with many open PRs would otherwise fire too many concurrent
+// fetchLivePullRequestState calls from a single webhook, and the delivery-order-guard wake below can re-trigger
+// this same check for over-cap siblings. Every sampled entry must still be verified, so this bounds concurrency
+// via mapWithConcurrency in addition to the repository query's total row cap.
 const CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY = 10;
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
@@ -6987,6 +7031,7 @@ export async function runAiReviewForAdvisory(
               resolveEnrichmentLinkedIssueNumbers(
                 args.pr.linkedIssues,
                 args.pr.body,
+                args.repoFullName,
               ),
             ),
             githubToken: isReesGithubTokenForwardingEnabled(env)
@@ -8005,6 +8050,7 @@ async function maybePublishPrPublicSurface(
   let reviewMemoryEnabledForReview = false;
   let findingCategoriesEnabledForReview = false;
   let minFindingSeverityForReview: ReviewFindingSeverity | null = null;
+  let inlineCommentsPerCategoryForReview: number | null = null;
   let aiReviewExpected = false;
   let aiReviewWasReused = false;
   let gateFinalized = false;
@@ -8516,6 +8562,7 @@ async function maybePublishPrPublicSurface(
     changedFilesSummaryEnabledForReview = deterministicReviewOverrides.changedFilesSummary;
     effortScoreEnabledForReview = deterministicReviewOverrides.effortScore;
     minFindingSeverityForReview = deterministicReviewOverrides.minFindingSeverity;
+    inlineCommentsPerCategoryForReview = deterministicReviewOverrides.inlineCommentsPerCategory;
     // review.memory (#2179, part of #1964): deterministic, no-AI -- resolved the same unconditional way as
     // changed_files_summary/effort_score above (must apply even when the AI review itself is skipped this
     // pass). ANDed with the operator's GITTENSORY_REVIEW_MEMORY kill-switch at the actual apply site below
@@ -8728,13 +8775,18 @@ async function maybePublishPrPublicSurface(
             // so a repo with it active also bypasses the AI-review result cache rather than fingerprinting a
             // value that can't prove freshness.
             cultureProfile: isRepoCultureProfileEnabled(env) && reviewCultureProfile === true,
+            // Impact map (#2182-#2186): queries the SAME live vector index RAG does (computeImpactMap issues
+            // its own retrieveContextWithMetrics calls), so it can go stale for the SAME head SHA exactly like
+            // RAG — a repo with it active also bypasses the AI-review result cache.
+            impactMap: shouldComputeImpactMap(env, reviewImpactMap === true),
           };
           const dynamicReviewContextActive =
             dynamicReviewFeatures.grounding ||
             dynamicReviewFeatures.rag ||
             dynamicReviewFeatures.enrichment ||
             dynamicReviewFeatures.reputation ||
-            dynamicReviewFeatures.cultureProfile;
+            dynamicReviewFeatures.cultureProfile ||
+            dynamicReviewFeatures.impactMap;
           const inputFingerprint = await aiReviewCacheInputFingerprint({
             title: pr.title,
             mode: settings.aiReviewMode,
@@ -9235,12 +9287,10 @@ async function maybePublishPrPublicSurface(
             decisionOutcome: gateEvaluation?.conclusion,
           },
           () =>
-            // #3698: a benign auto-review skip (draft, WIP title, too-large, docs-only, base-branch,
-            // auto-pause) shows the quiet "skipped (reason)" status -- but an IGNORED-AUTHOR skip also
-            // trips publicSurfaceSkipped, and that path exists specifically so the deterministic gate
-            // (e.g. the linked-issue hard rule) still shows its REAL, truthful conclusion instead of a
-            // "skipped" veneer that would let an ignored/excluded author's PR silently bypass it.
-            autoReviewSkipReason && !publicSurfaceSkipped
+            // #3698/#security: auto_review skip reasons are AI-review eligibility only. They may come
+            // from PR-controlled metadata, so the quiet skipped status is safe only after the deterministic
+            // gate has already passed; failures/holds must publish their real blocking conclusion.
+            autoReviewSkipReason && !publicSurfaceSkipped && gateEvaluation?.conclusion === "success"
               ? createOrUpdateSkippedGateCheckRun(
                   env,
                   installationId,
@@ -9275,7 +9325,10 @@ async function maybePublishPrPublicSurface(
             headSha: advisory.headSha,
             checkRunId: gateCheckResult.id,
             /* v8 ignore next -- gate-enabled publication always has a gate evaluation. */
-            conclusion: autoReviewSkipReason && !publicSurfaceSkipped ? "skipped" : (gateEvaluation?.conclusion ?? null),
+            conclusion:
+              autoReviewSkipReason && !publicSurfaceSkipped && gateEvaluation?.conclusion === "success"
+                ? "skipped"
+                : (gateEvaluation?.conclusion ?? null),
             detailsUrl: gateCheckResult.html_url,
             deliveryId: webhook.deliveryId,
           }).catch((error) => {
@@ -9802,6 +9855,7 @@ async function maybePublishPrPublicSurface(
                 additions: file.additions,
                 deletions: file.deletions,
               })),
+              changedFilesSummaryContext: { repoFullName, pullNumber: pr.number },
             }
           : {}),
         // review.effort_score (#1955): deterministic, no-AI complexity/time estimate — only computed when the
@@ -9885,6 +9939,7 @@ async function maybePublishPrPublicSurface(
       suggestionsEnabled: suggestionsEnabledForReview,
       categoriesEnabled: findingCategoriesEnabledForReview,
       minFindingSeverity: minFindingSeverityForReview,
+      perCategoryCap: inlineCommentsPerCategoryForReview,
     });
   }
   if (decision.willLabel) {

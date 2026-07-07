@@ -6,6 +6,7 @@ import { processJob } from "./queue/processors";
 import { isOrbBrokerEnabled } from "./orb/broker";
 import { isOpsEnabled } from "./review/ops-wire";
 import { isSweepWatchdogEnabled } from "./review/sweep-watchdog";
+import { isPrReconciliationEnabled } from "./review/pr-reconciliation";
 import { isRagEnabled } from "./review/rag-wire";
 import { isSelfTuneEnabled } from "./review/selftune-wire";
 import {
@@ -106,6 +107,10 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
   const hour = scheduledAt.getUTCHours();
   const isHourly = minute === 0;
   const isFullSyncWindow = isHourly && hour % 6 === 0;
+  // Self-heal (#audit-open-pr-reconciliation): every 10 minutes — much tighter than the hourly ops-alerts/
+  // selftune cadence, since this exists specifically to catch a silently-lost webhook within minutes rather
+  // than up to 6 hours (backfillRegisteredRepositories's freshness window).
+  const isReconciliationWindow = minute % 10 === 0;
   // The light auto-maintain sweep runs EVERY cron tick (~every 2 min) so an approved+clean PR MERGES and a
   // red-CI non-owner PR CLOSES promptly — reviewbot parity (its cron fired every minute). It re-fetches LIVE CI +
   // mergeable and only ACTS (merge/close/hold); it never re-runs the AI, so it is cheap enough for this cadence.
@@ -171,6 +176,10 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
     // classified (MAINTENANCE_JOB_TYPES) so it defers under live-work pressure like every other periodic sweep here.
     if (selfHostedReviews) jobs.push({ type: "backlog-convergence-sweep", requestedBy: "schedule" });
   }
+  // Self-heal (flag GITTENSORY_PR_RECONCILIATION). Every 10 minutes — see isReconciliationWindow above.
+  // Enqueued ONLY when the flag is ON — flag-OFF (default) this job is never created, so the cron tick does
+  // ZERO new work and the enqueued set is byte-identical to today.
+  if (selfHostedReviews && isReconciliationWindow && isPrReconciliationEnabled(env)) jobs.push({ type: "reconcile-open-prs", requestedBy: "schedule" });
   if (isHourly) {
     jobs.push({ type: "refresh-registry", requestedBy: "schedule" });
     jobs.push({ type: "refresh-scoring-model", requestedBy: "schedule" });

@@ -260,10 +260,11 @@ export function resolveEnrichmentAnalyzerSelection(
 export function resolveEnrichmentLinkedIssueNumbers(
   linkedIssues: number[] | undefined,
   body: string | null | undefined,
+  repoFullName: string,
 ): number[] {
   const explicit = (linkedIssues ?? []).filter((candidate) => Number.isInteger(candidate) && candidate > 0);
   if (explicit.length > 0) return explicit;
-  return extractLinkedIssueNumbers(body ?? "");
+  return extractLinkedIssueNumbers(body ?? "", repoFullName);
 }
 
 /** Resolve the PR's primary linked issue into the compact REES envelope (#1478). */

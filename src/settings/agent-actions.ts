@@ -3,6 +3,7 @@ import { AI_JUDGMENT_BLOCKER_CODES, type GateCheckConclusion } from "../rules/ad
 import { DEFAULT_AUTO_MAINTAIN_POLICY, autonomyRequiresApproval, isActingAutonomyLevel, resolveAutonomy } from "./autonomy";
 import { changedPathsHittingGuardrail, isGuardrailHit } from "../signals/change-guardrail";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../review/linked-issue-hard-rules";
+import { REVIEW_THREAD_BLOCKER_CODE } from "../review/review-thread-findings";
 import { sanitizePublicComment } from "../github/commands";
 
 // High-slop threshold default when a repo hasn't set slopGateMinScore (mirrors the gate's `high` band).
@@ -101,7 +102,7 @@ export type PlannedAgentAction = {
   // mutates via the Issues API and is exempt from the PR-write-permission gate `close` must pass, so without
   // this correlation a transient write-permission denial could leave a PR mislabeled "closed for X" while it
   // is, in fact, still open).
-  closeKind?: "linked-issue-hard-rule" | "blacklist" | "contributor_cap" | "review_nag" | "heuristic";
+  closeKind?: "linked-issue-hard-rule" | "blacklist" | "contributor_cap" | "review_nag" | "screenshot_table" | "heuristic";
   // For a CI-driven heuristic close, the CI state that must still hold at actuation time. Other heuristic
   // closes (gate verdict, duplicate/slop, conflict) do not depend on red CI and must not be blocked by green CI.
   // ALWAYS set for a heuristic close (never omitted) -- see the field's doc comment on AgentPendingActionParams
@@ -111,6 +112,10 @@ export type PlannedAgentAction = {
   // AgentPendingActionParams in types.ts for why the approval queue's accept-time recheck is scoped to this
   // specific case rather than every non-CI heuristic close. ALWAYS set for a heuristic close (never omitted).
   closeRequiresMergeableState?: boolean;
+  // True when an unresolved GitHub review thread (REVIEW_THREAD_BLOCKER_CODE) was part of this close's
+  // justification -- see the doc comment on AgentPendingActionParams in types.ts. Mirrors
+  // closeRequiresMergeableState's own discipline: ALWAYS set for a heuristic close (never omitted).
+  closeRequiresThreadResolved?: boolean;
   // For a "heuristic" close: true when the close is backed by CONCRETE, non-judgment evidence — a committed
   // secret, a failing/red CI run, a base conflict, a deterministic linked-issue-overlap duplicate, or a
   // rule-based lane/manifest/pre-merge rejection — rather than any AI/model-derived verdict or a fuzzy score.
@@ -322,6 +327,14 @@ export type AgentActionPlanInput = {
   // AI semantic-match verdict, and a systematically-wrong match must not become breaker-proof just because
   // it repeated. Mutually exclusive with unlinkedIssueMatchHold -- the resolver only ever returns one.
   unlinkedIssueMatchClose?: { reason: string; comment: string } | undefined;
+  // Screenshot-table gate (#2006): a DETERMINISTIC verdict (no AI, zero hallucination risk) that an in-scope
+  // visual/frontend PR's body is missing a before/after screenshot table (or has an image outside a table, or
+  // a screenshot committed to the repo instead of uploaded to the PR). Same zero-hallucination short-circuit
+  // shape as blacklistMatch — fires ahead of ALL merit/CI/AI analysis, for a CONTRIBUTOR only, so its close is
+  // tagged `closeKind: "screenshot_table"`. Absent / not-violated ⇒ no effect. The trigger only ever sets this
+  // when the repo's `screenshotTableGate.action` is `"close"` (the only enforcement mode this planner wires so
+  // far) — `"request_changes"`/`"comment"` stay advisory-only, surfaced elsewhere.
+  screenshotTableMatch?: { matched: boolean; reason: string | null } | undefined;
   pr: {
     mergeableState?: string | null | undefined;
     reviewDecision?: string | null | undefined;
@@ -506,6 +519,14 @@ function reviewNagCloseMessage(authorLogin: string, pingCount: number, maxPings:
   return `Gittensory closed this because @${authorLogin} pinged @gittensory ${pingCount} times, above this repository's configured limit of ${maxPings}. Please wait for the cooldown window to pass before requesting review again. This is an automated maintenance action.`;
 }
 
+// The close comment for the screenshot-table gate (#2006). `reason` is the repo-configured (or built-in
+// default) templated contract message — already public-safe by construction (it is either the maintainer's own
+// configured `.gittensory.yml` text or the static DEFAULT_SCREENSHOT_CONTRACT_MESSAGE, never AI/user-derived),
+// so it is interpolated directly, unlike blacklistCloseMessage's deliberately-static text.
+function screenshotTableCloseMessage(reason: string): string {
+  return `${reason} This is an automated maintenance action.`;
+}
+
 /**
  * Plan best-effort assignment of the PR's opening contributor (#3182), independent of merge/close/CI outcome.
  * MUST run before the CI-pending settle-before-decide return below (#assign-before-ci-pending) — a PR that has
@@ -624,6 +645,29 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     return actions;
   }
 
+  // Screenshot-table gate (#2006): same zero-hallucination short-circuit shape as the blacklist above — fires
+  // ahead of ALL merit/CI/AI analysis, for a CONTRIBUTOR only. The trigger has already resolved scope (label/
+  // path match) and run the deterministic body/diff check before ever setting this input; the planner's only
+  // job is to build the close plan under the repo's normal autonomy/dry-run/kill-switch gates. No coupled label
+  // (unlike blacklist/contributor-cap/review-nag) — the templated close comment already IS the full contract,
+  // so a separate enforcement label would be redundant noise on a PR that's about to be closed anyway.
+  const screenshotTableContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
+  if (input.screenshotTableMatch?.matched === true && screenshotTableContributor) {
+    if (acting("close")) {
+      const reason = input.screenshotTableMatch.reason ?? "missing a before/after screenshot table";
+      actions.push({
+        actionClass: "close",
+        requiresApproval: approval("close"),
+        reason: "missing before/after screenshot table",
+        closeReasons: ["missing before/after screenshot table"],
+        closeComment: sanitizePublicComment(screenshotTableCloseMessage(reason)),
+        closeKind: "screenshot_table",
+        ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
+      });
+    }
+    return actions;
+  }
+
   // Only a SKIPPED gate (genuinely not evaluated) drives no action. A NEUTRAL gate (first-time-contributor
   // grace, or eval-not-ready while state is still syncing) is gate-NON-BLOCKING: it flows to the disposition so
   // the PR is merged (clean+green) or HELD with a label — never left silently undecided. (#harm-stop neutral-silent-stuck)
@@ -648,6 +692,11 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // or review-thread blocker into success once the gate has classified it as blocking.
   const conclusion: GateCheckConclusion = input.conclusion;
   const isConflict = input.pr.mergeableState === "dirty"; // conflicts with base — can't merge as-is
+  // True when an unresolved GitHub review thread is (at least one of) this close's justifications -- the SAME
+  // staleness class as isConflict above (#3863), just triggered by a contributor clicking "Resolve conversation"
+  // on GitHub instead of the base branch becoming mergeable again. A mixed blocker set (thread + something else)
+  // still counts: the thread recheck only re-verifies ITS OWN signal, so it's harmless to also gate on it here.
+  const isReviewThreadJustified = (input.gateBlockerCodes ?? []).includes(REVIEW_THREAD_BLOCKER_CODE);
   const isContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
   // The owner-close exemption is PER-REPO CONFIGURABLE (#configurable-owner-close): by default the repo owner's
   // own PRs are exempt from auto-close (closeOwnerAuthors !== true ⇒ merge or manual-hold only), but a maintainer
@@ -1115,6 +1164,8 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       closeRequiresCiState: ciFailed ? "failed" : "not_required",
       // Always explicit (never omitted), mirroring closeRequiresCiState's own discipline above.
       closeRequiresMergeableState: isConflict,
+      // Always explicit (never omitted), mirroring closeRequiresCiState's own discipline above.
+      closeRequiresThreadResolved: isReviewThreadJustified,
     });
   }
   // else: guarded → manual; not-good OWNER/automation → manual; action-required/unverified → manual;

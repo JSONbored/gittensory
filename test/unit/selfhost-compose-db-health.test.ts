@@ -49,4 +49,17 @@ describe("docker-compose.yml — postgres/pgbouncer startup ordering (#2500, #25
 
     expect(dependsOn.postgres).toEqual({ condition: "service_healthy" });
   });
+
+  it("gives postgres and pgbouncer a start_period so a cold pg_isready probe isn't marked unhealthy (#3898)", () => {
+    const compose = readYaml("docker-compose.yml");
+    const services = (compose.services as Record<string, Record<string, unknown>>) ?? {};
+
+    // Every failed probe counts toward `retries` from the very first check unless start_period is set --
+    // a genuinely cold pgvector initdb (first pull, slow disk) can plausibly exceed 5 retries at 10s each
+    // with no grace period, marking postgres unhealthy and failing every service_healthy depends_on gate.
+    for (const name of ["postgres", "pgbouncer"]) {
+      const healthcheck = (services[name] ?? {}).healthcheck as { start_period?: string } | undefined;
+      expect(healthcheck?.start_period, name).toBeTruthy();
+    }
+  });
 });

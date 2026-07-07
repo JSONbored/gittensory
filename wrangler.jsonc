@@ -83,6 +83,12 @@
     // of requiring a human to notice and manually trigger it. Default OFF — flag-OFF the cron enqueues no
     // watchdog job, byte-identical to today.
     "GITTENSORY_SWEEP_WATCHDOG": "false",
+    // Self-heal: a short-interval cron list-diffs GitHub's open PR numbers against the local table for every
+    // acting-autonomy repo, and catches up (fetch + upsert + regate) any PR number GitHub has that the local
+    // table doesn't — a silently-lost "opened" webhook, caught within minutes instead of the 6-hour
+    // backfillRegisteredRepositories freshness window. Default OFF — flag-OFF the cron enqueues no
+    // reconciliation job, byte-identical to today.
+    "GITTENSORY_PR_RECONCILIATION": "false",
     // Convergence (RAG retrieval): at review time, query the codebase vector index for code/docs semantically
     // related to the PR's changed files and append a RELEVANT EXISTING CODE / DOCS section to the reviewer
     // prompt — additive reference context (callers, related modules, conventions), exactly like grounding.

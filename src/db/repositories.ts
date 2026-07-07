@@ -153,6 +153,7 @@ import type {
   ReviewSuppressionRecord,
   ScorePreviewRecord,
   ScoringModelSnapshotRecord,
+  ScreenshotTableGateConfig,
   SignalSnapshotRecord,
   UpstreamDriftArea,
   UpstreamDriftReportRecord,
@@ -172,6 +173,7 @@ import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAIN
 import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
 import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
 import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "../review/linked-issue-hard-rules-config";
+import { DEFAULT_SCREENSHOT_TABLE_GATE, isScreenshotTableGateAction, normalizeScreenshotTableGateConfig } from "../review/screenshot-table-gate";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { errorMessage, jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN } from "../signals/redaction";
@@ -564,6 +566,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewEvasionProtection: "off",
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
+      screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [] },
     };
   }
   return {
@@ -641,6 +644,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewEvasionProtection: normalizeReviewEvasionProtection(row.reviewEvasionProtection),
     reviewEvasionLabel: row.reviewEvasionLabel,
     reviewEvasionComment: row.reviewEvasionComment,
+    screenshotTableGate: parseScreenshotTableGateRow(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -760,6 +764,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     reviewEvasionProtection: normalizeReviewEvasionProtection(settings.reviewEvasionProtection),
     reviewEvasionLabel: settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL,
     reviewEvasionComment: settings.reviewEvasionComment ?? true,
+    screenshotTableGate: normalizeScreenshotTableGateConfig(settings.screenshotTableGate, []),
   } satisfies RepositorySettings;
   const db = getDb(env.DB);
   await db
@@ -838,6 +843,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       reviewEvasionProtection: resolved.reviewEvasionProtection,
       reviewEvasionLabel: resolved.reviewEvasionLabel,
       reviewEvasionComment: resolved.reviewEvasionComment,
+      screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
+      screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
+      screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
+      screenshotTableGateAction: resolved.screenshotTableGate.action,
+      screenshotTableGateMessage: resolved.screenshotTableGate.message ?? null,
       updatedAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -917,6 +927,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         reviewEvasionProtection: resolved.reviewEvasionProtection,
         reviewEvasionLabel: resolved.reviewEvasionLabel,
         reviewEvasionComment: resolved.reviewEvasionComment,
+        screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
+        screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
+        screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
+        screenshotTableGateAction: resolved.screenshotTableGate.action,
+        screenshotTableGateMessage: resolved.screenshotTableGate.message ?? null,
         updatedAt: nowIso(),
       },
     });
@@ -3691,7 +3706,11 @@ export async function listOtherOpenPullRequestsForAuthor(env: Env, fullName: str
     .select()
     .from(pullRequests)
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.state, "open"), not(eq(pullRequests.number, number)), sql`lower(${pullRequests.authorLogin}) = lower(${authorLogin})`))
-    .orderBy(asc(pullRequests.number));
+    // Keep the per-webhook live-verification and sibling-wake work budget fixed. The cap path only needs the
+    // lowest-numbered siblings to preserve the "oldest PRs win" rule, and wake coalescing can discover later
+    // over-cap siblings from their own deliveries without letting one delivery fan out across an unbounded set.
+    .orderBy(asc(pullRequests.number))
+    .limit(100);
   return rows.map(toPullRequestRecordFromRow);
 }
 
@@ -5391,7 +5410,7 @@ function toPullRequestRecord(repoFullName: string, pr: GitHubPullRequestPayload)
     // subsequent DB round-trip) sees the same value instead of `undefined`.
     createdAt: pr.created_at,
     labels: (pr.labels ?? []).flatMap((label) => (label.name ? [label.name] : [])),
-    linkedIssues: extractLinkedIssueNumbers(pr.body ?? ""),
+    linkedIssues: extractLinkedIssueNumbers(pr.body ?? "", repoFullName),
   };
   /* v8 ignore stop */
 }
@@ -6782,6 +6801,29 @@ function normalizeReviewEvasionProtection(value: string | null | undefined): "of
   return value === "close" ? "close" : "off";
 }
 
+// Config-driven before/after screenshot-table gate (#2006): the row stores whenLabels/whenPaths as JSON string
+// arrays (mirroring contributorBlacklistJson's shape) across dedicated flat columns rather than one combined
+// JSON blob, so a self-hoster can inspect/edit a single field (e.g. just the action) without round-tripping the
+// whole object.
+function parseScreenshotTableGateRow(row: typeof repositorySettings.$inferSelect): ScreenshotTableGateConfig {
+  return {
+    enabled: row.screenshotTableGateEnabled,
+    whenLabels: parseJsonStringArray(row.screenshotTableGateWhenLabelsJson),
+    whenPaths: parseJsonStringArray(row.screenshotTableGateWhenPathsJson),
+    action: isScreenshotTableGateAction(row.screenshotTableGateAction) ? row.screenshotTableGateAction : DEFAULT_SCREENSHOT_TABLE_GATE.action,
+    ...(row.screenshotTableGateMessage ? { message: row.screenshotTableGateMessage } : {}),
+  };
+}
+
+// Generic "JSON array of non-empty strings" parse for a column with no additional per-item validation (labels
+// and path globs have no fixed shape, unlike a GitHub login) -- any malformed/non-string entry is silently
+// dropped, never throws, matching every other settings parse in this file.
+function parseJsonStringArray(value: string): string[] {
+  const parsed = parseJson<unknown>(value, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 function normalizeCommandRateLimitPolicy(value: string | null | undefined): "off" | "hold" {
   return value === "hold" ? value : "off";
 }
@@ -6963,13 +7005,19 @@ export type LinkedIssueExtractionResult = {
   overflow: boolean;
 };
 
-export function extractLinkedIssueNumbersWithOverflow(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): LinkedIssueExtractionResult {
+export function extractLinkedIssueNumbersWithOverflow(text: string, repoFullName: string, limit = MAX_LINKED_ISSUE_NUMBERS): LinkedIssueExtractionResult {
   const normalizedLimit = Math.max(0, Math.floor(limit));
+  const target = repoFullName.toLowerCase();
 
   const linkedIssues: number[] = [];
   const seen = new Set<number>();
-  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)) {
-    const value = Number(match[1]);
+  // Matches both GitHub's bare `KEYWORD #N` and fully-qualified `KEYWORD owner/repo#N` closing syntax (#3862) --
+  // the qualified form only counts when owner/repo case-insensitively matches THIS repo; a reference to a
+  // different repo closes an issue there, not here, and must not spoof a same-repo linked-issue match.
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([\w.-]+\/[\w.-]+)#|#)(\d+)\b/gi)) {
+    const owner = match[1];
+    if (owner && owner.toLowerCase() !== target) continue;
+    const value = Number(match[2]);
     if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
     seen.add(value);
     if (linkedIssues.length >= normalizedLimit) return { numbers: linkedIssues, overflow: true };
@@ -6978,8 +7026,8 @@ export function extractLinkedIssueNumbersWithOverflow(text: string, limit = MAX_
   return { numbers: linkedIssues, overflow: false };
 }
 
-export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
-  return extractLinkedIssueNumbersWithOverflow(text, limit).numbers;
+export function extractLinkedIssueNumbers(text: string, repoFullName: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
+  return extractLinkedIssueNumbersWithOverflow(text, repoFullName, limit).numbers;
 }
 
 function extractLinkedPrNumbers(text: string): number[] {

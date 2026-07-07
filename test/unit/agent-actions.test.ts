@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AGENT_LABEL_CHANGES, AGENT_LABEL_MIGRATION_COLLISION, AGENT_LABEL_NEEDS_REVIEW, AGENT_LABEL_READY, DEFAULT_BLACKLIST_LABEL, DEFAULT_CONTRIBUTOR_CAP_LABEL, DEFAULT_REVIEW_NAG_LABEL, downgradeCloseToHold, downgradeMergeToHold, isProtectedAutomationAuthor, planAgentMaintenanceActions, type AgentActionPlanInput, type PlannedAgentAction } from "../../src/settings/agent-actions";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
+import { REVIEW_THREAD_BLOCKER_CODE } from "../../src/review/review-thread-findings";
 import type { GateCheckConclusion } from "../../src/rules/advisory";
 // #module-cycle-regression: forces the SAME module-load cycle that broke once (scoring/model.ts ->
 // db/repositories.ts -> agent-actions.ts -> rules/advisory.ts -> scoring/preview.ts -> scoring/model.ts) to
@@ -1087,7 +1088,49 @@ describe("planAgentMaintenanceActions (#778)", () => {
         closeKind: "heuristic",
         closeConcreteEvidence: false,
         closeRequiresMergeableState: false,
+        closeRequiresThreadResolved: false,
       });
+    });
+
+    it("REGRESSION (#review-thread-staleness): CLOSES a review-thread-only blocker with closeRequiresThreadResolved: true, so the actuation-time recheck can catch a since-resolved thread", () => {
+      const plan = planAgentMaintenanceActions(
+        input({
+          conclusion: "failure",
+          autonomy: { approve: "auto", merge: "auto", close: "auto" },
+          ciState: "passed",
+          gateBlockerCodes: [REVIEW_THREAD_BLOCKER_CODE],
+          blockerTitles: ["reviewer review thread unresolved: fix this"],
+          pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" },
+        }),
+      );
+      const cls = classes(plan);
+      expect(cls).not.toContain("approve");
+      expect(cls).not.toContain("merge");
+      expect(cls).toContain("close");
+      expect(plan.find((a) => a.actionClass === "close")).toMatchObject({
+        closeKind: "heuristic",
+        closeRequiresMergeableState: false,
+        closeRequiresThreadResolved: true,
+      });
+    });
+
+    it("REGRESSION (#review-thread-staleness): a mixed blocker set (review thread + something else) still tags closeRequiresThreadResolved: true", () => {
+      const plan = planAgentMaintenanceActions(
+        input({
+          conclusion: "failure",
+          autonomy: { approve: "auto", merge: "auto", close: "auto" },
+          ciState: "passed",
+          gateBlockerCodes: [REVIEW_THREAD_BLOCKER_CODE, "ai_consensus_defect"],
+          blockerTitles: ["reviewer review thread unresolved: fix this", "AI review found a defect"],
+          pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" },
+        }),
+      );
+      expect(plan.find((a) => a.actionClass === "close")).toMatchObject({ closeKind: "heuristic", closeRequiresThreadResolved: true });
+    });
+
+    it("does NOT tag closeRequiresThreadResolved when gateBlockerCodes is absent (nullish ?? [] fallback)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", blockerTitles: ["readiness score too low"], pr: { labels: [] } }));
+      expect(plan.find((a) => a.actionClass === "close")).toMatchObject({ closeKind: "heuristic", closeRequiresThreadResolved: false });
     });
 
     it("CLOSES on already-red CI even while an unrelated check is still pending — red is terminal, it does not need the rest to settle", () => {
@@ -1889,5 +1932,75 @@ describe("review-nag cooldown short-circuit (#2463)", () => {
     expect(planAgentMaintenanceActions(nagged({ autonomy: {} }))).toEqual([]);
     expect(planAgentMaintenanceActions(nagged({ autonomy: { label: "auto" } }))).toEqual([]);
     expect(classes(planAgentMaintenanceActions(nagged({ autonomy: { close: "auto" } })))).toEqual(["close", "label"]);
+  });
+});
+
+describe("screenshot-table gate short-circuit (#2006)", () => {
+  const missingTable = (extra: Partial<AgentActionPlanInput> = {}) =>
+    input({
+      conclusion: "success",
+      autonomy: { close: "auto", approve: "auto", merge: "auto" },
+      screenshotTableMatch: { matched: true, reason: "This pull request changes UI/visual code but its description is missing a before/after screenshot table." },
+      ...extra,
+    });
+
+  it("closes a PR missing its screenshot table, winning over a passing gate (no merit review / merge)", () => {
+    const plan = planAgentMaintenanceActions(missingTable());
+    expect(classes(plan)).toEqual(["close"]); // short-circuit: no approve/merge despite a SUCCESS gate; no coupled label
+    expect(plan[0]).toMatchObject({ actionClass: "close", closeKind: "screenshot_table" });
+    expect(plan[0]?.closeReasons).toEqual(["missing before/after screenshot table"]);
+  });
+
+  it("interpolates the configured contract reason into the close comment", () => {
+    const plan = planAgentMaintenanceActions(missingTable());
+    expect(plan[0]?.closeComment).toContain("before/after screenshot table");
+    expect(plan[0]?.closeComment).toContain("This is an automated maintenance action.");
+  });
+
+  it("falls back to a generic reason when the trigger passes reason: null", () => {
+    const plan = planAgentMaintenanceActions(missingTable({ screenshotTableMatch: { matched: true, reason: null } }));
+    expect(plan[0]?.closeComment).toContain("missing a before/after screenshot table");
+  });
+
+  it("pins the close to the reviewed head, mirroring blacklist/contributor-cap/review-nag", () => {
+    const plan = planAgentMaintenanceActions(missingTable({ pr: { labels: [], headSha: "h-reviewed" } }));
+    expect(plan.find((a) => a.actionClass === "close")).toMatchObject({ closeKind: "screenshot_table", expectedHeadSha: "h-reviewed" });
+  });
+
+  it("omits expectedHeadSha when the PR record has no headSha (defensive fallback)", () => {
+    const plan = planAgentMaintenanceActions(missingTable());
+    expect(plan.find((a) => a.actionClass === "close")?.expectedHeadSha).toBeUndefined();
+  });
+
+  it("fires AHEAD of CI — closes even while CI is still pending (not the pending early-return)", () => {
+    expect(classes(planAgentMaintenanceActions(missingTable({ ciState: "pending" })))).toEqual(["close"]);
+  });
+
+  it("NEVER fires for the owner, an admin login, or an automation bot (standing rule) — the PR falls through to normal disposition", () => {
+    expect(classes(planAgentMaintenanceActions(missingTable({ authorIsOwner: true })))).not.toContain("close");
+    expect(classes(planAgentMaintenanceActions(missingTable({ authorIsAdmin: true })))).not.toContain("close");
+    expect(classes(planAgentMaintenanceActions(missingTable({ authorIsAutomationBot: true })))).not.toContain("close");
+  });
+
+  it("no-ops when the match is not matched (normal disposition runs)", () => {
+    expect(classes(planAgentMaintenanceActions(missingTable({ screenshotTableMatch: { matched: false, reason: null } })))).not.toContain("close");
+  });
+
+  it("plans nothing when `close` autonomy is not acting", () => {
+    expect(planAgentMaintenanceActions(missingTable({ autonomy: {} }))).toEqual([]);
+    expect(classes(planAgentMaintenanceActions(missingTable({ autonomy: { close: "auto" } })))).toEqual(["close"]);
+  });
+
+  it("is exempt from the close-precision breaker (no closeKind: 'heuristic', mirroring blacklist/contributor-cap/review-nag)", () => {
+    const plan = planAgentMaintenanceActions(missingTable());
+    const closeAction = plan.find((a) => a.actionClass === "close");
+    const downgraded = downgradeCloseToHold(plan, true, {});
+    expect(downgraded).toEqual(plan);
+    expect(closeAction?.closeKind).not.toBe("heuristic");
+  });
+
+  it("is independent of the blacklist short-circuit — a matched blacklist entry still wins when both are present", () => {
+    const plan = planAgentMaintenanceActions(missingTable({ blacklistMatch: { matched: true, reason: "plagiarism" } }));
+    expect(plan[0]).toMatchObject({ closeKind: "blacklist" });
   });
 });

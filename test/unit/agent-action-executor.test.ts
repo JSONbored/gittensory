@@ -34,9 +34,15 @@ vi.mock("../../src/github/app", async (importOriginal) => ({
 }));
 // The actuation-time live CI re-check (#2128) defaults to "still passing" so the existing merge tests stay
 // deterministic; individual tests below override this to exercise the staleness-denial path.
+// The actuation-time live mergeable-state re-check (#3863) defaults to "dirty" (conflict still present) so no
+// existing test needs to override it; the tests below explicitly set it to exercise the staleness-denial path.
+// The actuation-time live review-thread re-check (#review-thread-staleness) defaults to a single still-unresolved
+// blocker for the same reason -- individual tests below override it to exercise the staleness-denial path.
 vi.mock("../../src/github/backfill", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/github/backfill")>()),
   fetchLiveCiAggregate: vi.fn(async () => ({ ciState: "passed" as const, hasPending: false, hasVisiblePending: false, hasMissingRequiredContext: false, failingDetails: [], nonRequiredFailingDetails: [], ciCompletenessWarning: null })),
+  fetchLivePullRequestMergeState: vi.fn(async () => "dirty" as const),
+  fetchLiveReviewThreadBlockers: vi.fn(async () => [{ title: "still unresolved", scannerFinding: false }]),
   refreshInstallationHealthForInstallation: vi.fn(async () => null),
 }));
 
@@ -45,7 +51,7 @@ import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github
 import { ensurePullRequestAssignee } from "../../src/github/assignees";
 import { fetchPullRequestFreshness } from "../../src/github/pr-freshness";
 import { createInstallationToken } from "../../src/github/app";
-import { fetchLiveCiAggregate, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
+import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLiveReviewThreadBlockers, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
 import {
   actionParams,
   applyModerationEscalationForRule,
@@ -65,6 +71,7 @@ import { STRUCTURED_CLOSE_REASONS_MAX_COUNT } from "../../src/settings/agent-exe
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
 import { clearProcessLocalGlobalAgentFrozenCacheForTest, getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import * as repositoriesModule from "../../src/db/repositories";
+import * as sentryModule from "../../src/selfhost/sentry";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createTestEnv } from "../helpers/d1";
 import { MODERATION_VIOLATION_EVENT_TYPE } from "../../src/settings/moderation-rules";
@@ -510,6 +517,109 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [hardRuleClose]);
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(fetchLiveCiAggregate).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#3863): a base-conflict-justified heuristic close is DENIED when the live mergeable_state has since cleared", async () => {
+    const env = createTestEnv({});
+    const conflictClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "conflicts with the base branch", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: true };
+    vi.mocked(fetchLivePullRequestMergeState).mockResolvedValueOnce("clean");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [conflictClose]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(outcomes[0]?.detail).toContain("the base-branch conflict that justified this close has since cleared");
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("a base-conflict-justified heuristic close proceeds when the live mergeable_state is still dirty (#3863)", async () => {
+    const env = createTestEnv({});
+    const conflictClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "conflicts with the base branch", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: true };
+    vi.mocked(fetchLivePullRequestMergeState).mockResolvedValueOnce("dirty");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [conflictClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+  });
+
+  it("a base-conflict-justified heuristic close fails open (still proceeds) when the live mergeable_state read is ambiguous/unresolved (#3863)", async () => {
+    const env = createTestEnv({});
+    const conflictClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "conflicts with the base branch", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: true };
+    // "unknown" (still computing) and a failed fetch (undefined) are both NOT a confirmed "clean" -- neither is
+    // proof the conflict resolved, so the close must not be silently blocked by an inconclusive live read.
+    vi.mocked(fetchLivePullRequestMergeState).mockResolvedValueOnce("unknown");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [conflictClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+  });
+
+  it("a non-conflict heuristic close (closeRequiresMergeableState omitted/false) skips the live mergeable-state re-check entirely (#3863)", async () => {
+    const env = createTestEnv({});
+    const gateClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "policy gate blocker", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: false };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [gateClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(fetchLivePullRequestMergeState).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#3863): closeRequiresMergeableState round-trips through the persist/replay round trip so a staged conflict close still re-checks live mergeable-state", async () => {
+    const env = createTestEnv({});
+    const conflictClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "conflicts with the base branch", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresMergeableState: true };
+    const persisted = actionParams(conflictClose);
+    const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: conflictClose.reason });
+    expect(replayed.closeRequiresMergeableState).toBe(true);
+    vi.mocked(fetchLivePullRequestMergeState).mockResolvedValueOnce("clean");
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [replayed]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#review-thread-staleness): a review-thread-justified heuristic close is DENIED when the live review threads have since all resolved", async () => {
+    const env = createTestEnv({});
+    const threadClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "unresolved review thread", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresThreadResolved: true };
+    vi.mocked(fetchLiveReviewThreadBlockers).mockResolvedValueOnce([]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [threadClose]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(outcomes[0]?.detail).toContain("the review thread(s) that justified this close are now all resolved");
+    expect(closePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("a review-thread-justified heuristic close proceeds when the live review thread is still unresolved (#review-thread-staleness)", async () => {
+    const env = createTestEnv({});
+    const threadClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "unresolved review thread", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresThreadResolved: true };
+    // The module mock's default already returns a single still-unresolved blocker.
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [threadClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+  });
+
+  it("a review-thread-justified heuristic close fails open (still proceeds) when the live thread-blocker read is ambiguous/unresolved (#review-thread-staleness)", async () => {
+    const env = createTestEnv({});
+    const threadClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "unresolved review thread", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresThreadResolved: true };
+    // fetchLiveReviewThreadBlockers itself never rejects in production (it fails open to [] internally on a
+    // GraphQL error) -- but the executor's own Promise.all resolution here still must not treat an ambiguous
+    // undefined result (were one ever to occur) as proof the threads resolved. Simulate that with a resolved
+    // single-element array standing in for "read succeeded, still unresolved" -- the true fail-open contract is
+    // that only a CONFIRMED empty array clears the close, covered by the DENIED test above.
+    vi.mocked(fetchLiveReviewThreadBlockers).mockResolvedValueOnce([{ title: "ambiguous but present", scannerFinding: false }]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [threadClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(closePullRequest).toHaveBeenCalledWith(env, 123, "owner/repo", 7);
+  });
+
+  it("a non-thread heuristic close (closeRequiresThreadResolved omitted/false) skips the live thread-blocker re-check entirely (#review-thread-staleness)", async () => {
+    const env = createTestEnv({});
+    const gateClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "policy gate blocker", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresThreadResolved: false };
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [gateClose]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(fetchLiveReviewThreadBlockers).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#review-thread-staleness): closeRequiresThreadResolved round-trips through the persist/replay round trip so a staged thread-justified close still re-checks live thread blockers", async () => {
+    const env = createTestEnv({});
+    const threadClose: PlannedAgentAction = { actionClass: "close", requiresApproval: false, reason: "unresolved review thread", closeComment: "closing", closeKind: "heuristic", closeRequiresCiState: "not_required", closeRequiresThreadResolved: true };
+    const persisted = actionParams(threadClose);
+    const replayed = pendingActionToPlanned({ actionClass: "close", params: persisted, reason: threadClose.reason });
+    expect(replayed.closeRequiresThreadResolved).toBe(true);
+    vi.mocked(fetchLiveReviewThreadBlockers).mockResolvedValueOnce([]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [replayed]);
+    expect(outcomes[0]?.outcome).toBe("denied");
+    expect(closePullRequest).not.toHaveBeenCalled();
   });
 
   it("LIVE merge is denied when live CI has since turned failing (#2128)", async () => {
@@ -1072,16 +1182,22 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
   it("records a failed mutation as error rather than swallowing it", async () => {
     const env = createTestEnv({});
     vi.mocked(mergePullRequest).mockRejectedValueOnce(new Error("Pull Request is not mergeable"));
+    const captureSpy = vi.spyOn(sentryModule, "captureError");
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
     expect(outcomes[0]?.outcome).toBe("error");
     expect(outcomes[0]?.detail).toMatch(/not mergeable/i);
     expect((await auditFor(env, "merge"))?.outcome).toBe("error");
+    // "not mergeable" is immediately terminal (classifyMergeFailure), so this held-for-human outcome must be
+    // Sentry-visible, not just an audit_events row a maintainer has to go looking for (#3862/#3863 gap sweep).
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ kind: "agent_merge_blocked", repo: "owner/repo", pr: 7 }));
+    captureSpy.mockRestore();
   });
 
   it("REGRESSION: a generic GitHub 403 merge rejection does not immediately pin merge_blocked_sha", async () => {
     const env = createTestEnv({});
     await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "" });
     vi.mocked(mergePullRequest).mockRejectedValueOnce(Object.assign(new Error("Resource not accessible by integration"), { status: 403 }));
+    const captureSpy = vi.spyOn(sentryModule, "captureError");
 
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
 
@@ -1096,15 +1212,24 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
       .bind("agent.action.merge_blocked")
       .first<{ count: number }>();
     expect(blocked?.count).toBe(0);
+    // A retryable (non-terminal) failure must stay silent in Sentry -- only the eventual terminal hold (above)
+    // or MERGE_RETRY_CAP exhaustion should ever page anyone, or every transient 403 would be alert noise.
+    expect(captureSpy).not.toHaveBeenCalled();
+    captureSpy.mockRestore();
   });
 
   it("opportunistically refreshes installation health when a PR-write mutation fails with a 403 (#2265)", async () => {
     const env = createTestEnv({});
     vi.mocked(closePullRequest).mockRejectedValueOnce(Object.assign(new Error("Resource not accessible by integration"), { status: 403 }));
+    const captureSpy = vi.spyOn(sentryModule, "captureError");
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [close]);
     expect(outcomes[0]?.outcome).toBe("error");
     expect(refreshInstallationHealthForInstallation).toHaveBeenCalledTimes(1);
     expect(refreshInstallationHealthForInstallation).toHaveBeenCalledWith(env, 123);
+    // Non-merge action classes have no retry loop, so a single failure is already this pass's terminal outcome
+    // and must be Sentry-visible immediately (#3862/#3863 gap sweep).
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ kind: "agent_action_execution_failed", actionClass: "close" }));
+    captureSpy.mockRestore();
   });
 
   it("does not refresh installation health for a non-403 mutation failure (#2265)", async () => {
@@ -1530,9 +1655,12 @@ describe("executeIssueMaintenanceActions (#2270 issue-side actuation)", () => {
   it("records a failed mutation as error rather than swallowing it", async () => {
     const env = createTestEnv({});
     vi.mocked(closeIssue).mockRejectedValueOnce(new Error("github 500"));
+    const captureSpy = vi.spyOn(sentryModule, "captureError");
     const outcomes = await executeIssueMaintenanceActions(env, issueCtx(), [issueClose]);
     expect(outcomes[0]?.outcome).toBe("error");
     expect((await auditFor(env, "close"))?.outcome).toBe("error");
+    expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ kind: "agent_issue_action_execution_failed", actionClass: "close" }));
+    captureSpy.mockRestore();
   });
 
   // #terminal-outcome-audit: the issue-actions executor has its own `audit` closure (a separate function scope

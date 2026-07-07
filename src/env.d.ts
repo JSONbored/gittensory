@@ -247,6 +247,12 @@ declare global {
      *  for just that repo. Default OFF — unset/false means the cron tick enqueues NO watchdog job (does no new
      *  work), so the worker is byte-identical to today. */
     GITTENSORY_SWEEP_WATCHDOG?: string;
+    /** Self-heal: when truthy, a short-interval cron list-diffs GitHub's open PR numbers against the local
+     *  table for every acting-autonomy repo and catches up (fetch + upsert + regate) any PR number GitHub has
+     *  that the local table doesn't — a silently-lost "opened" webhook, caught within minutes instead of the
+     *  6-hour backfillRegisteredRepositories freshness window. Default OFF — unset/false means the cron tick
+     *  enqueues NO reconciliation job, so the worker is byte-identical to today. */
+    GITTENSORY_PR_RECONCILIATION?: string;
     /** Convergence (RAG retrieval): when truthy, the AI reviewer prompt gains a RELEVANT EXISTING CODE / DOCS
      *  section — at review time the codebase vector index is queried for code/docs semantically related to the
      *  PR's changed files (callers, related modules, existing conventions) and appended as additive reference

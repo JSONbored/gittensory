@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTestCoverage, detectTestConvention, hasLocalTestEvidence, hasValidationNote, isTestPath } from "../../src/signals/test-evidence";
+import { classifyTestCoverage, detectTestConvention, hasLocalTestEvidence, hasValidationNote, isSourcePath, isTestPath } from "../../src/signals/test-evidence";
 
 describe("test evidence helpers", () => {
   it("detects common test path conventions", () => {
@@ -162,6 +162,55 @@ describe("test evidence helpers", () => {
     expect(hasValidationNote("No changes needed here; validated with npm test.")).toBe(true);
     expect(hasValidationNote("Tests: not run. Validated with npm run test:ci.")).toBe(true);
     expect(hasValidationNote("Tests; not run. Validated with npm run test:ci.")).toBe(true);
+  });
+});
+
+describe("isSourcePath", () => {
+  it("recognizes hand-authored source across every supported language", () => {
+    for (const path of [
+      "src/index.ts",
+      "components/Button.tsx",
+      "src/loader.mjs",
+      "src/legacy.cjs",
+      "service/main.py",
+      "lib/parser.rb",
+      "engine/core.rs",
+      "android/App.kt",
+      "etl/Job.scala",
+      "server/Main.java",
+      "cmd/server/main.go",
+      "migrations/0001_init.sql",
+    ]) {
+      expect(isSourcePath(path)).toBe(true);
+    }
+  });
+
+  it("recognizes Kotlin-script source symmetrically with isTestPath's class-suffix rule", () => {
+    // Regression: isTestPath already recognizes `SomethingTests.kts`, but `.kts` source was missing from the
+    // code matcher, so an untested Gradle Kotlin-script change escaped the missing-tests signals.
+    expect(isSourcePath("app/Build.kts")).toBe(true);
+    expect(isSourcePath("gradle/Cart.groovy")).toBe(true);
+    expect(isSourcePath("Services/PaymentProcessor.cs")).toBe(true);
+    expect(isSourcePath("Sources/App/Login.swift")).toBe(true);
+  });
+
+  it("excludes test files even when they carry a source extension", () => {
+    for (const path of [
+      "math.test.ts",
+      "Services/OrderTests.cs",
+      "Sources/App/LoginTests.swift",
+      "gradle/CartSpec.groovy",
+      "build/SettingsTests.kts",
+      "handler_test.go",
+    ]) {
+      expect(isSourcePath(path)).toBe(false);
+    }
+  });
+
+  it("excludes non-source assets and extensionless files", () => {
+    for (const path of ["README.md", "package.json", "assets/logo.png", "Dockerfile", "data/values.json"]) {
+      expect(isSourcePath(path)).toBe(false);
+    }
   });
 });
 

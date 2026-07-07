@@ -615,6 +615,12 @@ describe("classifyChangedFile", () => {
       ["README.md", "docs"],
       ["src/app.ts", "source"],
       ["src/integration/auth.ts", "source"],
+      // C#/Swift/Groovy source classify as source (their manifests Package.swift/build.gradle.kts are matched
+      // as dependency_manifest above; the language sources themselves are real code).
+      ["Services/PaymentProcessor.cs", "source"],
+      ["Sources/App/Login.swift", "source"],
+      ["gradle/Cart.groovy", "source"],
+      ["app/Build.kts", "source"],
       ["data/values.json", "other"],
     ];
     for (const [path, expected] of cases) {

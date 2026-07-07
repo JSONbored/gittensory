@@ -45,6 +45,7 @@ import {
   isOwnReviewThreadAuthor,
   isRateLimitedGitHubFailure,
   mergeRequiredCiContexts,
+  reconcileOpenPullRequests,
   refreshContributorActivity,
   refreshInstallationHealth,
   refreshPullRequestDetails,
@@ -253,8 +254,14 @@ describe("GitHub backfill", () => {
             nodes: [{ __typename: "PullRequest", mergedAt: "2026-05-24T00:00:00Z", labels: { nodes: [{ name: "bug" }] }, body: "Fixes #1" }],
           },
           r_JSONbored_gittensory_open: {
-            issueCount: 2,
-            nodes: [{ __typename: "PullRequest", updatedAt: "2026-04-01T00:00:00Z", labels: { nodes: [{ name: "ci" }] }, body: "" }],
+            issueCount: 3,
+            nodes: [
+              { __typename: "PullRequest", updatedAt: "2026-04-01T00:00:00Z", labels: { nodes: [{ name: "ci" }] }, body: "" },
+              { __typename: "PullRequest", updatedAt: "2026-04-02T00:00:00Z", labels: { nodes: [{ name: "ci" }] }, body: "Fixes #2" },
+              // REGRESSION: no `body` field at all (GitHub omits it, not just an empty string) -- exercises
+              // the `node.body ?? ""` nullish fallback the unlinkedPullRequests count feeds into.
+              { __typename: "PullRequest", updatedAt: "2026-04-03T00:00:00Z", labels: { nodes: [{ name: "ci" }] } },
+            ],
           },
           r_JSONbored_gittensory_issues: {
             issueCount: 12,
@@ -269,7 +276,7 @@ describe("GitHub backfill", () => {
     expect(result).toMatchObject({ repoCount: 1, updatedRepoStats: 1, warnings: [] });
     expect(authHeaders).toContain("Bearer public-token");
     expect(await listContributorRepoStats(env, "JSONbored")).toMatchObject([
-      { repoFullName: "JSONbored/gittensory", pullRequests: 50, mergedPullRequests: 47, openPullRequests: 2, issues: 12, unlinkedPullRequests: 1 },
+      { repoFullName: "JSONbored/gittensory", pullRequests: 50, mergedPullRequests: 47, openPullRequests: 3, issues: 12, unlinkedPullRequests: 2 },
     ]);
   });
 
@@ -4826,6 +4833,109 @@ describe("GitHub backfill", () => {
         expect(aggregate.ciCompletenessWarning).toMatch(/branch-protection required checks/i);
       });
     });
+
+    describe("duplicate-named check-runs from a re-run (dedupeLatestCheckRunsByName)", () => {
+      // Reproduces a real commit's shape: GitHub's /check-runs endpoint returned "Deploy UI preview version" TWICE
+      // after a "Re-run failed jobs" — id 85478132562 (conclusion: failure, started_at 2026-07-06T20:56:33Z, the
+      // STALE original run) and id 85485221438 (conclusion: skipped, started_at 2026-07-06T21:34:29Z, the CURRENT
+      // re-run). Without dedup, the stale failure alone flipped ciState to "failed" even though the check now
+      // passes — which fed a TERMINAL close signal into planAgentMaintenanceActions for a contributor PR whose CI
+      // had legitimately gone green on re-run.
+      it("keeps the NEWER (passing) conclusion when a re-run leaves a stale failing duplicate by name", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 85478132562, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z" },
+                { id: 85485221438, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z" },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "7d145f032eb3b03b5ac5868aa3cecf3e002bb6e2", "public-token", new Set(["Deploy UI preview version"]));
+
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.failingDetails).toEqual([]);
+      });
+
+      it("still fails when the NEWER duplicate-named check-run is the one that failed (recency-aware, not duplicate-blind)", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "success", started_at: "2026-07-06T20:56:33Z" },
+                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T21:34:29Z" },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["Deploy UI preview version"]));
+
+        expect(aggregate.ciState).toBe("failed");
+        expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "Deploy UI preview version" })]);
+      });
+
+      it("keeps the already-latest entry when a stale duplicate is listed OUT OF ORDER (appears second but started EARLIER)", async () => {
+        // GitHub does not document a stable ordering contract for /check-runs, so the comparison must genuinely
+        // compare timestamps rather than assume "later in the array is newer" — this fixture puts the STALE
+        // (older, failing) run SECOND to prove the earlier-started duplicate does not override the real latest.
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z" },
+                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z" },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["Deploy UI preview version"]));
+
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.failingDetails).toEqual([]);
+      });
+
+      it("falls back to array order when neither duplicate has a started_at (queued runs have none)", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 1, name: "flaky", status: "completed", conclusion: "failure", started_at: null },
+                { id: 2, name: "flaky", status: "completed", conclusion: "success", started_at: null },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["flaky"]));
+
+        // No timestamp to compare on either side → the later array entry wins (the documented tiebreak fallback).
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.failingDetails).toEqual([]);
+      });
+    });
   });
 
   describe("fetchLiveReviewThreadBlockers", () => {
@@ -5820,6 +5930,99 @@ describe("GitHub backfill", () => {
 
     it("does not treat a non-403/429 failure as a rate limit even with a matching body", () => {
       expect(isRateLimitedGitHubFailure({ statusCode: 500, retryAfter: null, remaining: null, body: "secondary rate limit" })).toBe(false);
+    });
+  });
+
+  describe("reconcileOpenPullRequests (#audit-open-pr-reconciliation)", () => {
+    it("returns an all-zero result for a repo that does not exist", async () => {
+      const env = createTestEnv();
+      expect(await reconcileOpenPullRequests(env, "owner/missing")).toEqual({ repoFullName: "owner/missing", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+    });
+
+    it("reports no missing numbers when the local table already has every remote-open PR", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) return Response.json([{ number: 1 }]);
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result).toEqual({ repoFullName: "JSONbored/gittensory", remoteOpenCount: 1, localOpenCount: 1, missingNumbers: [] });
+    });
+
+    it("REGRESSION (#3782/#3793): reports a PR number GitHub has open that has no local row at all", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) return Response.json([{ number: 1 }, { number: 7 }]); // #7 opened but never made it into the local table
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result).toEqual({ repoFullName: "JSONbored/gittensory", remoteOpenCount: 2, localOpenCount: 1, missingNumbers: [7] });
+    });
+
+    it("paginates the open-PR list past the first 100 via the Link header", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) {
+          const page = Number(new URL(url).searchParams.get("page") ?? "1");
+          if (page === 1) {
+            return Response.json(
+              Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })),
+              { headers: { link: '<https://api.github.com/repositories/1/pulls?state=open&per_page=100&page=2>; rel="next"' } },
+            );
+          }
+          return Response.json([{ number: 101 }]);
+        }
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result.remoteOpenCount).toBe(101);
+      expect(result.missingNumbers).toEqual(expect.arrayContaining([1, 101]));
+    });
+
+    it("fails open (all-zero result) when the FIRST page fails, so a GitHub hiccup never falsely reports every local PR as missing", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+      vi.stubGlobal("fetch", async () => new Response("down", { status: 500 }));
+
+      expect(await reconcileOpenPullRequests(env, "JSONbored/gittensory")).toEqual({ repoFullName: "JSONbored/gittensory", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+    });
+
+    it("keeps the pages already fetched when a LATER page fails mid-crawl (a partial remote list can only under-report, never falsely flag a real local PR)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      await seedRegisteredRepo(env);
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/pulls?")) {
+          const page = Number(new URL(url).searchParams.get("page") ?? "1");
+          if (page === 1) {
+            return Response.json(
+              Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })),
+              { headers: { link: '<https://api.github.com/repositories/1/pulls?state=open&per_page=100&page=2>; rel="next"' } },
+            );
+          }
+          return new Response("down", { status: 500 });
+        }
+        return Response.json([]);
+      });
+
+      const result = await reconcileOpenPullRequests(env, "JSONbored/gittensory");
+
+      expect(result.remoteOpenCount).toBe(100); // page 1's 100 items are kept despite page 2 failing
     });
   });
 

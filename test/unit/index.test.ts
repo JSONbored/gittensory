@@ -645,6 +645,47 @@ describe("worker entrypoint", () => {
     expect(sent.some((m) => m.type === "sweep-liveness-watchdog")).toBe(false);
   });
 
+  it("enqueues the reconcile-open-prs job every 10 minutes ONLY when GITTENSORY_PR_RECONCILIATION is ON (flag-OFF is byte-identical)", async () => {
+    const sentFor = async (flag?: string, isoTime = "2026-05-25T05:10:00.000Z"): Promise<Array<import("../../src/types").JobMessage>> => {
+      const sent: Array<import("../../src/types").JobMessage> = [];
+      const env = createTestEnv({
+        ...(flag === undefined ? {} : { GITTENSORY_PR_RECONCILIATION: flag }),
+        JOBS: {
+          async send(message: import("../../src/types").JobMessage) {
+            sent.push(message);
+          },
+        } as unknown as Queue,
+      });
+      const waitUntil: Promise<unknown>[] = [];
+      await worker.scheduled(controllerFor(isoTime), env, executionContext(waitUntil));
+      await Promise.all(waitUntil);
+      return sent;
+    };
+
+    // Flag OFF (default) → no reconcile-open-prs job; the enqueued set is unchanged from today.
+    expect((await sentFor()).some((m) => m.type === "reconcile-open-prs")).toBe(false);
+    expect((await sentFor("false")).some((m) => m.type === "reconcile-open-prs")).toBe(false);
+    // Flag ON, on a 10-minute boundary → exactly one reconcile-open-prs job.
+    const on = await sentFor("true");
+    expect(on.filter((m) => m.type === "reconcile-open-prs")).toEqual([{ type: "reconcile-open-prs", requestedBy: "schedule" }]);
+  });
+
+  it("does NOT enqueue reconcile-open-prs outside the 10-minute window even when GITTENSORY_PR_RECONCILIATION is ON", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      GITTENSORY_PR_RECONCILIATION: "true",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    const waitUntil: Promise<unknown>[] = [];
+    await worker.scheduled(controllerFor("2026-05-25T05:14:00.000Z"), env, executionContext(waitUntil)); // not a 10-minute boundary
+    await Promise.all(waitUntil);
+    expect(sent.some((m) => m.type === "reconcile-open-prs")).toBe(false);
+  });
+
   it("enqueues selftune hourly only when GITTENSORY_REVIEW_SELFTUNE is ON", async () => {
     const sentFor = async (
       selfTuneFlag?: string,

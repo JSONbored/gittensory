@@ -39,22 +39,30 @@ groups:
   - name: gittensory-jobs
     rules:
       - alert: GittensoryHighJobFailureRatio
-        # Fraction of processed jobs that failed over the last 10m. The `> 0` guard on
-        # the denominator avoids a 0/0 = NaN (which never fires but is noise in /rules).
-        # 0.10 = 10% of jobs failing. Raise if your workload has expected transient
-        # failures; lower if any failure is a real problem.
+        # Fraction of jobs ATTEMPTED (failed + succeeded) that failed over the last 10m.
+        # gittensory_jobs_processed_total only increments on success, so the denominator
+        # must be failed+processed, not processed alone (#3892) -- dividing by processed
+        # alone computes failed:success and can read as high as 100% at a true 50% failure
+        # rate. The `> 0` guard on the ratio avoids a 0/0 = NaN (which never fires but is
+        # noise in /rules) when no jobs ran at all. 0.10 = 10% of jobs failing. Raise if
+        # your workload has expected transient failures; lower if any failure is a real
+        # problem. Mirrors the Grafana "Job Failure Rate" panel's formula.
         expr: |
           (
             sum(rate(gittensory_jobs_failed_total[10m]))
             /
-            sum(rate(gittensory_jobs_processed_total[10m])) > 0
+            (
+              sum(rate(gittensory_jobs_failed_total[10m]))
+              +
+              sum(rate(gittensory_jobs_processed_total[10m]))
+            ) > 0
           ) > 0.10
         for: 15m
         labels:
           severity: warning
         annotations:
           summary: "gittensory job failure ratio above 10%"
-          description: "{{ $value | humanizePercentage }} of jobs processed in the last 10m failed (sustained 15m). Expected: well under 10%."
+          description: "{{ $value | humanizePercentage }} of jobs attempted in the last 10m failed (sustained 15m). Expected: well under 10%."
           runbook: "Tail logs for level=error job events (e.g. selfhost_cron_error). A spike usually means a bad upstream (GitHub API / AI provider / DB) or a poison payload — check what changed."
 
       - alert: GittensoryDeadLetterJobsGrowing
@@ -465,6 +473,21 @@ groups:
           summary: "gittensory AI review is repeatedly inconclusive"
           description: "{{ $value | printf \"%.0f\" }} AI review(s) came back inconclusive over the last 30m (sustained 10m). Dual-AI review is repeatedly failing to produce a usable verdict."
           runbook: "Check provider health and circuit-breaker state (gittensory_ai_provider_failures_total / gittensory_ai_provider_circuit_open_total) and verify AI_PROVIDER credentials are still valid for every configured reviewer."
+
+      - alert: GittensoryAiReviewOnMergeFloorBypassAttempted
+        # A repo's .gittensory.yml tried to loosen the operator's onMerge/combine/reviewer-count floor and
+        # got clamped back to the operator's own configured minimum (#3901). A governance/config signal, not
+        # an operational outage, but same absolute-increase style as GittensoryAiProviderCircuitOpen above:
+        # any occurrence (> 0) over 1h is worth a look, sustained 5m so a single instantaneous blip doesn't
+        # immediately page.
+        expr: increase(gittensory_ai_review_onmerge_clamped_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "a repo's review-floor clamp fired"
+          description: "{{ $value | printf \"%.0f\" }} onMerge/combine/reviewer-count clamp event(s) over the last 1h — a repo config tried to loosen below the operator's configured floor."
+          runbook: "Check which repo's .gittensory.yml requested the loosened setting (gittensory_ai_review_onmerge_clamped_total is labeled by mode) and confirm whether that repo's floor should be adjusted or the request declined."
 
       - alert: GittensoryAiProviderCircuitOpen
         # A provider's circuit breaker opens after AI_PROVIDER_FAILURE_THRESHOLD consecutive failures and

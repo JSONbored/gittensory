@@ -28,17 +28,86 @@ const files: ChangedFileSummaryInput[] = [
   { path: "package-lock.json", additions: 100, deletions: 50 },
 ];
 
+describe("buildChangedFilesSummaryCollapsible per-file diff links (#2157)", () => {
+  const context = { repoFullName: "acme/widgets", pullNumber: 42 };
+
+  it("renders one row per file with a View diff link when context is provided", () => {
+    const c = buildChangedFilesSummaryCollapsible(files, context);
+    expect(c).not.toBeNull();
+    expect(c?.body).toContain("| File | Added | Removed | |");
+    expect(c?.body).toContain(
+      "| `src/app.ts` | +40 | -10 | [View diff](https://github.com/acme/widgets/pull/42/files#diff-",
+    );
+    expect(c?.body).not.toContain("| Source | 2 | +45 | -10 |");
+  });
+
+  it("sorts same-category files by path when context is provided", () => {
+    const c = buildChangedFilesSummaryCollapsible(
+      [
+        { path: "src/z.ts", additions: 1, deletions: 0 },
+        { path: "src/a.ts", additions: 2, deletions: 0 },
+      ],
+      context,
+    );
+    const body = c?.body ?? "";
+    expect(body.indexOf("src/a.ts")).toBeLessThan(body.indexOf("src/z.ts"));
+  });
+
+  it("escapes adversarial path characters in per-file rows", () => {
+    const c = buildChangedFilesSummaryCollapsible(
+      [{ path: "src/weird\\path|`file<1>.ts", additions: 1, deletions: 0 }],
+      context,
+    );
+    expect(c?.body).toContain("&lt;1&gt;");
+    expect(c?.body).toContain("\\`");
+    expect(c?.body).toContain("\\|");
+    expect(c?.body).toContain("\\\\");
+  });
+
+  it("omits the View diff link when the path or repo context cannot be anchored", () => {
+    const unanchored = buildChangedFilesSummaryCollapsible([{ path: "   ", additions: 1, deletions: 0 }], context);
+    expect(unanchored?.body).toContain("| `   ` | +1 | -0 | — |");
+
+    const badRepo = buildChangedFilesSummaryCollapsible(
+      [{ path: "src/a.ts", additions: 1, deletions: 0 }],
+      { repoFullName: "not-a-repo", pullNumber: 1 },
+    );
+    expect(badRepo?.body).toContain("| `src/a.ts` | +1 | -0 | — |");
+  });
+
+  it("orders per-file rows source-first across categories when context is provided", () => {
+    const c = buildChangedFilesSummaryCollapsible(
+      [
+        { path: "docs/readme.md", additions: 1, deletions: 0 },
+        { path: "src/app.ts", additions: 2, deletions: 0 },
+      ],
+      context,
+    );
+    const body = c?.body ?? "";
+    expect(body.indexOf("src/app.ts")).toBeLessThan(body.indexOf("docs/readme.md"));
+  });
+
+  it("escapes a greater-than character in per-file paths", () => {
+    const c = buildChangedFilesSummaryCollapsible([{ path: "src/file>name.ts", additions: 1, deletions: 0 }], context);
+    expect(c?.body).toContain("&gt;");
+  });
+
+  it("keeps collapsed category rows without links when context is omitted", () => {
+    const c = buildChangedFilesSummaryCollapsible(files);
+    expect(c?.body).toContain("| Source | 2 | +45 | -10 |");
+    expect(c?.body).not.toContain("[View diff]");
+  });
+});
+
 describe("buildChangedFilesSummaryCollapsible (#2145)", () => {
   it("groups changed files by category with file counts and +/- totals", () => {
     const c = buildChangedFilesSummaryCollapsible(files);
     expect(c).not.toBeNull();
     expect(c?.title).toBe("Changed files");
     expect(c?.body).toContain("| Category | Files | Added | Removed |");
-    // Two source files collapse into ONE row with summed totals (45 = 40 + 5, 10 = 10 + 0).
     expect(c?.body).toContain("| Source | 2 | +45 | -10 |");
     expect(c?.body).toContain("| Test | 1 | +20 | -2 |");
     expect(c?.body).toContain("| Docs | 1 | +3 | -1 |");
-    // A lockfile classifies as generated.
     expect(c?.body).toContain("| Generated | 1 | +100 | -50 |");
   });
 
@@ -78,7 +147,18 @@ describe("buildUnifiedCommentBody changedFilesSummary wiring (#1957 / #2145)", (
     footerMarkdown: footer,
   };
 
-  it("appends the Changed files section when changedFilesSummary is present + non-empty", () => {
+  it("appends per-file View diff links when changedFilesSummaryContext is present (#2157)", () => {
+    const body = buildUnifiedCommentBody({
+      ...base,
+      changedFilesSummary: files,
+      changedFilesSummaryContext: { repoFullName: "acme/widgets", pullNumber: 42 },
+    });
+    expect(body).toContain("Changed files");
+    expect(body).toContain("[View diff](https://github.com/acme/widgets/pull/42/files#diff-");
+    expect(body).not.toContain("| Source | 2 | +45 | -10 |");
+  });
+
+  it("appends the grouped Changed files section when changedFilesSummary is present without context (#2145)", () => {
     const body = buildUnifiedCommentBody({ ...base, changedFilesSummary: files });
     expect(body).toContain("Changed files");
     expect(body).toContain("| Source | 2 | +45 | -10 |");

@@ -229,9 +229,15 @@ services:
       resources:
         limits:
           memory: "${POSTGRES_MEM_LIMIT:-2g}"
+    # start_period (#3898): pg_isready's failed-probe count applies from the very first check unless a
+    # start_period grace is set. A genuinely cold initdb (first pull, slow disk, low-memory VPS, creating
+    # the pgvector extension) can plausibly take longer than the 5x10s=50s this healthcheck otherwise
+    # allows before Docker marks the service unhealthy and fails every downstream service_healthy gate.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gittensory"]
       interval: 10s
+      timeout: 5s
+      start_period: 20s
       retries: 5
 
   # ── PgBouncer (--profile pgbouncer) ───────────────────────────────────────
@@ -264,6 +270,7 @@ services:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432"]
       interval: 10s
       timeout: 5s
+      start_period: 15s
       retries: 5
 
   # Postgres internals exporter. Starts with the Postgres profiles so Prometheus can scrape it when
@@ -520,7 +527,12 @@ services:
     expose:
       - "9093" # in-network only; reach the UI/API via `docker compose port` or a tunnel
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Mounts the whole host directory (not just the yml) so an operator's private overrides are visible
+      # inside the container at the same paths, with no docker-compose.yml edit needed per file added:
+      # a real receiver config (e.g. ./alertmanager/alertmanager.local, gitignored via the *.local rule
+      # above -- point docker-compose.override.yml's alertmanager `command:` at it) and/or a secret file a
+      # local config's webhook_url_file /etc/alertmanager/<name> references.
+      - ./alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
@@ -797,6 +809,15 @@ services:
       # /var/run/docker.sock grants container-escape risk and is intentionally omitted.
     volumes:
       - runner-work:/tmp/runner
+    # A memory ceiling so a single runaway CI job can't exhaust host RAM and take down the app alongside
+    # it (#3893) -- same universal-default treatment every other service in this file already has. This
+    # is independent of the CPU-priority tuning above: that's host-specific (vCPU count, replica count)
+    # and stays an opt-in docker-compose.override.yml pattern, but a memory cap needs no host-specific
+    # sizing to be a safe default.
+    deploy:
+      resources:
+        limits:
+          memory: "${RUNNER_MEM_LIMIT:-2g}"
 
   # ── Backups (--profile backup) ────────────────────────────────────────────
   # Active database backup (Postgres pg_dump or WAL-safe SQLite online backup) + a Qdrant snapshot, on a loop

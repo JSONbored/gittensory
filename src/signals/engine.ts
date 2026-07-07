@@ -24,9 +24,11 @@ import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import type { FocusManifestReviewConfig, ReviewFieldKey } from "./focus-manifest";
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
+import { extractLinkedIssueNumbers } from "../db/repositories";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { labelMatchesPattern, projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
 import { hasLocalTestEvidence, hasValidationNote, isTestPath } from "./test-evidence";
+import { isCodeFile, isTestFile } from "./path-matchers";
 import { isFailingCheckSummary } from "./local-branch";
 import { isDuplicateClusterWinnerByClaim } from "./duplicate-winner";
 import { PREFLIGHT_LIMITS } from "./preflight-limits";
@@ -5312,18 +5314,6 @@ export function tokenize(value: string): string[] {
     .filter((term) => term.length > 2 && !STOPWORDS.has(term));
 }
 
-function extractLinkedIssueNumbers(text: string, repoFullName: string): number[] {
-  const numbers = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)].map((match) => Number(match[1]));
-  // GitHub also auto-closes via the fully-qualified `KEYWORD owner/repo#N` form (e.g. Renovate/Dependabot bodies).
-  // Count it only when owner/repo case-insensitively equals THIS repo — a reference to a different repo closes an
-  // issue elsewhere, not here, so it must not spoof a same-repo link. Same `\b`-anchored keywords as above (#1988).
-  const target = repoFullName.toLowerCase();
-  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+([\w.-]+\/[\w.-]+)#(\d+)\b/gi)) {
-    if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
-  }
-  return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];
-}
-
 function outcomeSuccessPatterns(history: ContributorOutcomeHistory): OutcomePattern[] {
   const patterns: OutcomePattern[] = [];
   for (const outcome of history.repoOutcomes) {
@@ -5537,25 +5527,6 @@ function sanitizeOutcomeDimensionKey(key: string): string {
     .replace(/[\\`*_{}[\]()#+>|]/g, "\\$&")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function isCodeFile(file: string): boolean {
-  // Mirrors isCodeFile in local-branch.ts — kept in sync (cs/swift/groovy/php and C/C++/Objective-C added
-  // so native/C#/Swift/Groovy/PHP source counts as code, matching the test conventions
-  // isTestPath already recognizes; vue/svelte/astro match rag.ts, visual paths, and isCodePath;
-  // cc/hpp complete the C++ extension set alongside cpp/c/h; dart matches rag.ts and
-  // test-evidence's *_test.dart test convention).
-  return (
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy|php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i.test(
-      file,
-    ) && !isTestFile(file)
-  );
-}
-
-function isTestFile(file: string): boolean {
-  // Single-sourced with the canonical matcher (test-evidence.ts isTestPath), mirroring local-branch.ts's
-  // isTestFile — so cy/e2e, __snapshots__, and module extensions stay in sync and can't drift.
-  return isTestPath(file);
 }
 
 function riskRank(risk: CollisionCluster["risk"]): number {

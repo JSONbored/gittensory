@@ -803,7 +803,7 @@ export async function refreshContributorActivity(
         openPullRequests: openPullRequestCount,
         issues: issueCount,
         stalePullRequests: openNodes.filter((node) => node.updatedAt && daysSince(node.updatedAt) >= 14).length,
-        unlinkedPullRequests: openNodes.filter((node) => extractLinkedIssueNumbers(node.body ?? "").length === 0).length,
+        unlinkedPullRequests: openNodes.filter((node) => extractLinkedIssueNumbers(node.body ?? "", repo.fullName).length === 0).length,
         dominantLabels: topItems(labelNames, 8),
         lastActivityAt: latestDate([
           ...compactNodes(allPullRequests).map((node) => node.updatedAt ?? node.mergedAt),
@@ -2663,17 +2663,57 @@ export async function fetchNamedCheckRunConclusion(
 }
 
 // Minimal structural shape the CI reducer needs from a check-run — a superset of the REST GitHubCheckRunPayload
-// (so REST payloads assign directly) AND buildable from the GraphQL CheckRun node (which has no `id`).
+// (so REST payloads assign directly) AND buildable from the GraphQL CheckRun node (which has no `id`). `started_at`
+// is carried specifically so the reducer can dedupe a re-run job's stale entry (see dedupeLatestCheckRunsByName) —
+// both the REST payload and the GraphQL query populate it, so it is the one recency signal available on EITHER path.
 type LiveCiCheckRun = {
   name: string;
   status?: string | null;
   conclusion?: string | null;
   details_url?: string | null;
+  started_at?: string | null;
   output?: { title?: unknown; summary?: unknown };
   app?: { slug?: string | null } | null;
 };
 type LiveCiStatus = { context?: string | null; state?: string | null; description?: string | null; target_url?: string | null };
 type LiveCiSuite = { status?: string | null; app?: { slug?: string | null } | null };
+
+/**
+ * Collapse re-run duplicates so classification only ever sees ONE entry per check-run `name`. GitHub's check-runs
+ * API (both `/check-runs` REST and the GraphQL `statusCheckRollup`) can return MULTIPLE entries with the same name
+ * when a job is re-run (e.g. "Re-run failed jobs" after a flake) — the stale run is NOT removed or replaced, it is
+ * left in the list alongside the new one. Without this step the classification loop below would push the stale
+ * run's failure into `failingDetails` even though the same-named job now currently passes, resolving `ciState` to
+ * "failed" on a commit whose CI is actually green (reproduced empirically against a real commit in this repo: a
+ * "Deploy UI preview version" check-run appeared twice, once `conclusion: "failure"` from the original run and once
+ * `conclusion: "skipped"` from the re-run, and the un-deduped reducer read it as failed).
+ *
+ * Tiebreak by `started_at` (ISO-8601, string-comparable in chronological order) when BOTH candidates have one —
+ * GitHub sets `started_at` at check-run creation time, so it is a direct recency signal available on both the REST
+ * payload and (once queried) the GraphQL node; unlike a numeric `id`, it exists on the shared `LiveCiCheckRun` shape
+ * the GraphQL path can actually populate (GraphQL check-run nodes have no exposed `id`). When either candidate is
+ * missing `started_at` (a queued run that has not started yet has none), array order is the fallback: GitHub does
+ * not document a stable ordering contract for `/check-runs`, so this deliberately does not assume "returned last is
+ * newest" as a general rule — it only breaks a genuine tie, and last-standing is at least as good a default as
+ * first-standing when no timestamp is available.
+ */
+function dedupeLatestCheckRunsByName(checkRuns: ReadonlyArray<LiveCiCheckRun>): LiveCiCheckRun[] {
+  const latestByName = new Map<string, LiveCiCheckRun>();
+  for (const run of checkRuns) {
+    const existing = latestByName.get(run.name);
+    if (!existing) {
+      latestByName.set(run.name, run);
+      continue;
+    }
+    if (run.started_at && existing.started_at) {
+      if (run.started_at >= existing.started_at) latestByName.set(run.name, run);
+    } else {
+      // No comparable timestamp on one or both sides — keep the later array entry (see doc above).
+      latestByName.set(run.name, run);
+    }
+  }
+  return [...latestByName.values()];
+}
 
 /**
  * Pure reduction of a head SHA's check-runs + classic statuses (+ a lazily-fetched check-suite backstop) into the
@@ -2682,7 +2722,11 @@ type LiveCiSuite = { status?: string | null; app?: { slug?: string | null } | nu
  * differs (#1941), which is what keeps the flag-gated GraphQL path semantically equivalent to the proven REST one.
  * `fetchSuites` is invoked ONLY when the cheaper sources are fully settled (no failure, no pending, no incomplete
  * read), mirroring the REST path's conditional suites read so neither path pays for it on an already-decided PR; it
- * returns the suite list, or null when that read is unreadable (fail-closed).
+ * returns the suite list, or null when that read is unreadable (fail-closed). Check-runs are deduped by name
+ * (`dedupeLatestCheckRunsByName`) before classification so a re-run job's stale duplicate can never masquerade as a
+ * current failure; classic commit-statuses are NOT deduped here because GitHub's Combined Status API is documented
+ * to already return exactly one entry per unique context (the most recent), so this duplicate-name failure mode
+ * does not apply to `statuses`.
  */
 async function reduceLiveCiAggregate(
   env: Env,
@@ -2708,8 +2752,10 @@ async function reduceLiveCiAggregate(
   let sawFirstPartyCheckRun = false;
   const seenContextNames = new Set<string>();
 
-  // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks).
-  for (const run of checkRuns) {
+  // 1) Check-runs (GitHub Actions jobs, CodeQL, app checks). Deduped by name FIRST (dedupeLatestCheckRunsByName)
+  // so a re-run job's stale duplicate entry can never contribute its own failingDetails/pending signal alongside
+  // the current one.
+  for (const run of dedupeLatestCheckRunsByName(checkRuns)) {
     seenContextNames.add(run.name); // mark BEFORE bot-check skip: a bot-owned required context is "seen"
     if ((run.app?.slug ?? "").toLowerCase() === "github-actions") sawFirstPartyCheckRun = true;
     if (isOwnGitHubAppCheckRun(env, run)) continue; // never wait on the bot's own Gate/Context check-runs
@@ -2906,7 +2952,7 @@ export async function fetchLiveCiAggregateViaGraphQl(
   if (!headSha || !token) return null;
   const [owner, name] = repoFullName.split("/");
   if (!owner || !name) return null;
-  const query = `query GittensoryLiveCiRollup { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { object(oid: ${JSON.stringify(headSha)}) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status detailsUrl title summary checkSuite { app { slug } } } ... on StatusContext { context state description targetUrl } } pageInfo { hasNextPage } } } checkSuites(first: 100) { nodes { status app { slug } } } } } } }`;
+  const query = `query GittensoryLiveCiRollup { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { object(oid: ${JSON.stringify(headSha)}) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status startedAt detailsUrl title summary checkSuite { app { slug } } } ... on StatusContext { context state description targetUrl } } pageInfo { hasNextPage } } } checkSuites(first: 100) { nodes { status app { slug } } } } } } }`;
   const result = await githubGraphQl<{
     data?: {
       repository?: {
@@ -2918,6 +2964,7 @@ export async function fetchLiveCiAggregateViaGraphQl(
                 name?: string | null;
                 conclusion?: string | null;
                 status?: string | null;
+                startedAt?: string | null;
                 detailsUrl?: string | null;
                 title?: string | null;
                 summary?: string | null;
@@ -2957,13 +3004,16 @@ export async function fetchLiveCiAggregateViaGraphQl(
   const statuses: LiveCiStatus[] = [];
   for (const node of contexts?.nodes ?? []) {
     if (node.__typename === "CheckRun") {
-      // Field-name mapping only (detailsUrl→details_url, title/summary→output.*, checkSuite.app→app); the reducer
-      // lowercases GraphQL's UPPERCASE conclusion/status enums, so no case handling is needed here.
+      // Field-name mapping only (detailsUrl→details_url, startedAt→started_at, title/summary→output.*,
+      // checkSuite.app→app); the reducer lowercases GraphQL's UPPERCASE conclusion/status enums, so no case
+      // handling is needed here. `started_at` is carried through so reduceLiveCiAggregate's re-run dedup
+      // (dedupeLatestCheckRunsByName) has the same recency signal on this path as it does on REST.
       checkRuns.push({
         name: node.name ?? "",
         conclusion: node.conclusion ?? null,
         status: node.status ?? null,
         details_url: node.detailsUrl ?? null,
+        started_at: node.startedAt ?? null,
         output: { title: node.title ?? undefined, summary: node.summary ?? undefined },
         app: { slug: node.checkSuite?.app?.slug ?? null },
       });
@@ -3130,6 +3180,52 @@ export async function fetchLivePullRequest(
 ): Promise<GitHubPullRequestPayload | undefined> {
   const result = await fetchLivePullRequestResult(env, repoFullName, prNumber, token, admissionKey);
   return result.status === "ok" ? result.data : undefined;
+}
+
+// Bounded at 1000 open PRs (10 pages of 100) — far beyond any real repo's open-PR count; a pathological repo
+// can't spin this loop forever.
+const RECONCILE_OPEN_PRS_MAX_PAGES = 10;
+
+export type OpenPrReconciliationResult = {
+  repoFullName: string;
+  remoteOpenCount: number;
+  localOpenCount: number;
+  /** PR numbers GitHub reports open that have NO local pull_requests row at all — a webhook silently lost. */
+  missingNumbers: number[];
+};
+
+/**
+ * Fast open-PR reconciliation (#audit-open-pr-reconciliation): a CHEAP list-only GitHub read (PR numbers only,
+ * via the Link-header-paginated `/pulls?state=open` list — never a per-PR detail fetch) diffed against the
+ * local `pull_requests` table. Exists to catch a silently-lost "PR opened" webhook (#3782/#3793, 2026-07-06:
+ * two contributor PRs had zero trace anywhere for ~2 hours) within minutes, instead of waiting on
+ * `backfillRegisteredRepositories`'s 6-hour freshness window.
+ *
+ * FAIL-OPEN: a total read failure (repo not found, or the very first list page erroring) returns an all-zero,
+ * empty-`missingNumbers` result — it must never falsely report every local PR as "missing" just because GitHub
+ * was briefly unreachable. A LATER page failing mid-crawl keeps the pages already fetched (a partial remote
+ * list can only under-report divergence, never wrongly flag a real local PR as missing).
+ */
+export async function reconcileOpenPullRequests(env: Env, repoFullName: string): Promise<OpenPrReconciliationResult> {
+  const empty: OpenPrReconciliationResult = { repoFullName, remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] };
+  const repo = await getRepository(env, repoFullName);
+  if (!repo) return empty;
+  const token = await tokenForRepo(env, repo);
+  const admissionKey = repoAdmissionKeyForToken(env, repo, token);
+  const remoteNumbers: number[] = [];
+  for (let page = 1; page <= RECONCILE_OPEN_PRS_MAX_PAGES; page += 1) {
+    const result = await githubJsonWithHeaders<Array<{ number: number }>>(env, repoFullName, `/pulls?state=open&per_page=100&page=${page}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
+    if (!result) {
+      if (page === 1) return empty;
+      break;
+    }
+    remoteNumbers.push(...result.data.map((pr) => pr.number));
+    if (!hasNextPage(result.link)) break;
+  }
+  const localOpen = await listOpenPullRequests(env, repoFullName);
+  const localNumbers = new Set(localOpen.map((pr) => pr.number));
+  const missingNumbers = remoteNumbers.filter((number) => !localNumbers.has(number));
+  return { repoFullName, remoteOpenCount: remoteNumbers.length, localOpenCount: localOpen.length, missingNumbers };
 }
 
 // #2537: durable, webhook-invalidated cache for the bare PR-state read (GET /pulls/{n}). Unlike the request-local
@@ -3869,7 +3965,7 @@ function toRecentMergedPullRequest(repoFullName: string, pr: GitHubPullRequestPa
     htmlUrl: pr.html_url,
     mergedAt: pr.merged_at,
     labels: (pr.labels ?? []).flatMap((label) => (label.name ? [label.name] : [])),
-    linkedIssues: extractLinkedIssueNumbers(pr.body ?? ""),
+    linkedIssues: extractLinkedIssueNumbers(pr.body ?? "", repoFullName),
     changedFiles: files.map((file) => file.filename),
     payload: pr as unknown as Record<string, JsonValue>,
   };
