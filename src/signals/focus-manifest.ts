@@ -25,6 +25,8 @@ export {
   normalizeReadinessGateMode,
   parseFocusManifest,
   parseFocusManifestContent,
+  parseReviewConfigMapping,
+  overlayReviewConfig,
   repoDocGenerationConfigToJson,
   reviewConfigToJson,
   reviewRecapConfigToJson,

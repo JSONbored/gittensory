@@ -64,7 +64,9 @@ describe("the two examples together demonstrate the documented overlay behavior"
     mkdirSync(join(dir, "owner__repo"));
     writeFileSync(join(dir, "owner__repo", ".gittensory.yml"), readExample("repo-override.gittensory.yml"));
     const reader = makeLocalManifestReader(dir)!;
-    const manifest = parseFocusManifestContent(await reader("owner/repo"));
+    const result = await reader("owner/repo");
+    const content = typeof result === "string" ? result : result!.content!;
+    const manifest = parseFocusManifestContent(content);
 
     expect(manifest.gate.enabled).toBe(true); // set the same way in both files
     expect(manifest.gate.duplicates).toBe("block"); // inherited from global; repo-override never mentions it
@@ -85,7 +87,9 @@ describe("all three examples together demonstrate the documented shared-base ove
     mkdirSync(join(dir, "owner__repo"));
     writeFileSync(join(dir, "owner__repo", ".gittensory.yml"), readExample("repo-override.gittensory.yml"));
     const reader = makeLocalManifestReader(dir)!;
-    const manifest = parseFocusManifestContent(await reader("owner/repo"));
+    const result = await reader("owner/repo");
+    const content = typeof result === "string" ? result : result!.content!;
+    const manifest = parseFocusManifestContent(content);
 
     expect(manifest.review.tone).toBe("friendly-terse"); // inherited from the shared base; neither global nor repo-override mentions it
     expect(manifest.gate.duplicates).toBe("block"); // shared base and global agree; still inherited, not overridden

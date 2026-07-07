@@ -527,6 +527,10 @@ export type FocusManifestReviewConfig = {
    *  ONLY (#2173, for #1961): parsed + normalized here; the merge/close decision that reads this mode is a separate
    *  maintainer-only slice. null (default, absent) ⇒ byte-identical to today. */
   linkedIssueSatisfaction: LinkedIssueSatisfactionMode | null;
+  /** Runtime provenance when the container-private shared base (`review.shared_config`, #2046) filled review
+   *  fields from `GITTENSORY_REPO_CONFIG_DIR/_shared/.gittensory.yml`. Never parsed from maintainer YAML —
+   *  set by the private-config loader only. null (default) ⇒ no shared overlay was applied. */
+  sharedConfigSource: string | null;
 };
 
 /** `review.linkedIssueSatisfaction` modes (#2173). `off` = not evaluated (same as unset). */
@@ -847,7 +851,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -877,7 +881,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -1878,7 +1882,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -2014,7 +2018,157 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     pathFilters,
     preMergeChecks,
     labelingRules,
+    sharedConfigSource: null,
   };
+}
+
+function pickOverlayNullable<T>(override: T | null, base: T | null): T | null {
+  return override !== null ? override : base;
+}
+
+function pickOverlayStringList(override: readonly string[], base: readonly string[]): string[] {
+  return override.length > 0 ? [...override] : [...base];
+}
+
+function pickOverlayPartialRecord<T extends string>(
+  override: Partial<Record<T, boolean>>,
+  base: Partial<Record<T, boolean>>,
+): Partial<Record<T, boolean>> {
+  return { ...base, ...override };
+}
+
+function overlayMaxFindingsConfig(base: MaxFindingsConfig, override: MaxFindingsConfig): MaxFindingsConfig {
+  return {
+    blockers: pickOverlayNullable(override.blockers, base.blockers),
+    nits: pickOverlayNullable(override.nits, base.nits),
+  };
+}
+
+function overlayAutoReviewConfig(base: AutoReviewConfig, override: AutoReviewConfig): AutoReviewConfig {
+  return {
+    skipDrafts: pickOverlayNullable(override.skipDrafts, base.skipDrafts),
+    ignoreAuthors: pickOverlayStringList(override.ignoreAuthors, base.ignoreAuthors),
+    ignoreTitleKeywords: pickOverlayStringList(override.ignoreTitleKeywords, base.ignoreTitleKeywords),
+    skipLabels: pickOverlayStringList(override.skipLabels, base.skipLabels),
+    skipDocsOnly: pickOverlayNullable(override.skipDocsOnly, base.skipDocsOnly),
+    maxAddedLines: override.maxAddedLines > 0 ? override.maxAddedLines : base.maxAddedLines,
+    maxFiles: override.maxFiles > 0 ? override.maxFiles : base.maxFiles,
+    baseBranches: pickOverlayStringList(override.baseBranches, base.baseBranches),
+    autoPauseAfterReviewedCommits: pickOverlayNullable(override.autoPauseAfterReviewedCommits, base.autoPauseAfterReviewedCommits),
+  };
+}
+
+function overlaySelfHostAiModelConfig(base: SelfHostAiModelConfig, override: SelfHostAiModelConfig): SelfHostAiModelConfig {
+  return {
+    claudeModel: pickOverlayNullable(override.claudeModel, base.claudeModel),
+    claudeEffort: pickOverlayNullable(override.claudeEffort, base.claudeEffort),
+    codexModel: pickOverlayNullable(override.codexModel, base.codexModel),
+    codexEffort: pickOverlayNullable(override.codexEffort, base.codexEffort),
+    ollamaModel: pickOverlayNullable(override.ollamaModel, base.ollamaModel),
+    openaiModel: pickOverlayNullable(override.openaiModel, base.openaiModel),
+    openaiCompatibleModel: pickOverlayNullable(override.openaiCompatibleModel, base.openaiCompatibleModel),
+    anthropicModel: pickOverlayNullable(override.anthropicModel, base.anthropicModel),
+  };
+}
+
+function overlayVisualConfig(base: VisualConfig, override: VisualConfig): VisualConfig {
+  return {
+    preview: { urlTemplate: pickOverlayNullable(override.preview.urlTemplate, base.preview.urlTemplate) },
+    routes: {
+      paths: pickOverlayStringList(override.routes.paths, base.routes.paths),
+      maxRoutes: pickOverlayNullable(override.routes.maxRoutes, base.routes.maxRoutes),
+    },
+    themes: override.themes.length > 0 ? [...override.themes] : [...base.themes],
+    gif: override.gif ? override.gif : base.gif,
+  };
+}
+
+function computeReviewConfigPresent(review: Omit<FocusManifestReviewConfig, "present" | "sharedConfigSource">): boolean {
+  return (
+    review.footerText !== null ||
+    review.note !== null ||
+    review.profile !== null ||
+    review.tone !== null ||
+    review.securityFocus !== null ||
+    review.inlineComments !== null ||
+    review.fixHandoff !== null ||
+    review.autoMergeSummary !== null ||
+    review.suggestions !== null ||
+    review.changedFilesSummary !== null ||
+    review.effortScore !== null ||
+    review.testGeneration !== null ||
+    review.impactMap !== null ||
+    review.cultureProfile !== null ||
+    review.reviewMemory !== null ||
+    review.findingCategories !== null ||
+    review.inlineCommentsPerCategory !== null ||
+    review.minFindingSeverity !== null ||
+    maxFindingsPresent(review.maxFindings) ||
+    review.commentVerbosity !== null ||
+    review.pathInstructions.length > 0 ||
+    review.instructions !== null ||
+    review.excludePaths.length > 0 ||
+    review.pathFilters.length > 0 ||
+    review.preMergeChecks.length > 0 ||
+    autoReviewPresent(review.autoReview) ||
+    review.labelingRules.length > 0 ||
+    selfHostAiModelPresent(review.aiModel) ||
+    visualConfigPresent(review.visual) ||
+    review.linkedIssueSatisfaction !== null ||
+    Object.keys(review.fields).length > 0 ||
+    Object.keys(review.enrichmentAnalyzers).length > 0
+  );
+}
+
+/** Overlay a higher-priority `review:` config onto a shared/base layer (#2046). Per-field: override wins when set;
+ *  base fills gaps; defaults stay byte-identical. `sharedConfigSource` on the override is preserved when present. */
+export function overlayReviewConfig(
+  base: FocusManifestReviewConfig,
+  override: FocusManifestReviewConfig,
+): FocusManifestReviewConfig {
+  const merged: FocusManifestReviewConfig = {
+    footerText: pickOverlayNullable(override.footerText, base.footerText),
+    note: pickOverlayNullable(override.note, base.note),
+    fields: pickOverlayPartialRecord(override.fields, base.fields),
+    enrichmentAnalyzers: pickOverlayPartialRecord(override.enrichmentAnalyzers, base.enrichmentAnalyzers),
+    profile: pickOverlayNullable(override.profile, base.profile),
+    tone: pickOverlayNullable(override.tone, base.tone),
+    securityFocus: pickOverlayNullable(override.securityFocus, base.securityFocus),
+    inlineComments: pickOverlayNullable(override.inlineComments, base.inlineComments),
+    fixHandoff: pickOverlayNullable(override.fixHandoff, base.fixHandoff),
+    autoMergeSummary: pickOverlayNullable(override.autoMergeSummary, base.autoMergeSummary),
+    suggestions: pickOverlayNullable(override.suggestions, base.suggestions),
+    changedFilesSummary: pickOverlayNullable(override.changedFilesSummary, base.changedFilesSummary),
+    effortScore: pickOverlayNullable(override.effortScore, base.effortScore),
+    testGeneration: pickOverlayNullable(override.testGeneration, base.testGeneration),
+    impactMap: pickOverlayNullable(override.impactMap, base.impactMap),
+    cultureProfile: pickOverlayNullable(override.cultureProfile, base.cultureProfile),
+    reviewMemory: pickOverlayNullable(override.reviewMemory, base.reviewMemory),
+    findingCategories: pickOverlayNullable(override.findingCategories, base.findingCategories),
+    inlineCommentsPerCategory: pickOverlayNullable(override.inlineCommentsPerCategory, base.inlineCommentsPerCategory),
+    minFindingSeverity: pickOverlayNullable(override.minFindingSeverity, base.minFindingSeverity),
+    maxFindings: overlayMaxFindingsConfig(base.maxFindings, override.maxFindings),
+    commentVerbosity: pickOverlayNullable(override.commentVerbosity, base.commentVerbosity),
+    pathInstructions: override.pathInstructions.length > 0 ? [...override.pathInstructions] : [...base.pathInstructions],
+    instructions: pickOverlayNullable(override.instructions, base.instructions),
+    excludePaths: pickOverlayStringList(override.excludePaths, base.excludePaths),
+    pathFilters: pickOverlayStringList(override.pathFilters, base.pathFilters),
+    preMergeChecks: override.preMergeChecks.length > 0 ? [...override.preMergeChecks] : [...base.preMergeChecks],
+    autoReview: overlayAutoReviewConfig(base.autoReview, override.autoReview),
+    labelingRules: override.labelingRules.length > 0 ? [...override.labelingRules] : [...base.labelingRules],
+    aiModel: overlaySelfHostAiModelConfig(base.aiModel, override.aiModel),
+    visual: overlayVisualConfig(base.visual, override.visual),
+    linkedIssueSatisfaction: pickOverlayNullable(override.linkedIssueSatisfaction, base.linkedIssueSatisfaction),
+    sharedConfigSource: override.sharedConfigSource ?? base.sharedConfigSource,
+    present: false,
+  };
+  merged.present = computeReviewConfigPresent(merged);
+  return merged;
+}
+
+/** Parse a raw `review:` mapping value. Exported for the private-config shared overlay (#2046). */
+export function parseReviewConfigMapping(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
+  return parseReviewConfig(value, warnings);
 }
 
 function maxFindingsPresent(config: MaxFindingsConfig): boolean {

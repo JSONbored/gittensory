@@ -3,6 +3,7 @@ import type { JsonValue } from "../types";
 import { nowIso } from "../utils/json";
 import { contentLaneConfigToJson, featuresConfigToJson, gateConfigToJson, MAX_FOCUS_MANIFEST_BYTES, parseFocusManifest, parseFocusManifestContent, repoDocGenerationConfigToJson, reviewConfigToJson, reviewRecapConfigToJson, settingsOverrideToJson, type FocusManifest, type FocusManifestSource, type RepoReviewContext } from "./focus-manifest";
 import { GITTENSORY_REPO_FOCUS_MANIFEST_YAML, resolveGittensorySelfRepoFullName } from "../config/gittensory-repo-focus-manifest";
+import type { LocalManifestLoadResult } from "../selfhost/private-config";
 
 export const REPO_FOCUS_MANIFEST_SIGNAL = "repo-focus-manifest";
 export const REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL = "repo-public-focus-manifest";
@@ -19,8 +20,9 @@ export const MANIFEST_FILE_CANDIDATES = [
 /**
  * Async source for the raw manifest text of a single repo. Returns null when no manifest is
  * published. Allows tests and the persisted-record path to swap out the public-GitHub fetcher.
+ * Self-host readers may return {@link LocalManifestLoadResult} with `review.shared_config` provenance (#2046).
  */
-export type RepoFocusManifestFetcher = (repoFullName: string) => Promise<string | null>;
+export type RepoFocusManifestFetcher = (repoFullName: string) => Promise<string | LocalManifestLoadResult | null>;
 
 /**
  * Optional container-private per-repo config reader (self-host GITTENSORY_REPO_CONFIG_DIR). When registered it
@@ -125,7 +127,20 @@ async function loadRepoFocusManifestWithCachePolicy(
   // (contributor-preview) path, and never persisted — so private policy can't leak into previews or the cache.
   if (!cachePolicy.publicOnly && localManifestReader) {
     const localRaw = await localManifestReader(repoFullName);
-    if (localRaw !== null) return parseFocusManifestContent(localRaw, "api_record");
+    const localLoad = normalizeLocalManifestFetch(localRaw);
+    if (localLoad.content !== null) {
+      const manifest = parseFocusManifestContent(localLoad.content, "api_record");
+      if (localLoad.sharedConfigSource || localLoad.warnings.length > 0) {
+        return {
+          ...manifest,
+          review: localLoad.sharedConfigSource
+            ? { ...manifest.review, sharedConfigSource: localLoad.sharedConfigSource }
+            : manifest.review,
+          warnings: localLoad.warnings.length > 0 ? [...manifest.warnings, ...localLoad.warnings] : manifest.warnings,
+        };
+      }
+      return manifest;
+    }
   }
   const fetcher = options.fetcher ?? fetchRepoFocusManifestFile;
   const maxAgeMs = options.maxAgeMs ?? REPO_FOCUS_MANIFEST_MAX_AGE_MS;
@@ -136,6 +151,7 @@ async function loadRepoFocusManifestWithCachePolicy(
   let manifest: FocusManifest;
   try {
     let content = await fetcher(repoFullName);
+    if (content !== null && typeof content === "object") content = content.content;
     if ((content === null || content === undefined) && isGittensorySelfRepo(repoFullName, env)) {
       content = GITTENSORY_REPO_FOCUS_MANIFEST_YAML;
     }
@@ -297,4 +313,10 @@ function snapshotAgeMs(generatedAt: string | null | undefined): number {
 
 function isGittensorySelfRepo(repoFullName: string, env: Env): boolean {
   return repoFullName.toLowerCase() === resolveGittensorySelfRepoFullName(env).toLowerCase();
+}
+
+function normalizeLocalManifestFetch(raw: string | LocalManifestLoadResult | null): LocalManifestLoadResult {
+  if (raw === null) return { content: null, sharedConfigSource: null, warnings: [] };
+  if (typeof raw === "string") return { content: raw, sharedConfigSource: null, warnings: [] };
+  return raw;
 }

@@ -162,7 +162,9 @@ folded across one more layer; it is not a new merge algorithm.
 behavior is byte-identical to the pre-#1959 2-layer chain. A malformed or unreadable shared file
 fails safe exactly like a malformed per-repo or global file always has: it is dropped from the
 merge and the remaining, still-valid layers combine as if it were never mounted — a broken shared
-base never blocks a review.
+base never blocks a review. When a shared `review:` block contributes, the parsed manifest carries
+`review.sharedConfigSource` (runtime provenance only, #2046) with the relative path of the shared
+file that supplied the base layer.
 
 ### Example 4 — shared base + global default + a per-repo override, all three present
 

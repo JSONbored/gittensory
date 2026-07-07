@@ -501,4 +501,31 @@ describe("focus-manifest loader — container-private config (self-host)", () =>
     expect(manifest.source).toBe("repo_file");
     expect(manifest.wantedPaths).toEqual(["src/"]);
   });
+
+  it("threads review.shared_config provenance from the local reader into the parsed manifest (#2046)", async () => {
+    const env = createTestEnv();
+    setLocalManifestReader(async () => ({
+      content: JSON.stringify({ review: { profile: "assertive" } }),
+      sharedConfigSource: "_shared/.gittensory.yml",
+      warnings: [],
+    }));
+    const manifest = await loadRepoFocusManifest(env, "owner/private");
+    expect(manifest.review.profile).toBe("assertive");
+    expect(manifest.review.sharedConfigSource).toBe("_shared/.gittensory.yml");
+  });
+
+  it("appends private-config warnings without sharedConfigSource (#2046)", async () => {
+    const env = createTestEnv();
+    setLocalManifestReader(async () => ({
+      content: "wantedPaths:\n  - src/\n",
+      sharedConfigSource: null,
+      warnings: ["Container-private shared base manifest (`review.shared_config`) is malformed or oversized; ignoring it and continuing (#2046)."],
+    }));
+    const manifest = await loadRepoFocusManifest(env, "owner/private");
+    expect(manifest.wantedPaths).toEqual(["src/"]);
+    expect(manifest.review.sharedConfigSource).toBeNull();
+    expect(manifest.warnings).toContain(
+      "Container-private shared base manifest (`review.shared_config`) is malformed or oversized; ignoring it and continuing (#2046).",
+    );
+  });
 });

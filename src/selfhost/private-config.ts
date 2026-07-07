@@ -90,13 +90,46 @@ export function localConfigCandidates(repoFullName: string): string[] {
 /** Read the first candidate that exists, trying each in order; null when none do. A read error (ENOENT or
  *  otherwise unreadable) is swallowed so the next candidate is tried. */
 async function readFirstExisting(base: string, candidates: string[]): Promise<string | null> {
+  const hit = await readFirstExistingWithPath(base, candidates);
+  return hit?.text ?? null;
+}
+
+/** Like {@link readFirstExisting}, but also returns the winning relative candidate path (for provenance). */
+async function readFirstExistingWithPath(
+  base: string,
+  candidates: string[],
+): Promise<{ text: string; path: string } | null> {
   for (const candidate of candidates) {
     try {
-      return await readFile(resolve(base, candidate), "utf8");
+      return { text: await readFile(resolve(base, candidate), "utf8"), path: candidate };
     } catch {
       // ENOENT / unreadable → try the next candidate
     }
   }
+  return null;
+}
+
+export type LocalManifestLoadResult = {
+  content: string | null;
+  /** Relative path under GITTENSORY_REPO_CONFIG_DIR when a shared-base `review:` block contributed (#2046). */
+  sharedConfigSource: string | null;
+  warnings: string[];
+};
+
+const SHARED_BASE_MALFORMED_WARNING =
+  "Container-private shared base manifest (`review.shared_config`) is malformed or oversized; ignoring it and continuing (#2046).";
+
+type ConfigLayerKind = "shared" | "global" | "repo";
+
+function stripReviewKey(mapping: Record<string, unknown>): Record<string, unknown> {
+  const { review: _review, ...rest } = mapping;
+  return rest;
+}
+
+function extractReviewMapping(mapping: Record<string, unknown>): Record<string, unknown> | null {
+  const { review } = mapping;
+  if (review === undefined || review === null) return null;
+  if (typeof review === "object" && !Array.isArray(review)) return review as Record<string, unknown>;
   return null;
 }
 
@@ -137,33 +170,51 @@ export function mergeConfigOverlay(base: unknown, override: unknown): unknown {
   return merged;
 }
 
-/** Combine any number of config-text layers, given in ASCENDING priority order (lowest first, e.g.
- *  `[sharedText, globalText, repoText]` — #1959), into the raw text `parseFocusManifestContent` should parse.
- *  `null` entries (a layer whose file simply doesn't exist) are ignored outright. Every remaining, present layer is
- *  tolerantly parsed via {@link parseConfigMapping}; layers that parse as a mapping are folded left-to-right with
- *  {@link mergeConfigOverlay} (each later — higher-priority — layer overlays every earlier one), so a 3-way fold
- *  reduces to exactly the existing 2-way "per-repo overlays global" semantics when only 2 layers are present, and to
- *  a single file's raw text when only 1 is. A present-but-unparseable layer (malformed, oversized, or a parsed
- *  non-mapping value) is DROPPED from the fold — never blocks, never discards a still-valid sibling's policy —
- *  which is why fewer than 2 layers may end up parsed even when more than 2 are present on disk. With 0 parsed
- *  layers, the highest-priority PRESENT layer's raw text is returned unchanged (matching the original
- *  single-candidate priority, so a fully-broken set degrades exactly like a single malformed manifest always has).
- *  With exactly 1 parsed layer, that layer's own raw text is returned unchanged — never re-serialized — so a lone
- *  valid file's formatting/comments survive untouched, identical to the pre-#1959 "only one side present" case.
- *  Only 2+ successfully parsed layers are actually re-serialized as merged JSON. */
-function combineConfigLayers(layersAscendingPriority: (string | null)[]): string | null {
-  const present = layersAscendingPriority.filter((text): text is string => text !== null);
-  if (present.length === 0) return null;
-  const parsedLayers: { text: string; mapping: Record<string, unknown> }[] = [];
-  for (const text of present) {
-    const mapping = parseConfigMapping(text);
-    if (mapping) parsedLayers.push({ text, mapping });
+/** Combine private-config layers with `review.shared_config` provenance (#2046). Non-`review` keys still deep-merge
+ *  via {@link mergeConfigOverlay}; the `review` block is folded separately so provenance + warnings stay accurate. */
+function combineConfigLayersWithMeta(
+  layersAscendingPriority: Array<{ text: string | null; kind: ConfigLayerKind; sourcePath?: string | null }>,
+): LocalManifestLoadResult {
+  const warnings: string[] = [];
+  let sharedConfigSource: string | null = null;
+  const present = layersAscendingPriority.filter((layer): layer is { text: string; kind: ConfigLayerKind; sourcePath?: string | null } => layer.text !== null);
+  if (present.length === 0) return { content: null, sharedConfigSource: null, warnings };
+
+  const sharedLayer = present.find((layer) => layer.kind === "shared");
+  if (sharedLayer && parseConfigMapping(sharedLayer.text) === null) warnings.push(SHARED_BASE_MALFORMED_WARNING);
+
+  const parsedLayers: Array<{ text: string; kind: ConfigLayerKind; mapping: Record<string, unknown>; sourcePath: string | null }> = [];
+  for (const layer of present) {
+    const mapping = parseConfigMapping(layer.text);
+    if (mapping) parsedLayers.push({ text: layer.text, kind: layer.kind, mapping, sourcePath: layer.sourcePath ?? null });
   }
-  if (parsedLayers.length === 0) return present[present.length - 1]!; // none parsed → highest-priority present layer, raw
-  if (parsedLayers.length === 1) return parsedLayers[0]!.text; // exactly one parsed → its raw text, unchanged
-  let merged: unknown = parsedLayers[0]!.mapping;
-  for (const layer of parsedLayers.slice(1)) merged = mergeConfigOverlay(merged, layer.mapping);
-  return JSON.stringify(merged);
+
+  if (parsedLayers.length === 0) {
+    return { content: present[present.length - 1]!.text, sharedConfigSource: null, warnings };
+  }
+  if (parsedLayers.length === 1) {
+    const only = parsedLayers[0]!;
+    if (only.kind === "shared" && extractReviewMapping(only.mapping) && only.sourcePath) {
+      sharedConfigSource = only.sourcePath;
+    }
+    return { content: only.text, sharedConfigSource, warnings };
+  }
+
+  let mergedBody: Record<string, unknown> = stripReviewKey(parsedLayers[0]!.mapping);
+  for (const layer of parsedLayers.slice(1)) {
+    mergedBody = mergeConfigOverlay(mergedBody, stripReviewKey(layer.mapping)) as Record<string, unknown>;
+  }
+
+  let mergedReview: unknown;
+  for (const layer of parsedLayers) {
+    const review = extractReviewMapping(layer.mapping);
+    if (review === null) continue;
+    mergedReview = mergedReview === undefined ? review : mergeConfigOverlay(mergedReview, review);
+    if (layer.kind === "shared" && layer.sourcePath) sharedConfigSource = layer.sourcePath;
+  }
+  if (mergedReview !== undefined) mergedBody.review = mergedReview;
+
+  return { content: JSON.stringify(mergedBody), sharedConfigSource, warnings };
 }
 
 /** Build the container-local manifest reader over GITTENSORY_REPO_CONFIG_DIR, or null when the dir is unset/blank
@@ -178,15 +229,21 @@ export function makeLocalManifestReader(dir: string | undefined): RepoFocusManif
   const trimmed = (dir ?? "").trim();
   if (!trimmed) return null;
   const base = resolve(trimmed);
-  return async (repoFullName: string): Promise<string | null> => {
+  return async (repoFullName: string): Promise<LocalManifestLoadResult | null> => {
     const perRepo = localConfigCandidates(repoFullName);
     if (perRepo.length === 0) return null; // invalid repo name → no per-repo file, global default, or shared base
-    const [sharedText, globalText, repoText] = await Promise.all([
-      readFirstExisting(base, SHARED_BASE_CONFIG_CANDIDATES),
+    const [sharedHit, globalText, repoText] = await Promise.all([
+      readFirstExistingWithPath(base, SHARED_BASE_CONFIG_CANDIDATES),
       readFirstExisting(base, GLOBAL_CONFIG_CANDIDATES),
       readFirstExisting(base, perRepo),
     ]);
-    return combineConfigLayers([sharedText, globalText, repoText]);
+    const loaded = combineConfigLayersWithMeta([
+      { text: sharedHit?.text ?? null, kind: "shared", sourcePath: sharedHit?.path ?? null },
+      { text: globalText, kind: "global" },
+      { text: repoText, kind: "repo" },
+    ]);
+    if (loaded.content === null && loaded.warnings.length === 0 && loaded.sharedConfigSource === null) return null;
+    return loaded;
   };
 }
 

@@ -2,9 +2,22 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { GLOBAL_CONFIG_CANDIDATES, isReviewSkillEnabled, localConfigCandidates, makeLocalManifestReader, makeLocalReviewContextReader, mergeConfigOverlay, parseReviewSkill, SHARED_BASE_CONFIG_CANDIDATES } from "../../src/selfhost/private-config";
-import { loadRepoReviewContext, setLocalReviewContextReader } from "../../src/signals/focus-manifest-loader";
+import { GLOBAL_CONFIG_CANDIDATES, isReviewSkillEnabled, localConfigCandidates, makeLocalManifestReader, makeLocalReviewContextReader, mergeConfigOverlay, parseReviewSkill, SHARED_BASE_CONFIG_CANDIDATES, type LocalManifestLoadResult } from "../../src/selfhost/private-config";
+import { loadRepoReviewContext, setLocalReviewContextReader, type RepoFocusManifestFetcher } from "../../src/signals/focus-manifest-loader";
 import { MAX_FOCUS_MANIFEST_BYTES, parseFocusManifestContent } from "../../src/signals/focus-manifest";
+
+async function readLocalManifestContent(reader: RepoFocusManifestFetcher, repo: string): Promise<string | null> {
+  const result = await reader(repo);
+  if (result === null) return null;
+  return typeof result === "string" ? result : result.content;
+}
+
+async function readLocalManifestLoad(reader: RepoFocusManifestFetcher, repo: string): Promise<LocalManifestLoadResult | null> {
+  const result = await reader(repo);
+  if (result === null) return null;
+  if (typeof result === "string") return { content: result, sharedConfigSource: null, warnings: [] };
+  return result;
+}
 
 describe("localConfigCandidates (container-private config paths)", () => {
   it("builds owner-folder → repo-folder → flat candidates (lowercased), each in .yml/.yaml/.json order", () => {
@@ -103,7 +116,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     writeFileSync(join(dir, "jsonbored__metagraphed", ".gittensory.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
     expect(reader).not.toBeNull();
-    expect(await reader!("JSONbored/metagraphed")).toBe("gate:\n  enabled: false\n");
+    expect(await readLocalManifestContent(reader!,"JSONbored/metagraphed")).toBe("gate:\n  enabled: false\n");
   });
 
   it("falls back to the bare repo-name folder when no owner-qualified folder exists", async () => {
@@ -111,21 +124,21 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "metagraphed"));
     writeFileSync(join(dir, "metagraphed", ".gittensory.yaml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("JSONbored/metagraphed")).toBe("gate:\n  enabled: true\n");
+    expect(await readLocalManifestContent(reader!,"JSONbored/metagraphed")).toBe("gate:\n  enabled: true\n");
   });
 
   it("still reads the flat {owner}__{repo}.json file (#1390 back-compat)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     writeFileSync(join(dir, "owner__repo.json"), '{"gate":{"enabled":true}}');
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe('{"gate":{"enabled":true}}');
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe('{"gate":{"enabled":true}}');
   });
 
   it("falls back to the dir-root global .gittensory.yml for a repo with no per-repo file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/unconfigured")).toBe("gate:\n  enabled: false\n");
+    expect(await readLocalManifestContent(reader!,"owner/unconfigured")).toBe("gate:\n  enabled: false\n");
   });
 
   it("deep-merges a per-repo file over the global default: per-repo wins on shared keys, global fills the rest", async () => {
@@ -134,7 +147,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n"); // per-repo overrides only `enabled`
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // per-repo wins on the shared key
     expect(manifest.gate.duplicates).toBe("block"); // inherited from global, untouched
   });
@@ -145,7 +158,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "wantedPaths:\n  - docs/**\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.wantedPaths).toEqual(["docs/**"]);
   });
 
@@ -155,7 +168,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "settings:\n  contributorOpenPrCap: null\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // explicit null clears the global 5, not "unset"
   });
 
@@ -165,7 +178,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "settings:\n  accountAgeThresholdDays: null\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.settings.accountAgeThresholdDays).toBeNull();
   });
 
@@ -176,7 +189,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: true\n"); // oversized global dropped; per-repo raw text unchanged
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // oversized global dropped; per-repo raw text unchanged
   });
 
   it("falls back to the per-repo file alone when the global default fails to parse", async () => {
@@ -185,7 +198,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: true\n");
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n");
   });
 
   it("falls back to the global default alone when the per-repo file parses but isn't a mapping", async () => {
@@ -194,7 +207,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "[1, 2, 3]"); // valid JSON, but an array, not a mapping
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: false\n");
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: false\n");
   });
 
   it("returns the per-repo raw text (today's legacy priority) when BOTH files fail to parse as mappings", async () => {
@@ -203,27 +216,27 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "{ broken json");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("{ broken json"); // flows downstream, which warns + ignores it, same as today
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("{ broken json"); // flows downstream, which warns + ignores it, same as today
   });
 
   it("returns null when neither a per-repo file nor a global fallback exists (⇒ loader uses the public file)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/unconfigured")).toBeNull();
+    expect(await readLocalManifestContent(reader!,"owner/unconfigured")).toBeNull();
   });
 
   it("does NOT serve the global fallback to an invalid repo full name (no per-repo candidates)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n"); // global present
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("no-slash")).toBeNull(); // perRepo.length === 0 early return
+    expect(await readLocalManifestContent(reader!,"no-slash")).toBeNull(); // perRepo.length === 0 early return
   });
 
   it("rejects traversal repo names instead of reading outside the private config directory", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     writeFileSync(join(dirname(dir), ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/..")).toBeNull();
+    expect(await readLocalManifestContent(reader!,"owner/..")).toBeNull();
   });
 });
 
@@ -233,7 +246,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "_shared"));
     writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: false\n"); // byte-identical raw text, no merge attempted
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: false\n"); // byte-identical raw text, no merge attempted
   });
 
   it("byte-identical to pre-#1959 behavior when no shared base file is mounted at all (repo-only)", async () => {
@@ -241,7 +254,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: true\n"); // no _shared/ present → same as the existing repo-only test
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // no _shared/ present → same as the existing repo-only test
   });
 
   it("deep-merges a per-repo file over a shared base with no global default present: per-repo wins, shared fills the rest", async () => {
@@ -251,7 +264,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n"); // repo overrides only `enabled`
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // per-repo wins on the shared key
     expect(manifest.gate.duplicates).toBe("block"); // inherited from the shared base, untouched
   });
@@ -264,7 +277,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n"); // per-repo overrides enabled only
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // from per-repo (highest priority)
     expect(manifest.gate.duplicates).toBe("off"); // from global, overlaying the shared base's "block"
     expect(manifest.gate.linkedIssue).toBe("advisory"); // inherited from the shared base, untouched by either override
@@ -278,7 +291,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "wantedPaths:\n  - docs/**\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.wantedPaths).toEqual(["docs/**"]); // per-repo array wins wholesale, shared/global arrays discarded
   });
 
@@ -290,7 +303,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "settings:\n  contributorOpenPrCap: null\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // explicit null clears the shared 5, not "unset"
   });
 
@@ -302,7 +315,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/repo"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // still merged from the two still-valid layers
     expect(manifest.gate.duplicates).toBe("block"); // global's value survives; broken shared base dropped, not blocking
   });
@@ -315,7 +328,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: true\n"); // oversized shared base dropped; per-repo raw text unchanged
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // oversized shared base dropped; per-repo raw text unchanged
   });
 
   it("falls back to the highest-priority present layer's raw text when ALL THREE fail to parse as mappings", async () => {
@@ -326,7 +339,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "repo"));
     writeFileSync(join(dir, "repo", ".gittensory.yml"), "{ broken json");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("{ broken json"); // per-repo (highest priority) raw text, same downstream "malformed" handling
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("{ broken json"); // per-repo (highest priority) raw text, same downstream "malformed" handling
   });
 
   it("tries _shared/.gittensory.yml before .yaml before .json", async () => {
@@ -335,7 +348,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     writeFileSync(join(dir, "_shared", ".gittensory.yaml"), "gate:\n  enabled: true\n");
     writeFileSync(join(dir, "_shared", ".gittensory.json"), '{"gate":{"enabled":false}}');
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("owner/repo")).toBe("gate:\n  enabled: true\n"); // .yaml found before .json is tried
+    expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // .yaml found before .json is tried
   });
 
   it("keeps global precedence over the shared base for a repo named _shared", async () => {
@@ -344,7 +357,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: true\nwantedPaths:\n  - '**/*'\n");
     writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\nwantedPaths:\n  - src/safe/**\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/_shared"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/_shared"));
     expect(manifest.gate.enabled).toBe(false); // global still overlays the reserved shared-base folder
     expect(manifest.wantedPaths).toEqual(["src/safe/**"]);
   });
@@ -356,7 +369,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "owner___shared"));
     writeFileSync(join(dir, "owner___shared", ".gittensory.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await reader!("owner/_shared"));
+    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/_shared"));
     expect(manifest.gate.enabled).toBe(true); // explicit owner-qualified per-repo file remains highest priority
   });
 
@@ -365,7 +378,74 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     mkdirSync(join(dir, "_shared"));
     writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
-    expect(await reader!("no-slash")).toBeNull(); // perRepo.length === 0 early return, before the shared base is even read
+    expect(await readLocalManifestContent(reader!,"no-slash")).toBeNull(); // perRepo.length === 0 early return, before the shared base is even read
+  });
+});
+
+describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () => {
+  it("records sharedConfigSource when the shared base contributes a review block", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  tone: shared-tone\n");
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  profile: assertive\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    expect(loaded?.sharedConfigSource).toBe(join("_shared", ".gittensory.yml"));
+    const manifest = parseFocusManifestContent(loaded!.content!);
+    expect(manifest.review.tone).toBe("shared-tone");
+    expect(manifest.review.profile).toBe("assertive");
+  });
+
+  it("is byte-identical when the shared base is absent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  tone: repo-only\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    expect(loaded?.sharedConfigSource).toBeNull();
+    expect(loaded?.warnings).toEqual([]);
+    expect(loaded?.content).toBe("review:\n  tone: repo-only\n");
+  });
+
+  it("warns and ignores a malformed shared base while still serving higher layers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "{ broken shared");
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  tone: repo-tone\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    expect(loaded?.sharedConfigSource).toBeNull();
+    expect(loaded?.warnings.some((w) => w.includes("review.shared_config"))).toBe(true);
+    expect(parseFocusManifestContent(loaded!.content!).review.tone).toBe("repo-tone");
+  });
+
+  it("fills review fields from the shared base when the per-repo file is silent on them", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  tone: house-tone\n  security_focus: true\n");
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    const manifest = parseFocusManifestContent((await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo"))!.content!);
+    expect(manifest.review.tone).toBe("house-tone");
+    expect(manifest.review.securityFocus).toBe(true);
+  });
+
+  it("sets sharedConfigSource when only the shared base is present for a repo", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  tone: only-shared\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    expect(loaded?.sharedConfigSource).toBe(join("_shared", ".gittensory.yml"));
+    expect(parseFocusManifestContent(loaded!.content!).review.tone).toBe("only-shared");
+  });
+
+  it("ignores a non-mapping shared review block without blocking higher layers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
+    mkdirSync(join(dir, "_shared"));
+    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review: [1, 2, 3]\n");
+    mkdirSync(join(dir, "repo"));
+    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  tone: repo-tone\n");
+    const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
+    expect(parseFocusManifestContent(loaded!.content!).review.tone).toBe("repo-tone");
   });
 });
 

@@ -37,6 +37,8 @@ import {
   resolveTestGenerationManifestToggle,
   resolveReviewMemoryManifestToggle,
   reviewConfigToJson,
+  overlayReviewConfig,
+  parseReviewConfigMapping,
   reviewRecapConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
@@ -384,7 +386,7 @@ describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
     aiModel: "ai_model:",
     visual: "visual:",
     linkedIssueSatisfaction: "linkedIssueSatisfaction:",
-  } satisfies Record<Exclude<keyof FocusManifestReviewConfig, "present">, string>;
+  } satisfies Record<Exclude<keyof FocusManifestReviewConfig, "present" | "sharedConfigSource">, string>;
 
   it.each(Object.entries(REVIEW_FIELD_TOKENS))("documents review.%s", (_field, token) => {
     expect(exampleContent).toContain(token);
@@ -793,7 +795,7 @@ describe("compileFocusManifestPolicy", () => {
       publicNotes: ["Keep PRs focused.", "Maximize your reward payout"],
       gate: { present: false, enabled: null, checkMode: null, pack: null, linkedIssue: null, duplicates: null, readinessMode: null, readinessMinScore: null, slopMode: null, slopMinScore: null, slopAiAdvisory: null, sizeMode: null, lockfileIntegrityMode: null, aiReviewMode: null, aiReviewByok: null, aiReviewProvider: null, aiReviewModel: null, aiReviewAllAuthors: null, aiReviewCloseConfidence: null, aiReviewCombine: null, aiReviewOnMerge: null, aiReviewReviewers: null, mergeReadiness: null, selfAuthoredLinkedIssue: null, manifestPolicy: null, dryRun: null, firstTimeContributorGrace: null, premergeContentRecheck: null, requireFreshRebaseWindowMinutes: null, claMode: null, claConsentPhrase: null, claCheckRunName: null, claCheckRunAppSlug: null, expectedCiContexts: null },
       settings: {},
-      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null },
+      review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, testGeneration: null, impactMap: null, cultureProfile: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
       features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null },
       contentLane: { present: false, entryFileGlob: null, providerFileGlob: null, artifactGlob: null, collectionField: null, maxAppendedEntries: null, duplicateKeyFields: [], validatorId: null },
       repoDocGeneration: { present: false, enabled: false, scope: ["agents"], allowOverwriteExisting: false, refreshIntervalDays: 7 },
@@ -3366,6 +3368,46 @@ describe("review.path_filters (#2043)", () => {
       { path: "src/a.ts" },
     ]);
     expect(filterReviewFilesForAi(files, [], [])).toBe(files);
+  });
+});
+
+describe("overlayReviewConfig / review.shared_config (#2046)", () => {
+  it("lets the override win per nullable field while the base fills gaps", () => {
+    const base = parseReviewConfigMapping({ tone: "house-tone", profile: "chill" }, []);
+    const override = parseReviewConfigMapping({ profile: "assertive" }, []);
+    const merged = overlayReviewConfig(base, override);
+    expect(merged.tone).toBe("house-tone");
+    expect(merged.profile).toBe("assertive");
+    expect(merged.present).toBe(true);
+  });
+
+  it("replaces array fields wholesale from the override when non-empty", () => {
+    const base = parseReviewConfigMapping({ path_filters: ["shared/**"], exclude_paths: ["vendor/**"] }, []);
+    const override = parseReviewConfigMapping({ path_filters: ["src/**"] }, []);
+    const merged = overlayReviewConfig(base, override);
+    expect(merged.pathFilters).toEqual(["src/**"]);
+    expect(merged.excludePaths).toEqual(["vendor/**"]);
+  });
+
+  it("merges nested auto_review and partial field maps key-by-key", () => {
+    const base = parseReviewConfigMapping({ auto_review: { skip_drafts: true, ignore_authors: ["bot"] }, fields: { relatedWork: false } }, []);
+    const override = parseReviewConfigMapping({ auto_review: { ignore_authors: ["dependabot"] }, fields: { openPrQueue: true } }, []);
+    const merged = overlayReviewConfig(base, override);
+    expect(merged.autoReview.skipDrafts).toBe(true);
+    expect(merged.autoReview.ignoreAuthors).toEqual(["dependabot"]);
+    expect(merged.fields).toEqual({ relatedWork: false, openPrQueue: true });
+  });
+
+  it("preserves sharedConfigSource from the override when set", () => {
+    const base = parseReviewConfigMapping({ tone: "house" }, []);
+    const override = { ...parseReviewConfigMapping({ profile: "assertive" }, []), sharedConfigSource: "_shared/.gittensory.yml" };
+    expect(overlayReviewConfig(base, override).sharedConfigSource).toBe("_shared/.gittensory.yml");
+  });
+
+  it("is byte-identical to the override when the base is empty", () => {
+    const base = parseReviewConfigMapping(undefined, []);
+    const override = parseReviewConfigMapping({ tone: "repo-only" }, []);
+    expect(overlayReviewConfig(base, override)).toEqual(override);
   });
 });
 
