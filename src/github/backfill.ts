@@ -803,7 +803,7 @@ export async function refreshContributorActivity(
         openPullRequests: openPullRequestCount,
         issues: issueCount,
         stalePullRequests: openNodes.filter((node) => node.updatedAt && daysSince(node.updatedAt) >= 14).length,
-        unlinkedPullRequests: openNodes.filter((node) => extractLinkedIssueNumbers(node.body ?? "").length === 0).length,
+        unlinkedPullRequests: openNodes.filter((node) => extractLinkedIssueNumbers(node.body ?? "", repo.fullName).length === 0).length,
         dominantLabels: topItems(labelNames, 8),
         lastActivityAt: latestDate([
           ...compactNodes(allPullRequests).map((node) => node.updatedAt ?? node.mergedAt),
@@ -3915,7 +3915,7 @@ function toRecentMergedPullRequest(repoFullName: string, pr: GitHubPullRequestPa
     htmlUrl: pr.html_url,
     mergedAt: pr.merged_at,
     labels: (pr.labels ?? []).flatMap((label) => (label.name ? [label.name] : [])),
-    linkedIssues: extractLinkedIssueNumbers(pr.body ?? ""),
+    linkedIssues: extractLinkedIssueNumbers(pr.body ?? "", repoFullName),
     changedFiles: files.map((file) => file.filename),
     payload: pr as unknown as Record<string, JsonValue>,
   };

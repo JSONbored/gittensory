@@ -38,8 +38,8 @@ describe("database row parser hardening", () => {
   it("caps linked issues extracted from attacker-controlled PR bodies and reports overflow", () => {
     const body = Array.from({ length: MAX_LINKED_ISSUE_NUMBERS + 25 }, (_, index) => `Fixes #${index + 1}`).join("\n");
 
-    expect(extractLinkedIssueNumbers(body)).toEqual(Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, index) => index + 1));
-    expect(extractLinkedIssueNumbersWithOverflow(body)).toEqual({
+    expect(extractLinkedIssueNumbers(body, "owner/repo")).toEqual(Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, index) => index + 1));
+    expect(extractLinkedIssueNumbersWithOverflow(body, "owner/repo")).toEqual({
       numbers: Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, index) => index + 1),
       overflow: true,
     });
@@ -48,13 +48,37 @@ describe("database row parser hardening", () => {
   it("deduplicates linked issues before applying the extraction cap", () => {
     const body = [`Fixes #1`, ...Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, index) => `Resolves #${index + 1}`)].join("\n");
 
-    expect(extractLinkedIssueNumbers(body)).toEqual(Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, index) => index + 1));
-    expect(extractLinkedIssueNumbersWithOverflow(body).overflow).toBe(false);
+    expect(extractLinkedIssueNumbers(body, "owner/repo")).toEqual(Array.from({ length: MAX_LINKED_ISSUE_NUMBERS }, (_, index) => index + 1));
+    expect(extractLinkedIssueNumbersWithOverflow(body, "owner/repo").overflow).toBe(false);
   });
 
   it("returns no linked issues when the cap is zero or negative", () => {
-    expect(extractLinkedIssueNumbers("Fixes #1\nCloses #2", 0)).toEqual([]);
-    expect(extractLinkedIssueNumbers("Fixes #1", -5)).toEqual([]);
+    expect(extractLinkedIssueNumbers("Fixes #1\nCloses #2", "owner/repo", 0)).toEqual([]);
+    expect(extractLinkedIssueNumbers("Fixes #1", "owner/repo", -5)).toEqual([]);
+  });
+
+  it("recognizes the fully-qualified `Fixes owner/repo#N` closing syntax when owner/repo matches this repo (#3862)", () => {
+    expect(extractLinkedIssueNumbers("Closes owner/repo#42", "owner/repo")).toEqual([42]);
+    // Case-insensitive, matching GitHub's own repo-name matching.
+    expect(extractLinkedIssueNumbers("Fixes Owner/Repo#7", "owner/repo")).toEqual([7]);
+    // A DIFFERENT repo's qualified reference must not spoof a same-repo linked issue.
+    expect(extractLinkedIssueNumbers("Resolves other/repo#99", "owner/repo")).toEqual([]);
+    // Bare and qualified forms mix freely and dedupe together.
+    expect(extractLinkedIssueNumbers("Fixes #1\nCloses owner/repo#1\nResolves owner/repo#2", "owner/repo")).toEqual([1, 2]);
+  });
+
+  it("REGRESSION (#3862): a stored PR using ONLY the qualified `Closes owner/repo#N` form is not flagged as unlinked", async () => {
+    const env = createTestEnv();
+    await upsertPullRequestFromGitHub(env, "owner/repo", {
+      number: 5,
+      title: "Qualified-form closing reference",
+      state: "open",
+      user: { login: "contributor1" },
+      labels: [],
+      body: "Closes owner/repo#42",
+    });
+    const stored = await getPullRequest(env, "owner/repo", 5);
+    expect(stored?.linkedIssues).toEqual([42]);
   });
 
   it("returns empty arrays from D1 raw() when a select has no rows", async () => {
@@ -393,7 +417,7 @@ describe("database row parser hardening", () => {
     await upsertPullRequestFromGitHub(env, "owner/repo", { number: 10, title: "Too many claims", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [], body });
     const claimed = await getPullRequest(env, "owner/repo", 10);
     expect(claimed?.linkedIssues).toHaveLength(MAX_LINKED_ISSUE_NUMBERS);
-    expect(extractLinkedIssueNumbersWithOverflow(claimed?.body ?? "").overflow).toBe(true);
+    expect(extractLinkedIssueNumbersWithOverflow(claimed?.body ?? "", "owner/repo").overflow).toBe(true);
 
     const resynced = await upsertPullRequestFromGitHub(env, "owner/repo", { number: 10, title: "Too many claims", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [] });
     expect(resynced.body).toBe(body);
@@ -401,7 +425,7 @@ describe("database row parser hardening", () => {
 
     const stored = await getPullRequest(env, "owner/repo", 10);
     expect(stored?.body).toBe(body);
-    expect(extractLinkedIssueNumbersWithOverflow(stored?.body ?? "").overflow).toBe(true);
+    expect(extractLinkedIssueNumbersWithOverflow(stored?.body ?? "", "owner/repo").overflow).toBe(true);
     expect(stored?.linkedIssues).toHaveLength(MAX_LINKED_ISSUE_NUMBERS);
   });
 

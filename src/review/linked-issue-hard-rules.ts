@@ -158,7 +158,7 @@ export async function resolveLinkedIssueHardRule(args: {
     args.config.missingPointLabelClose === "block" ||
     args.config.maintainerOnlyLabelClose === "block";
   if (!anyRuleOn) return undefined;
-  if (extractLinkedIssueNumbersWithOverflow(args.body ?? "").overflow) {
+  if (extractLinkedIssueNumbersWithOverflow(args.body ?? "", args.repoFullName).overflow) {
     return {
       violated: true,
       reason: "PR body links more issues than Gittensory can safely verify automatically; please reduce linked closing references or request maintainer review.",

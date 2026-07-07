@@ -24,6 +24,7 @@ import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import type { FocusManifestReviewConfig, ReviewFieldKey } from "./focus-manifest";
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
+import { extractLinkedIssueNumbers } from "../db/repositories";
 import { sanitizePublicComment } from "../queue-intelligence";
 import { labelMatchesPattern, projectLinkedIssueMultiplierForPlannedSolve, type LinkedIssueMultiplierStatus } from "../scoring/preview";
 import { hasLocalTestEvidence, hasValidationNote, isTestPath } from "./test-evidence";
@@ -5310,18 +5311,6 @@ export function tokenize(value: string): string[] {
     .toLowerCase()
     .split(/[^a-z0-9]+/g)
     .filter((term) => term.length > 2 && !STOPWORDS.has(term));
-}
-
-function extractLinkedIssueNumbers(text: string, repoFullName: string): number[] {
-  const numbers = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)].map((match) => Number(match[1]));
-  // GitHub also auto-closes via the fully-qualified `KEYWORD owner/repo#N` form (e.g. Renovate/Dependabot bodies).
-  // Count it only when owner/repo case-insensitively equals THIS repo — a reference to a different repo closes an
-  // issue elsewhere, not here, so it must not spoof a same-repo link. Same `\b`-anchored keywords as above (#1988).
-  const target = repoFullName.toLowerCase();
-  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+([\w.-]+\/[\w.-]+)#(\d+)\b/gi)) {
-    if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
-  }
-  return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];
 }
 
 function outcomeSuccessPatterns(history: ContributorOutcomeHistory): OutcomePattern[] {

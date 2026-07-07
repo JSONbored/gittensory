@@ -5406,7 +5406,7 @@ function toPullRequestRecord(repoFullName: string, pr: GitHubPullRequestPayload)
     // subsequent DB round-trip) sees the same value instead of `undefined`.
     createdAt: pr.created_at,
     labels: (pr.labels ?? []).flatMap((label) => (label.name ? [label.name] : [])),
-    linkedIssues: extractLinkedIssueNumbers(pr.body ?? ""),
+    linkedIssues: extractLinkedIssueNumbers(pr.body ?? "", repoFullName),
   };
   /* v8 ignore stop */
 }
@@ -7001,13 +7001,19 @@ export type LinkedIssueExtractionResult = {
   overflow: boolean;
 };
 
-export function extractLinkedIssueNumbersWithOverflow(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): LinkedIssueExtractionResult {
+export function extractLinkedIssueNumbersWithOverflow(text: string, repoFullName: string, limit = MAX_LINKED_ISSUE_NUMBERS): LinkedIssueExtractionResult {
   const normalizedLimit = Math.max(0, Math.floor(limit));
+  const target = repoFullName.toLowerCase();
 
   const linkedIssues: number[] = [];
   const seen = new Set<number>();
-  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)) {
-    const value = Number(match[1]);
+  // Matches both GitHub's bare `KEYWORD #N` and fully-qualified `KEYWORD owner/repo#N` closing syntax (#3862) --
+  // the qualified form only counts when owner/repo case-insensitively matches THIS repo; a reference to a
+  // different repo closes an issue there, not here, and must not spoof a same-repo linked-issue match.
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([\w.-]+\/[\w.-]+)#|#)(\d+)\b/gi)) {
+    const owner = match[1];
+    if (owner && owner.toLowerCase() !== target) continue;
+    const value = Number(match[2]);
     if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
     seen.add(value);
     if (linkedIssues.length >= normalizedLimit) return { numbers: linkedIssues, overflow: true };
@@ -7016,8 +7022,8 @@ export function extractLinkedIssueNumbersWithOverflow(text: string, limit = MAX_
   return { numbers: linkedIssues, overflow: false };
 }
 
-export function extractLinkedIssueNumbers(text: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
-  return extractLinkedIssueNumbersWithOverflow(text, limit).numbers;
+export function extractLinkedIssueNumbers(text: string, repoFullName: string, limit = MAX_LINKED_ISSUE_NUMBERS): number[] {
+  return extractLinkedIssueNumbersWithOverflow(text, repoFullName, limit).numbers;
 }
 
 function extractLinkedPrNumbers(text: string): number[] {

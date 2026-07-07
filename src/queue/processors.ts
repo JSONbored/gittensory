@@ -7013,6 +7013,7 @@ export async function runAiReviewForAdvisory(
               resolveEnrichmentLinkedIssueNumbers(
                 args.pr.linkedIssues,
                 args.pr.body,
+                args.repoFullName,
               ),
             ),
             githubToken: isReesGithubTokenForwardingEnabled(env)
