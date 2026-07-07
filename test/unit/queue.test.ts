@@ -22824,10 +22824,17 @@ describe("queue processors", () => {
     });
 
     it("never fetches a linked issue and keeps normal behavior when propagation is left at its default (disabled) (#priority-linked-issue-gate)", async () => {
+      // Deliberately NOT "JSONbored/gittensory" (unlike its two sibling tests above): this repo's own
+      // `.gittensory.yml` now enables propagation for itself (#priority-linked-issue-gate-ownership
+      // dogfooding), and `resolveRepositorySettings` falls back to the bundled
+      // `GITTENSORY_REPO_FOCUS_MANIFEST_YAML` copy of it whenever a live manifest fetch is unavailable
+      // (`isGittensorySelfRepo`, `src/signals/focus-manifest-loader.ts`) -- exactly the case in this test's
+      // stubbed fetch. Using gittensory's own literal repo name here would make this "propagation is off by
+      // DEFAULT" test silently stop being a default-behavior test at all.
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+      await upsertRepositoryFromGitHub(env, { name: "widget", full_name: "acme/widget", private: false, owner: { login: "acme" } }, 123);
       await upsertRepositorySettings(env, {
-        repoFullName: "JSONbored/gittensory",
+        repoFullName: "acme/widget",
         commentMode: "off",
         publicSurface: "label_only",
         autoLabelEnabled: true,
@@ -22847,8 +22854,8 @@ describe("queue processors", () => {
         eventName: "pull_request",
         payload: {
           action: "opened",
-          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
-          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          installation: { id: 123, account: { login: "acme", id: 1, type: "User" } },
+          repository: { name: "widget", full_name: "acme/widget", private: false, owner: { login: "acme" } },
           pull_request: { number: 222, title: "fix: some bug", state: "open", user: { login: "contributor" }, author_association: "NONE", head: { sha: "sha222" }, labels: [], body: "Fixes #1" },
         },
       });

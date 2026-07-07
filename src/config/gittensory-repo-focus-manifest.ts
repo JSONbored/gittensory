@@ -59,6 +59,31 @@ gate:
 #     relatedWork: false                                # linkedIssue | relatedWork | reviewLoad (Change scope) |
 #     openPrQueue: false                                # validationEvidence (Validation posture) | openPrQueue (Contributor workload) | contributorContext | gateResult
 
+# Linked-issue label propagation (#priority-linked-issue-gate, #priority-linked-issue-gate-ownership): a PR
+# that closes/fixes/resolves an issue inherits that issue's point-bearing gittensor:* label onto the PR
+# itself, instead of the PR's own label being decided purely by its commit-title prefix. bug/feature are
+# \`trustMaintainerAuthoredIssue: true\` (routine categorization, no reward at stake, and the title-based
+# fallback already has zero equivalent verification) so they propagate even when the PR author isn't a
+# formal GitHub assignee of the issue — our issues are almost always maintainer-authored for open pickup and
+# rarely formally assigned. priority intentionally omits the flag: it is the scarce, maintainer-hand-picked
+# reward label, and must still require the PR author to be the issue's actual author/assignee.
+settings:
+  linkedIssueLabelPropagation:
+    enabled: true
+    mode: exclusive_type_label
+    mappings:
+      - issueLabel: "gittensor:bug"
+        prLabel: "gittensor:bug"
+        removeOtherTypeLabels: true
+        trustMaintainerAuthoredIssue: true
+      - issueLabel: "gittensor:feature"
+        prLabel: "gittensor:feature"
+        removeOtherTypeLabels: true
+        trustMaintainerAuthoredIssue: true
+      - issueLabel: "gittensor:priority"
+        prLabel: "gittensor:priority"
+        removeOtherTypeLabels: true
+
 # Repo-doc generation roadmap (#2993/#3002) — opt-in only, off by default. Uncomment to let Gittensory open a
 # PR generating AGENTS.md/CLAUDE.md from this repo's own profile.
 # repoDocGeneration:

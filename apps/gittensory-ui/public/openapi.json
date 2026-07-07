@@ -8760,6 +8760,9 @@
                     },
                     "removeOtherTypeLabels": {
                       "type": "boolean"
+                    },
+                    "trustMaintainerAuthoredIssue": {
+                      "type": "boolean"
                     }
                   },
                   "required": [

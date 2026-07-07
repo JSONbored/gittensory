@@ -89,6 +89,33 @@ describe("normalizeLinkedIssueLabelPropagationConfig (#priority-linked-issue-gat
     expect(warnings.some((w) => w.includes("settings.linkedIssueLabelPropagation.mappings"))).toBe(true);
   });
 
+  it("passes through a mapping's trustMaintainerAuthoredIssue: true unchanged", () => {
+    const warnings: string[] = [];
+    const result = normalizeLinkedIssueLabelPropagationConfig(
+      { enabled: true, mappings: [{ issueLabel: "gittensor:feature", prLabel: "gittensor:feature", removeOtherTypeLabels: true, trustMaintainerAuthoredIssue: true }] },
+      warnings,
+    );
+    expect(result.mappings).toEqual([{ issueLabel: "gittensor:feature", prLabel: "gittensor:feature", removeOtherTypeLabels: true, trustMaintainerAuthoredIssue: true }]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("leaves trustMaintainerAuthoredIssue undefined (not defaulted to false) when omitted from a mapping, with no warning", () => {
+    const warnings: string[] = [];
+    const result = normalizeLinkedIssueLabelPropagationConfig({ enabled: true, mappings: [{ issueLabel: "a", prLabel: "b" }] }, warnings);
+    expect(result.mappings[0]?.trustMaintainerAuthoredIssue).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns and ignores a non-boolean trustMaintainerAuthoredIssue, keeping the rest of the mapping (never silently defaults to true)", () => {
+    const warnings: string[] = [];
+    const result = normalizeLinkedIssueLabelPropagationConfig(
+      { enabled: true, mappings: [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", trustMaintainerAuthoredIssue: "true" }] },
+      warnings,
+    );
+    expect(result.mappings).toEqual([{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: false, trustMaintainerAuthoredIssue: undefined }]);
+    expect(warnings.some((w) => w.includes("mappings[0].trustMaintainerAuthoredIssue"))).toBe(true);
+  });
+
   it("defaults removeOtherTypeLabels to false when omitted from a mapping", () => {
     const warnings: string[] = [];
     const result = normalizeLinkedIssueLabelPropagationConfig({ enabled: true, mappings: [{ issueLabel: "a", prLabel: "b" }] }, warnings);

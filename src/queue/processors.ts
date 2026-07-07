@@ -7920,6 +7920,7 @@ async function maybePublishPrPublicSurface(
               linkedIssues: pr.linkedIssues,
               installationId,
               prAuthorLogin: pr.authorLogin,
+              mappings: propagation.mappings,
             })
           : [];
       const decisionResult = resolvePrTypeLabel({

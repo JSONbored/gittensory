@@ -1,6 +1,8 @@
-import { fetchLinkedIssueFacts } from "../github/backfill";
-import { createInstallationToken } from "../github/app";
+import { fetchLinkedIssueFacts, type LinkedIssueFactsFetch } from "../github/backfill";
+import { createInstallationToken, getRepositoryCollaboratorPermission } from "../github/app";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
+import { parseGitHubLoginList } from "../auth/security";
+import type { LinkedIssueLabelPropagationMapping } from "../types";
 
 // The GitHub-fetch orchestrator for linked-issue label propagation (#priority-linked-issue-gate), kept
 // deliberately OUT of `linked-issue-label-propagation.ts` (the pure config types + normalizer, imported by
@@ -17,6 +19,72 @@ import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 // directly, without needing to trust every call site to have gone through the capped extractor first.
 const MAX_LINKED_ISSUES_TO_FETCH = 50;
 
+/** Whether `login` holds a maintainer-equivalent permission on `repoFullName` -- the literal repo owner,
+ *  a fleet-operator in the global `ADMIN_GITHUB_LOGINS` allowlist, or a live GitHub collaborator with
+ *  admin/maintain/write access (#priority-linked-issue-gate-ownership). Mirrors
+ *  `hasMaintainerOrOwnerPermission` in `src/queue/processors.ts` (kept as its own copy here rather than
+ *  imported, since that one is private to a file this module's header comment explicitly must NOT pull
+ *  into its import graph -- see the file-level comment above). Fail-CLOSED: a collaborator-permission
+ *  fetch error resolves to `null` inside `getRepositoryCollaboratorPermission` itself, which this treats
+ *  the same as "not a maintainer" -- consistent with this whole file's bias toward denying an
+ *  unverifiable trust claim rather than granting one. */
+async function isRepoMaintainerLogin(env: Env, installationId: number, repoFullName: string, login: string): Promise<boolean> {
+  // The ": \"\"" fallback is unreachable via the real webhook path: repoFullName is always the
+  // "owner/repo"-formatted payload.repository.full_name, and the surrounding pipeline already requires a
+  // repository match on that exact format before this function's caller runs (mirrors the identical
+  // pattern + rationale in `hasMaintainerOrOwnerPermission`, `src/queue/processors.ts`).
+  /* v8 ignore next */
+  const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase() : "";
+  if (login === repoOwner || parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login)) return true;
+  const permission = await getRepositoryCollaboratorPermission(env, installationId, repoFullName, login).catch(() => null);
+  return permission != null && new Set(["admin", "maintain", "write"]).has(permission);
+}
+
+/** Per-issue label resolution for {@link fetchLinkedIssueLabelsForPropagation}: a direct PR-author-is-
+ *  issue-author-or-assignee match unlocks EVERY label the issue carries (today's original behavior,
+ *  unchanged). Failing that, a mapping explicitly opted into `trustMaintainerAuthoredIssue`
+ *  (#priority-linked-issue-gate-ownership) unlocks JUST that mapping's `issueLabel` when the issue's
+ *  author independently checks out as a repo maintainer/operator via {@link isRepoMaintainerLogin} --
+ *  built so routine bug/feature mirroring doesn't require formal GitHub issue assignment (our own repos
+ *  rarely assign issues), while a scarce, maintainer-hand-picked reward label like `gittensor:priority`
+ *  (which should never set the flag) still requires the contributor to be the actual author/assignee.
+ *  `relaxableLabels` is empty whenever the caller passed no mappings or none opted in, which skips the
+ *  maintainer-permission check (and its GitHub API call) entirely -- byte-identical to the pre-fix
+ *  behavior for any caller that hasn't opted in. Logs once per issue when the returned set is smaller
+ *  than what the issue actually carries, so a future "why didn't my PR inherit the label" report is
+ *  diagnosable from structured logs instead of a source read. */
+async function resolveIssueLabelsForPropagation(
+  args: { env: Env; repoFullName: string; installationId: number },
+  result: LinkedIssueFactsFetch,
+  prAuthorLogin: string | undefined,
+  relaxableLabels: ReadonlySet<string>,
+): Promise<string[]> {
+  if (result.status !== "found" || result.facts.state !== "open" || !prAuthorLogin) return [];
+  const allLabels = result.facts.labels;
+  const issueAuthorLogin = result.facts.authorLogin?.toLowerCase();
+  const assignees = result.facts.assignees.map((login) => login.toLowerCase());
+  if (issueAuthorLogin === prAuthorLogin || assignees.includes(prAuthorLogin)) return allLabels;
+
+  const maintainerAuthored =
+    relaxableLabels.size > 0 &&
+    !!issueAuthorLogin &&
+    (await isRepoMaintainerLogin(args.env, args.installationId, args.repoFullName, issueAuthorLogin));
+  const kept = maintainerAuthored ? allLabels.filter((label) => relaxableLabels.has(label.toLowerCase())) : [];
+
+  if (kept.length < allLabels.length && allLabels.length > 0) {
+    console.log(
+      JSON.stringify({
+        ev: "linked_issue_label_propagation_filtered",
+        repoFullName: args.repoFullName,
+        issueNumber: result.facts.number,
+        reason: maintainerAuthored ? "strict_label_requires_direct_ownership" : "no_direct_ownership_match",
+        droppedCount: allLabels.length - kept.length,
+      }),
+    );
+  }
+  return kept;
+}
+
 /** FETCH every linked issue's labels (fail-open) and flatten into one label list for
  *  `resolvePrTypeLabel` (`src/settings/pr-type-label.ts`) to match against. Only verified OPEN issues
  *  can contribute labels; closing-keyword text in a PR body is author-controlled and is not authority by
@@ -32,13 +100,19 @@ const MAX_LINKED_ISSUES_TO_FETCH = 50;
  *  which is a single try/catch in `src/queue/processors.ts`'s type-label block (`type_label_error`).
  *  Callers should gate this behind `config.enabled` themselves before calling (mirrors
  *  `shouldCollectLinkedIssueEvidence`'s cheap-check-before-fetch precedent) — this function only
- *  short-circuits the zero-linked-issues case, since it has no visibility into the caller's enabled flag. */
+ *  short-circuits the zero-linked-issues case, since it has no visibility into the caller's enabled flag.
+ *
+ *  `mappings` (optional, #priority-linked-issue-gate-ownership) is the propagation config's own mapping
+ *  list, used ONLY to know which `issueLabel`s are allowed to unlock via `resolveIssueLabelsForPropagation`'s
+ *  relaxed maintainer-authored-issue path -- omitting it (or a mapping never setting the flag) reproduces
+ *  today's strict author-or-assignee-only behavior exactly. */
 export async function fetchLinkedIssueLabelsForPropagation(args: {
   env: Env;
   repoFullName: string;
   linkedIssues: number[];
   installationId: number;
   prAuthorLogin: string | null | undefined;
+  mappings?: readonly LinkedIssueLabelPropagationMapping[] | undefined;
 }): Promise<string[]> {
   if (args.linkedIssues.length === 0) return [];
   const linkedIssues = args.linkedIssues.slice(0, MAX_LINKED_ISSUES_TO_FETCH);
@@ -51,6 +125,12 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
     token,
     args.installationId,
   );
+  const prAuthorLogin = args.prAuthorLogin?.toLowerCase();
+  const relaxableLabels = new Set(
+    (args.mappings ?? [])
+      .filter((mapping) => mapping.trustMaintainerAuthoredIssue === true)
+      .map((mapping) => mapping.issueLabel.toLowerCase()),
+  );
   const results = await Promise.all(
     linkedIssues.map((issueNumber) =>
       fetchLinkedIssueFacts(
@@ -62,17 +142,15 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
       ),
     ),
   );
-  return results.flatMap((result) => {
-    if (result.status !== "found" || result.facts.state !== "open") return [];
-    const prAuthorLogin = args.prAuthorLogin?.toLowerCase();
-    if (!prAuthorLogin) return [];
-    const issueAuthorLogin = result.facts.authorLogin?.toLowerCase();
-    const assignees = result.facts.assignees.map((login) =>
-      login.toLowerCase(),
-    );
-    return issueAuthorLogin === prAuthorLogin ||
-      assignees.includes(prAuthorLogin)
-      ? result.facts.labels
-      : [];
-  });
+  const perIssueLabels = await Promise.all(
+    results.map((result) =>
+      resolveIssueLabelsForPropagation(
+        { env: args.env, repoFullName: args.repoFullName, installationId: args.installationId },
+        result,
+        prAuthorLogin,
+        relaxableLabels,
+      ),
+    ),
+  );
+  return perIssueLabels.flat();
 }

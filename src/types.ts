@@ -1045,6 +1045,13 @@ export type LinkedIssueLabelPropagationMapping = {
   issueLabel: string;
   prLabel: string;
   removeOtherTypeLabels: boolean;
+  /** Allow this mapping to fire off a linked issue authored by the repo's owner/admin/write-collaborator
+   *  even when the PR author neither opened nor is assigned to that issue (#priority-linked-issue-gate-
+   *  ownership). Defaults to `false`/unset (today's strict author-or-assignee-only behavior) -- a
+   *  maintainer-reward mapping like `gittensor:priority` should never set this, since it is exactly the
+   *  scarce, hand-picked label a contributor could otherwise farm by citing an unrelated issue they had no
+   *  part in. See `review/linked-issue-label-propagation-fetch.ts`'s `isRepoMaintainerLogin`. */
+  trustMaintainerAuthoredIssue?: boolean | undefined;
 };
 
 export type LinkedIssueLabelPropagationMode = "exclusive_type_label";

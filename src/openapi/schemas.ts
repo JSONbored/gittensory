@@ -681,7 +681,14 @@ export const RepositorySettingsSchema = z
       .object({
         enabled: z.boolean(),
         mode: z.enum(["exclusive_type_label"]),
-        mappings: z.array(z.object({ issueLabel: z.string(), prLabel: z.string(), removeOtherTypeLabels: z.boolean() })),
+        mappings: z.array(
+          z.object({
+            issueLabel: z.string(),
+            prLabel: z.string(),
+            removeOtherTypeLabels: z.boolean(),
+            trustMaintainerAuthoredIssue: z.boolean().optional(),
+          }),
+        ),
       })
       .optional(),
     linkedIssueHardRules: z

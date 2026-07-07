@@ -99,6 +99,18 @@ describe("Gittensory repo focus manifest", () => {
     expect(manifest.maintainerNotes.join(" ")).toMatch(/private triage/i);
   });
 
+  it("enables linked-issue label propagation with bug/feature relaxed and priority strict (#priority-linked-issue-gate-ownership)", () => {
+    const manifest = parseFocusManifestContent(GITTENSORY_REPO_FOCUS_MANIFEST_YAML, "repo_file");
+    const propagation = manifest.settings.linkedIssueLabelPropagation;
+    expect(propagation?.enabled).toBe(true);
+    expect(propagation?.mode).toBe("exclusive_type_label");
+    const byIssueLabel = Object.fromEntries((propagation?.mappings ?? []).map((mapping) => [mapping.issueLabel, mapping]));
+    expect(byIssueLabel["gittensor:bug"]).toMatchObject({ prLabel: "gittensor:bug", trustMaintainerAuthoredIssue: true });
+    expect(byIssueLabel["gittensor:feature"]).toMatchObject({ prLabel: "gittensor:feature", trustMaintainerAuthoredIssue: true });
+    expect(byIssueLabel["gittensor:priority"]).toMatchObject({ prLabel: "gittensor:priority" });
+    expect(byIssueLabel["gittensor:priority"]?.trustMaintainerAuthoredIssue).toBeUndefined();
+  });
+
   it("loads bundled manifest for the Gittensory repo when fetch is unavailable", async () => {
     const env = createTestEnv({ GITTENSORY_DRIFT_ISSUE_REPO: "JSONbored/gittensory" });
     const manifest = await loadRepoFocusManifest(env, "JSONbored/gittensory", { fetcher: async () => null });
