@@ -117,10 +117,11 @@ pasted JSON block will not work in Codex). You'll use these tools in Phases 1 an
   and (on scored repos) carries a point label**: linking an owner-assigned / maintainer-only /
   ineligible issue trips a **deterministic linked-issue hard rule that auto-closes your PR**. Verify
   with `gittensory_check_before_start` + `gittensory_validate_linked_issue`.
-- **Open an issue first** for anything risky: public behavior changes, auth/session/CORS changes, DB
-  schema/migrations, large dependency bumps, deploy/secret changes, or frontend architecture. For a
-  small, self-evident fix, a direct PR with a clear rationale is fine (this repo's
-  `linkedIssuePolicy` is `preferred`, not required).
+- **A linked, currently-open, unassigned, eligible issue is always required before opening a PR** —
+  there is no "small enough to skip it" exemption, no matter how self-evident the fix looks. This
+  holds regardless of what the committed root `.gittensory.yml`'s `linkedIssuePolicy` says: that
+  file is a non-representative **example** checked into the repo, not the live enforced rule. If no
+  suitable open issue exists, open one yourself first, then link it from the PR.
 - **Run the pre-start checks** via MCP: `gittensory_check_before_start` (is it claimed / a duplicate
   cluster / already solved?) and, if linking an issue, `gittensory_validate_linked_issue`.
 - **Stay in scope.** The gate's `wantedPaths` are `src/`, `packages/`, `test/`, `migrations/`,
@@ -244,8 +245,8 @@ Run the MCP predictor with your actual PR shape:
 - `gittensory_check_slop_risk` — keep slop **low**: fill the PR description, include tests, keep the
   diff focused (no lockfile/docs/generated noise dominating), real source ratio.
 - `gittensory_lint_pr_text` — your commit + PR body must read as **strong**: Conventional Commit
-  subject, traceability (linked issue or explicit no-issue rationale), and a body that says what
-  changed, why, and how it was validated.
+  subject, traceability (a linked, currently-open, eligible issue — no no-issue rationale accepted),
+  and a body that says what changed, why, and how it was validated.
 - `gittensory_predict_gate` — simulate the repo's public `.gittensory.yml` gate. Resolve any
   predicted blocker (the duplicate-PR blocker is the one that hard-fails here) before opening.
 
@@ -276,8 +277,8 @@ command list — only check what you actually ran), and `## Safety` (especially 
 **negative-path tests** box and the no-secrets box). For any visible UI/frontend/docs change, fill the
 **`## UI Evidence`** table with captioned, clickable **JPG/PNG** thumbnails (`<a href><img></a>`) —
 SVG is not accepted, and review-only screenshots are never committed to the repo. A filled Summary +
-the Validation evidence + a linked issue (or an explicit no-issue rationale in the Summary) is exactly
-what makes `lint_pr_text` read *strong*.
+the Validation evidence + a linked, currently-open issue is exactly what makes `lint_pr_text` read
+*strong* — there is no no-issue-rationale substitute.
 
 ---
 
