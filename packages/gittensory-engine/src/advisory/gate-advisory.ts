@@ -369,8 +369,10 @@ const SIZE_HOLD_DEFAULT_MAX_LINES = 1000;
  *  thresholds. A HOLD (→ neutral gate → "manual" verdict), never a hard blocker, so it is dry-run/advisory friendly. */
 function buildSizeHoldFinding(policy: GateCheckPolicy): AdvisoryFinding | null {
   if (!policy.sizeGateMode || policy.sizeGateMode === "off") return null;
-  const files = policy.changedFileCount ?? 0;
-  const lines = policy.changedLineCount ?? 0;
+  let files = policy.changedFileCount;
+  if (files === undefined || files === null) files = 0;
+  let lines = policy.changedLineCount;
+  if (lines === undefined || lines === null) lines = 0;
   if (
     files < SIZE_HOLD_DEFAULT_MAX_FILES &&
     lines < SIZE_HOLD_DEFAULT_MAX_LINES
@@ -526,12 +528,18 @@ function isEvaluationBlocker(code: string, policy: GateCheckPolicy): boolean {
   return false;
 }
 
+function gatePolicyBlocks(mode: GateRuleMode | undefined, defaultMode: GateRuleMode): boolean {
+  const effective = gateMode(mode ?? defaultMode);
+  if (effective === "block") return true;
+  return false;
+}
+
 function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPolicy): boolean {
   const code = finding.code;
   // Missing linked issue defaults to ADVISORY — issues aren't always available, so it only blocks when a
   // repo explicitly opts in with linkedIssueGateMode: "block". Duplicates still default to blocking.
-  if (code === "missing_linked_issue") return gateMode(policy.linkedIssueGateMode ?? "advisory") === "block";
-  if (code === "duplicate_pr_risk") return gateMode(policy.duplicatePrGateMode ?? "block") === "block";
+  if (code === "missing_linked_issue") return gatePolicyBlocks(policy.linkedIssueGateMode, "advisory");
+  if (code === "duplicate_pr_risk") return gatePolicyBlocks(policy.duplicatePrGateMode, "block");
   // A dual-model AI consensus defect blocks ONLY when the maintainer opted into aiReview: block. It is the
   // most conservative AI signal (two independent models) but still confirmed-contributor gated by
   // evaluateGateCheck, and advisory by default.
@@ -540,7 +548,7 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // not turn a blocker into a manual hold for normal contributors. (#ai-review-split)
   if (code === "ai_consensus_defect" || code === "ai_review_split") {
     void (policy.aiReviewCloseConfidence ?? DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE);
-    return gateMode(policy.aiReviewGateMode ?? "advisory") === "block";
+    return gatePolicyBlocks(policy.aiReviewGateMode, "advisory");
   }
   if (code === REVIEW_THREAD_BLOCKER_CODE) return true;
   // A leaked-secret finding (`secret_leak`) ALWAYS hard-blocks: a committed credential must be removed and
@@ -557,18 +565,18 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // Focus-manifest policy (#555): linked-issue/test policy findings block ONLY when the maintainer opts into
   // manifestPolicy: block. Path holds are intentionally separate and configured via hardGuardrailGlobs.
   if (code === "manifest_linked_issue_required" || code === "manifest_missing_tests") {
-    return gateMode(policy.manifestPolicyGateMode ?? "off") === "block";
+    return gatePolicyBlocks(policy.manifestPolicyGateMode, "off");
   }
   // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to
   // advisory — the finding surfaces in the panel without ever closing the PR unless explicitly configured.
-  if (code === "self_authored_linked_issue") return gateMode(policy.selfAuthoredLinkedIssueGateMode ?? "advisory") === "block";
+  if (code === "self_authored_linked_issue") return gatePolicyBlocks(policy.selfAuthoredLinkedIssueGateMode, "advisory");
   // Lockfile-tamper-risk gate (#2563): blocks only when the maintainer opts in with `block`. Defaults to `off`
   // (the finding is never even produced — see maybeAddLockfileTamperFinding's mode gate in queue/processors.ts),
   // so this branch only matters once a repo has explicitly turned the scan on.
-  if (code === "lockfile_tamper_risk") return gateMode(policy.lockfileIntegrityGateMode ?? "off") === "block";
+  if (code === "lockfile_tamper_risk") return gatePolicyBlocks(policy.lockfileIntegrityGateMode, "off");
   // CLA / license-compatibility gate (#2564): blocks only when the maintainer opts into claMode: block.
   // Defaults to off (evaluateClaCheck never even runs for an off repo, so the finding does not exist).
-  if (code === CLA_CONSENT_MISSING_CODE) return gateMode(policy.claGateMode ?? "off") === "block";
+  if (code === CLA_CONSENT_MISSING_CODE) return gatePolicyBlocks(policy.claGateMode, "off");
   return false;
 }
 
@@ -630,4 +638,6 @@ export const gateAdvisoryInternals = {
   isConfiguredGateBlocker,
   buildQualityGateWarning,
   buildSlopGateBlocker,
+  gateMode,
+  gatePolicyBlocks,
 };
