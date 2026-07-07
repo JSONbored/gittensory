@@ -1216,6 +1216,21 @@ describe("api routes", () => {
     const invalidLintPrText = await app.request("/v1/lint/pr-text", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ linkedIssue: -1 }) }, env);
     expect(invalidLintPrText.status).toBe(400);
 
+    const validateManifest = await app.request(
+      "/v1/validate/focus-manifest",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ content: "wantedPaths:\n  - src/\n" }) },
+      env,
+    );
+    expect(validateManifest.status).toBe(200);
+    await expect(validateManifest.json()).resolves.toMatchObject({ status: "ok", present: true, warnings: [] });
+
+    const invalidValidateManifest = await app.request(
+      "/v1/validate/focus-manifest",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ content: 123 }) },
+      env,
+    );
+    expect(invalidValidateManifest.status).toBe(400);
+
     const invalidFindOpportunities = await app.request(
       "/v1/opportunities/find",
       { method: "POST", headers: apiHeaders(env), body: JSON.stringify({}) },

@@ -127,6 +127,7 @@ import {
 } from "./local-write-tools";
 import { TEST_FRAMEWORKS } from "../signals/test-evidence";
 import { applyStepResult, buildPlanDag, nextReadySteps, planProgress, validatePlanDag, type PlanDag } from "../services/plan-dag";
+import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
 import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
 import { AGENT_ACTION_CLASSES, isActingAutonomyLevel, resolveAutonomy } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
@@ -235,6 +236,11 @@ const lintPrTextShape = {
   commitMessages: z.array(z.string().max(PREFLIGHT_LIMITS.bodyChars)).max(50).optional(),
   prBody: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
   linkedIssue: z.number().int().positive().optional(),
+};
+
+const validateConfigShape = {
+  content: z.string().max(256 * 1024),
+  source: z.enum(["repo_file", "api_record", "none"]).optional(),
 };
 
 const preflightShape = {
@@ -1011,6 +1017,13 @@ const lintPrTextOutputSchema = {
   summary: z.string().optional(),
   generatedAt: z.string().optional(),
 };
+
+const validateConfigOutputSchema = {
+  present: z.boolean().optional(),
+  warnings: z.array(z.string()).optional(),
+  normalized: z.record(z.string(), z.unknown()).optional(),
+  status: z.enum(["ok", "warn", "error"]).optional(),
+};
 // #550: output schemas for the remaining tools (preflight/score/local-branch/agent), so MCP clients can
 // machine-validate their results. Same lenient style as the schemas above — documented top-level keys,
 // all optional, complex values as z.unknown(). No behavior change; these mirror the existing payloads.
@@ -1500,6 +1513,17 @@ export class GittensoryMcp {
         outputSchema: lintPrTextOutputSchema,
       },
       async (input) => this.toolResult(this.lintPrText(input)),
+    );
+
+    server.registerTool(
+      "gittensory_validate_config",
+      {
+        description:
+          "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+        inputSchema: validateConfigShape,
+        outputSchema: validateConfigOutputSchema,
+      },
+      async (input) => this.toolResult(this.validateConfig(input)),
     );
 
     server.registerTool(
@@ -2256,6 +2280,14 @@ export class GittensoryMcp {
     const report = buildPrTextLint(input);
     return {
       summary: `Gittensory PR-text lint verdict: ${report.verdict}.`,
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  private validateConfig(input: { content: string; source?: "repo_file" | "api_record" | "none" | undefined }): ToolPayload {
+    const report = buildFocusManifestValidation(input);
+    return {
+      summary: `Gittensory manifest validation: ${report.status}.`,
       data: report as unknown as Record<string, unknown>,
     };
   }

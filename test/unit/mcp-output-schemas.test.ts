@@ -27,6 +27,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_check_before_start",
   "gittensory_find_opportunities",
   "gittensory_lint_pr_text",
+  "gittensory_validate_config",
   "gittensory_get_registry_changes",
   "gittensory_get_upstream_drift",
   "gittensory_local_status",
@@ -460,6 +461,32 @@ describe("MCP tool calls return schema-valid structured content", () => {
       },
     });
     expect((strong.structuredContent as Record<string, unknown>).verdict).toBe("strong");
+  });
+
+  it("gittensory_validate_config returns normalized manifest fields and status arms", async () => {
+    const { client } = await connectTestClient();
+    const ok = await client.callTool({
+      name: "gittensory_validate_config",
+      arguments: { content: "wantedPaths:\n  - src/\n" },
+    });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.structuredContent).toMatchObject({ status: "ok", present: true, warnings: [] });
+    expect((ok.structuredContent as Record<string, unknown>).normalized).toMatchObject({ wantedPaths: ["src/"] });
+
+    const warn = await client.callTool({
+      name: "gittensory_validate_config",
+      arguments: { content: "gate:\n  pack: not-real\n  enabled: true\n" },
+    });
+    expect(warn.isError).toBeFalsy();
+    expect((warn.structuredContent as Record<string, unknown>).status).toBe("warn");
+
+    const error = await client.callTool({
+      name: "gittensory_validate_config",
+      arguments: { content: "{ not: valid json" },
+    });
+    expect(error.isError).toBeFalsy();
+    expect((error.structuredContent as Record<string, unknown>).status).toBe("error");
+    expect(JSON.stringify(error.structuredContent)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
   });
 
   it("gittensory_get_repo_outcome_patterns reports not-found, computed, and cached outcomes", async () => {

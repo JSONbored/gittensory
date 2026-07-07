@@ -247,6 +247,7 @@ import { buildPullRequestReviewability, type PullRequestReviewability } from "..
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildSlopAssessment, buildIssueSlopAssessment, SLOP_RUBRIC_MARKDOWN, ISSUE_SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
+import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
 import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { loadGatePrecisionReport } from "../services/gate-precision";
@@ -450,6 +451,11 @@ const lintPrTextSchema = z.object({
   commitMessages: z.array(z.string().max(PREFLIGHT_LIMITS.bodyChars)).max(50).optional(),
   prBody: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
   linkedIssue: z.number().int().positive().optional(),
+});
+
+const validateFocusManifestSchema = z.object({
+  content: z.string().max(256 * 1024),
+  source: z.enum(["repo_file", "api_record", "none"]).optional(),
 });
 
 // Pure local-metadata slop self-checks (no repo data, no secrets) — mirror the gittensory_check_slop_risk /
@@ -2786,6 +2792,13 @@ export function createApp() {
     const parsed = lintPrTextSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_lint_pr_text_request", issues: parsed.error.issues }, 400);
     return c.json(buildPrTextLint(parsed.data));
+  });
+
+  app.post("/v1/validate/focus-manifest", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = validateFocusManifestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_validate_focus_manifest_request", issues: parsed.error.issues }, 400);
+    return c.json(buildFocusManifestValidation(parsed.data));
   });
 
   // Agent-native slop self-checks (#530/#533): pure local-metadata, mirroring the MCP tools of the same name.
@@ -5187,6 +5200,7 @@ const EXTENSION_PULL_CONTEXT_PATH = "/v1/extension/pull-context";
 const EXTENSION_PULL_CONTEXT_SCOPE = "extension:pull_context";
 const OPPORTUNITIES_FIND_PATH = "/v1/opportunities/find";
 const LINT_PR_TEXT_PATH = "/v1/lint/pr-text";
+const VALIDATE_FOCUS_MANIFEST_PATH = "/v1/validate/focus-manifest";
 const LINT_SLOP_RISK_PATH = "/v1/lint/slop-risk";
 const LINT_ISSUE_SLOP_PATH = "/v1/lint/issue-slop";
 // Contributor (miner) side of the extension (#556). Minted for NON-maintainer sign-ins; strictly
@@ -5253,7 +5267,7 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoAgentPendingActionsPath(path)) return true; // list-only: requireRepoMaintainer; decision POSTs require server tokens
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
   if (path === OPPORTUNITIES_FIND_PATH) return true;
-  if (path === LINT_PR_TEXT_PATH || path === LINT_SLOP_RISK_PATH || path === LINT_ISSUE_SLOP_PATH) return true;
+  if (path === LINT_PR_TEXT_PATH || path === VALIDATE_FOCUS_MANIFEST_PATH || path === LINT_SLOP_RISK_PATH || path === LINT_ISSUE_SLOP_PATH) return true;
   if (path === EXTENSION_PULL_CONTEXT_PATH && isExtensionScopedSession(identity)) return true;
   // Contributor extension scope reaches only `/v1/extension/contributors/<login>/*`; the handler's
   // requireContributorAccess then enforces actor === login (self-only).

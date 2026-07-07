@@ -144,7 +144,9 @@ All tools are metadata-only (no source upload). Run in this order:
    testFiles}` → slopRisk 0–100 + band + findings.
 4. `gittensory_lint_pr_text` — `{commitMessages[], prBody, linkedIssue}` → verdict
    strong/adequate/weak + specific fixes.
-5. `gittensory_predict_gate` — `{login, owner, repo, title, body, labels, linkedIssues}` → predicted
+5. `gittensory_validate_config` — `{content, source?}` → normalized manifest fields,
+   warnings, and ok/warn/error status.
+6. `gittensory_predict_gate` — `{login, owner, repo, title, body, labels, linkedIssues}` → predicted
    conclusion + blockers + warnings + readiness score.
 
 (Auth'd extras: `gittensory_preflight_pr` / `…_local_diff` for lane fit + collision + queue health.)

@@ -242,6 +242,19 @@ export async function startFixtureServer(
       response.end(JSON.stringify(lintPrTextFixture(body)));
       return;
     }
+    if (request.url === "/v1/validate/focus-manifest" && request.method === "POST") {
+      const body = (await readJsonRequest(request)) as { content?: string };
+      const content = body.content ?? "";
+      const malformed = content.includes("not: valid json");
+      response.end(
+        JSON.stringify(
+          malformed
+            ? { present: false, status: "error", warnings: ["Manifest content was not valid JSON; ignoring it and falling back to deterministic signals."], normalized: { present: false, source: "repo_file" } }
+            : { present: true, status: "ok", warnings: [], normalized: { present: true, source: "repo_file", wantedPaths: ["src/"] } },
+        ),
+      );
+      return;
+    }
     if (request.url === "/v1/lint/slop-risk" && request.method === "POST") {
       if (options.slopRiskStatus && options.slopRiskStatus >= 400) {
         await readJsonRequest(request);

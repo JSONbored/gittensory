@@ -42,6 +42,7 @@ const CLI_COMMAND_SPEC = {
   preflight: [],
   "review-pr": [],
   "lint-pr-text": [],
+  "validate-config": [],
   "slop-risk": [],
   "issue-slop": [],
   profile: ["list", "create", "switch", "remove"],
@@ -211,6 +212,11 @@ const lintPrTextShape = {
   commitMessages: z.array(z.string()).max(50).optional(),
   prBody: z.string().optional(),
   linkedIssue: z.number().int().positive().optional(),
+};
+
+const validateConfigShape = {
+  content: z.string().max(256 * 1024),
+  source: z.enum(["repo_file", "api_record", "none"]).optional(),
 };
 
 const checkSlopRiskShape = {
@@ -429,6 +435,16 @@ server.registerTool(
     inputSchema: lintPrTextShape,
   },
   async (input) => toolResult("Gittensory PR-text lint.", await apiPost("/v1/lint/pr-text", input)),
+);
+
+server.registerTool(
+  "gittensory_validate_config",
+  {
+    description:
+      "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+    inputSchema: validateConfigShape,
+  },
+  async (input) => toolResult("Gittensory manifest validation.", await apiPost("/v1/validate/focus-manifest", input)),
 );
 
 server.registerTool(
@@ -1456,6 +1472,7 @@ async function runCli(args) {
   if (command === "doctor") return doctor(options);
   if (command === "init-client") return initClient(options);
   if (command === "lint-pr-text") return lintPrTextCli(args.slice(1));
+  if (command === "validate-config") return validateConfigCli(args.slice(1));
   if (command === "slop-risk") return slopRiskCli(args.slice(1));
   if (command === "issue-slop") return issueSlopCli(args.slice(1));
   if (command === "decision-pack") return decisionPackCli(options);
@@ -1613,6 +1630,41 @@ async function lintPrTextCli(args) {
   process.stdout.write(`PR text lint: ${payload.verdict} (score ${payload.score})\n`);
   process.stdout.write(`${payload.summary}\n`);
   for (const fix of payload.fixes ?? []) process.stdout.write(`- ${fix}\n`);
+}
+
+function printValidateConfigHelp() {
+  process.stdout.write(
+    [
+      "Usage: gittensory-mcp validate-config --file <path> [--source repo_file|api_record|none] [--json]",
+      "",
+      "Validate a .gittensory.yml manifest before pushing.",
+      "Mirrors the gittensory_validate_config MCP tool and POST /v1/validate/focus-manifest. No source upload.",
+      "",
+      "Pass --json for machine-readable output.",
+    ].join("\n") + "\n",
+  );
+}
+
+async function validateConfigCli(args) {
+  if (!args.length || args[0] === "--help" || args[0] === "help") return printValidateConfigHelp();
+  const options = parseOptions(args);
+  if (!options.file) throw new Error("Pass --file <path> to the manifest to validate.");
+  const content = readCliTextFile(options.file, "Manifest");
+  const source = options.source;
+  if (source !== undefined && !["repo_file", "api_record", "none"].includes(String(source))) {
+    throw new Error("--source must be one of: repo_file, api_record, none");
+  }
+  const payload = await apiPost("/v1/validate/focus-manifest", {
+    content,
+    ...(source !== undefined ? { source } : {}),
+  });
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`Manifest validation: ${payload.status}\n`);
+  process.stdout.write(`present=${payload.present}\n`);
+  for (const warning of payload.warnings ?? []) process.stdout.write(`- ${warning}\n`);
 }
 
 function printSlopRiskHelp() {
@@ -2096,6 +2148,7 @@ function printHelp() {
   gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
   gittensory-mcp review-pr --login <github-login> [--repo owner/repo] [--base origin/main] [--commit <message>]... [--body <text>] [--body-file <path>] [--linked-issue <number>] [--json]
   gittensory-mcp lint-pr-text [--commit <message>]... [--body <text>] [--body-file <path>] [--linked-issue <number>] [--json]
+  gittensory-mcp validate-config --file <path> [--source repo_file|api_record|none] [--json]
   gittensory-mcp slop-risk [--description <text>] [--description-file <path>] [--changed-file <path[:additions:deletions]>]... [--test <command>]... [--test-file <path>]... [--json]
   gittensory-mcp issue-slop [--title <text>] [--body <text>] [--body-file <path>] [--json]
   gittensory-mcp agent plan --login <github-login> [--repo owner/repo] [--json]
