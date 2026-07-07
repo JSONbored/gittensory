@@ -8,6 +8,7 @@ import {
   type RepoOutcomeSnapshot,
   runOpsAlerts,
 } from "../../src/review/ops-wire";
+import { counterValue, resetMetrics, setSelfHostedMetricsMode } from "../../src/selfhost/metrics";
 import { createTestEnv } from "../helpers/d1";
 
 // Wrap env.DB.prepare so any SQL matching `pattern` throws, exercising a fail-safe catch; every other
@@ -187,7 +188,11 @@ async function seedGateFalsePositiveAnomaly(env: Env, repoFullName: string): Pro
 }
 
 describe("runOpsAlerts — cron path over gittensory's outcome data", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetMetrics();
+    setSelfHostedMetricsMode(false);
+  });
 
   it("emits a structured ops_anomaly log naming the repo + drift on a seeded anomaly, at error level (#orb-ci-stuck-repeat -- so it reaches Sentry)", async () => {
     const env = createTestEnv();
@@ -224,6 +229,7 @@ describe("runOpsAlerts — cron path over gittensory's outcome data", () => {
   });
 
   it("detects and reports a review burst end-to-end (a PR published far more review surfaces than normal in the window)", async () => {
+    setSelfHostedMetricsMode(true); // keep the repo label so the counter assertion can target the exact series
     const env = createTestEnv();
     await seedRegisteredRepo(env, "owner/repo");
     for (let i = 0; i < 7; i += 1) {
@@ -242,6 +248,9 @@ describe("runOpsAlerts — cron path over gittensory's outcome data", () => {
     const stats = await computeOpsStats(env);
     const row = stats.repos.find((r) => r.repoFullName === "owner/repo");
     expect(row?.anomalies.some((a) => /review burst/.test(a))).toBe(true);
+    // #ops-anomaly-metric: the Prometheus counterpart to the log line, labeled by kind (self-host mode preserves
+    // the repo label so the assertion can target the exact series without relying on cloud-worker redaction).
+    expect(counterValue("gittensory_ops_anomaly_total", { repo: "owner/repo", kind: "review_burst" })).toBe(1);
   });
 
   it("detects and reports a review FAILURE burst end-to-end -- reproduces the #3747 incident shape (repeated inconclusive calls, zero publishes) (#review-burst-blind-spot)", async () => {

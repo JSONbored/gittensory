@@ -120,6 +120,15 @@ describe("metrics registry (#982)", () => {
     expect(await renderMetrics()).toContain('gittensory_gate_decisions_total{conclusion="hold"} 1');
   });
 
+  it("redacts the repository label from the ops anomaly counter but keeps the kind label (#ops-anomaly-metric)", async () => {
+    incr("gittensory_ops_anomaly_total", { repo: "private-owner/secret-repo", kind: "review_burst" });
+
+    const out = await renderMetrics();
+    expect(out).toContain('gittensory_ops_anomaly_total{kind="review_burst"} 1');
+    expect(out).not.toContain("private-owner/secret-repo");
+    expect(out).not.toContain('repo="');
+  });
+
   it("preserves repository labels for unrelated metrics", async () => {
     incr("debug_total", { repo: "public-owner/public-repo" });
     expect(await renderMetrics()).toContain('debug_total{repo="public-owner/public-repo"} 1');
@@ -132,10 +141,12 @@ describe("metrics registry (#982)", () => {
     setSelfHostedMetricsMode(true);
     incr("gittensory_gate_decisions_total", { repo: "owner/repo", conclusion: "success" });
     incr("gittensory_reviews_published_total", { repo: "owner/repo" });
+    incr("gittensory_ops_anomaly_total", { repo: "owner/repo", kind: "review_burst" });
 
     const out = await renderMetrics();
     expect(out).toContain('gittensory_gate_decisions_total{conclusion="success",repo="owner/repo"} 1');
     expect(out).toContain('gittensory_reviews_published_total{repo="owner/repo"} 1');
+    expect(out).toContain('gittensory_ops_anomaly_total{kind="review_burst",repo="owner/repo"} 1');
     expect(out).toContain('repo="owner/repo"');
   });
 

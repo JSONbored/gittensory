@@ -3094,6 +3094,94 @@
           "legendFormat": "clamped"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 213 },
+      "id": 162,
+      "title": "Reviews & Ops Anomalies (#ops-anomaly-metric)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 214 },
+      "id": 163,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Ops Anomaly Detections (review burst / review failure burst)",
+      "description": "runOpsAlerts' hourly scan over gittensory's own outcome data, labeled by kind (review_burst / review_failure_burst) and repo. Any nonzero value here means the scan flagged a stuck-CI finalize loop or retry storm -- see the ops_anomaly structured log for the human-readable detail line.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (kind, repo) (increase(gittensory_ops_anomaly_total[1h])) or vector(0)",
+          "legendFormat": "{{kind}} {{repo}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 214 },
+      "id": 164,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Published Review Comments (rate)",
+      "description": "Published review comments/summaries per repo -- the gittensory review pipeline's actual output rate.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (repo) (rate(gittensory_reviews_published_total[5m])) or vector(0)",
+          "legendFormat": "{{repo}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 214 },
+      "id": 165,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Gate Decisions by Conclusion (rate)",
+      "description": "Rendered gate verdict rate by conclusion (merge/close/hold) -- the \"are we rubber-stamping?\" signal (#reviews-dashboard).",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (conclusion) (rate(gittensory_gate_decisions_total[5m])) or vector(0)",
+          "legendFormat": "{{conclusion}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -3118,5 +3206,5 @@
   "timezone": "browser",
   "title": "Gittensory Self-Host",
   "uid": "gittensory-selfhost",
-  "version": 8
+  "version": 9
 }

@@ -31,6 +31,7 @@
 // design. This module is READ-ONLY observability: it reports drift; it never changes what blocks a live PR.
 
 import { findHottestInconclusiveReviewTargetForRepo, findHottestReviewTargetForRepo, listRepositories, sumByokAiUsageForRepoSince } from "../db/repositories";
+import { incr } from "../selfhost/metrics";
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadGatePrecisionReport, type GatePrecisionReport } from "../services/gate-precision";
@@ -191,6 +192,16 @@ export async function runOpsAlerts(env: Env): Promise<Record<string, string[]>> 
         // Structured log = gittensory's notify path (no Discord/operator webhook exists) AND the Sentry path
         // (level:"error" + an `event` field reaches forwardStructuredLogToSentry). One line per repo.
         console.error(JSON.stringify({ level: "error", event: "ops_anomaly", repo: repoFullName, at: nowIso(), anomalies }));
+        // #ops-anomaly-metric: Prometheus counterpart to the log line above so a self-host operator can alert on
+        // /metrics instead of grepping Workers Logs. Scoped to reviewBurst/reviewFailureBurst -- the two anomalies
+        // this module exists to catch fast (#orb-ci-stuck-repeat / #review-burst-blind-spot) -- rather than every
+        // anomaly kind, so the counter stays a precise "stuck-CI/retry-storm" signal, not a catch-all.
+        if (reviewBurst && reviewBurst.count >= REVIEW_BURST_THRESHOLD) {
+          incr("gittensory_ops_anomaly_total", { repo: repoFullName, kind: "review_burst" });
+        }
+        if (reviewFailureBurst && reviewFailureBurst.count >= REVIEW_FAILURE_BURST_THRESHOLD) {
+          incr("gittensory_ops_anomaly_total", { repo: repoFullName, kind: "review_failure_burst" });
+        }
       } catch (error) {
         console.error(JSON.stringify({ level: "error", event: "ops_anomaly_repo_error", repo: repoFullName, message: errorMessage(error).slice(0, 200) }));
       }

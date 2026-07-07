@@ -133,6 +133,7 @@ const DEFAULT_METRIC_META: readonly (readonly [string, MetricMeta])[] = [
   ["gittensory_github_pr_files_fetch_total", { help: "GitHub pull-request file fetch attempts.", type: "counter" }],
   ["gittensory_pr_state_cache_total", { help: "Pull-request state cache outcomes.", type: "counter" }],
   ["gittensory_ci_state_cache_total", { help: "CI-state snapshot cache outcomes.", type: "counter" }],
+  ["gittensory_ops_anomaly_total", { help: "Ops anomaly scan detections (review burst / review failure burst), by repo and kind.", type: "counter" }],
 ];
 const metricMeta = new Map<string, MetricMeta>(DEFAULT_METRIC_META);
 
@@ -151,6 +152,7 @@ export function setSelfHostedMetricsMode(isSelfHosted: boolean): void {
 const PRIVATE_REPO_LABEL_METRICS = new Set([
   "gittensory_gate_decisions_total",
   "gittensory_reviews_published_total",
+  "gittensory_ops_anomaly_total",
 ]);
 const ALWAYS_REDACT_REPO_LABEL_METRICS = new Set([
   "gittensory_agent_disposition_total",

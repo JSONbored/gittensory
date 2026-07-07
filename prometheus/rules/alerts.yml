@@ -503,6 +503,25 @@ groups:
           description: "Provider {{ $labels.provider }} has failed repeatedly and its circuit breaker is skipping calls fast during its cooldown (sustained 5m)."
           runbook: "Check that provider's credentials/reachability (CLI auth for claude-code/codex, or the configured API key/base URL for HTTP providers) via gittensory_ai_provider_failures_total{provider=\"...\"} and recent selfhost_ai_provider_failed logs."
 
+  # ── Ops anomaly scan (review burst / review failure burst, #ops-anomaly-metric) ────
+  - name: gittensory-ops-anomalies
+    rules:
+      - alert: GittensoryOpsAnomalyDetected
+        # runOpsAlerts (src/review/ops-wire.ts) scans gittensory's own outcome data hourly and increments this
+        # counter, labeled by kind, when it catches a review burst (a stuck-CI finalize loop or sweep retry
+        # storm re-publishing the same PR far more than normal iteration ever does) or a review failure burst
+        # (repeated inconclusive AI-review calls with zero successful publish -- the #3747 incident shape).
+        # Same absolute-increase style as GittensoryDeadLetterJobsGrowing: any occurrence over the scan's own
+        # 2h detection window is worth a look, not a rate/ratio.
+        expr: increase(gittensory_ops_anomaly_total[2h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gittensory ops anomaly scan flagged a {{ $labels.kind }} on {{ $labels.repo }}"
+          description: "{{ $value | printf \"%.0f\" }} {{ $labels.kind }} detection(s) over the last 2h for {{ $labels.repo }} (sustained 5m). Check the ops_anomaly structured log for the full detail line."
+          runbook: "Tail logs for level=error event=ops_anomaly repo={{ $labels.repo }} for the human-readable anomaly text. A review_burst or review_failure_burst usually means a stuck-CI finalize loop or a sweep retry storm -- see #orb-ci-stuck-repeat / #review-burst-blind-spot."
+
   # ── Host clock sync (#3811) ───────────────────────────────────────────────
   - name: gittensory-system-health
     rules:
