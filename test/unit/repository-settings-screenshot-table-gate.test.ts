@@ -75,4 +75,15 @@ describe("repository_settings: screenshotTableGate (#2006)", () => {
     expect(settings.screenshotTableGate?.whenLabels).toEqual([]);
     expect(settings.screenshotTableGate?.whenPaths).toEqual([]);
   });
+
+  it("REGRESSION: valid JSON that parses to a non-array (an object) also fails closed to an empty list, not just a JSON syntax error", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "acme/non-array-json" });
+    await env.DB.prepare("UPDATE repository_settings SET screenshot_table_gate_when_labels_json = ?, screenshot_table_gate_when_paths_json = ? WHERE repo_full_name = ?")
+      .bind('{"frontend":true}', "42", "acme/non-array-json")
+      .run();
+    const settings = await getRepositorySettings(env, "acme/non-array-json");
+    expect(settings.screenshotTableGate?.whenLabels).toEqual([]);
+    expect(settings.screenshotTableGate?.whenPaths).toEqual([]);
+  });
 });
