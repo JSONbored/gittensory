@@ -284,8 +284,9 @@ export async function extractRepoCultureProfile(env: Env, repoFullName: string, 
   }
   try {
     const prs = await listRecentMergedPullRequests(env, repoFullName);
+    const sampleCountAtGeneration = await countRecentMergedPullRequests(env, repoFullName);
     const profile = deriveRepoCultureProfile(repoFullName, prs, generatedAt);
-    await persistCultureProfile(env, repoFullName, profile, prs.length);
+    await persistCultureProfile(env, repoFullName, profile, sampleCountAtGeneration);
     return profile;
   } catch {
     return insufficientData(repoFullName, generatedAt, "repo merged-pull-request history is unavailable (storage read failed)");

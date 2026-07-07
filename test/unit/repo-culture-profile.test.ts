@@ -194,6 +194,39 @@ describe("extractRepoCultureProfile: cache + invalidation", () => {
     expect(refreshed.generatedAt).toBe("2026-07-05T01:00:00.000Z");
   });
 
+  it("reuses a fresh culture-profile cache when a repo has more than the 200 sampled merged PRs", async () => {
+    const env = createTestEnv({});
+    for (let i = 1; i <= 201; i++) {
+      await seedMergedPr(env, {
+        number: i,
+        mergedAt: new Date(Date.UTC(2026, 5, i)).toISOString(),
+        labels: ["bug"],
+      });
+    }
+
+    const first = await extractRepoCultureProfile(env, REPO, {
+      now: "2026-07-05T00:00:00.000Z",
+      maxAgeMs: Number.POSITIVE_INFINITY,
+    });
+    expect(first.present).toBe(true);
+    if (!first.present) throw new Error("expected present profile");
+    expect(first.pullRequestNorms.sampleSize).toBe(200);
+
+    const second = await extractRepoCultureProfile(env, REPO, {
+      now: "2026-07-05T01:00:00.000Z",
+      maxAgeMs: Number.POSITIVE_INFINITY,
+    });
+    expect(second).toEqual(first);
+    expect(second.generatedAt).toBe("2026-07-05T00:00:00.000Z");
+
+    const snapshotCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM signal_snapshots WHERE signal_type = ? AND target_key = ?",
+    )
+      .bind("repo-culture-profile", REPO)
+      .first<{ count: number }>();
+    expect(snapshotCount?.count).toBe(1);
+  });
+
   it("options.refresh forces a fresh derive even with a warm, non-stale cache", async () => {
     const env = createTestEnv({});
     for (let i = 1; i <= MIN_SAMPLE_PULL_REQUESTS; i++) await seedMergedPr(env, { number: i });
