@@ -14,10 +14,11 @@
 //   reviewed   = merged + closed + commented            (every distinct PR a review surface was published for)
 //   filteredPct = (reviewed - merged) / reviewed         (share resolved WITHOUT a merge — noise kept off humans)
 //   accuracyPct = 1 - reversed / (merged + closed)       (reversed = engine auto-actions a human overturned, live)
-//   minutesSaved = reviewed * avgReviewEffortMinutes      (estimated maintainer review time saved -- #1955: the
-//                                                          real per-PR average of `estimateReviewEffort`'s minutes,
-//                                                          persisted at publish time; MINUTES_SAVED_PER_PR only
-//                                                          backstops an empty/all-historical ledger)
+//   minutesSaved = SUM(per-PR COALESCE(reviewEffortMinutes, MINUTES_SAVED_PER_PR))  (estimated maintainer
+//                                                          review time saved -- #1955/#2070: each distinct
+//                                                          published PR contributes its persisted estimate,
+//                                                          with MINUTES_SAVED_PER_PR only backstopping PRs
+//                                                          that lack a stored estimate)
 //
 // PRIVACY: counts only — no PR content, authors, scores, or reward internals. Safe to serve publicly.
 //
@@ -190,7 +191,7 @@ export async function getPublicStats(
         Promise.resolve<DispositionRow[]>([]),
         Promise.resolve<{ project: string; reversed: number }[]>([]),
         Promise.resolve<{ reviewed: number; merged: number }[]>([]),
-        Promise.resolve<{ avgMinutes: number | null }[]>([]),
+        Promise.resolve<{ totalMinutes: number | null }[]>([]),
       ])
     : await Promise.all([
     safeAll<DispositionRow>(
@@ -244,16 +245,11 @@ export async function getPublicStats(
       sinceIso,
       ...projects,
     ),
-    // review-effort minutes (#1955): a deterministic, no-AI per-PR estimate persisted at publish time
-    // (processors.ts's pr_public_surface_published metadata.reviewEffortMinutes). Fold repeated publish events
-    // down to one sample per distinct PR before the global AVG, matching the distinct-PR reviewed denominator
-    // below; a published row that predates this feature (or a files-fetch failure at publish time) simply has no
-    // `reviewEffortMinutes` key, so json_extract returns SQL NULL for that row and SQLite's AVG silently skips it
-    // — an all-historical ledger degrades to a NULL average (handled below via `?? MINUTES_SAVED_PER_PR`), never a
-    // crash or a skewed zero.
-    safeAll<{ avgMinutes: number | null }>(
+    // review-effort minutes (#1955/#2070): sum each distinct published PR's persisted estimate, using
+    // MINUTES_SAVED_PER_PR only for PRs whose metadata lacks reviewEffortMinutes (mixed-rollout safe).
+    safeAll<{ totalMinutes: number | null }>(
       env,
-      `SELECT AVG(minutes) AS avgMinutes
+      `SELECT SUM(COALESCE(minutes, ?)) AS totalMinutes
          FROM (
            SELECT repo, number, AVG(minutes) AS minutes
              FROM (
@@ -267,6 +263,7 @@ export async function getPublicStats(
              )
             GROUP BY repo, number
          )`,
+      MINUTES_SAVED_PER_PR,
       ...projects,
     ),
   ]);
@@ -323,11 +320,11 @@ export async function getPublicStats(
 
   const reviewed = reviewedOf(totals);
   const w = weeklyRows[0] ?? { reviewed: 0, merged: 0 };
-  // review-effort minutes (#1955): prefer the REAL average per-review estimate (persisted at publish time from
-  // estimateReviewEffort); an empty/all-null ledger (no allowlisted project, or every published row predates
-  // this feature) falls back to the flat MINUTES_SAVED_PER_PR constant, exactly like every other nullish-SUM
-  // fallback in this module (`?? 0`) — never a crash, never a skewed zero.
-  const avgReviewEffortMinutes = effortRows[0]?.avgMinutes ?? MINUTES_SAVED_PER_PR;
+  // review-effort minutes (#1955/#2070): sum per-PR estimates with MINUTES_SAVED_PER_PR fallback for missing
+  // rows; an empty effort subquery (no allowlisted publishes) degrades to reviewed * MINUTES_SAVED_PER_PR.
+  const minutesSavedTotal = effortRows[0]?.totalMinutes;
+  const minutesSaved =
+    reviewed === 0 ? 0 : Math.round(minutesSavedTotal ?? reviewed * MINUTES_SAVED_PER_PR);
   return {
     generatedAt,
     updatedAt: generatedAt,
@@ -336,7 +333,7 @@ export async function getPublicStats(
       reviewed,
       filteredPct: filteredPct(reviewed, totals.merged),
       accuracyPct: accuracyPct(totals.merged, totals.closed, totals.reversed),
-      minutesSaved: Math.round(reviewed * avgReviewEffortMinutes),
+      minutesSaved,
     },
     weekly: { reviewed: w.reviewed ?? 0, merged: w.merged ?? 0 },
     byProject,

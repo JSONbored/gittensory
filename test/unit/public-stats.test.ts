@@ -123,30 +123,78 @@ describe("getPublicStats — live aggregate over the review ledger", () => {
     expect(out.updatedAt).toBe(out.generatedAt);
   });
 
-  // #1955: minutesSaved now averages the REAL per-PR estimate (estimateReviewEffort's minutes, persisted at
-  // publish time) instead of unconditionally multiplying by the flat MINUTES_SAVED_PER_PR constant. Proves the
-  // new estimate is actually used when the ledger has it — the regression case for the flat-constant replacement.
-  it("uses the real average review-effort minutes when the ledger has them, instead of the flat constant", async () => {
+  // #1955/#2070: minutesSaved sums per-PR estimates (with MINUTES_SAVED_PER_PR fallback for missing rows)
+  // instead of multiplying reviewed by a global average.
+  it("sums the real per-PR review-effort minutes when the ledger has them, instead of the flat constant", async () => {
     const withEffort = (sql: string): Row[] => {
-      if (isEffort(sql)) return [{ avgMinutes: 7.4 }];
+      if (isEffort(sql)) return [{ totalMinutes: 2742 * 7.4 }];
       return ledger(sql);
     };
     const out = await getPublicStats(stubEnv(withEffort), NOW);
-    // reviewed = 2742 (same ledger as the base test) * 7.4 = 20290.8 -> rounded.
     expect(out.totals.minutesSaved).toBe(Math.round(2742 * 7.4));
     expect(out.totals.minutesSaved).not.toBe(2742 * MINUTES_SAVED_PER_PR);
   });
 
-  // The nullish arm of `effortRows[0]?.avgMinutes ?? MINUTES_SAVED_PER_PR`: a ledger whose published rows all
-  // predate this feature (or an empty allowlist) yields a NULL average (SQLite's AVG skips missing json_extract
-  // keys entirely) rather than a row missing outright — both must degrade to the flat constant, not NaN/0.
-  it("falls back to the flat MINUTES_SAVED_PER_PR constant when the effort average is SQL NULL", async () => {
+  // The nullish arm when the effort subquery returns SQL NULL (no published rows in scope).
+  it("falls back to the flat MINUTES_SAVED_PER_PR constant when the effort sum is SQL NULL", async () => {
     const nullEffort = (sql: string): Row[] => {
-      if (isEffort(sql)) return [{ avgMinutes: null }];
+      if (isEffort(sql)) return [{ totalMinutes: null }];
       return ledger(sql);
     };
     const out = await getPublicStats(stubEnv(nullEffort), NOW);
     expect(out.totals.minutesSaved).toBe(2742 * MINUTES_SAVED_PER_PR);
+  });
+
+  // #2070: mixed ledgers must COALESCE missing per-PR estimates to MINUTES_SAVED_PER_PR, not AVG-skip them.
+  it("sums mixed per-PR effort with fallback when one published PR lacks reviewEffortMinutes", async () => {
+    const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "JSONbored/gittensory" });
+    const db = env.DB;
+
+    await db
+      .prepare(
+        `INSERT INTO pull_requests (id, repo_full_name, number, title, state, merged_at)
+         VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        "pr-a",
+        "JSONbored/gittensory",
+        10,
+        "small fix",
+        "closed",
+        "2026-06-01T00:00:00.000Z",
+        "pr-b",
+        "JSONbored/gittensory",
+        11,
+        "legacy publish",
+        "closed",
+        "2026-06-01T00:00:00.000Z",
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO audit_events (id, event_type, target_key, outcome, metadata_json)
+         VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        "published-a",
+        "github_app.pr_public_surface_published",
+        "JSONbored/gittensory#10",
+        "completed",
+        JSON.stringify({ reviewEffortMinutes: 4 }),
+        "published-b",
+        "github_app.pr_public_surface_published",
+        "JSONbored/gittensory#11",
+        "completed",
+        "{}",
+      )
+      .run();
+
+    const out = await getPublicStats(env, NOW);
+
+    expect(out.totals.reviewed).toBe(2);
+    expect(out.totals.minutesSaved).toBe(4 + MINUTES_SAVED_PER_PR);
+    // Old AVG-based path skipped the missing row and under-reported: reviewed * avg(4) = 8.
+    expect(out.totals.minutesSaved).not.toBe(8);
   });
 
   it("breaks byProject ties on project name so equal-reviewed repos keep a deterministic order", async () => {
@@ -322,9 +370,8 @@ describe("getPublicStats — live aggregate over the review ledger", () => {
     expect(out.totals.accuracyPct).toBe(100);
   });
 
-  // #1955: end-to-end over REAL D1/SQLite (not the stub) — a published row's `metadata_json.reviewEffortMinutes`
-  // (the exact shape processors.ts writes at publish time) round-trips through json_extract/AVG into
-  // minutesSaved, proving the SQL itself (not just the mocked shape) computes the real per-PR average.
+  // #1955/#2070: end-to-end over REAL D1/SQLite — published reviewEffortMinutes round-trip through
+  // json_extract/SUM(COALESCE(...)) into minutesSaved.
   it("averages a real reviewEffortMinutes value out of metadata_json via json_extract (real D1)", async () => {
     const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "JSONbored/gittensory" });
     const db = env.DB;
@@ -370,7 +417,7 @@ describe("getPublicStats — live aggregate over the review ledger", () => {
 
     const out = await getPublicStats(env, NOW);
 
-    // avg(4, 96) = 50; reviewed = 2 -> minutesSaved = 100 (not 2 * MINUTES_SAVED_PER_PR = 40).
+    // sum(4, 96) = 100; reviewed = 2 -> minutesSaved = 100 (not 2 * MINUTES_SAVED_PER_PR = 40).
     expect(out.totals.reviewed).toBe(2);
     expect(out.totals.minutesSaved).toBe(100);
     expect(out.totals.minutesSaved).not.toBe(2 * MINUTES_SAVED_PER_PR);
@@ -432,7 +479,7 @@ describe("getPublicStats — live aggregate over the review ledger", () => {
     const out = await getPublicStats(env, NOW);
 
     expect(out.totals.reviewed).toBe(2);
-    // Per-PR average: avg(avg(100, 100, 100), 1) = 50.5; reviewed = 2 -> 101.
+    // Per-PR sum: 100 + 1 = 101 (deduped republish events averaged per PR first).
     // A raw event-level average would skew this to round(2 * avg(100, 100, 100, 1)) = 151.
     expect(out.totals.minutesSaved).toBe(101);
   });
