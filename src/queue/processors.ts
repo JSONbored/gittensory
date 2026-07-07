@@ -1080,13 +1080,13 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // One bounded re-gate unit fanned out by the sweep (#audit-sweep-fanout): re-review + stamp a single PR.
       await regatePullRequest(
         env,
-        message.repairHeadSha,
         message.repoFullName,
         message.prNumber,
         message.installationId,
         message.deliveryId,
         message.force,
         message.prCreatedAt,
+        message.repairHeadSha,
       );
       return;
     case "run-agent":
@@ -1462,13 +1462,17 @@ async function refreshOpenPullRequestsForScheduledSweep(
 // surfaceRepairPriorityPullNumbers has no memory of prior attempts -- if the repair keeps failing for the SAME
 // head SHA (e.g. every AI-provider attempt times out), it would otherwise re-select that PR forever, burning a
 // fresh review attempt every cycle for zero output. These two constants cap that: once a SHA has already had
-const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 5;
+// REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA dispatches recorded, it drops back to ordinary staleness-gated candidacy
 // (still eventually re-checked, just not on every tick) and a single REGATE_REPAIR_EXHAUSTED_EVENT_TYPE audit
 // event is recorded so the stuck PR is visible instead of silently retried forever. A new commit changes the
 // head SHA, which resets the count naturally (the target key is scoped to repo+PR+SHA).
 const REGATE_REPAIR_ATTEMPT_EVENT_TYPE = "agent.sweep.regate.repair_attempt";
 const REGATE_REPAIR_EXHAUSTED_EVENT_TYPE = "agent.sweep.regate.repair_exhausted";
-const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 2;
+// Bumped 2 -> 5 (#3998): the dispatch-time recording below double-counted rate-limit-deferred attempts as
+// real ones, exhausting the budget before the repair ever actually ran. Recording moved to execution-time
+// (regatePullRequest) makes each count a genuine attempt, so a higher cap gives real transient failures
+// (e.g. a single AI-provider timeout) more room without letting a truly broken PR retry indefinitely.
+const REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA = 5;
 const REGATE_REPAIR_ATTEMPT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 function regateRepairTargetKey(repoFullName: string, prNumber: number, headSha: string): string {
@@ -1871,21 +1875,21 @@ async function sweepRepoRegate(
       const job: JobMessage = {
         type: "agent-regate-pr",
         deliveryId: isPriorityRepair
-        // #orb-retry-storm: pass the repair SHA so regatePullRequest can record the attempt at
-        // execution time (after rate-limit admission), not here at dispatch time.  Jobs that are
-        // deferred or dropped before they run no longer count against the per-SHA cap.
-        ...(isPriorityRepair && pr.headSha ? { repairHeadSha: pr.headSha } : {}),
           ? `regate-repair:${repoFullName}#${pr.number}`
           : `regate-sweep:${repoFullName}#${pr.number}`,
         repoFullName,
         prNumber: pr.number,
         installationId: sweepInstallationId,
-          targetKey: regateRepairTargetKey(repoFullName, pr.number, pr.headSha),
-          outcome: "queued",
-          detail: `outage-repair re-review dispatched for ${repoFullName}#${pr.number}`,
-          metadata: { repoFullName, prNumber: pr.number, headSha: pr.headSha },
-        });
-      }
+        ...(pr.createdAt ? { prCreatedAt: pr.createdAt } : {}),
+        // #orb-retry-storm: pass the repair SHA so regatePullRequest can record the attempt at
+        // execution time (after rate-limit admission), not here at dispatch time.  Jobs that are
+        // deferred or dropped before they run no longer count against the per-SHA cap.
+        ...(isPriorityRepair && pr.headSha ? { repairHeadSha: pr.headSha } : {}),
+      };
+      const delaySeconds = Math.min(index * 10, 600);
+      await (delaySeconds > 0
+        ? env.JOBS.send(job, { delaySeconds })
+        : env.JOBS.send(job));
     }
   }
   await recordAuditEvent(env, {
@@ -2089,13 +2093,13 @@ async function sweepRepoBacklogConvergence(
 // per-PR job always re-evaluates the head.
 async function regatePullRequest(
   env: Env,
-  repairHeadSha?: string,
   repoFullName: string,
   prNumber: number,
   installationId: number,
   deliveryId: string,
   force?: boolean,
   prCreatedAt?: string | null,
+  repairHeadSha?: string,
 ): Promise<void> {
   // Reserve installation rate-limit headroom (#audit-rate-headroom): all repos share ONE GitHub App installation
   // = ONE REST bucket, so when the shared budget is low, DEFER this re-review until the reset instead of
@@ -2117,11 +2121,17 @@ async function regatePullRequest(
     await env.JOBS.send(
       {
         type: "agent-regate-pr",
-        ...(repairHeadSha ? { repairHeadSha } : {}),
         deliveryId,
         repoFullName,
         prNumber,
         installationId,
+        ...(prCreatedAt ? { prCreatedAt } : {}),
+        ...(force ? { force: true } : {}),
+        ...(repairHeadSha ? { repairHeadSha } : {}),
+      },
+      { delaySeconds: delayUntil(rateResetAt) },
+    );
+    return;
   }
   // #orb-retry-storm: record the repair attempt NOW — after rate-limit admission — so the cap in
   // surfaceRepairPriorityPullNumbers counts actual executions, not queued dispatches that may have
@@ -2132,16 +2142,10 @@ async function regatePullRequest(
       eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
       actor: "gittensory",
       targetKey: regateRepairTargetKey(repoFullName, prNumber, repairHeadSha),
-      outcome: "started",
+      outcome: "queued",
       detail: `outage-repair re-review executing for ${repoFullName}#${prNumber}`,
       metadata: { repoFullName, prNumber, headSha: repairHeadSha },
     });
-        ...(prCreatedAt ? { prCreatedAt } : {}),
-        ...(force ? { force: true } : {}),
-      },
-      { delaySeconds: delayUntil(rateResetAt) },
-    );
-    return;
   }
   const settings = await resolveRepositorySettings(env, repoFullName);
   await reReviewStoredPullRequest(
