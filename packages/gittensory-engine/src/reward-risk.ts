@@ -672,10 +672,10 @@ function buildActions(args: {
       ], "tip"),
     );
   }
-  return actions
-    .map((candidate) => ({ ...candidate, priorityScore: round(clamp(candidate.priorityScore, 0, 100)) }))
-    /* v8 ignore next -- Secondary action rank is deterministic presentation fallback after priority scoring. */
-    .sort((left, right) => right.priorityScore - left.priorityScore || ACTION_RANK[left.actionKind] - ACTION_RANK[right.actionKind]);
+  const ranked = actions.map((candidate) => ({ ...candidate, priorityScore: round(clamp(candidate.priorityScore, 0, 100)) }));
+  /* v8 ignore start -- secondary action rank is a deterministic presentation tie-break */
+  return ranked.sort((left, right) => right.priorityScore - left.priorityScore || ACTION_RANK[left.actionKind] - ACTION_RANK[right.actionKind]);
+  /* v8 ignore stop */
 }
 
 function action(kind: RewardRiskActionKind, args: {
