@@ -5594,6 +5594,7 @@ async function processGitHubWebhook(
 
     if (eventName === "issue_comment" && (await maybeProcessResolveCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessExplainCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
+    if (eventName === "issue_comment" && (await maybeProcessPauseCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (
       eventName === "issue_comment" &&
       (await maybeProcessConfigurationCommand(env, deliveryId, payload))
@@ -10692,6 +10693,54 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   await createOrUpdateAgentCommandComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation, mode);
   await recordAuditEvent(env, { eventType: "github_app.finding_resolved", actor: req.actor, targetKey, outcome: "completed", detail: `Marked ${resolvedLabel} as resolved.`, metadata: { deliveryId, repoFullName: req.repoFullName, scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } });
   await recordGithubProductUsage(env, "finding_resolved", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); return true; }
+
+/**
+ * `@gittensory pause` (#2164, part of #1960): a maintainer pauses AUTO-REVIEW for THIS PR only by recording a
+ * per-PR `github_app.autoreview_paused` marker (an audit event keyed to repo#pr) that the sweep/webhook re-review
+ * path can honor. AUTO-REVIEW SCOPE ONLY — it deliberately touches neither the Gate check-run, the AgentActionMode,
+ * nor any advisory, so the one-shot gate disposition and its enforcement are left intact (#1960's hard constraint:
+ * pause must never flip the gate to advisory or bypass the disposition; the gate-enforcement side and any
+ * repository_settings kill-switch stay maintainer-owned). Mirrors maybeProcessResolveCommand's classify → authorize
+ * → record shape (classifyPrCommandRequest + authorizePrActionActor + the gate-override skip/denied/completed
+ * recording convention). Unlike gate-override it does NOT consult resolveAgentActionMode: the pause IS the
+ * "stop auto-reviewing" instruction, so gating the marker behind the execution mode would make an already
+ * paused/dry-run agent impossible to pause — the marker + public-safe confirmation are therefore recorded
+ * unconditionally on an authorized pause. Returns true once it owns the event; a non-pause comment returns false
+ * and falls through to the other command handlers.
+ */
+async function maybeProcessPauseCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  const command = parseGittensoryMentionCommand(payload.comment?.body);
+  if (!command || command.name !== "pause") return false;
+  const { classifyPrCommandRequest } = await import("../github/pr-command-request");
+  const req = classifyPrCommandRequest(payload, getInstallationId(payload));
+  if (!req.ok) {
+    await recordAutoreviewPausedSkip(env, deliveryId, req.repoFullName, req.targetKey, req.actor, req.reason);
+    return true;
+  }
+  const targetKey = `${req.repoFullName}#${req.pr.number}`;
+  const [pr, settings] = await Promise.all([getPullRequest(env, req.repoFullName, req.pr.number), resolveRepositorySettings(env, req.repoFullName)]);
+  if (!pr) {
+    await recordAutoreviewPausedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "cached_pr_missing");
+    return true;
+  }
+  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "pause" as GittensoryMentionCommandName, settings, pr });
+  if (!authorization.authorized) {
+    await recordAuditEvent(env, { eventType: "github_app.autoreview_paused_denied", actor: req.actor, targetKey, outcome: "denied", detail: authorization.reason, metadata: { deliveryId, repoFullName: req.repoFullName, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "pause") } });
+    await recordGithubProductUsage(env, "autoreview_paused_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "pause") } });
+    return true;
+  }
+  const safeReason = sanitizePublicComment((command.reason ?? "").trim() || "No reason provided.");
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Auto-review paused by @${req.actor}**`, "> Auto-review is paused for this PR only. Gate enforcement and the one-shot disposition are unchanged; use `@gittensory resume` to re-enable auto-review.", "", `- Reason: ${safeReason}`, "", "---", gittensoryFooter()].join("\n"));
+  await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation);
+  await recordAuditEvent(env, { eventType: "github_app.autoreview_paused", actor: req.actor, targetKey, outcome: "completed", detail: safeReason, metadata: { deliveryId, repoFullName: req.repoFullName } });
+  await recordGithubProductUsage(env, "autoreview_paused", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { actorKind: authorization.actorKind } });
+  return true;
+}
+
+async function recordAutoreviewPausedSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
+  await recordAuditEvent(env, { eventType: "github_app.autoreview_paused_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
+  await recordGithubProductUsage(env, "autoreview_paused_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
+}
 
 /**
  * `@gittensory explain <finding>` (#2169, part of #1960): a contributor/maintainer asks for more detail on a

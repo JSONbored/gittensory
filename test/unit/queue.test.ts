@@ -10765,6 +10765,138 @@ describe("queue processors", () => {
     expect(skip?.detail).toBe("unsupported_comment_action_or_bot");
   });
 
+  const pauseIssue = { number: 77, title: "Add a retry to the fetch helper", state: "open", user: { login: "reporter" }, body: "b", pull_request: { url: "https://api.github.com/repos/JSONbored/gittensory/pulls/77" } };
+  async function seedPausePr(env: Env): Promise<void> {
+    await setupPlannerRepo(env);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 77, title: "Add a retry to the fetch helper", state: "open", user: { login: "reporter" }, head: { sha: "h1" }, labels: [], body: "b" });
+  }
+
+  it("pause (#2164): a maintainer @gittensory pause records the autoreview-paused marker and posts a public-safe confirmation", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedPausePr(env);
+    let postedBody: string | undefined;
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      urls.push(url);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" }); // maintainer
+      if (url.includes("/issues/77/comments")) {
+        postedBody = init?.body ? JSON.parse(init.body.toString()).body : undefined;
+        return Response.json({ id: 5 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, plannerWebhook("@gittensory pause flaky CI, will re-enable after the fix", "maintainer1", pauseIssue));
+    expect(postedBody).toContain("Auto-review paused by @maintainer1");
+    expect(postedBody).toContain("Gate enforcement and the one-shot disposition are unchanged");
+    expect(postedBody).toContain("flaky CI, will re-enable after the fix");
+    // AUTO-REVIEW SCOPE ONLY (#2164): no Gate check-run is written and no gate-disposition audit is recorded, so the
+    // one-shot gate/advisory is provably untouched.
+    expect(urls.some((u) => u.includes("/check-runs"))).toBe(false);
+    const gateAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type like 'github_app.gate_%'").first<{ n: number }>();
+    expect(gateAudit?.n).toBe(0);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.autoreview_paused").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("completed");
+    expect(audit?.detail).toBe("flaky CI, will re-enable after the fix");
+    const usage = await env.DB.prepare("select outcome from product_usage_events where event_name = ?").bind("autoreview_paused").first<{ outcome: string }>();
+    expect(usage?.outcome).toBe("completed");
+  });
+
+  it("pause: an authorized pause with no trailing reason records the marker with a 'No reason provided.' detail", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedPausePr(env);
+    let postedBody: string | undefined;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/issues/77/comments")) {
+        postedBody = init?.body ? JSON.parse(init.body.toString()).body : undefined;
+        return Response.json({ id: 5 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, plannerWebhook("@gittensory pause", "maintainer1", pauseIssue));
+    expect(postedBody).toContain("No reason provided.");
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.autoreview_paused").first<{ detail: string }>();
+    expect(audit?.detail).toBe("No reason provided.");
+  });
+
+  it("pause: a non-maintainer is denied — nothing is posted and a denied marker is recorded (never a pause)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedPausePr(env);
+    let posted = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "read" }); // not a maintainer
+      if (url.includes("/issues/77/comments")) {
+        posted = true;
+        return Response.json({ id: 5 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, plannerWebhook("@gittensory pause let me in", "outsider", pauseIssue));
+    expect(posted).toBe(false);
+    const denied = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.autoreview_paused_denied").first<{ outcome: string }>();
+    expect(denied?.outcome).toBe("denied");
+    const paused = await env.DB.prepare("select 1 from audit_events where event_type = ?").bind("github_app.autoreview_paused").first();
+    expect(paused).toBeFalsy();
+  });
+
+  it("pause: a pause on a PR with no cached record is recorded as a cached_pr_missing skip, never posted", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await setupPlannerRepo(env); // repo + installation, but deliberately NO cached PR record
+    let posted = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/comments")) posted = true;
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, plannerWebhook("@gittensory pause", "maintainer1", pauseIssue));
+    expect(posted).toBe(false);
+    const skip = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.autoreview_paused_skipped").first<{ detail: string }>();
+    expect(skip?.detail).toBe("cached_pr_missing");
+  });
+
+  it("pause: a bot-authored @gittensory pause is recorded as a classifier skip, never posted", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedPausePr(env);
+    let posted = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString().includes("/comments")) posted = true;
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "pause-bot",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: pauseIssue,
+        comment: { body: "@gittensory pause", user: { login: "some-bot[bot]", type: "Bot" } },
+        sender: { login: "some-bot[bot]", type: "Bot" },
+      },
+    } as unknown as Parameters<typeof processJob>[1]);
+    expect(posted).toBe(false);
+    const skip = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.autoreview_paused_skipped").first<{ detail: string }>();
+    expect(skip?.detail).toBe("bot_author");
+  });
+
+  it("pause: a non-pause comment is not intercepted (the handler declines, no autoreview audit)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedPausePr(env);
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await processJob(env, plannerWebhook("just a normal comment, no mention", "maintainer1", pauseIssue));
+    const paused = await env.DB.prepare("select 1 from audit_events where event_type like 'github_app.autoreview_paused%'").first();
+    expect(paused).toBeFalsy();
+  });
+
   it("REGRESSION (#audit-draft-maintenance): a clean DRAFT PR is never auto-merged/approved/closed (drafts are WIP)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {
@@ -23627,7 +23759,7 @@ describe("queue processors", () => {
     });
   });
 
-  it("a #1960 action-command verb with no dispatch handler wired yet (e.g. pause) is bailed out of the Q&A answer-card path, not misrendered as help (#2160)", async () => {
+  it("a #1960 action-command verb with no dispatch handler wired yet (e.g. resume) is bailed out of the Q&A answer-card path, not misrendered as help (#2160)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertRepositorySettings(env, {
@@ -23676,13 +23808,13 @@ describe("queue processors", () => {
         installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
         repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
         issue: { number: 93, title: "Not yet wired", state: "open", user: { login: "contributor" }, pull_request: {} },
-        comment: { id: 900, body: "@gittensory pause", author_association: "OWNER", user: { login: "maintainer", type: "User" } },
+        comment: { id: 900, body: "@gittensory resume", author_association: "OWNER", user: { login: "maintainer", type: "User" } },
         sender: { login: "maintainer", type: "User" },
       },
     });
 
-    // No handler claims a bare "pause" comment yet (its dispatch lands in a follow-up bounty -- unlike
-    // "resolve"/"configuration", which now have their own handlers), so the Q&A answer-card path must bail
+    // No handler claims a bare "resume" comment yet (its dispatch lands in a follow-up bounty -- unlike
+    // "pause"/"resolve"/"configuration", which now have their own handlers), so the Q&A answer-card path must bail
     // rather than post a stray "help" card or any other Q&A comment.
     expect(calls.comments).toBe(0);
     const feedback = await env.DB.prepare("select id from audit_events where event_type = ?").bind("github_app.agent_command_feedback_prompted").first<{ id: string }>();
