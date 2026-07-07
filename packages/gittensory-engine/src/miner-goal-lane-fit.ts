@@ -55,8 +55,8 @@ export function computeMinerGoalLaneFit(
   return clamp01(score);
 }
 
-function normalizeCandidatePaths(paths: readonly string[] | undefined): string[] {
-  if (!paths) return [];
+function normalizeCandidatePaths(paths: unknown): string[] {
+  if (!Array.isArray(paths)) return [];
   const normalized: string[] = [];
   for (const path of paths) {
     if (typeof path !== "string") continue;

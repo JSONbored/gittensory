@@ -95,11 +95,30 @@ test("computeMetadataLaneFit returns 0 when candidatePaths hit blockedPaths", ()
   );
 });
 
-test("computeMetadataLaneFit ignores blank or malformed candidatePaths entries", () => {
-  const spec = { ...DEFAULT_MINER_GOAL_SPEC, preferredLabels: ["bug"] };
+test("computeMetadataLaneFit ignores malformed candidatePaths values", () => {
+  const spec = {
+    ...DEFAULT_MINER_GOAL_SPEC,
+    blockedPaths: ["src/**"],
+    preferredLabels: ["bug"],
+    wantedPaths: ["src/**"],
+  };
   assert.equal(
     computeMetadataLaneFit(
       { labels: ["bug"], candidatePaths: ["", "  ", 42 as unknown as string] },
+      spec,
+    ),
+    1,
+  );
+  assert.equal(
+    computeMetadataLaneFit(
+      { labels: ["bug"], candidatePaths: { path: "src/app.ts" } as unknown as string[] },
+      spec,
+    ),
+    1,
+  );
+  assert.equal(
+    computeMetadataLaneFit(
+      { labels: ["bug"], candidatePaths: "src/app.ts" as unknown as string[] },
       spec,
     ),
     1,

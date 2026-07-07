@@ -43,11 +43,28 @@ describe("computeMetadataLaneFit", () => {
     ).toBe(0);
   });
 
-  it("ignores non-string candidatePaths entries before scoring", () => {
-    const spec = { ...DEFAULT_MINER_GOAL_SPEC, preferredLabels: ["bug"] };
+  it("ignores malformed candidatePaths values before scoring", () => {
+    const spec = {
+      ...DEFAULT_MINER_GOAL_SPEC,
+      blockedPaths: ["src/**"],
+      preferredLabels: ["bug"],
+      wantedPaths: ["src/**"],
+    };
     expect(
       computeMetadataLaneFit(
         { labels: ["bug"], candidatePaths: [42 as unknown as string, ""] },
+        spec,
+      ),
+    ).toBe(1);
+    expect(
+      computeMetadataLaneFit(
+        { labels: ["bug"], candidatePaths: { path: "src/app.ts" } as unknown as string[] },
+        spec,
+      ),
+    ).toBe(1);
+    expect(
+      computeMetadataLaneFit(
+        { labels: ["bug"], candidatePaths: "src/app.ts" as unknown as string[] },
         spec,
       ),
     ).toBe(1);
