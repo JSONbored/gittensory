@@ -113,6 +113,11 @@ describe("impact map wired into runAiReviewForAdvisory (#2186)", () => {
     expect(user).toContain("IMPACT MAP");
     expect(user).toContain("src/review/impact-map.ts");
     expect(user).toContain("src/review/caller.ts");
+    // #1971: the SAME computed entries are threaded out of the review result so the publish site can render the
+    // "Impact map" collapsible from them — no second RAG query.
+    expect(result?.impactMap?.length).toBeGreaterThan(0);
+    expect(result?.impactMap?.[0]?.changedModule).toBe("src/review/impact-map.ts");
+    expect(result?.impactMap?.[0]?.affectedModules).toContain("src/review/caller.ts");
   });
 
   it("FLAG-OFF (operator env unset): no impact-map computation, prompt has no IMPACT MAP section", async () => {

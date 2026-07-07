@@ -18256,6 +18256,52 @@ describe("queue processors", () => {
     expect(unifiedCommentBody).toContain("| Security | 1 |");
   });
 
+  // #1971: a FROZEN (manual-review) PR reuses its last published AI review, which carries no impact-map entries —
+  // the unified comment still renders, and the impact-map render arm degrades to no section (aiReview present but
+  // aiReview.impactMap undefined ⇒ `aiReview?.impactMap ?? []` ⇒ [] ⇒ buildImpactMapCollapsible null).
+  it("renders the unified comment WITHOUT an Impact map section when a frozen review is reused (no threaded entries)", async () => {
+    let aiCalls = 0;
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_REVIEW_UNIFIED_COMMENT: "1",
+      AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ assessment: "Fresh.", blockers: [], nits: [], suggestions: [] }) }; } } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await persistRegistrySnapshot(env, normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"));
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", aiReviewMode: "block", gatePack: "oss-anti-slop" });
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 77, title: "Held PR", state: "open", user: { login: "contributor" }, head: { sha: "a77" }, labels: [{ name: "manual-review" }], body: "Closes #1" });
+    await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 77, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+    // A prior PUBLISHED review for this exact head — the freeze path reuses it (aiReview = frozenReview) instead of
+    // spending a fresh AI call. Its cached shape has notes+reviewerCount but NO impactMap, so the render arm's
+    // nullish arm fires.
+    await putCachedAiReview(env, "JSONbored/gittensory", 77, "a77", "block", { notes: "Prior published review.", reviewerCount: 1 });
+    await markAiReviewPublished(env, "JSONbored/gittensory", 77, "a77");
+    let unifiedCommentBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+      if (url.includes("/pulls/77/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      if (url.endsWith("/pulls/77")) return Response.json({ number: 77, title: "Held PR", state: "open", user: { login: "contributor" }, head: { sha: "a77" }, labels: [{ name: "manual-review" }], body: "Closes #1", mergeable_state: "clean" });
+      if (url.includes("/commits/a77/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/a77/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+      if (url.includes("/issues/77/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/77/comments")) { unifiedCommentBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? unifiedCommentBody); return Response.json({ id: 1 }, { status: 201 }); }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "impact-map-frozen-reuse", repoFullName: "JSONbored/gittensory", prNumber: 77, installationId: 123 });
+
+    expect(aiCalls).toBe(0); // frozen ⇒ reused, no fresh AI
+    expect(unifiedCommentBody).toContain("gittensory-pr-panel"); // the unified panel rendered from the frozen review
+    expect(unifiedCommentBody).not.toContain("Impact map"); // ...with no impact-map section (reused review has none)
+  });
+
   // #1962: with BOTH the operator flag and the manifest opt-in on, the review emits a "Fix handoff" collapsible —
   // one machine-readable block per inline finding a contributor's own local agent can consume — in the unified
   // comment. Flag-OFF (every other review test) ⇒ no such section.

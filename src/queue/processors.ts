@@ -449,7 +449,7 @@ import {
 } from "../review/rag-wire";
 import { createReviewAdapters } from "../review/adapters";
 import { extractChangedSymbols } from "../review/impact-symbols";
-import { computeImpactMap } from "../review/impact-map";
+import { computeImpactMap, type ImpactMapEntry } from "../review/impact-map";
 import { formatImpactMapPromptSection, shouldComputeImpactMap } from "../review/impact-map-wire";
 import { shouldEmitFixHandoff } from "../review/fix-handoff";
 import { buildFixHandoffBlocks } from "../review/fix-handoff-render";
@@ -6951,6 +6951,10 @@ export async function runAiReviewForAdvisory(
       notes: string;
       reviewerCount: number;
       inlineFindings: InlineFinding[];
+      // Deterministic impact-map entries this pass computed for the AI prompt (#1971), threaded out so the
+      // publish site can ALSO render them as the unified comment's "Impact map" collapsible. Empty when the
+      // feature is off (flag/manifest) — the render arm keys on `.length`, so off ⇒ no section.
+      impactMap?: ImpactMapEntry[] | undefined;
       findings: AdvisoryFinding[];
       metadata?: Record<string, unknown> | undefined;
       cacheable?: boolean | undefined;
@@ -7119,6 +7123,9 @@ export async function runAiReviewForAdvisory(
     // undefined so the prompt is byte-identical to today. Fully fail-safe (computeImpactMap never throws; a
     // missing/cold RAG index degrades to an empty impact map, which formats to "" and appends nothing).
     let impactMapContext: string | undefined;
+    // The computed entries are ALSO threaded out of this function (#1971) so the publish site can render the
+    // "Impact map" collapsible from the exact same array — no second RAG query. Empty when the feature is off.
+    let impactMapEntries: ImpactMapEntry[] = [];
     if (shouldComputeImpactMap(env, args.reviewImpactMap === true)) {
       const [impactMapProject, impactMapRepo] = splitRepoForRag(args.repoFullName);
       const changedSymbols = extractChangedSymbols(
@@ -7127,12 +7134,12 @@ export async function runAiReviewForAdvisory(
           patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined,
         })),
       );
-      const impactMap = await computeImpactMap(changedSymbols, {
+      impactMapEntries = await computeImpactMap(changedSymbols, {
         infra: createReviewAdapters(env),
         project: impactMapProject,
         repo: impactMapRepo,
       });
-      impactMapContext = formatImpactMapPromptSection(impactMap);
+      impactMapContext = formatImpactMapPromptSection(impactMapEntries);
     }
     // Repo quality-culture profile (#2995, flag-gated by GITTENSORY_REVIEW_CULTURE_PROFILE AND the per-repo
     // `review.culture_profile` opt-in). Derives a compact reference block from the repo's OWN merge history
@@ -7329,6 +7336,7 @@ export async function runAiReviewForAdvisory(
         notes: result.advisoryNotes!,
         reviewerCount: result.reviewerCount,
         inlineFindings: result.inlineFindings,
+        impactMap: impactMapEntries,
         findings,
         metadata: metadataFor(result.advisoryNotes, result.inlineFindings),
       };
@@ -8272,6 +8280,7 @@ async function maybePublishPrPublicSurface(
         notes: string;
         reviewerCount: number;
         inlineFindings?: InlineFinding[];
+        impactMap?: ImpactMapEntry[] | undefined;
         findings?: AdvisoryFinding[];
         metadata?: Record<string, unknown> | undefined;
         cacheable?: boolean | undefined;
@@ -10175,6 +10184,11 @@ async function maybePublishPrPublicSurface(
         ...(findingCategoriesEnabledForReview && aiReview?.inlineFindings?.length
           ? { findingCategories: aiReview.inlineFindings }
           : {}),
+        // review.impact_map render (#1971): the deterministic impact-map entries this fresh pass already computed
+        // for the AI prompt ALSO render here as the "Impact map" collapsible — no second RAG query. A cache hit /
+        // frozen reuse / skipped review carries none (undefined ⇒ []); buildImpactMapCollapsible returns null for
+        // an empty list, so off/empty ⇒ no section ⇒ byte-identical. `ImpactMapEntry` IS `ImpactMapSummaryInput`.
+        impactMap: aiReview?.impactMap ?? [],
         // review.fixHandoff emission (#1962): the SAME fresh inline findings feed the fix-handoff blocks —
         // present ONLY on a cache-miss review with inline comments enabled — so a cache hit never re-emits them,
         // exactly like findingCategories above. Flag-OFF ⇒ omitted ⇒ the rendered comment is byte-identical.
