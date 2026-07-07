@@ -32,6 +32,9 @@ const {
   runWorkersOpinion,
   coerceAiUsage,
   aggregateActualUsage,
+  buildUserPrompt,
+  selectContextSectionsWithinBudget,
+  AGGREGATE_CONTEXT_BUDGET_CHARS,
 } = __aiReviewInternals;
 
 type InlineFinding = {
@@ -3448,6 +3451,123 @@ describe("buildTestEvidencePromptSection (#2558)", () => {
       { path: "src/a.ts" },
     ]);
     expect(section?.match(/src\/a\.ts/g)).toHaveLength(1);
+  });
+});
+
+describe("selectContextSectionsWithinBudget (#3900)", () => {
+  it("includes every present section when the total comfortably fits the budget", () => {
+    const included = selectContextSectionsWithinBudget(
+      [
+        { key: "a", text: "x".repeat(100) },
+        { key: "b", text: "y".repeat(100) },
+        { key: "c", text: undefined },
+      ],
+      0,
+      1000,
+    );
+    expect(included).toEqual(new Set(["a", "b"]));
+  });
+
+  it("stops at the first section that would overflow and drops every lower-priority section after it, even one that would individually fit", () => {
+    const included = selectContextSectionsWithinBudget(
+      [
+        { key: "first", text: "a".repeat(500) },
+        { key: "second", text: "b".repeat(600) }, // 500+600=1100 > 1000 -- overflows here
+        { key: "third", text: "c".repeat(10) }, // would individually fit (500+10=510 <= 1000), but must NOT be
+        // included: a hard priority cutoff, not a bin-packing optimization that skips a large blocked section
+        // to squeeze in a smaller lower-priority one.
+      ],
+      0,
+      1000,
+    );
+    expect(included).toEqual(new Set(["first"]));
+  });
+
+  it("skips an absent (undefined) section without consuming budget or affecting later decisions", () => {
+    const included = selectContextSectionsWithinBudget(
+      [
+        { key: "present-1", text: "a".repeat(400) },
+        { key: "absent", text: undefined },
+        { key: "present-2", text: "b".repeat(400) },
+      ],
+      0,
+      1000,
+    );
+    expect(included).toEqual(new Set(["present-1", "present-2"]));
+  });
+
+  it("includes a section landing exactly on the budget boundary, excludes one that overflows by a single character", () => {
+    const exact = selectContextSectionsWithinBudget([{ key: "a", text: "x".repeat(8) }], 0, 10); // 0+8+2=10 <= 10
+    expect(exact).toEqual(new Set(["a"]));
+    const over = selectContextSectionsWithinBudget([{ key: "a", text: "x".repeat(9) }], 0, 10); // 0+9+2=11 > 10
+    expect(over).toEqual(new Set());
+  });
+
+  it("accounts for chars already used (e.g. the diff/description) before evaluating the first section", () => {
+    const included = selectContextSectionsWithinBudget([{ key: "a", text: "x".repeat(100) }], 950, 1000); // 950+100+2 > 1000
+    expect(included).toEqual(new Set());
+  });
+});
+
+describe("buildUserPrompt aggregate context budget (#3900)", () => {
+  const budgetBaseInput: GittensoryAiReviewInput = {
+    repoFullName: "owner/repo",
+    prNumber: 1,
+    title: "PR",
+    diff: "diff content",
+    mode: "advisory",
+  };
+
+  it("includes every optional section when everything is enabled but comfortably under budget", () => {
+    const user = buildUserPrompt({
+      ...budgetBaseInput,
+      grounding: { promptSection: "GROUNDING-SECTION" },
+      ragContext: "RAG-SECTION",
+      impactMapContext: "IMPACT-MAP-SECTION",
+      enrichment: { promptSection: "ENRICHMENT-SECTION" },
+      cultureProfileContext: "CULTURE-PROFILE-SECTION",
+      changedFiles: [{ path: "src/a.ts" }],
+    });
+    expect(user).toContain("GROUNDING-SECTION");
+    expect(user).toContain("RAG-SECTION");
+    expect(user).toContain("IMPACT-MAP-SECTION");
+    expect(user).toContain("ENRICHMENT-SECTION");
+    expect(user).toContain("CULTURE-PROFILE-SECTION");
+    expect(user).toContain("zero test-path evidence");
+  });
+
+  it("drops the lowest-priority sections first when every section enabled together would exceed the aggregate budget", () => {
+    // Sized so grounding+RAG survive (highest priority) but impact-map/enrichment/culture-profile/test-evidence
+    // -- everything below RAG in priority order -- get cut once the running total would overflow.
+    const grounding = "G".repeat(150_000);
+    const rag = "R".repeat(40_000);
+    const impactMap = "I".repeat(20_000);
+    const user = buildUserPrompt({
+      ...budgetBaseInput,
+      grounding: { promptSection: grounding },
+      ragContext: rag,
+      impactMapContext: impactMap,
+      enrichment: { promptSection: "ENRICHMENT-SECTION" },
+      cultureProfileContext: "CULTURE-PROFILE-SECTION",
+      changedFiles: [{ path: "src/a.ts" }],
+    });
+    expect(user).toContain(grounding);
+    expect(user).toContain(rag);
+    expect(user).not.toContain(impactMap);
+    expect(user).not.toContain("ENRICHMENT-SECTION");
+    expect(user).not.toContain("CULTURE-PROFILE-SECTION");
+    expect(user).not.toContain("zero test-path evidence");
+    expect(user.length).toBeLessThanOrEqual(AGGREGATE_CONTEXT_BUDGET_CHARS);
+  });
+
+  it("never trims grounding even with the diff at its own maximum size and grounding at its OWN real-world maximum (review-grounding.ts's 60k FILE_CONTENT_BUDGET)", () => {
+    const grounding = "G".repeat(60_000);
+    const user = buildUserPrompt({
+      ...budgetBaseInput,
+      diff: "d".repeat(120_000),
+      grounding: { promptSection: grounding },
+    });
+    expect(user).toContain(grounding);
   });
 });
 

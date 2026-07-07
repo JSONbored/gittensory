@@ -673,6 +673,40 @@ export function parseModelReview(text: string): ModelReview | null {
   }
 }
 
+// Aggregate ceiling across ALL optional context sections combined (#3900). Each section below already
+// enforces its OWN per-section cap (FILE_CONTENT_BUDGET, MAX_CONTEXT_CHARS, MAX_PROMPT_CHARS,
+// MAX_ENRICHMENT_PROMPT_SECTION_CHARS...), but nothing previously bounded the COMBINED total: with every
+// convergence feature enabled on one repo, the worst-case assembled prompt exceeds 200,000 characters before
+// the system prompt is even added, degrading signal-to-noise on exactly the large/complex PRs that most need
+// focused attention. The diff + description are NOT counted against this ceiling -- they are the primary
+// review target and are always included in full (capped at 120,000 + 2,000 chars regardless). 200,000 sits
+// comfortably above diff+description+grounding's own worst case (~182k) so grounding is effectively never
+// trimmed, while still meaningfully bounding the "every feature enabled" case.
+const AGGREGATE_CONTEXT_BUDGET_CHARS = 200_000;
+
+/**
+ * Priority-ordered cutoff (#3900): walk the optional sections highest-priority-first, including each while it
+ * still fits under the remaining budget, and stop entirely (dropping this section AND every lower-priority
+ * one after it) the moment one would not fit. A simple, predictable priority cutoff -- not a bin-packing
+ * optimization that could skip a large section to squeeze in a smaller, lower-priority one instead.
+ */
+function selectContextSectionsWithinBudget(
+  sections: ReadonlyArray<{ key: string; text: string | null | undefined }>,
+  usedChars: number,
+  budgetChars: number,
+): Set<string> {
+  const included = new Set<string>();
+  let running = usedChars;
+  for (const section of sections) {
+    if (!section.text) continue;
+    const addedChars = section.text.length + 2; // +2 for the blank-line separator `lines.push("", text)` adds
+    if (running + addedChars > budgetChars) break;
+    included.add(section.key);
+    running += addedChars;
+  }
+  return included;
+}
+
 function buildUserPrompt(input: GittensoryAiReviewInput): string {
   const lines = [
     `Repository: ${input.repoFullName}`,
@@ -687,33 +721,50 @@ function buildUserPrompt(input: GittensoryAiReviewInput): string {
     // review — self-host reviewers are configured with at least as much room). (#extensive-reviews)
     input.diff.slice(0, 120000),
   ];
-  // Convergence (grounding): append the FINISHED CI status + FULL file content when the caller supplied them
-  // (flag GITTENSORY_REVIEW_GROUNDING on). Absent/empty (the default) → the prompt is byte-identical to today.
+  // Convergence (grounding): the FINISHED CI status + FULL file content when the caller supplied them (flag
+  // GITTENSORY_REVIEW_GROUNDING on). Absent/empty (the default) → the prompt is byte-identical to today.
   const groundingSection = input.grounding?.promptSection;
-  if (groundingSection) lines.push("", groundingSection);
-  // Convergence (RAG retrieval): append the retrieved RELEVANT EXISTING CODE / DOCS block when the caller
-  // supplied one (flag GITTENSORY_REVIEW_RAG on AND an index exists). Absent/empty (the default) → byte-identical.
+  // Convergence (RAG retrieval): the retrieved RELEVANT EXISTING CODE / DOCS block when the caller supplied
+  // one (flag GITTENSORY_REVIEW_RAG on AND an index exists). Absent/empty (the default) → byte-identical.
   const ragSection = input.ragContext;
-  if (ragSection) lines.push("", ragSection);
-  // Deterministic impact map (#2186): append the "IMPACT MAP" block when the caller supplied one (BOTH
+  // Deterministic impact map (#2186): the "IMPACT MAP" block when the caller supplied one (BOTH
   // GITTENSORY_REVIEW_IMPACT_MAP AND the per-repo review.impact_map opt-in on, AND the computation found at
   // least one affected module). Absent/empty (the default) → the prompt is byte-identical to today.
   const impactMapSection = input.impactMapContext;
-  if (impactMapSection) lines.push("", impactMapSection);
-  // Repo quality-culture profile (#2995): append the ADDITIVE "REPO QUALITY-CULTURE PROFILE" reference block
-  // when the caller supplied one (flag GITTENSORY_REVIEW_CULTURE_PROFILE + review.culture_profile both on).
-  // Absent/empty (the default) → the prompt is byte-identical. Reference-only grounding, never a gate input.
-  const cultureProfileSection = input.cultureProfileContext;
-  if (cultureProfileSection) lines.push("", cultureProfileSection);
-  // Review-enrichment brief (#1472): append the external REES analysis block when the caller supplied one (flag
+  // Review-enrichment brief (#1472): the external REES analysis block when the caller supplied one (flag
   // GITTENSORY_REVIEW_ENRICHMENT on AND REES_URL set). Absent/empty (the default) → the prompt is byte-identical.
   const enrichmentSection = input.enrichment?.promptSection;
-  if (enrichmentSection) lines.push("", enrichmentSection);
-  // Test-evidence classifier (#2558): ground the reviewer's test-adequacy judgment in the engine's own
+  // Repo quality-culture profile (#2995): the ADDITIVE "REPO QUALITY-CULTURE PROFILE" reference block when
+  // the caller supplied one (flag GITTENSORY_REVIEW_CULTURE_PROFILE + review.culture_profile both on).
+  // Absent/empty (the default) → the prompt is byte-identical. Reference-only grounding, never a gate input.
+  const cultureProfileSection = input.cultureProfileContext;
+  // Test-evidence classifier (#2558): grounds the reviewer's test-adequacy judgment in the engine's own
   // deterministic classification instead of eyeballing the diff. Absent/no changed code files without test
   // evidence ⇒ the prompt is byte-identical.
   const testEvidenceSection = buildTestEvidencePromptSection(input.changedFiles ?? []);
-  if (testEvidenceSection) lines.push("", testEvidenceSection);
+
+  // Priority order (highest first): grounding (CI truth + full-file content) > RAG (codebase context) >
+  // impact map (deterministic blast-radius) > enrichment (external analyzer brief) > culture profile (soft
+  // house-style reference) > test-evidence flag (smallest, narrowest signal).
+  const included = selectContextSectionsWithinBudget(
+    [
+      { key: "grounding", text: groundingSection },
+      { key: "rag", text: ragSection },
+      { key: "impactMap", text: impactMapSection },
+      { key: "enrichment", text: enrichmentSection },
+      { key: "cultureProfile", text: cultureProfileSection },
+      { key: "testEvidence", text: testEvidenceSection },
+    ],
+    lines.join("\n").length,
+    AGGREGATE_CONTEXT_BUDGET_CHARS,
+  );
+
+  if (groundingSection && included.has("grounding")) lines.push("", groundingSection);
+  if (ragSection && included.has("rag")) lines.push("", ragSection);
+  if (impactMapSection && included.has("impactMap")) lines.push("", impactMapSection);
+  if (cultureProfileSection && included.has("cultureProfile")) lines.push("", cultureProfileSection);
+  if (enrichmentSection && included.has("enrichment")) lines.push("", enrichmentSection);
+  if (testEvidenceSection && included.has("testEvidence")) lines.push("", testEvidenceSection);
   return lines.join("\n");
 }
 
@@ -2178,4 +2229,7 @@ export const __aiReviewInternals = {
   runWorkersOpinion,
   coerceAiUsage,
   aggregateActualUsage,
+  buildUserPrompt,
+  selectContextSectionsWithinBudget,
+  AGGREGATE_CONTEXT_BUDGET_CHARS,
 };
