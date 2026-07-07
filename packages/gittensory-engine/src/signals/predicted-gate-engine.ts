@@ -859,7 +859,8 @@ function plannedContributionTerms(input: PreflightInput): CollisionTerms {
 }
 
 export function termOverlap(left: CollisionTerms, right: CollisionTerms): { score: number; shared: number } {
-  if (left.size === 0 || right.size === 0) return { score: 0, shared: 0 };
+  if (left.size === 0) return { score: 0, shared: 0 };
+  if (right.size === 0) return { score: 0, shared: 0 };
   let shared = 0;
   const [smaller, larger] = left.size <= right.size ? [left.terms, right.terms] : [right.terms, left.terms];
   for (const term of smaller) {
@@ -883,7 +884,8 @@ function boundedTextItems(values: string[] | undefined, maxItems: number, maxCha
 }
 
 function truncateText(value: string, maxChars: number): string {
-  return value.length > maxChars ? value.slice(0, maxChars) : value;
+  if (value.length <= maxChars) return value;
+  return value.slice(0, maxChars);
 }
 
 // Exported (#3183) so the project/milestone text matcher (src/integrations/project-tracker-adapter.ts) can
@@ -924,7 +926,8 @@ function isPullRequestShapedItem(item: CollisionItem): boolean {
  *  (diffFilePriority's least-useful-to-review bucket) — a shared package-lock.json or dist/ output is touched
  *  incidentally by unrelated PRs and is not evidence of a real collision. */
 function sharesMeaningfulFile(left: string[] | undefined, right: string[] | undefined): boolean {
-  if (!left || !right || left.length === 0 || right.length === 0) return false;
+  if (!left || !right) return false;
+  if (left.length === 0 || right.length === 0) return false;
   const rightSet = new Set(right);
   return left.some((path) => rightSet.has(path) && diffFilePriority(path) < 4);
 }

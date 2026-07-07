@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { gateAdvisoryInternals } from "../../packages/gittensory-engine/src/advisory/gate-advisory";
+import { buildPullRequestAdvisory, evaluateGateCheck, gateAdvisoryInternals } from "../../packages/gittensory-engine/src/advisory/gate-advisory";
 import { evaluateClaCheck, CLA_CHECK_UNRESOLVED_CODE, CLA_CONSENT_MISSING_CODE } from "../../packages/gittensory-engine/src/review/cla-check";
+import { REVIEW_THREAD_BLOCKER_CODE } from "../../packages/gittensory-engine/src/review/review-thread-findings";
 import { guardrailPathMatches } from "../../packages/gittensory-engine/src/signals/change-guardrail";
 import {
   buildCollisionReport,
@@ -10,6 +11,7 @@ import {
   buildQueueHealth,
   classifyBountyLifecycle,
   predictedGateEngineInternals,
+  termOverlap,
 } from "../../packages/gittensory-engine/src/signals/predicted-gate-engine";
 import type { IssueQualityReport, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../packages/gittensory-engine/src/types/predicted-gate-types";
 
@@ -68,6 +70,10 @@ describe("predicted-gate engine branch coverage (#2283)", () => {
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("lockfile_tamper_risk"), block)).toBe(true);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding(CLA_CONSENT_MISSING_CODE), advisory)).toBe(false);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding(CLA_CONSENT_MISSING_CODE), block)).toBe(true);
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding(REVIEW_THREAD_BLOCKER_CODE), advisory)).toBe(true);
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("secret_leak"), advisory)).toBe(true);
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("pre_merge_check_required"), advisory)).toBe(true);
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("unknown_code"), advisory)).toBe(false);
     expect(gateAdvisoryInternals.buildSlopGateBlocker({ slopGateMode: "block", slopRisk: 90, slopGateMinScore: 60 })?.code).toBe("slop_risk_above_threshold");
     expect(gateAdvisoryInternals.buildSlopGateBlocker({ slopGateMode: "block", slopRisk: 40, slopGateMinScore: 60 })).toBeNull();
     expect(gateAdvisoryInternals.buildSlopGateBlocker({ slopGateMode: "block", slopRisk: 80 })).not.toBeNull();
@@ -438,6 +444,66 @@ describe("predicted-gate engine branch coverage (#2283)", () => {
       [],
     );
     expect(mergedLinkedIssues.linkedIssues).toEqual([3, 5]);
+  });
+
+  it("exercises codecov-critical helper and gate-evaluation branches", () => {
+    const finding = (code: string) => ({ code, severity: "warning" as const, title: code, detail: code });
+    const advisoryBase = {
+      id: "a",
+      targetType: "pull_request" as const,
+      targetKey: "k",
+      repoFullName: REPO.fullName,
+      conclusion: "success" as const,
+      severity: "info" as const,
+      title: "t",
+      summary: "s",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      findings: [] as Array<{ code: string; severity: "warning" | "critical"; title: string; detail: string; action?: string }>,
+    };
+    const policyBlockers = evaluateGateCheck(
+      {
+        ...advisoryBase,
+        findings: [
+          finding(REVIEW_THREAD_BLOCKER_CODE),
+          { code: "secret_leak", severity: "critical", title: "secret", detail: "secret", action: "rotate" },
+          finding("ai_review_split"),
+        ],
+      },
+      { aiReviewGateMode: "block" },
+    );
+    expect(policyBlockers.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining([REVIEW_THREAD_BLOCKER_CODE, "secret_leak", "ai_review_split"]),
+    );
+
+    expect(termOverlap({ terms: new Set(), size: 0 }, { terms: new Set(["alpha"]), size: 1 }).score).toBe(0);
+    expect(termOverlap({ terms: new Set(["alpha"]), size: 1 }, { terms: new Set(), size: 0 }).score).toBe(0);
+    expect(predictedGateEngineInternals.truncateText("short", 10)).toBe("short");
+    expect(predictedGateEngineInternals.truncateText("x".repeat(20), 10)).toHaveLength(10);
+    expect(predictedGateEngineInternals.sharesMeaningfulFile([], ["src/a.ts"])).toBe(false);
+    expect(predictedGateEngineInternals.sharesMeaningfulFile(["src/a.ts"], [])).toBe(false);
+
+    const issue = { repoFullName: REPO.fullName, number: 1, title: "Issue", state: "open" as const, labels: [], linkedPrs: [] };
+    expect(classifyBountyLifecycle({ id: "b", repoFullName: REPO.fullName, issueNumber: 1, status: "  ", discoveredAt: "2026-01-01T00:00:00.000Z", payload: {} }, issue)).toBe("unknown");
+    expect(classifyBountyLifecycle({ id: "b", repoFullName: REPO.fullName, issueNumber: 1, status: "archived bounty", discoveredAt: "2026-01-01T00:00:00.000Z", payload: {} }, issue)).toBe("historical");
+    expect(classifyBountyLifecycle({ id: "b", repoFullName: REPO.fullName, issueNumber: 1, status: "mystery", discoveredAt: "2026-01-01T00:00:00.000Z", payload: {} }, issue)).toBe("ambiguous");
+
+    const selfAuthored = buildPullRequestAdvisory(
+      REPO,
+      {
+        ...pr(REPO.fullName, 1, "Fix"),
+        authorLogin: "alice",
+        linkedIssues: [7],
+      },
+      { linkedIssueAuthorLogins: ["alice"] },
+    );
+    expect(selfAuthored.findings.some((f) => f.code === "self_authored_linked_issue")).toBe(true);
+
+    const readiness = buildPublicReadinessScore({
+      pr: { ...pr(REPO.fullName, 2, "Fix"), body: "No issue because docs-only typo", linkedIssues: [] },
+      preflight: buildPreflightResult({ repoFullName: REPO.fullName, title: "Fix", body: "No issue because docs-only typo", linkedIssues: [], changedFiles: ["README.md"] }, REPO, [], []),
+      queueHealth: buildQueueHealth(REPO, [], [], buildCollisionReport(REPO.fullName, [], [])),
+    });
+    expect(readiness.components.find((c) => c.key === "traceability")?.evidence).toContain("no-issue rationale");
   });
 });
 
