@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "../../src/db/client";
-import { aiReviewCache, aiSlopCache, orbRelayPending, repositorySettings, webhookEvents } from "../../src/db/schema";
+import { aiReviewCache, aiSlopCache, linkedIssueSatisfactionCache, orbRelayPending, repositorySettings, webhookEvents } from "../../src/db/schema";
 import { createTestEnv } from "../helpers/d1";
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
@@ -89,6 +89,22 @@ describe("timestamp column defaults", () => {
       status: "ok",
     });
     const [row] = await db.select().from(aiSlopCache).where(eq(aiSlopCache.repoFullName, "acme/widgets")).limit(1);
+    expect(row?.createdAt).toMatch(ISO);
+    expect(row?.createdAt).not.toBe("CURRENT_TIMESTAMP");
+  });
+
+  it("applies the linked-issue satisfaction cache createdAt default on omit (#1961/#3906)", async () => {
+    const env = createTestEnv();
+    const db = getDb(env.DB);
+    await db.insert(linkedIssueSatisfactionCache).values({
+      repoFullName: "acme/widgets",
+      pullNumber: 3,
+      headSha: "sha",
+      linkedIssueNumber: 1275,
+      inputFingerprint: "fp-v1",
+      status: "ok",
+    });
+    const [row] = await db.select().from(linkedIssueSatisfactionCache).where(eq(linkedIssueSatisfactionCache.repoFullName, "acme/widgets")).limit(1);
     expect(row?.createdAt).toMatch(ISO);
     expect(row?.createdAt).not.toBe("CURRENT_TIMESTAMP");
   });

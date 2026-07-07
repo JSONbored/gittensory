@@ -55,6 +55,13 @@ export type GateCheckPolicy = {
    *  the PR author also filed the linked issue — becomes a hard blocker. Defaults to `advisory` — the
    *  finding is surfaced but never blocks unless the maintainer opts in. */
   selfAuthoredLinkedIssueGateMode?: GateRuleMode | undefined;
+  /** Linked-issue satisfaction gate (#1961/#3906). When `block`, a `linked_issue_scope_mismatch` finding —
+   *  raised when the AI assessment judged (above its confidence floor) that the PR's diff does NOT satisfy
+   *  its primary linked issue's intent — becomes a hard blocker. Defaults to `advisory` — the finding is
+   *  never even produced under `advisory`/`off` (the caller gates the assessment itself on this mode; see
+   *  runLinkedIssueSatisfactionForAdvisory, src/queue/processors.ts), so this branch only matters once a
+   *  repo has explicitly opted into `block`. */
+  linkedIssueSatisfactionGateMode?: GateRuleMode | undefined;
   /** CLA / license-compatibility gate (#2564). When `block`, a `cla_consent_missing` finding — raised when
    *  neither configured detection method (a consent phrase in the PR body, or a named CLA-bot check-run
    *  conclusion) confirms consent — becomes a hard blocker. `off` (default) = no finding at all; `advisory` =
@@ -898,6 +905,11 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to
   // advisory — the finding surfaces in the panel without ever closing the PR unless explicitly configured.
   if (code === "self_authored_linked_issue") return gateMode(policy.selfAuthoredLinkedIssueGateMode ?? "advisory") === "block";
+  // Linked-issue satisfaction gate (#1961/#3906): blocks only when the maintainer opts in with `block`. The
+  // finding itself is only ever produced when the caller already resolved `block` mode (see
+  // runLinkedIssueSatisfactionForAdvisory), so this is a defense-in-depth mirror of that gate, not the
+  // primary enforcement point.
+  if (code === "linked_issue_scope_mismatch") return gateMode(policy.linkedIssueSatisfactionGateMode ?? "advisory") === "block";
   // Lockfile-tamper-risk gate (#2563): blocks only when the maintainer opts in with `block`. Defaults to `off`
   // (the finding is never even produced — see maybeAddLockfileTamperFinding's mode gate in queue/processors.ts),
   // so this branch only matters once a repo has explicitly turned the scan on.

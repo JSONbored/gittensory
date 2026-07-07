@@ -9298,6 +9298,14 @@
               "audit",
               "enforce"
             ]
+          },
+          "linkedIssueSatisfactionGateMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory",
+              "block"
+            ]
           }
         },
         "required": [
@@ -9318,6 +9326,7 @@
           "mergeReadinessGateMode",
           "manifestPolicyGateMode",
           "selfAuthoredLinkedIssueGateMode",
+          "linkedIssueSatisfactionGateMode",
           "firstTimeContributorGrace",
           "slopAiAdvisory",
           "aiReviewMode",
@@ -10026,6 +10035,14 @@
               },
               "publicQualityMetrics": {
                 "type": "boolean"
+              },
+              "linkedIssueSatisfactionGateMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "advisory",
+                  "block"
+                ]
               }
             },
             "required": [
@@ -10046,6 +10063,7 @@
               "mergeReadinessGateMode",
               "manifestPolicyGateMode",
               "selfAuthoredLinkedIssueGateMode",
+              "linkedIssueSatisfactionGateMode",
               "firstTimeContributorGrace",
               "autoLabelEnabled",
               "typeLabelsEnabled",

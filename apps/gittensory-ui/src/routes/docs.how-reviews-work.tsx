@@ -139,6 +139,15 @@ function HowReviewsWork() {
           blocks a PR whose author also opened the linked issue.
         </li>
         <li>
+          <strong>Linked-issue satisfaction gate</strong> (
+          <code>linkedIssueSatisfactionGateMode</code>, default <code>off</code>) — an AI assessment
+          of whether the PR's diff actually satisfies its primary linked issue's intent (distinct
+          from the linked-issue gate above, which only checks that a link exists).{" "}
+          <code>advisory</code> renders the assessment in the review comment without ever blocking;{" "}
+          <code>block</code> additionally lets a confidence-floor-passing "unaddressed" verdict
+          become a hard blocker.
+        </li>
+        <li>
           <strong>Moderation-rules engine</strong> (<code>moderationGateMode</code>, default{" "}
           <code>inherit</code>) — whether the contributor-cap / blacklist / review-nag mechanisms
           feed a shared, cross-repo violation tally on this repo; <code>inherit</code> defers to the

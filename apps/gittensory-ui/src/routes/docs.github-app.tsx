@@ -224,6 +224,14 @@ GET /v1/installations/:id/repair`}
           opened the linked issue. Default <code>advisory</code>.
         </li>
         <li>
+          <code>linkedIssueSatisfactionGateMode</code> — an AI assessment of whether the PR's diff
+          actually satisfies its primary linked issue's intent, distinct from{" "}
+          <code>linkedIssueGateMode</code> (which only checks a link exists). Default{" "}
+          <code>off</code>; <code>advisory</code> renders in the review comment without blocking,{" "}
+          <code>block</code> additionally lets a confidence-floor-passing "unaddressed" verdict
+          become a blocker.
+        </li>
+        <li>
           <code>moderationGateMode</code> — whether the moderation-rules engine (contributor cap,
           blacklist, review-nag feeding a shared cross-repo violation tally) runs on this repo.
           Default <code>inherit</code> (defers to the instance-wide default); <code>off</code>/

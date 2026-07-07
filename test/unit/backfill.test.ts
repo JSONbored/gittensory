@@ -5913,8 +5913,45 @@ describe("GitHub backfill", () => {
       const result = await fetchLinkedIssueFacts(env, "JSONbored/gittensory", 42, "tok");
       expect(result).toEqual({
         status: "found",
-        facts: { number: 42, labels: ["bug", "manual-string-label"], assignees: ["maintainer"], state: "open", authorLogin: "reporter" },
+        facts: { number: 42, labels: ["bug", "manual-string-label"], assignees: ["maintainer"], state: "open", authorLogin: "reporter", title: null, body: null },
       });
+    });
+
+    it("extracts title + body (#1961/#3906, linked-issue satisfaction assessment) from the same REST payload — no second fetch", async () => {
+      const env = createTestEnv({});
+      vi.stubGlobal("fetch", async () =>
+        Response.json({
+          number: 1275,
+          state: "open",
+          labels: [],
+          assignees: [],
+          user: { login: "reporter" },
+          title: "Enrich SN74 Gittensor — add SSE stream",
+          body: "We need a live SSE stream surface for SN74 Gittensor.",
+        }),
+      );
+      const result = await fetchLinkedIssueFacts(env, "JSONbored/metagraphed", 1275, "tok");
+      expect(result).toEqual({
+        status: "found",
+        facts: {
+          number: 1275,
+          labels: [],
+          assignees: [],
+          state: "open",
+          authorLogin: "reporter",
+          title: "Enrich SN74 Gittensor — add SSE stream",
+          body: "We need a live SSE stream surface for SN74 Gittensor.",
+        },
+      });
+    });
+
+    it("falls back to null for title/body when the payload omits them or they are empty strings", async () => {
+      const env = createTestEnv({});
+      vi.stubGlobal("fetch", async () => Response.json({ number: 7, state: "open", title: "", body: "" }));
+      const result = await fetchLinkedIssueFacts(env, "JSONbored/gittensory", 7, "tok");
+      expect(result.status).toBe("found");
+      expect(result.status === "found" && result.facts.title).toBeNull();
+      expect(result.status === "found" && result.facts.body).toBeNull();
     });
 
     it("returns not_found on a confirmed 404, distinct from a transient fetch error", async () => {

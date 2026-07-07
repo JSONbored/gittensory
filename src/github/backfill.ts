@@ -3803,8 +3803,20 @@ export function isOwnReviewThreadAuthor(login: string | null | undefined): boole
   return /^gittensory[-\w]*\[bot\]$/i.test(login ?? "") || /^(gittensory|gittensory-orb)$/i.test(login ?? "");
 }
 
-/** The deterministic linked-issue facts the hard-rule evaluator needs (labels / assignees / open-state). */
-export type LinkedIssueFactsResult = { number: number; labels: string[]; assignees: string[]; state: string; authorLogin: string | null };
+/** The deterministic linked-issue facts the hard-rule evaluator needs (labels / assignees / open-state), plus
+ *  the issue's title/body text (#1961/#3906) for the linked-issue satisfaction assessment -- purely additive:
+ *  the hard-rule evaluator and label-propagation callers never read these two fields, so widening this shape
+ *  does not change their behavior. Same endpoint, same call -- REST already returns the full issue payload
+ *  (there is no sparse-fieldset param on `/issues/{number}`), so this is a type-level extension only. */
+export type LinkedIssueFactsResult = {
+  number: number;
+  labels: string[];
+  assignees: string[];
+  state: string;
+  authorLogin: string | null;
+  title?: string | null;
+  body?: string | null;
+};
 
 /** Tri-state outcome of fetching one linked issue's facts (#2136). `not_found` is a CONFIRMED 404 seen with a
  *  genuine, repo-scoped token — GitHub told an authenticated caller this issue number does not exist. `fetch_error`
@@ -3847,6 +3859,8 @@ export async function fetchLinkedIssueFacts(
       labels?: Array<{ name?: string | null } | string | null> | null;
       assignees?: Array<{ login?: string | null } | null> | null;
       user?: { login?: string | null } | null;
+      title?: string | null;
+      body?: string | null;
     }>(env, repoFullName, `/issues/${issueNumber}`, token, githubRateLimitOptions(admissionKey));
   } catch (error) {
     if (!(error instanceof GitHubApiError) || error.statusCode !== 404) return { status: "fetch_error" };
@@ -3867,6 +3881,8 @@ export async function fetchLinkedIssueFacts(
       assignees,
       state: String(data.state ?? "open").toLowerCase(),
       authorLogin: data.user?.login ?? null,
+      title: typeof data.title === "string" && data.title.length > 0 ? data.title : null,
+      body: typeof data.body === "string" && data.body.length > 0 ? data.body : null,
     },
   };
 }

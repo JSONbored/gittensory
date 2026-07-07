@@ -200,6 +200,7 @@ export type RepoSettingsPreview = {
     mergeReadinessGateMode: RepositorySettings["mergeReadinessGateMode"];
     manifestPolicyGateMode: RepositorySettings["manifestPolicyGateMode"];
     selfAuthoredLinkedIssueGateMode: RepositorySettings["selfAuthoredLinkedIssueGateMode"];
+    linkedIssueSatisfactionGateMode: RepositorySettings["linkedIssueSatisfactionGateMode"];
     firstTimeContributorGrace: boolean;
     slopGateMinScore?: number | null | undefined;
     autoLabelEnabled: boolean;
@@ -329,6 +330,7 @@ export function buildRepoSettingsPreview(args: {
       mergeReadinessGateMode: settings.mergeReadinessGateMode,
       manifestPolicyGateMode: settings.manifestPolicyGateMode,
       selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
+      linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode,
       firstTimeContributorGrace: settings.firstTimeContributorGrace,
       slopGateMinScore: settings.slopGateMinScore ?? null,
       autoLabelEnabled: settings.autoLabelEnabled,

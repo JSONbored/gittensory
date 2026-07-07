@@ -59,6 +59,7 @@ export const GATE_MODE_MANIFEST = [
   { field: "mergeReadinessGateMode", aliases: ["mergeReadinessGateMode", "gate.mergeReadiness"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
   { field: "manifestPolicyGateMode", aliases: ["manifestPolicyGateMode", "gate.manifestPolicy"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
   { field: "selfAuthoredLinkedIssueGateMode", aliases: ["selfAuthoredLinkedIssueGateMode", "gate.selfAuthoredLinkedIssue"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
+  { field: "linkedIssueSatisfactionGateMode", aliases: ["linkedIssueSatisfactionGateMode", "gate.linkedIssueSatisfaction"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
   { field: "moderationGateMode", aliases: ["moderationGateMode", "settings.moderationGateMode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
 ];
 

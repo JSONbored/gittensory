@@ -259,6 +259,17 @@ gate:
   # DB-backed (dashboard-settable too); this overrides the stored value.
   selfAuthoredLinkedIssue: advisory
 
+  # Linked-issue satisfaction gate (#1961/#3906) — an AI assessment of whether
+  # this PR's diff actually satisfies its PRIMARY linked issue's intent/
+  # acceptance criteria (distinct from linkedIssue above, which only checks a
+  # link EXISTS). off = the assessment never runs; advisory = it runs and
+  # renders as a collapsible "Linked issue satisfaction" section in the review
+  # comment, but never blocks; block = a confidence-floor-passing "unaddressed"
+  # verdict ALSO becomes a hard blocker (linked_issue_scope_mismatch).
+  # off | advisory | block. Default: off. DB-backed (dashboard-settable too);
+  # this overrides the stored value.
+  linkedIssueSatisfaction: off
+
   # Gate-check dry-run. When true, the posted check conclusion remains the real
   # non-enforcing verdict while comments/check text may also show the would-be
   # stricter verdict for AI-review blocker mode. It does not disable downstream

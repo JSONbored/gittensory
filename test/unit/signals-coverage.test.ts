@@ -2217,6 +2217,7 @@ function repoSettings(repoFullName: string): RepositorySettings {
     mergeReadinessGateMode: "off",
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
+    linkedIssueSatisfactionGateMode: "off",
     firstTimeContributorGrace: false,
     slopAiAdvisory: false,
     qualityGateMinScore: null,

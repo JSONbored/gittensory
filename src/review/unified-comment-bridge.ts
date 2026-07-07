@@ -366,6 +366,13 @@ export type UnifiedCommentBridgeArgs = {
   preflightHeld?: boolean | undefined;
   /** Public freshness marker for the posted/updated review comment. Defaults to the current publish time. */
   reviewedAt?: string | number | Date | undefined;
+  /** Linked-issue satisfaction advisory (#1961/#3906): the resolved {status, rationale} the processor computed
+   *  via runLinkedIssueSatisfactionForAdvisory, passed straight through to buildUnifiedReviewInput's field of
+   *  the same name. Presentation only — never changes `decision`/the gate verdict, which the `block`-mode
+   *  blocker (linked_issue_scope_mismatch, src/rules/advisory.ts) already folded into `gate` above when it
+   *  applies. Absent (default; the processor only resolves this when linkedIssueSatisfactionGateMode !=
+   *  "off") ⇒ no section is rendered, byte-identical to today. */
+  linkedIssueSatisfaction?: { status: "addressed" | "partial" | "unaddressed"; rationale: string } | undefined;
 };
 
 /**
@@ -693,6 +700,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     ...(args.reviewEffort !== undefined ? { reviewEffort: args.reviewEffort } : {}),
     ...(args.maxFindingsCaps !== undefined ? { maxFindingsCaps: args.maxFindingsCaps } : {}),
     ...(args.findingCategories !== undefined ? { inlineFindings: args.findingCategories } : {}),
+    ...(args.linkedIssueSatisfaction !== undefined ? { linkedIssueSatisfaction: args.linkedIssueSatisfaction } : {}),
   });
   // The gate already produced 0/1 reviewer notes from a synthesis of the model pair; reflect the caller's
   // actual reviewer count (for the chip + the "N reviewers, synthesized" evidence) without re-deriving it.

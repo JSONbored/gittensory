@@ -66,7 +66,11 @@ function parseConfidence(value: unknown): number {
   return n;
 }
 
-const SATISFACTION_SYSTEM_PROMPT = [
+// Exported (additive only -- no behavior change) so the model-calling orchestration slice (#1961's
+// maintainer-only remainder, src/services/linked-issue-satisfaction-run.ts) can reuse this exact system
+// prompt instead of duplicating it -- this module's own doc comment above explicitly calls out that
+// orchestration as a separate slice that supplies the model call this text feeds.
+export const SATISFACTION_SYSTEM_PROMPT = [
   "You are a senior open-source maintainer judging whether a pull request satisfies the intent and acceptance",
   "criteria of a SINGLE linked issue. Judge ONLY the issue text and the PR's title/description/diff provided.",
   "Be conservative: 'addressed' requires the diff to visibly fulfill the issue's own ask; 'partial' means it",

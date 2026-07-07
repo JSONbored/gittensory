@@ -51,6 +51,8 @@ import {
   markAiReviewPublished,
   getCachedAiSlopAdvisory,
   putCachedAiSlopAdvisory,
+  getCachedLinkedIssueSatisfaction,
+  putCachedLinkedIssueSatisfaction,
   markPullRequestsRegated,
   markPullRequestReviewsInvalidated,
   markPullRequestSurfacePublished,
@@ -277,6 +279,7 @@ import {
 } from "../selfhost/queue-common";
 import { aiReviewCacheInputFingerprint } from "../review/ai-review-cache-input";
 import { aiSlopCacheInputFingerprint } from "../review/ai-slop-cache-input";
+import { linkedIssueSatisfactionCacheInputFingerprint } from "../review/linked-issue-satisfaction-cache-input";
 import {
   AGENT_LABEL_NEEDS_REVIEW,
   DEFAULT_REVIEW_EVASION_LABEL,
@@ -369,6 +372,7 @@ import {
   type SlopBand,
 } from "../signals/slop";
 import { runGittensoryAiSlopAdvisory } from "../services/ai-slop";
+import { runGittensoryLinkedIssueSatisfaction } from "../services/linked-issue-satisfaction-run";
 import { decidePublicSurface } from "../signals/settings-preview";
 import {
   buildFocusManifestGuidance,
@@ -6518,6 +6522,7 @@ export function gateCheckPolicy(
     mergeReadinessGateMode: settings.mergeReadinessGateMode,
     manifestPolicyGateMode: settings.manifestPolicyGateMode,
     selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
+    linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode,
     firstTimeContributorGrace: settings.firstTimeContributorGrace,
     authorMergedPrCount: authorHistory?.mergedPrCount,
     authorClosedUnmergedPrCount: authorHistory?.closedUnmergedPrCount,
@@ -7663,6 +7668,181 @@ export async function runAiSlopForAdvisory(
 }
 
 /**
+ * Run the linked-issue satisfaction assessment for advisory purposes (#1961/#3906) — opt-in via
+ * `linkedIssueSatisfactionGateMode != "off"`. Assesses only the PR's PRIMARY (first) linked issue: v1 chooses
+ * cost/complexity over completeness for the multi-linked-issue case (each additional issue would need its own
+ * bounded model-call budget on top of an already-bounded retry/fallback loop), and the concrete repro this
+ * closes (JSONbored/metagraphed PR #3910) cited exactly one issue. A future slice could widen this to assess
+ * every linked issue independently; documented here rather than built speculatively.
+ *
+ * Returns the resolved `{status, rationale}` for the caller to thread into the comment's dedicated "Linked
+ * issue satisfaction" section (both `advisory` and `block` modes render it) — or `null` when nothing usable
+ * was produced (no linked issue, the issue couldn't be fetched, the model produced nothing publishable, or a
+ * low-confidence "unaddressed" call degraded to no finding — see buildLinkedIssueSatisfactionResult's own
+ * fail-safe contract). In `block` mode, an above-confidence-floor "unaddressed" verdict ALSO pushes a
+ * `linked_issue_scope_mismatch` finding into `args.advisory.findings` so `isConfiguredGateBlocker` can block
+ * the gate; `advisory` mode never pushes a finding — the dedicated rendered section is the only surface, so a
+ * repo running advisory-only never ALSO sees the same gap restated as a generic Nit line.
+ *
+ * Like `runAiSlopForAdvisory`, this runs ONLY for confirmed contributors so an unconfirmed/untrusted PR author
+ * cannot spend either the shared Workers AI budget or the maintainer-paid BYOK quota. Fail-safe: any error is
+ * swallowed so the gate still finalizes.
+ */
+export async function runLinkedIssueSatisfactionForAdvisory(
+  env: Env,
+  args: {
+    settings: RepositorySettings;
+    advisory: Awaited<ReturnType<typeof buildPullRequestAdvisory>>;
+    repoFullName: string;
+    pr: { number: number; title: string; body?: string | null | undefined; linkedIssues: number[] };
+    author: string | null;
+    files: Awaited<ReturnType<typeof listPullRequestFiles>>;
+    confirmedContributor: boolean;
+    installationId: number;
+  },
+): Promise<{ status: "addressed" | "partial" | "unaddressed"; rationale: string } | null> {
+  if (!args.confirmedContributor || !args.advisory.headSha) return null;
+  const primaryIssueNumber = args.pr.linkedIssues[0];
+  if (primaryIssueNumber === undefined) return null;
+  try {
+    // Dedicated fetch (independent of resolveLinkedIssueAdvisoryContext's own, narrower, conditional fetch) so
+    // this feature's issue-text needs stay self-contained regardless of whether linkedIssueGateMode is also
+    // configured for this repo. A modest bounded extra GitHub call when BOTH features are enabled for the same
+    // repo is an acceptable, minor cost for keeping each feature isolated and easy to reason about.
+    const token = (await createInstallationToken(env, args.installationId).catch(() => undefined)) ?? env.GITHUB_PUBLIC_TOKEN;
+    const admissionKey = githubAdmissionKeyForToken(env, args.installationId, token);
+    const issueFetch = await fetchLinkedIssueFacts(env, args.repoFullName, primaryIssueNumber, token, admissionKey);
+    // Fail-safe: no confirmed issue text -> no assessment (mirrors buildLinkedIssueSatisfactionResult's own
+    // contract). A fetch error or a confirmed-not-found issue both yield no assessment rather than a guess.
+    if (issueFetch.status !== "found") return null;
+    const issueText = [issueFetch.facts.title, issueFetch.facts.body]
+      .filter((part): part is string => Boolean(part?.trim()))
+      .join("\n\n");
+    if (!issueText.trim()) return null;
+
+    // BYOK (opt-in): reuse the repo's encrypted key + aiReviewByok flag, exactly like runAiSlopForAdvisory —
+    // one BYOK key serves every AI feature.
+    const storedKey = args.settings.aiReviewByok
+      ? await getDecryptedRepositoryAiKey(env, args.repoFullName)
+      : null;
+    const providerKey =
+      storedKey &&
+      (!args.settings.aiReviewProvider ||
+        args.settings.aiReviewProvider === storedKey.provider)
+        ? {
+            provider: storedKey.provider,
+            key: storedKey.key,
+            model: args.settings.aiReviewModel ?? storedKey.model,
+          }
+        : null;
+    // #linked-issue-satisfaction-cache: the assessment's LLM call is fully deterministic given the same head SHA
+    // + linked issue number (no RAG/grounding/enrichment feeds into it), so a repeated scheduled sweep pass at
+    // an unchanged head+issue reuses the stored result instead of re-spending up to 6 free-tier attempts (or a
+    // BYOK call) on every tick — mirrors ai_slop_cache's confirmed-in-production motivation exactly.
+    const inputFingerprint = await linkedIssueSatisfactionCacheInputFingerprint({
+      byok: Boolean(providerKey),
+      provider: providerKey?.provider,
+      model: providerKey?.model,
+    });
+    const cached = await getCachedLinkedIssueSatisfaction(
+      env,
+      args.repoFullName,
+      args.pr.number,
+      args.advisory.headSha,
+      primaryIssueNumber,
+      inputFingerprint,
+    ).catch(() => null);
+    let result: Awaited<ReturnType<typeof runGittensoryLinkedIssueSatisfaction>>;
+    if (cached) {
+      result = { status: "ok", result: cached.result, estimatedNeurons: cached.estimatedNeurons };
+      incr("gittensory_linked_issue_satisfaction_cache_hit_total");
+      await recordAuditEvent(env, {
+        eventType: "github_app.linked_issue_satisfaction_cache_hit",
+        actor: args.author,
+        targetKey: `${args.repoFullName}#${args.pr.number}`,
+        outcome: "completed",
+        detail: "reused a stored linked-issue satisfaction assessment instead of re-spending an LLM call",
+        /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
+        metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null, linkedIssueNumber: primaryIssueNumber },
+      }).catch(() => undefined);
+    } else {
+      incr("gittensory_linked_issue_satisfaction_cache_miss_total");
+      await recordAuditEvent(env, {
+        eventType: "github_app.linked_issue_satisfaction_cache_miss",
+        actor: args.author,
+        targetKey: `${args.repoFullName}#${args.pr.number}`,
+        outcome: "completed",
+        detail: "no reusable stored linked-issue satisfaction assessment for this head+issue+fingerprint; running a fresh assessment",
+        /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
+        metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null, linkedIssueNumber: primaryIssueNumber },
+      }).catch(() => undefined);
+      result = await runGittensoryLinkedIssueSatisfaction(env, {
+        repoFullName: args.repoFullName,
+        prNumber: args.pr.number,
+        issueText,
+        prTitle: args.pr.title,
+        prBody: args.pr.body ?? undefined,
+        diff: buildAiReviewDiff(args.files),
+        actor: args.author,
+        providerKey,
+      });
+      // Only "ok" actually spent the LLM call (free-tier attempts or a BYOK call) — disabled/unavailable/
+      // quota_exceeded all short-circuit BEFORE any provider call, so caching them would suppress a legitimate
+      // retry once the condition clears without having saved anything.
+      if (result.status === "ok") {
+        await putCachedLinkedIssueSatisfaction(
+          env,
+          args.repoFullName,
+          args.pr.number,
+          args.advisory.headSha,
+          primaryIssueNumber,
+          inputFingerprint,
+          { status: result.status, result: result.result, estimatedNeurons: result.estimatedNeurons },
+        ).catch((error) => {
+          incr("gittensory_linked_issue_satisfaction_cache_write_error_total");
+          return recordAuditEvent(env, {
+            eventType: "github_app.linked_issue_satisfaction_cache_write_error",
+            actor: args.author,
+            targetKey: `${args.repoFullName}#${args.pr.number}`,
+            outcome: "error",
+            detail: errorMessage(error),
+            /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
+            metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null, linkedIssueNumber: primaryIssueNumber },
+          }).catch(() => undefined);
+        });
+      }
+    }
+    if (result.status !== "ok" || !result.result) return null;
+    // `block` mode: an above-confidence-floor "unaddressed" verdict becomes a hard blocker. `advisory` mode
+    // never pushes a finding here — the dedicated rendered section (populated via this function's return
+    // value, regardless of mode) is the only surface for that mode, so the same gap is never ALSO shown as a
+    // generic advisory Nit line.
+    if (args.settings.linkedIssueSatisfactionGateMode === "block" && result.result.status === "unaddressed") {
+      args.advisory.findings.push({
+        code: "linked_issue_scope_mismatch",
+        severity: "warning",
+        title: "Linked issue does not appear to be satisfied",
+        detail: result.result.rationale,
+        action: "Confirm this PR actually addresses the linked issue's scope, or link the correct issue.",
+        publicText: `AI assessment: this PR does not appear to satisfy its linked issue's scope. ${result.result.rationale}`,
+      });
+    }
+    return { status: result.result.status, rationale: result.result.rationale };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: "warn",
+        event: "linked_issue_satisfaction_failed",
+        repository: args.repoFullName,
+        pullNumber: args.pr.number,
+        error: errorMessage(error),
+      }),
+    );
+    return null;
+  }
+}
+
+/**
  * Duplicate-winner adjudication (#dup-winner) seam for the close-reason disposition. Given a PR's open
  * duplicate-sibling numbers (from {@link linkedIssueDuplicatePullRequestsForGate}, open-only), return the
  * `linkedDuplicateCount` the agent planner reads. When the flag is ON and this PR is the cluster winner, return
@@ -8273,6 +8453,11 @@ async function maybePublishPrPublicSurface(
   let queueHealth!: ReturnType<typeof buildQueueHealth>;
   let preflight!: ReturnType<typeof buildPreflightResult>;
   let gateEvaluation: ReturnType<typeof evaluateGateCheck> | undefined;
+  // Linked-issue satisfaction assessment (#1961/#3906) result, hoisted to function scope (like gateEvaluation
+  // above) because it is computed inside the try block below but consumed later, outside it, when building the
+  // unified comment. Declared undefined/null-equivalent by default so an unopted-in repo (linkedIssueSatisfactionGateMode:
+  // "off", the default) or a caught error never threads a section into the comment.
+  let linkedIssueSatisfaction: { status: "addressed" | "partial" | "unaddressed"; rationale: string } | null = null;
   // inlineFindings is present ONLY on a FRESH review (cache miss) with inline comments enabled; the AI cache
   // round-trips notes + reviewerCount + the gate findings (so a cache hit replays consensus/split/inconclusive
   // blockers — see below), but NOT inlineFindings, so a cache hit never re-posts inline comments (#inline-comments).
@@ -8656,6 +8841,23 @@ async function maybePublishPrPublicSurface(
           confirmedContributor,
         });
       }
+    }
+    // Linked-issue satisfaction assessment (#1961/#3906, opt-in via linkedIssueSatisfactionGateMode). Assesses
+    // only the PR's primary linked issue -- see runLinkedIssueSatisfactionForAdvisory's own doc comment for
+    // the multi-linked-issue rationale. `off` (default) short-circuits before any fetch or model call, so this
+    // is byte-identical to before this feature existed for every repo that hasn't opted in. (Declared/hoisted
+    // to function scope above, alongside gateEvaluation, since it is consumed later outside this try block.)
+    if (settings.linkedIssueSatisfactionGateMode !== "off" && pr.linkedIssues.length > 0) {
+      linkedIssueSatisfaction = await runLinkedIssueSatisfactionForAdvisory(env, {
+        settings,
+        advisory,
+        repoFullName,
+        pr,
+        author,
+        files: await getReviewFiles(),
+        confirmedContributor,
+        installationId,
+      });
     }
     // Focus-manifest policy (#555, opt-in via manifestPolicyGateMode). Reload the CACHED manifest (the
     // settings resolver discards the raw manifest, but loadRepoFocusManifest is cached so this is cheap),
@@ -10121,6 +10323,7 @@ async function maybePublishPrPublicSurface(
         gate: renderedGate,
         ...(aiReview !== undefined ? { aiReview } : {}),
         advisoryFindings: advisory.findings,
+        ...(linkedIssueSatisfaction !== null ? { linkedIssueSatisfaction } : {}),
         panelRows: rows,
         ...(reviewConfig?.fields !== undefined
           ? { reviewFields: reviewConfig.fields }

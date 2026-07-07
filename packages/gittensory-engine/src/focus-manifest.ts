@@ -119,6 +119,15 @@ export type FocusManifestGateConfig = {
   mergeReadiness: GateRuleMode | null;
   manifestPolicy: GateRuleMode | null;
   selfAuthoredLinkedIssue: GateRuleMode | null;
+  /** `gate.linkedIssueSatisfaction` (#1961/#3906): off|advisory|block, off by default. When not off, an AI
+   *  assessment of whether the PR's diff satisfies its primary linked issue's intent runs and renders as a
+   *  collapsible section in the review comment; `block` additionally lets a confidence-floor-passing
+   *  "unaddressed" verdict become a hard blocker. DB-backed (dashboard-settable too); this overrides the
+   *  stored value -- mirrors `aiReviewMode` above, not the config-as-code-only `unlinkedIssueGuardrail`
+   *  pattern. Distinct from the pre-existing, config-as-code-only `review.linkedIssueSatisfaction` (#2173,
+   *  below) -- that field is parsed but not yet consumed by any decision path; this `gate:` field is the one
+   *  the merge/close decision actually reads. */
+  linkedIssueSatisfaction: GateRuleMode | null;
   dryRun: boolean | null;
   firstTimeContributorGrace: boolean | null;
   /** `gate.premergeContentRecheck` (#2550): for a PR touching `migrations/**`, re-verify against a live,
@@ -790,6 +799,7 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   mergeReadiness: null,
   manifestPolicy: null,
   selfAuthoredLinkedIssue: null,
+  linkedIssueSatisfaction: null,
   dryRun: null,
   firstTimeContributorGrace: null,
   premergeContentRecheck: null,
@@ -1119,6 +1129,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     mergeReadiness: normalizeOptionalGateMode(record.mergeReadiness, "gate.mergeReadiness", warnings),
     manifestPolicy: normalizeOptionalGateMode(record.manifestPolicy, "gate.manifestPolicy", warnings),
     selfAuthoredLinkedIssue: normalizeOptionalGateMode(record.selfAuthoredLinkedIssue, "gate.selfAuthoredLinkedIssue", warnings),
+    linkedIssueSatisfaction: normalizeOptionalGateMode(record.linkedIssueSatisfaction, "gate.linkedIssueSatisfaction", warnings),
     dryRun: normalizeOptionalBoolean(record.dryRun, "gate.dryRun", warnings),
     firstTimeContributorGrace: normalizeOptionalBoolean(record.firstTimeContributorGrace, "gate.firstTimeContributorGrace", warnings),
     premergeContentRecheck: normalizeOptionalBoolean(record.premergeContentRecheck, "gate.premergeContentRecheck", warnings),
@@ -1161,6 +1172,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.mergeReadiness !== null ||
     gate.manifestPolicy !== null ||
     gate.selfAuthoredLinkedIssue !== null ||
+    gate.linkedIssueSatisfaction !== null ||
     gate.dryRun !== null ||
     gate.firstTimeContributorGrace !== null ||
     gate.premergeContentRecheck !== null ||
@@ -1230,6 +1242,7 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   if (gate.mergeReadiness !== null) out.mergeReadiness = gate.mergeReadiness;
   if (gate.manifestPolicy !== null) out.manifestPolicy = gate.manifestPolicy;
   if (gate.selfAuthoredLinkedIssue !== null) out.selfAuthoredLinkedIssue = gate.selfAuthoredLinkedIssue;
+  if (gate.linkedIssueSatisfaction !== null) out.linkedIssueSatisfaction = gate.linkedIssueSatisfaction;
   if (gate.dryRun !== null) out.dryRun = gate.dryRun;
   if (gate.firstTimeContributorGrace !== null) out.firstTimeContributorGrace = gate.firstTimeContributorGrace;
   if (gate.premergeContentRecheck !== null) out.premergeContentRecheck = gate.premergeContentRecheck;

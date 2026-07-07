@@ -861,6 +861,33 @@ describe("lockfile-tamper-risk gate blocker (#2563)", () => {
   });
 });
 
+describe("linked-issue satisfaction gate blocker (#1961/#3906)", () => {
+  const satisfactionAdvisory = (): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "linked_issue_scope_mismatch", title: "Linked issue does not appear to be satisfied", severity: "warning", detail: "The cited issue asks for an SSE stream; this PR adds an unrelated REST endpoint.", action: "Confirm this PR actually addresses the linked issue's scope, or link the correct issue." }],
+  });
+
+  it("blocks (failure) under linkedIssueSatisfactionGateMode: block, confirmed contributor", () => {
+    const result = evaluateGateCheck(satisfactionAdvisory(), { linkedIssueSatisfactionGateMode: "block", confirmedContributor: true });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((b) => b.code)).toContain("linked_issue_scope_mismatch");
+  });
+
+  it("stays advisory (never blocks) under off/unset (default) or advisory mode, even if a finding exists", () => {
+    expect(evaluateGateCheck(satisfactionAdvisory(), {}).conclusion).toBe("success"); // unset ⇒ defaults to advisory
+    expect(evaluateGateCheck(satisfactionAdvisory(), { linkedIssueSatisfactionGateMode: "off" }).conclusion).toBe("success");
+    const advisoryResult = evaluateGateCheck(satisfactionAdvisory(), { linkedIssueSatisfactionGateMode: "advisory" });
+    expect(advisoryResult.conclusion).toBe("success");
+    expect(advisoryResult.warnings.map((w) => w.code)).toContain("linked_issue_scope_mismatch");
+  });
+
+  it("resolveEffectiveSettings maps gate.linkedIssueSatisfaction → linkedIssueSatisfactionGateMode, and gateCheckPolicy threads it", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { linkedIssueSatisfaction: "block" } }));
+    expect(eff.linkedIssueSatisfactionGateMode).toBe("block");
+    expect(gateCheckPolicy(settings({ linkedIssueSatisfactionGateMode: "block" }), null, true).linkedIssueSatisfactionGateMode).toBe("block");
+  });
+});
+
 describe("dry-run disposition (#gate-dryrun): would-be verdict without enforcing", () => {
   // #disposition-redesign: the dry-run shadow promotes ONLY the AI sub-gate. CLOSE is driven by AI confidence; the
   // advisory signals (linked issue, readiness/quality, slop, duplicates) can NEVER drive a would-be close.

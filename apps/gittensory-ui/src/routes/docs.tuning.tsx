@@ -334,6 +334,14 @@ function Tuning() {
           same author. Default <code>advisory</code>.
         </li>
         <li>
+          <code>gate.linkedIssueSatisfaction</code> — an AI assessment of whether the PR's diff
+          actually satisfies its primary linked issue's intent, distinct from{" "}
+          <code>gate.linkedIssue</code> (which only checks a link exists). Default <code>off</code>.{" "}
+          <code>advisory</code> renders the assessment in the review comment without blocking;{" "}
+          <code>block</code> additionally lets a confidence-floor-passing "unaddressed" verdict
+          become a blocker.
+        </li>
+        <li>
           <code>settings.moderationGateMode</code> — whether the moderation-rules engine
           (contributor cap, blacklist, review-nag feeding a shared cross-repo violation tally) runs
           on this repo at all. <code>inherit</code> (default) defers to the instance-wide{" "}

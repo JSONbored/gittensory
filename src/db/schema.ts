@@ -75,6 +75,11 @@ export const repositorySettings = sqliteTable("repository_settings", {
   mergeReadinessGateMode: text("merge_readiness_gate_mode").notNull().default("off"),
   manifestPolicyGateMode: text("manifest_policy_gate_mode").notNull().default("off"),
   selfAuthoredLinkedIssueGateMode: text("self_authored_linked_issue_gate_mode").notNull().default("advisory"),
+  // Linked-issue satisfaction gate (#1961/#3906). off = the assessment never runs (byte-identical to today,
+  // and the default); advisory = it runs and renders in the comment but never blocks; block = an above-
+  // confidence-floor "unaddressed" verdict additionally becomes a hard blocker. See src/rules/advisory.ts's
+  // isConfiguredGateBlocker (linked_issue_scope_mismatch) and gittensory-gate-setting-wiring for the pattern.
+  linkedIssueSatisfactionGateMode: text("linked_issue_satisfaction_gate_mode").notNull().default("off"),
   firstTimeContributorGrace: integer("first_time_contributor_grace", { mode: "boolean" }).notNull().default(false),
   slopGateMinScore: integer("slop_gate_min_score"),
   slopAiAdvisory: integer("slop_ai_advisory", { mode: "boolean" }).notNull().default(false),
@@ -1404,5 +1409,31 @@ export const aiSlopCache = sqliteTable(
   },
   (table) => ({
     primary: primaryKey({ columns: [table.repoFullName, table.pullNumber, table.headSha] }),
+  }),
+);
+
+// Linked-issue satisfaction assessment cache (#1961/#3906): mirrors aiSlopCache above, but the primary key
+// ADDITIONALLY includes linkedIssueNumber -- unlike the slop advisory, this assessment's verdict is scoped to
+// a SPECIFIC linked issue, and a PR's primary linked issue can change between passes (an edited body re-links
+// a different issue). Reusing a stored verdict for a different issue number would silently answer the wrong
+// question, so a changed primary issue must miss the cache rather than replay a stale verdict.
+export const linkedIssueSatisfactionCache = sqliteTable(
+  "linked_issue_satisfaction_cache",
+  {
+    repoFullName: text("repo_full_name").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    linkedIssueNumber: integer("linked_issue_number").notNull(),
+    // Fingerprints the one input that can change independently of the head SHA + issue number: which provider
+    // produced the opinion (free/default reviewer vs. a maintainer's BYOK key/model) -- see
+    // linked-issue-satisfaction-cache-input.ts.
+    inputFingerprint: text("input_fingerprint").notNull(),
+    status: text("status").notNull(),
+    resultJson: text("result_json"),
+    estimatedNeurons: integer("estimated_neurons").notNull().default(0),
+    createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+  },
+  (table) => ({
+    primary: primaryKey({ columns: [table.repoFullName, table.pullNumber, table.headSha, table.linkedIssueNumber] }),
   }),
 );

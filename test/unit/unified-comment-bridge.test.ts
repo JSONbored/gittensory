@@ -297,6 +297,30 @@ describe("buildUnifiedCommentBody", () => {
     expect(withoutEffort).not.toContain("review effort:");
   });
 
+  it("forwards the linked-issue satisfaction result into the rendered collapsible section, and omits it otherwise (#1961/#3906)", () => {
+    const withResult = buildUnifiedCommentBody({
+      gate: gate(),
+      aiReview: { notes: "Clean change." },
+      panelRows,
+      readinessTotal: 88,
+      changedFiles: 3,
+      footerMarkdown: footer,
+      linkedIssueSatisfaction: { status: "unaddressed", rationale: "The linked issue asks for an SSE stream; this PR adds an unrelated REST endpoint." },
+    });
+    expect(withResult).toContain("Linked issue satisfaction");
+    expect(withResult).toContain("Not yet addressed");
+    expect(withResult).toContain("The linked issue asks for an SSE stream");
+    const without = buildUnifiedCommentBody({
+      gate: gate(),
+      aiReview: { notes: "Clean change." },
+      panelRows,
+      readinessTotal: 88,
+      changedFiles: 3,
+      footerMarkdown: footer,
+    });
+    expect(without).not.toContain("Linked issue satisfaction");
+  });
+
   it("forwards maxFindings caps into the rendered blocker/nit sections (#2049)", () => {
     const body = buildUnifiedCommentBody({
       gate: gate({

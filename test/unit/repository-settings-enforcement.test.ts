@@ -26,6 +26,7 @@ function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
     mergeReadinessGateMode: "off",
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
+    linkedIssueSatisfactionGateMode: "off",
     firstTimeContributorGrace: false,
     slopAiAdvisory: false,
     qualityGateMinScore: null,

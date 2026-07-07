@@ -61,6 +61,7 @@ import {
   webhookEvents,
 } from "./schema";
 import { DEFAULT_REVIEW_EVASION_LABEL, MAX_REVIEW_NAG_COOLDOWN_DAYS } from "../settings/agent-actions";
+import type { LinkedIssueSatisfactionResult } from "../services/linked-issue-satisfaction";
 import { MAX_CONTRIBUTOR_OPEN_ITEM_CAP } from "../types";
 import type {
   Advisory,
@@ -513,6 +514,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       mergeReadinessGateMode: "off",
       manifestPolicyGateMode: "off",
       selfAuthoredLinkedIssueGateMode: "advisory",
+      linkedIssueSatisfactionGateMode: "off",
       firstTimeContributorGrace: false,
       slopGateMinScore: null,
       slopAiAdvisory: false,
@@ -590,6 +592,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     mergeReadinessGateMode: parseGateRuleMode(row.mergeReadinessGateMode),
     manifestPolicyGateMode: parseGateRuleMode(row.manifestPolicyGateMode),
     selfAuthoredLinkedIssueGateMode: parseGateRuleMode(row.selfAuthoredLinkedIssueGateMode),
+    linkedIssueSatisfactionGateMode: parseGateRuleMode(row.linkedIssueSatisfactionGateMode),
     firstTimeContributorGrace: row.firstTimeContributorGrace,
     slopGateMinScore: normalizeQualityGateMinScore(row.slopGateMinScore),
     slopAiAdvisory: row.slopAiAdvisory,
@@ -711,6 +714,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     mergeReadinessGateMode: settings.mergeReadinessGateMode ?? "off",
     manifestPolicyGateMode: settings.manifestPolicyGateMode ?? "off",
     selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode ?? "advisory",
+    linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode ?? "off",
     firstTimeContributorGrace: settings.firstTimeContributorGrace ?? false,
     slopGateMinScore: normalizeQualityGateMinScore(settings.slopGateMinScore),
     slopAiAdvisory: settings.slopAiAdvisory ?? false,
@@ -790,6 +794,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       mergeReadinessGateMode: resolved.mergeReadinessGateMode,
       manifestPolicyGateMode: resolved.manifestPolicyGateMode,
       selfAuthoredLinkedIssueGateMode: resolved.selfAuthoredLinkedIssueGateMode,
+      linkedIssueSatisfactionGateMode: resolved.linkedIssueSatisfactionGateMode,
       firstTimeContributorGrace: resolved.firstTimeContributorGrace,
       slopGateMinScore: resolved.slopGateMinScore,
       slopAiAdvisory: resolved.slopAiAdvisory,
@@ -873,6 +878,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         mergeReadinessGateMode: resolved.mergeReadinessGateMode,
         manifestPolicyGateMode: resolved.manifestPolicyGateMode,
         selfAuthoredLinkedIssueGateMode: resolved.selfAuthoredLinkedIssueGateMode,
+        linkedIssueSatisfactionGateMode: resolved.linkedIssueSatisfactionGateMode,
         firstTimeContributorGrace: resolved.firstTimeContributorGrace,
         slopGateMinScore: resolved.slopGateMinScore,
         slopAiAdvisory: resolved.slopAiAdvisory,
@@ -4540,6 +4546,61 @@ export async function putCachedAiSlopAdvisory(
          input_fingerprint = excluded.input_fingerprint, status = excluded.status, band = excluded.band, finding_json = excluded.finding_json, estimated_neurons = excluded.estimated_neurons, created_at = excluded.created_at`,
     )
     .bind(repoFullName, pullNumber, headSha, inputFingerprint, result.status, result.band, jsonString(result.finding), result.estimatedNeurons, nowIso())
+    .run();
+}
+
+/** #linked-issue-satisfaction-cache: the stored linked-issue satisfaction result for (repo, pull, head SHA,
+ *  linked issue number), or null on a miss. Mirrors getCachedAiSlopAdvisory -- every stored row is
+ *  unconditionally durable (no cacheable/allowNonCacheable/maxAgeMs dimension). A nullish head SHA is always a
+ *  miss. `expectedInputFingerprint` mismatching (e.g. the repo turned BYOK on/off, or changed its BYOK
+ *  provider/model, since this row was written) is also a miss so a config change can't silently replay an
+ *  opinion produced under a different reviewer. */
+export async function getCachedLinkedIssueSatisfaction(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  headSha: string | null | undefined,
+  linkedIssueNumber: number,
+  expectedInputFingerprint: string,
+): Promise<{ status: string; result: LinkedIssueSatisfactionResult | null; estimatedNeurons: number } | null> {
+  if (!headSha) return null;
+  const row = await env.DB
+    .prepare(
+      "SELECT status, result_json AS resultJson, estimated_neurons AS estimatedNeurons, input_fingerprint AS inputFingerprint FROM linked_issue_satisfaction_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ? AND linked_issue_number = ?",
+    )
+    .bind(repoFullName, pullNumber, headSha, linkedIssueNumber)
+    .first<{ status: string; resultJson: string | null; estimatedNeurons: number; inputFingerprint: string }>();
+  if (!row || row.inputFingerprint !== expectedInputFingerprint) return null;
+  return {
+    status: row.status,
+    result: parseJson<LinkedIssueSatisfactionResult | null>(row.resultJson, null),
+    estimatedNeurons: row.estimatedNeurons,
+  };
+}
+
+/** #linked-issue-satisfaction-cache: upsert the linked-issue satisfaction result for (repo, pull, head SHA,
+ *  linked issue number). A nullish head SHA is a no-op (mirrors putCachedAiSlopAdvisory). Only call this for a
+ *  result that actually spent the LLM call/attempts (status "ok") -- the caller is responsible for not caching
+ *  a pre-call short-circuit (disabled/unavailable/quota_exceeded), since those return before any provider call
+ *  and caching them would suppress a legitimate retry once the condition clears without having saved anything. */
+export async function putCachedLinkedIssueSatisfaction(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  headSha: string | null | undefined,
+  linkedIssueNumber: number,
+  inputFingerprint: string,
+  result: { status: string; result: LinkedIssueSatisfactionResult | null; estimatedNeurons: number },
+): Promise<void> {
+  if (!headSha) return;
+  await env.DB
+    .prepare(
+      `INSERT INTO linked_issue_satisfaction_cache (repo_full_name, pull_number, head_sha, linked_issue_number, input_fingerprint, status, result_json, estimated_neurons, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(repo_full_name, pull_number, head_sha, linked_issue_number) DO UPDATE SET
+         input_fingerprint = excluded.input_fingerprint, status = excluded.status, result_json = excluded.result_json, estimated_neurons = excluded.estimated_neurons, created_at = excluded.created_at`,
+    )
+    .bind(repoFullName, pullNumber, headSha, linkedIssueNumber, inputFingerprint, result.status, jsonString(result.result), result.estimatedNeurons, nowIso())
     .run();
 }
 
