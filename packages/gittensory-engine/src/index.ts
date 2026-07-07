@@ -302,3 +302,23 @@ export {
   type VisualRoutesConfig,
   type VisualTheme,
 } from "./focus-manifest.js";
+// Reward/risk reasoning signals (#2281). The four builders depend on the still-in-`src` maintainer signal
+// stack, so they take an injected `RewardRiskEngineDeps` (the `src/signals/reward-risk.ts` shim binds it).
+export {
+  buildRepoRewardRisk,
+  buildContributorRewardRiskStrategy,
+  buildMaintainerNoiseReport,
+  buildPullRequestReviewability,
+  rewardRiskFreshnessInternals,
+  type RewardRiskEngineDeps,
+  type PullRequestReviewabilityInput,
+  type PullRequestReviewIntelligenceView,
+  type RewardRiskAction,
+  type RewardRiskActionKind,
+  type RewardRiskActionSeverity,
+  type RepoRewardRisk,
+  type EligibilityGapEntry,
+  type ContributorRewardRiskStrategy,
+  type MaintainerNoiseReport,
+  type PullRequestReviewability,
+} from "./reward-risk.js";
