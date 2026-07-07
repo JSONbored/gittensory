@@ -217,6 +217,16 @@ export {
   type ContributorFitProfile,
 } from "./contributor-fit.js";
 export {
+  buildFeasibilityVerdict,
+  feasibilityInputFromPreStartCheck,
+  type FeasibilityClaimStatus,
+  type FeasibilityDuplicateClusterRisk,
+  type FeasibilityGateInput,
+  type FeasibilityGateResult,
+  type FeasibilityIssueStatus,
+  type FeasibilityVerdict,
+} from "./feasibility.js";
+export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
   computeMetadataFeasibility,
