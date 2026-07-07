@@ -186,52 +186,55 @@ export async function scanNativeBuild(
   const changes = extractDependencyChanges(req.files ?? [])
     .filter(isQueryable)
     .slice(0, options.limits?.maxQueries ?? MAX_QUERIES);
-  const findings: NativeBuildFinding[] = [];
-  for (const change of changes) {
-    if (options.signal?.aborted) break;
+  const results = await Promise.all(
+    changes.map(async (change): Promise<NativeBuildFinding | null> => {
+      if (options.signal?.aborted) return null;
 
-    if (change.ecosystem === "npm") {
-      const data = (await fetchJson(
-        fetchImpl,
-        `https://registry.npmjs.org/${encodeURIComponent(change.package)}/${encodeURIComponent(change.to)}`,
-        options,
-        "npm-version",
-        MAX_NPM_VERSION_JSON_BYTES,
-      )) as
-        | (NpmVersionMeta | { versions?: Record<string, NpmVersionMeta> })
-        | null;
-      const meta = npmVersionMeta(data, change.to);
-      const native = meta && npmNativeBuild(meta);
-      if (native) {
-        findings.push({
-          ecosystem: change.ecosystem,
-          package: change.package,
-          version: change.to,
-          kind: "native-addon",
-          prebuiltFallback: native.prebuiltFallback,
-          reason: native.reason,
-        });
+      if (change.ecosystem === "npm") {
+        const data = (await fetchJson(
+          fetchImpl,
+          `https://registry.npmjs.org/${encodeURIComponent(change.package)}/${encodeURIComponent(change.to)}`,
+          options,
+          "npm-version",
+          MAX_NPM_VERSION_JSON_BYTES,
+        )) as
+          | (NpmVersionMeta | { versions?: Record<string, NpmVersionMeta> })
+          | null;
+        const meta = npmVersionMeta(data, change.to);
+        const native = meta && npmNativeBuild(meta);
+        if (native) {
+          return {
+            ecosystem: change.ecosystem,
+            package: change.package,
+            version: change.to,
+            kind: "native-addon",
+            prebuiltFallback: native.prebuiltFallback,
+            reason: native.reason,
+          };
+        }
+      } else {
+        // PyPI — the only other ecosystem isQueryable admits.
+        const data = (await fetchJson(
+          fetchImpl,
+          `https://pypi.org/pypi/${encodeURIComponent(change.package)}/${encodeURIComponent(change.to)}/json`,
+          options,
+          "pypi-json",
+          MAX_PYPI_VERSION_JSON_BYTES,
+        )) as { urls?: PypiUrl[] } | null;
+        if (data && pypiSdistOnly(data.urls ?? [])) {
+          return {
+            ecosystem: change.ecosystem,
+            package: change.package,
+            version: change.to,
+            kind: "sdist-only",
+            reason:
+              "no prebuilt wheel for this version — pip compiles from source (sdist) on install",
+          };
+        }
       }
-    } else {
-      // PyPI — the only other ecosystem isQueryable admits.
-      const data = (await fetchJson(
-        fetchImpl,
-        `https://pypi.org/pypi/${encodeURIComponent(change.package)}/${encodeURIComponent(change.to)}/json`,
-        options,
-        "pypi-json",
-        MAX_PYPI_VERSION_JSON_BYTES,
-      )) as { urls?: PypiUrl[] } | null;
-      if (data && pypiSdistOnly(data.urls ?? [])) {
-        findings.push({
-          ecosystem: change.ecosystem,
-          package: change.package,
-          version: change.to,
-          kind: "sdist-only",
-          reason:
-            "no prebuilt wheel for this version — pip compiles from source (sdist) on install",
-        });
-      }
-    }
-  }
+      return null;
+    }),
+  );
+  const findings = results.filter((f): f is NativeBuildFinding => f !== null);
   return findings;
 }
