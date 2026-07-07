@@ -72,7 +72,7 @@ import {
 import type { PlannedAgentAction } from "../../src/settings/agent-actions";
 import { STRUCTURED_CLOSE_REASONS_MAX_COUNT } from "../../src/settings/agent-execution";
 import { AGENT_LABEL_PENDING_CLOSURE } from "../../src/review/linked-issue-hard-rules";
-import { clearProcessLocalGlobalAgentFrozenCacheForTest, getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFromGitHub } from "../../src/db/repositories";
+import { clearProcessLocalGlobalAgentFrozenCacheForTest, getGlobalContributorBlacklist, isGlobalAgentFrozen, setGlobalAgentFrozen, upsertGlobalModerationConfig, upsertPullRequestFile, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import * as repositoriesModule from "../../src/db/repositories";
 import * as sentryModule from "../../src/selfhost/sentry";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
@@ -1883,16 +1883,26 @@ describe("executeAgentMaintenanceActions merge-train gate (#selfhost-merge-train
     expect(mergePullRequest).toHaveBeenCalled();
   });
 
-  it("mergeTrainMode: \"enforce\" holds the merge behind a still-open OLDER sibling", async () => {
+  it("mergeTrainMode: \"enforce\" holds the merge behind a still-open, OVERLAPPING OLDER sibling", async () => {
     const env = createTestEnv({});
-    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "", created_at: "2026-07-05T08:00:00.000Z" });
-    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "", created_at: "2026-07-05T10:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T08:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T10:00:00.000Z" });
 
-    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "enforce", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z" }), [merge]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "enforce", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z", pullRequestLinkedIssues: [1] }), [merge]);
     expect(outcomes[0]).toMatchObject({ actionClass: "merge", outcome: "denied" });
     expect(outcomes[0]?.detail).toContain("merge train");
     expect(outcomes[0]?.detail).toContain("#3");
     expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("does NOT hold an enforce-mode merge behind an older sibling that shares no linked issue or changed file (#selfhost-merge-train-overlap)", async () => {
+    const env = createTestEnv({});
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Unrelated older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "Fixes #99", created_at: "2026-07-05T08:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T10:00:00.000Z" });
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "enforce", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z", pullRequestLinkedIssues: [1] }), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalled();
   });
 
   it("mergeTrainMode: \"enforce\" merges normally when no older sibling exists", async () => {
@@ -1907,10 +1917,10 @@ describe("executeAgentMaintenanceActions merge-train gate (#selfhost-merge-train
 
   it("mergeTrainMode: \"audit\" records the would-hold decision but still executes the merge", async () => {
     const env = createTestEnv({});
-    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "", created_at: "2026-07-05T08:00:00.000Z" });
-    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "", created_at: "2026-07-05T10:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T08:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T10:00:00.000Z" });
 
-    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "audit", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z" }), [merge]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "audit", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z", pullRequestLinkedIssues: [1] }), [merge]);
     // Exactly ONE outcome for the one planned action -- the audit-mode signal must not double it.
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]?.outcome).toBe("completed");
@@ -1923,11 +1933,24 @@ describe("executeAgentMaintenanceActions merge-train gate (#selfhost-merge-train
 
   it("a git-conflicted (\"dirty\") older sibling never blocks an enforce-mode merge", async () => {
     const env = createTestEnv({});
-    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Conflicted older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "", created_at: "2026-07-05T08:00:00.000Z", mergeable_state: "dirty" });
-    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "", created_at: "2026-07-05T10:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Conflicted older sibling", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T08:00:00.000Z", mergeable_state: "dirty" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "Fixes #1", created_at: "2026-07-05T10:00:00.000Z" });
 
-    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "enforce", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z" }), [merge]);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "enforce", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z", pullRequestLinkedIssues: [1] }), [merge]);
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(mergePullRequest).toHaveBeenCalled();
+  });
+
+  it("holds an enforce-mode merge behind an older sibling that shares no linked issue but DOES share a meaningful changed file", async () => {
+    const env = createTestEnv({});
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older sibling, no linked issue", state: "open", user: { login: "c" }, head: { sha: "sha3" }, labels: [], body: "", created_at: "2026-07-05T08:00:00.000Z" });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "This PR", state: "open", user: { login: "c" }, head: { sha: "sha7" }, labels: [], body: "", created_at: "2026-07-05T10:00:00.000Z" });
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 3, path: "src/queue/processors.ts", status: "modified", additions: 1, deletions: 1, changes: 2, payload: {} });
+    await upsertPullRequestFile(env, { repoFullName: "owner/repo", pullNumber: 7, path: "src/queue/processors.ts", status: "modified", additions: 1, deletions: 1, changes: 2, payload: {} });
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ mergeTrainMode: "enforce", pullRequestCreatedAt: "2026-07-05T10:00:00.000Z", pullRequestChangedFiles: ["src/queue/processors.ts"] }), [merge]);
+    expect(outcomes[0]).toMatchObject({ actionClass: "merge", outcome: "denied" });
+    expect(outcomes[0]?.detail).toContain("#3");
+    expect(mergePullRequest).not.toHaveBeenCalled();
   });
 });

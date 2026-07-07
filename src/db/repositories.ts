@@ -566,6 +566,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewEvasionProtection: "close", // #4011: default-ON -- see normalizeReviewEvasionProtection's doc comment
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
+      mergeTrainMode: "off",
       screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [] },
     };
   }
@@ -842,6 +843,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       reviewEvasionProtection: resolved.reviewEvasionProtection,
       reviewEvasionLabel: resolved.reviewEvasionLabel,
       reviewEvasionComment: resolved.reviewEvasionComment,
+      mergeTrainMode: resolved.mergeTrainMode,
       screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
       screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
       screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
@@ -925,6 +927,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         reviewEvasionProtection: resolved.reviewEvasionProtection,
         reviewEvasionLabel: resolved.reviewEvasionLabel,
         reviewEvasionComment: resolved.reviewEvasionComment,
+        mergeTrainMode: resolved.mergeTrainMode,
         screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
         screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
         screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),

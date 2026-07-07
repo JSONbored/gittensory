@@ -7,6 +7,7 @@ import {
   insertNotificationDeliveryIfAbsent,
   isGlobalAgentFrozen,
   listOtherOpenPullRequests,
+  listRepoPullRequestFilePaths,
   markPullRequestApproved,
   markPullRequestMergeBlocked,
   recordAuditEvent,
@@ -190,6 +191,16 @@ export type AgentActionExecutionContext = {
   // gate below compares this against open siblings fetched fresh, since siblings are only ever fetched lazily
   // when the gate is actually enabled (see step 8b), not threaded through every caller unconditionally.
   pullRequestCreatedAt?: string | null | undefined;
+  // This PR's own linked issues (#selfhost-merge-train-overlap), resolved by the CALLER (already has the PR
+  // record in scope): the merge-train gate only holds a merge behind an OVERLAPPING older sibling (shared
+  // linked issue or shared meaningful changed file), never a blanket "any older PR" wait -- see
+  // merge-train.ts's module header for why. Absent/undefined behaves like an empty list (issue-overlap never
+  // matches; file-overlap can still apply via pullRequestChangedFiles below).
+  pullRequestLinkedIssues?: readonly number[] | undefined;
+  // This PR's own changed file paths, when the caller has them resolved (e.g. a webhook path with the
+  // `pull_request_files` cache already populated). Absent/undefined degrades the merge-train overlap check to
+  // linked-issue-only for this PR, never to "no overlap possible".
+  pullRequestChangedFiles?: readonly string[] | undefined;
 };
 
 export type ModerationContextSettings = {
@@ -461,15 +472,39 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
         continue;
       }
     }
-    // 8b) merge-train FIFO gate (#selfhost-merge-train): a still-viable OLDER open sibling in this repo holds
-    // this merge until it merges, closes, or goes stale (see merge-train.ts's staleness cap). Siblings are
-    // fetched fresh here, lazily, ONLY when the gate is actually enabled for this repo — not threaded through
-    // every caller unconditionally, since the vast majority of merges never need this check. "audit" mode logs
-    // the decision but never actually holds anything, so it's safe to enable everywhere to validate the fix
-    // before switching a repo to "enforce".
+    // 8b) merge-train FIFO gate (#selfhost-merge-train): a still-viable, OVERLAPPING older open sibling in this
+    // repo holds this merge until it merges, closes, or goes stale (see merge-train.ts's staleness cap and its
+    // module header for why overlap-scoping, not blanket FIFO, is the actual fix -- an unrelated older sibling,
+    // even one stuck in manual review, never blocks). Siblings + their changed-file paths are fetched fresh
+    // here, lazily, ONLY when the gate is actually enabled for this repo — not threaded through every caller
+    // unconditionally, since the vast majority of merges never need this check. "audit" mode logs the decision
+    // but never actually holds anything, so it's safe to enable everywhere to validate the fix before switching
+    // a repo to "enforce".
     if (action.actionClass === "merge" && ctx.mergeTrainMode && ctx.mergeTrainMode !== "off") {
       const siblings = await listOtherOpenPullRequests(env, ctx.repoFullName, ctx.pullNumber);
-      const decision = shouldWaitForOlderSiblings(ctx.pullNumber, ctx.pullRequestCreatedAt, siblings, Date.now());
+      const filePaths = await listRepoPullRequestFilePaths(env, ctx.repoFullName, {
+        pullNumbers: [ctx.pullNumber, ...siblings.map((sibling) => sibling.number)],
+      });
+      const pathsByPullNumber = new Map<number, string[]>();
+      for (const row of filePaths) {
+        const paths = pathsByPullNumber.get(row.pullNumber) ?? [];
+        paths.push(row.path);
+        pathsByPullNumber.set(row.pullNumber, paths);
+      }
+      const decision = shouldWaitForOlderSiblings({
+        thisPrNumber: ctx.pullNumber,
+        thisPrCreatedAt: ctx.pullRequestCreatedAt,
+        thisPrLinkedIssues: ctx.pullRequestLinkedIssues ?? [],
+        thisPrChangedFiles: pathsByPullNumber.get(ctx.pullNumber) ?? ctx.pullRequestChangedFiles,
+        siblings: siblings.map((sibling) => ({
+          number: sibling.number,
+          createdAt: sibling.createdAt,
+          mergeableState: sibling.mergeableState,
+          linkedIssues: sibling.linkedIssues,
+          changedFiles: pathsByPullNumber.get(sibling.number),
+        })),
+        nowMs: Date.now(),
+      });
       if (decision.wait) {
         incr("gittensory_merge_train_deferred_total", { repo: ctx.repoFullName, mode: ctx.mergeTrainMode });
         if (ctx.mergeTrainMode === "enforce") {

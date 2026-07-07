@@ -193,6 +193,39 @@ describe("agent approval queue (#779)", () => {
     expect(mergePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7, { mergeMethod: "squash", sha: "h7" });
   });
 
+  it("accept holds a staged merge behind a still-open, OVERLAPPING older sibling under mergeTrainMode: enforce (#selfhost-merge-train-overlap)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" }, mergeTrainMode: "enforce" });
+    await seedInstallation(env);
+    // Relative to Date.now() (this file never pins the system clock) so the sibling is unambiguously OLDER
+    // than the current PR but still well within the 24h merge-train staleness cap.
+    const olderCreatedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const newerCreatedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older overlapping sibling", state: "open", user: { login: "contributor" }, head: { sha: "h3" }, labels: [], body: "Fixes #1", created_at: olderCreatedAt });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "Fixes #1", created_at: newerCreatedAt });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.executionOutcome).toBe("denied");
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("accept does NOT hold a staged merge behind an older sibling sharing no linked issue or file, even under mergeTrainMode: enforce", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: "x" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto_with_approval" }, mergeTrainMode: "enforce" });
+    await seedInstallation(env);
+    const olderCreatedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const newerCreatedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 3, title: "Older unrelated sibling", state: "open", user: { login: "contributor" }, head: { sha: "h3" }, labels: [], body: "Fixes #99", created_at: olderCreatedAt });
+    await upsertPullRequestFromGitHub(env, "owner/repo", { number: 7, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: "h7" }, labels: [], body: "Fixes #1", created_at: newerCreatedAt });
+    const { action } = await createPendingAgentActionIfAbsent(env, { repoFullName: "owner/repo", pullNumber: 7, installationId: 5, actionClass: "merge", autonomyLevel: "auto_with_approval", params: { mergeMethod: "squash", expectedHeadSha: "h7" }, reason: "clean" });
+
+    const result = await decidePendingAgentAction(env, { id: action.id, decision: "accept", decidedBy: "owner" });
+    expect(result.status).toBe("accepted");
+    expect(result.executionOutcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalledWith(env, 5, "owner/repo", 7, { mergeMethod: "squash", sha: "h7" });
+  });
+
   it("REGRESSION (#2422): accept denies a merge staged with NO reviewed-head pin, rather than silently merging whatever commit is currently live", async () => {
     // Unlike a PINNED merge, where GitHub's `sha` param 409s on mismatch (a real backstop), an UNPINNED merge
     // falls back to performAction's `mergeSha = action.expectedHeadSha ?? ctx.headSha`, which by construction
