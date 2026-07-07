@@ -4371,6 +4371,58 @@ export async function markAiReviewPublished(
     .run();
 }
 
+/** #ai-slop-cache: the stored AI slop advisory result for (repo, pull, head SHA), or null on a miss. Mirrors
+ *  getCachedAiReview but deliberately simpler -- see ai_slop_cache's migration doc comment for why no
+ *  cacheable/allowNonCacheable/maxAgeMs dimension is needed here: every stored row is unconditionally durable.
+ *  A nullish head SHA is always a miss (nothing to key on). `expectedInputFingerprint` mismatching (e.g. the
+ *  repo turned BYOK on/off, or changed its BYOK provider/model, since this row was written) is also a miss so a
+ *  config change can't silently replay an opinion produced under a different reviewer. */
+export async function getCachedAiSlopAdvisory(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  headSha: string | null | undefined,
+  expectedInputFingerprint: string,
+): Promise<{ status: string; band: string | null; finding: AdvisoryFinding | null; estimatedNeurons: number } | null> {
+  if (!headSha) return null;
+  const row = await env.DB
+    .prepare("SELECT status, band, finding_json AS findingJson, estimated_neurons AS estimatedNeurons, input_fingerprint AS inputFingerprint FROM ai_slop_cache WHERE repo_full_name = ? AND pull_number = ? AND head_sha = ?")
+    .bind(repoFullName, pullNumber, headSha)
+    .first<{ status: string; band: string | null; findingJson: string | null; estimatedNeurons: number; inputFingerprint: string }>();
+  if (!row || row.inputFingerprint !== expectedInputFingerprint) return null;
+  return {
+    status: row.status,
+    band: row.band,
+    finding: parseJson<AdvisoryFinding | null>(row.findingJson, null),
+    estimatedNeurons: row.estimatedNeurons,
+  };
+}
+
+/** #ai-slop-cache: upsert the AI slop advisory result for (repo, pull, head SHA). A nullish head SHA is a
+ *  no-op (mirrors putCachedAiReview). Only call this for a result that actually spent the LLM call/attempts
+ *  (status "ok") -- the caller is responsible for not caching a pre-call short-circuit (disabled/unavailable/
+ *  quota_exceeded), since those return before any provider call and caching them would suppress a legitimate
+ *  retry once quota resets without having saved anything. */
+export async function putCachedAiSlopAdvisory(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  headSha: string | null | undefined,
+  inputFingerprint: string,
+  result: { status: string; band: string | null; finding: AdvisoryFinding | null; estimatedNeurons: number },
+): Promise<void> {
+  if (!headSha) return;
+  await env.DB
+    .prepare(
+      `INSERT INTO ai_slop_cache (repo_full_name, pull_number, head_sha, input_fingerprint, status, band, finding_json, estimated_neurons, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(repo_full_name, pull_number, head_sha) DO UPDATE SET
+         input_fingerprint = excluded.input_fingerprint, status = excluded.status, band = excluded.band, finding_json = excluded.finding_json, estimated_neurons = excluded.estimated_neurons, created_at = excluded.created_at`,
+    )
+    .bind(repoFullName, pullNumber, headSha, inputFingerprint, result.status, result.band, jsonString(result.finding), result.estimatedNeurons, nowIso())
+    .run();
+}
+
 export async function replaceCollisionEdges(env: Env, repoFullName: string, edges: CollisionEdgeRecord[]): Promise<void> {
   const db = getDb(env.DB);
   await env.DB.prepare("DELETE FROM collision_edges WHERE repo_full_name = ?").bind(repoFullName).run();

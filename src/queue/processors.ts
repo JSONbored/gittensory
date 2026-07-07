@@ -49,6 +49,8 @@ import {
   countPublishedAiReviewHeads,
   putCachedAiReview,
   markAiReviewPublished,
+  getCachedAiSlopAdvisory,
+  putCachedAiSlopAdvisory,
   markPullRequestsRegated,
   markPullRequestReviewsInvalidated,
   markPullRequestSurfacePublished,
@@ -270,6 +272,7 @@ import {
   queueSnapshotFromBinding,
 } from "../selfhost/queue-common";
 import { aiReviewCacheInputFingerprint } from "../review/ai-review-cache-input";
+import { aiSlopCacheInputFingerprint } from "../review/ai-slop-cache-input";
 import {
   AGENT_LABEL_NEEDS_REVIEW,
   DEFAULT_REVIEW_EVASION_LABEL,
@@ -7502,16 +7505,75 @@ export async function runAiSlopForAdvisory(
             model: args.settings.aiReviewModel ?? storedKey.model,
           }
         : null;
-    const result = await runGittensoryAiSlopAdvisory(env, {
-      repoFullName: args.repoFullName,
-      prNumber: args.pr.number,
-      title: args.pr.title,
-      body: args.pr.body ?? undefined,
-      diff: buildAiReviewDiff(args.files),
-      actor: args.author,
-      deterministicBand: args.deterministicBand,
-      providerKey,
+    // #ai-slop-cache: the slop advisory's LLM call is fully deterministic given the same head SHA (no RAG/
+    // grounding/enrichment feeds into it, unlike ai review — see ai_slop_cache's migration doc comment), so a
+    // repeated scheduled sweep pass at an unchanged head reuses the stored result instead of re-spending up to
+    // 6 free-tier attempts (or a BYOK call) on every tick — confirmed in production: 110 ai_slop_pr calls on a
+    // single PR in 24h at an unchanged head. The fingerprint only needs to cover which provider would answer
+    // (free vs. this repo's BYOK key/model); everything else the model sees is already pinned to the head SHA.
+    const inputFingerprint = await aiSlopCacheInputFingerprint({
+      byok: Boolean(providerKey),
+      provider: providerKey?.provider,
+      model: providerKey?.model,
     });
+    const cachedSlop = await getCachedAiSlopAdvisory(env, args.repoFullName, args.pr.number, args.advisory.headSha, inputFingerprint).catch(() => null);
+    let result: Awaited<ReturnType<typeof runGittensoryAiSlopAdvisory>>;
+    if (cachedSlop) {
+      result = { status: "ok", finding: cachedSlop.finding, band: cachedSlop.band as SlopBand | null, estimatedNeurons: cachedSlop.estimatedNeurons };
+      incr("gittensory_ai_slop_cache_hit_total");
+      await recordAuditEvent(env, {
+        eventType: "github_app.ai_slop_cache_hit",
+        actor: args.author,
+        targetKey: `${args.repoFullName}#${args.pr.number}`,
+        outcome: "completed",
+        detail: "reused a stored AI slop advisory instead of re-spending an LLM call",
+        /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
+        metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null },
+      }).catch(() => undefined);
+    } else {
+      incr("gittensory_ai_slop_cache_miss_total");
+      await recordAuditEvent(env, {
+        eventType: "github_app.ai_slop_cache_miss",
+        actor: args.author,
+        targetKey: `${args.repoFullName}#${args.pr.number}`,
+        outcome: "completed",
+        detail: "no reusable stored AI slop advisory for this head+fingerprint; running a fresh advisory",
+        /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
+        metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null },
+      }).catch(() => undefined);
+      result = await runGittensoryAiSlopAdvisory(env, {
+        repoFullName: args.repoFullName,
+        prNumber: args.pr.number,
+        title: args.pr.title,
+        body: args.pr.body ?? undefined,
+        diff: buildAiReviewDiff(args.files),
+        actor: args.author,
+        deterministicBand: args.deterministicBand,
+        providerKey,
+      });
+      // Only "ok" actually spent the LLM call (free-tier attempts or a BYOK call) — disabled/unavailable/
+      // quota_exceeded all short-circuit BEFORE any provider call, so caching them would suppress a legitimate
+      // retry once the condition clears without having saved anything.
+      if (result.status === "ok") {
+        await putCachedAiSlopAdvisory(env, args.repoFullName, args.pr.number, args.advisory.headSha, inputFingerprint, {
+          status: result.status,
+          band: result.band,
+          finding: result.finding,
+          estimatedNeurons: result.estimatedNeurons,
+        }).catch((error) => {
+          incr("gittensory_ai_slop_cache_write_error_total");
+          return recordAuditEvent(env, {
+            eventType: "github_app.ai_slop_cache_write_error",
+            actor: args.author,
+            targetKey: `${args.repoFullName}#${args.pr.number}`,
+            outcome: "error",
+            detail: errorMessage(error),
+            /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
+            metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null },
+          }).catch(() => undefined);
+        });
+      }
+    }
     if (result.status === "ok" && result.finding)
       args.advisory.findings.push(result.finding);
   } catch (error) {
