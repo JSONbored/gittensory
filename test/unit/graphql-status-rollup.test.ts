@@ -11,13 +11,13 @@ const REPO = "JSONbored/gittensory";
 const SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 const TOKEN = "test-token";
 
-type Run = { name: string; conclusion?: string | null; status?: string | null; appSlug?: string | null; detailsUrl?: string | null; title?: string | null; summary?: string | null };
+type Run = { name: string; conclusion?: string | null; status?: string | null; appSlug?: string | null; detailsUrl?: string | null; title?: string | null; summary?: string | null; startedAt?: string | null };
 type Status = { context: string; state: string; description?: string | null; targetUrl?: string | null };
 type Suite = { status: string; appSlug: string };
 
 // GraphQL statusCheckRollup nodes use UPPERCASE enums (SUCCESS/FAILURE/COMPLETED/IN_PROGRESS) — the reducer
 // lowercases them, so the fixtures below deliberately use GitHub's real GraphQL casing.
-const runNode = (r: Run) => ({ __typename: "CheckRun", name: r.name, conclusion: r.conclusion ?? null, status: r.status ?? null, detailsUrl: r.detailsUrl ?? null, title: r.title ?? null, summary: r.summary ?? null, checkSuite: { app: { slug: r.appSlug ?? null } } });
+const runNode = (r: Run) => ({ __typename: "CheckRun", name: r.name, conclusion: r.conclusion ?? null, status: r.status ?? null, detailsUrl: r.detailsUrl ?? null, title: r.title ?? null, summary: r.summary ?? null, startedAt: r.startedAt ?? null, checkSuite: { app: { slug: r.appSlug ?? null } } });
 const statusNode = (s: Status) => ({ __typename: "StatusContext", context: s.context, state: s.state, description: s.description ?? null, targetUrl: s.targetUrl ?? null });
 
 function graphqlBody(opts: { runs?: Run[]; statuses?: Status[]; suites?: Suite[]; hasNextPage?: boolean; object?: unknown } = {}): unknown {
@@ -45,7 +45,7 @@ function stubGraphql(body: unknown, opts: { status?: number } = {}): void {
 function stubRest(opts: { runs?: Run[]; statuses?: Status[]; suites?: Suite[] }): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = input.toString();
-    if (url.includes("/check-runs")) return Response.json({ check_runs: (opts.runs ?? []).map((r) => ({ id: 1, name: r.name, status: (r.status ?? "").toLowerCase(), conclusion: r.conclusion ? r.conclusion.toLowerCase() : null, details_url: r.detailsUrl ?? null, output: { title: r.title ?? null, summary: r.summary ?? null }, app: { slug: r.appSlug ?? null } })) });
+    if (url.includes("/check-runs")) return Response.json({ check_runs: (opts.runs ?? []).map((r) => ({ id: 1, name: r.name, status: (r.status ?? "").toLowerCase(), conclusion: r.conclusion ? r.conclusion.toLowerCase() : null, details_url: r.detailsUrl ?? null, started_at: r.startedAt ?? null, output: { title: r.title ?? null, summary: r.summary ?? null }, app: { slug: r.appSlug ?? null } })) });
     if (url.includes("/status")) return Response.json({ statuses: (opts.statuses ?? []).map((s) => ({ context: s.context, state: s.state.toLowerCase(), description: s.description ?? null, target_url: s.targetUrl ?? null })) });
     if (url.includes("/check-suites")) return Response.json({ check_suites: (opts.suites ?? []).map((s) => ({ status: s.status.toLowerCase(), app: { slug: s.appSlug } })) });
     return new Response("not found", { status: 404 });
@@ -190,6 +190,38 @@ describe("fetchLiveCiAggregateViaGraphQl — verdicts", () => {
     stubGraphql(graphqlBody({ runs: [], statuses: [], suites: [] }));
     expect((await fetchLiveCiAggregateViaGraphQl(env, REPO, SHA, TOKEN))?.ciState).toBe("unverified"); // fold-all, nothing seen
   });
+
+  it("dedupes a re-run's stale duplicate check-run by name, keeping the newer (passing) conclusion", async () => {
+    // Reproduces a real commit's shape: a job re-run leaves the ORIGINAL failing entry in the list alongside the
+    // NEW one instead of replacing it. Without name-based dedup, the stale "failure" would resolve ciState to
+    // "failed" even though the check currently passes.
+    stubGraphql(
+      graphqlBody({
+        runs: [
+          { name: "Deploy UI preview version", conclusion: "FAILURE", status: "COMPLETED", startedAt: "2026-07-06T20:56:33Z" },
+          { name: "Deploy UI preview version", conclusion: "SKIPPED", status: "COMPLETED", startedAt: "2026-07-06T21:34:29Z" },
+        ],
+        suites: [{ status: "COMPLETED", appSlug: "github-actions" }],
+      }),
+    );
+    const agg = await fetchLiveCiAggregateViaGraphQl(env, REPO, SHA, TOKEN, new Set(["Deploy UI preview version"]));
+    expect(agg?.ciState).toBe("passed");
+    expect(agg?.failingDetails).toEqual([]);
+  });
+
+  it("still fails when the LATEST duplicate-named check-run is the one that failed (order/recency-aware, not just duplicate-blind)", async () => {
+    stubGraphql(
+      graphqlBody({
+        runs: [
+          { name: "Deploy UI preview version", conclusion: "SUCCESS", status: "COMPLETED", startedAt: "2026-07-06T20:56:33Z" },
+          { name: "Deploy UI preview version", conclusion: "FAILURE", status: "COMPLETED", startedAt: "2026-07-06T21:34:29Z" },
+        ],
+      }),
+    );
+    const agg = await fetchLiveCiAggregateViaGraphQl(env, REPO, SHA, TOKEN, new Set(["Deploy UI preview version"]));
+    expect(agg?.ciState).toBe("failed");
+    expect(agg?.failingDetails).toEqual([expect.objectContaining({ name: "Deploy UI preview version" })]);
+  });
 });
 
 describe("fetchLiveCiAggregateViaGraphQl — equivalence with the REST path", () => {
@@ -202,6 +234,26 @@ describe("fetchLiveCiAggregateViaGraphQl — equivalence with the REST path", ()
     { name: "pending non-required passes", runs: [{ name: "opt", conclusion: null, status: "IN_PROGRESS" }, { name: "build", conclusion: "SUCCESS", status: "COMPLETED" }], required: ["build"] },
     { name: "missing required", runs: [{ name: "build", conclusion: "SUCCESS", status: "COMPLETED" }], required: ["build", "e2e"] },
     { name: "suite in progress", runs: [{ name: "build", conclusion: "SUCCESS", status: "COMPLETED" }], suites: [{ status: "IN_PROGRESS", appSlug: "github-actions" }], required: ["build"] },
+    {
+      // A re-run job: GitHub keeps the stale failing entry alongside the new one instead of replacing it. Both
+      // paths must dedupe by name (keeping the newer `started_at`) and resolve "passed", not "failed" (the bug).
+      name: "duplicate-named check-run from a re-run — newer passing entry wins",
+      runs: [
+        { name: "Deploy UI preview version", conclusion: "FAILURE", status: "COMPLETED", startedAt: "2026-07-06T20:56:33Z" },
+        { name: "Deploy UI preview version", conclusion: "SKIPPED", status: "COMPLETED", startedAt: "2026-07-06T21:34:29Z" },
+      ],
+      required: ["Deploy UI preview version"],
+    },
+    {
+      // Same duplicate-name shape, but this time the LATEST run is the one that failed — must still fail (proves
+      // the fix is recency-aware, not just "duplicates always pass").
+      name: "duplicate-named check-run from a re-run — newer failing entry wins",
+      runs: [
+        { name: "Deploy UI preview version", conclusion: "SUCCESS", status: "COMPLETED", startedAt: "2026-07-06T20:56:33Z" },
+        { name: "Deploy UI preview version", conclusion: "FAILURE", status: "COMPLETED", startedAt: "2026-07-06T21:34:29Z" },
+      ],
+      required: ["Deploy UI preview version"],
+    },
   ];
 
   for (const s of scenarios) {

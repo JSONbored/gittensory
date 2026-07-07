@@ -4833,6 +4833,109 @@ describe("GitHub backfill", () => {
         expect(aggregate.ciCompletenessWarning).toMatch(/branch-protection required checks/i);
       });
     });
+
+    describe("duplicate-named check-runs from a re-run (dedupeLatestCheckRunsByName)", () => {
+      // Reproduces a real commit's shape: GitHub's /check-runs endpoint returned "Deploy UI preview version" TWICE
+      // after a "Re-run failed jobs" — id 85478132562 (conclusion: failure, started_at 2026-07-06T20:56:33Z, the
+      // STALE original run) and id 85485221438 (conclusion: skipped, started_at 2026-07-06T21:34:29Z, the CURRENT
+      // re-run). Without dedup, the stale failure alone flipped ciState to "failed" even though the check now
+      // passes — which fed a TERMINAL close signal into planAgentMaintenanceActions for a contributor PR whose CI
+      // had legitimately gone green on re-run.
+      it("keeps the NEWER (passing) conclusion when a re-run leaves a stale failing duplicate by name", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 85478132562, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z" },
+                { id: 85485221438, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z" },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "7d145f032eb3b03b5ac5868aa3cecf3e002bb6e2", "public-token", new Set(["Deploy UI preview version"]));
+
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.failingDetails).toEqual([]);
+      });
+
+      it("still fails when the NEWER duplicate-named check-run is the one that failed (recency-aware, not duplicate-blind)", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "success", started_at: "2026-07-06T20:56:33Z" },
+                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T21:34:29Z" },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["Deploy UI preview version"]));
+
+        expect(aggregate.ciState).toBe("failed");
+        expect(aggregate.failingDetails).toEqual([expect.objectContaining({ name: "Deploy UI preview version" })]);
+      });
+
+      it("keeps the already-latest entry when a stale duplicate is listed OUT OF ORDER (appears second but started EARLIER)", async () => {
+        // GitHub does not document a stable ordering contract for /check-runs, so the comparison must genuinely
+        // compare timestamps rather than assume "later in the array is newer" — this fixture puts the STALE
+        // (older, failing) run SECOND to prove the earlier-started duplicate does not override the real latest.
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 2, name: "Deploy UI preview version", status: "completed", conclusion: "skipped", started_at: "2026-07-06T21:34:29Z" },
+                { id: 1, name: "Deploy UI preview version", status: "completed", conclusion: "failure", started_at: "2026-07-06T20:56:33Z" },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["Deploy UI preview version"]));
+
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.failingDetails).toEqual([]);
+      });
+
+      it("falls back to array order when neither duplicate has a started_at (queued runs have none)", async () => {
+        const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = input.toString();
+          if (url.includes("/check-runs?")) {
+            return Response.json({
+              check_runs: [
+                { id: 1, name: "flaky", status: "completed", conclusion: "failure", started_at: null },
+                { id: 2, name: "flaky", status: "completed", conclusion: "success", started_at: null },
+              ],
+            });
+          }
+          if (url.includes("/status?")) return Response.json({ statuses: [] });
+          if (url.includes("/check-suites?")) return Response.json({ check_suites: [{ status: "completed", app: { slug: "github-actions" } }] });
+          return new Response("not found", { status: 404 });
+        });
+
+        const aggregate = await fetchLiveCiAggregate(env, "JSONbored/gittensory", "abc123", "public-token", new Set(["flaky"]));
+
+        // No timestamp to compare on either side → the later array entry wins (the documented tiebreak fallback).
+        expect(aggregate.ciState).toBe("passed");
+        expect(aggregate.failingDetails).toEqual([]);
+      });
+    });
   });
 
   describe("fetchLiveReviewThreadBlockers", () => {
