@@ -11237,6 +11237,60 @@ describe("queue processors", () => {
     expect(completed).toBeFalsy();
   });
 
+  // REGRESSION: DEFAULT_COMMAND_AUTHORIZATION_POLICY deliberately widens "review" to confirmed_miner (a
+  // confirmed miner may re-trigger review on their own PR, the same self-rerun precedent as review-now). That
+  // requires authorizePrActionActor's needsMinerDetection: true -- an earlier version of this handler omitted
+  // it, so a confirmed miner's OWN PR author (not a maintainer/collaborator) was wrongly denied every time,
+  // since there was no other role they could match instead.
+  it("review: a confirmed Gittensor miner is authorized to re-review their OWN PR (not a maintainer/collaborator)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedReviewPr(env);
+    await upsertOfficialMinerDetection(env, "reporter", { status: "confirmed", snapshot: queueMinerSnapshot("reporter") }, 60_000);
+    // A confirmed miner is ALSO a confirmedContributor for the dispatched reReviewStoredPullRequest's own
+    // public-surface eligibility, so this pass can post a SECOND, unrelated deterministic panel comment
+    // alongside the review command's own confirmation -- collect every posted body rather than assuming
+    // the command's confirmation is the only (or the last) one.
+    const postedBodies: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/collaborators/") && url.includes("/permission")) return new Response("not found", { status: 404 }); // no repo permission at all
+      if (url.includes("/issues/78/comments") && method === "POST") {
+        postedBodies.push(init?.body ? JSON.parse(init.body.toString()).body : "");
+        return Response.json({ id: 78 }, { status: 201 });
+      }
+      return reviewCommandFetchStub()(input, init);
+    });
+
+    await processJob(env, plannerWebhook("@gittensory review", "reporter", reviewIssue));
+
+    expect(postedBodies.some((body) => body.includes("Re-review triggered by @reporter"))).toBe(true);
+    const completed = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_command_completed").first<{ outcome: string }>();
+    expect(completed?.outcome).toBe("completed");
+    const denied = await env.DB.prepare("select 1 from audit_events where event_type = ?").bind("github_app.review_command_denied").first();
+    expect(denied).toBeFalsy();
+  });
+
+  it("review: respects agentPaused and agentDryRun without dispatching re-review", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedReviewPr(env);
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", agentPaused: true });
+    vi.stubGlobal("fetch", reviewCommandFetchStub());
+
+    await processJob(env, plannerWebhook("@gittensory review", "maintainer1", reviewIssue));
+    let skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1").bind("github_app.review_command_skipped").first<{ detail: string }>();
+    expect(skipped?.detail).toBe("agent_paused");
+    let completed = await env.DB.prepare("select 1 from audit_events where event_type = ?").bind("github_app.review_command_completed").first();
+    expect(completed).toBeFalsy();
+
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", agentPaused: false, agentDryRun: true });
+    await processJob(env, plannerWebhook("@gittensory review", "maintainer1", reviewIssue));
+    skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1").bind("github_app.review_command_skipped").first<{ detail: string }>();
+    expect(skipped?.detail).toBe("dry_run");
+    completed = await env.DB.prepare("select 1 from audit_events where event_type = ?").bind("github_app.review_command_completed").first();
+    expect(completed).toBeFalsy();
+  });
+
   it("review: a review command on a PR with no cached record is recorded as a cached_pr_missing skip, never posted", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await setupPlannerRepo(env); // repo + installation, but deliberately NO cached PR record
@@ -24034,487 +24088,6 @@ describe("queue processors", () => {
     expect(denied).toMatchObject({ event_type: "github_app.gate_override_denied", actor: "org-member", target_key: "JSONbored/gittensory#91", outcome: "denied", detail: "not_maintainer_or_pr_author" });
     const overridden = await env.DB.prepare("select id from audit_events where event_type = ?").bind("github_app.gate_overridden").first<{ id: string }>();
     expect(overridden ?? null).toBeNull();
-  });
-
-  // #2163: `@gittensory review` / `re-review` dispatches to reReviewStoredPullRequest without mutating gate disposition.
-  describe("@gittensory review (#2163)", () => {
-    async function seedReviewCommandPr(
-      env: Env,
-      overrides: Partial<Parameters<typeof upsertRepositorySettings>[1]> = {},
-    ): Promise<void> {
-      await upsertRepositoryFromGitHub(
-        env,
-        { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-        123,
-      );
-      await upsertInstallation(env, {
-        installation: {
-          id: 123,
-          account: { login: "JSONbored", id: 1, type: "User" },
-          repository_selection: "selected",
-          permissions: { metadata: "read", pull_requests: "write", issues: "write" },
-          events: ["issues", "issue_comment"],
-        },
-        repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
-      });
-      await upsertRepositorySettings(env, {
-        repoFullName: "JSONbored/gittensory",
-        commentMode: "off",
-        publicSurface: "off",
-        autoLabelEnabled: false,
-        checkRunMode: "off",
-        gateCheckMode: "enabled",
-        linkedIssueGateMode: "off",
-        aiReviewMode: "off",
-        ...overrides,
-      });
-      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
-        number: 2163,
-        title: "Review me",
-        state: "open",
-        user: { login: "contributor" },
-        author_association: "CONTRIBUTOR",
-        head: { sha: "review-2163-sha" },
-        labels: [],
-        body: "Validation: npm test",
-      });
-      await upsertPullRequestDetailSyncState(env, {
-        repoFullName: "JSONbored/gittensory",
-        pullNumber: 2163,
-        status: "complete",
-        reviewsSyncedAt: new Date().toISOString(),
-      });
-    }
-
-    function reviewCommandWebhook(
-      commentBody: string,
-      actor: string,
-      overrides: { action?: string; issue?: Record<string, unknown>; comment?: Record<string, unknown> } = {},
-    ): Parameters<typeof processJob>[1] {
-      return {
-        type: "github-webhook",
-        deliveryId: `review-2163-${actor}-${commentBody.length}`,
-        eventName: "issue_comment",
-        payload: {
-          action: overrides.action ?? "created",
-          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
-          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-          issue: overrides.issue ?? {
-            number: 2163,
-            title: "Review me",
-            state: "open",
-            user: { login: "contributor" },
-            pull_request: {},
-          },
-          comment: {
-            id: 21630,
-            body: commentBody,
-            author_association: "NONE",
-            user: { login: actor, type: "User" },
-            ...(overrides.comment ?? {}),
-          },
-          sender: { login: actor, type: "User" },
-        },
-      } as unknown as Parameters<typeof processJob>[1];
-    }
-
-    it("dispatches reReviewStoredPullRequest for an authorized maintainer and leaves gate mode untouched", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedReviewCommandPr(env);
-      const calls = { permission: 0, livePullGets: 0, gatePatches: 0 };
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = input.toString();
-        const method = init?.method ?? "GET";
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        if (url.includes("/collaborators/maintainer/permission")) {
-          calls.permission += 1;
-          return Response.json({ permission: "admin" });
-        }
-        if (url.endsWith("/pulls/2163")) {
-          calls.livePullGets += 1;
-          return Response.json({
-            number: 2163,
-            title: "Review me",
-            state: "open",
-            draft: false,
-            user: { login: "contributor" },
-            head: { sha: "review-2163-sha" },
-            labels: [],
-            body: "Validation: npm test",
-            mergeable_state: "clean",
-          });
-        }
-        if (url.includes("/commits/review-2163-sha/check-runs") && method === "GET") {
-          return Response.json({ total_count: 0, check_runs: [] });
-        }
-        if (url.includes("/commits/review-2163-sha/status")) {
-          return Response.json({ state: "success", statuses: [] });
-        }
-        if (url.includes("/pulls/2163/files")) {
-          return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+ok" }]);
-        }
-        if (url.includes("/issues/2163/comments")) {
-          return method === "POST" ? Response.json({ id: 21631 }, { status: 201 }) : Response.json([]);
-        }
-        if (url.includes("/check-runs") && method === "PATCH") {
-          calls.gatePatches += 1;
-          return Response.json({ id: 1 });
-        }
-        if (url.includes("/branches/")) {
-          return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
-        }
-        return new Response("not found", { status: 404 });
-      });
-
-      await processJob(env, reviewCommandWebhook("@gittensory review", "maintainer"));
-
-      expect(calls.permission).toBe(1);
-      expect(calls.livePullGets).toBeGreaterThan(0);
-      const completed = await env.DB.prepare("select event_type, actor, target_key, outcome from audit_events where event_type = ?")
-        .bind("github_app.review_command_completed")
-        .first<{ event_type: string; actor: string; target_key: string; outcome: string }>();
-      expect(completed).toMatchObject({
-        event_type: "github_app.review_command_completed",
-        actor: "maintainer",
-        target_key: "JSONbored/gittensory#2163",
-        outcome: "completed",
-      });
-      const usageEvents = await listProductUsageEvents(env, { limit: 10 });
-      expect(usageEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ surface: "github_app", eventName: "review_command_completed", outcome: "completed" }),
-        ]),
-      );
-      const settingsAfter = await env.DB.prepare("select gate_check_mode from repository_settings where repo_full_name = ?")
-        .bind("JSONbored/gittensory")
-        .first<{ gate_check_mode: string }>();
-      expect(settingsAfter?.gate_check_mode).toBe("enabled");
-      const gateOverride = await env.DB.prepare("select id from audit_events where event_type = ?")
-        .bind("github_app.gate_overridden")
-        .first<{ id: string }>();
-      expect(gateOverride ?? null).toBeNull();
-    });
-
-    it("treats @gittensory re-review as the review command alias", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedReviewCommandPr(env);
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = input.toString();
-        const method = init?.method ?? "GET";
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
-        if (url.endsWith("/pulls/2163")) {
-          return Response.json({
-            number: 2163,
-            title: "Review me",
-            state: "open",
-            draft: false,
-            user: { login: "contributor" },
-            head: { sha: "review-2163-sha" },
-            labels: [],
-            body: "Validation: npm test",
-            mergeable_state: "clean",
-          });
-        }
-        if (url.includes("/commits/review-2163-sha/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
-        if (url.includes("/commits/review-2163-sha/status")) return Response.json({ state: "success", statuses: [] });
-        if (url.includes("/pulls/2163/files")) {
-          return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+ok" }]);
-        }
-        if (url.includes("/issues/2163/comments")) {
-          return method === "POST" ? Response.json({ id: 21631 }, { status: 201 }) : Response.json([]);
-        }
-        if (url.includes("/branches/")) {
-          return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
-        }
-        return new Response("not found", { status: 404 });
-      });
-
-      await processJob(env, reviewCommandWebhook("@gittensory re-review", "maintainer"));
-
-      const completed = await env.DB.prepare("select outcome from audit_events where event_type = ?")
-        .bind("github_app.review_command_completed")
-        .first<{ outcome: string }>();
-      expect(completed?.outcome).toBe("completed");
-    });
-
-    it("denies an unauthorized actor with review_command_denied audit + usage", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedReviewCommandPr(env);
-      const calls = { livePullGets: 0 };
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-        const url = input.toString();
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        if (url.includes("/collaborators/outsider/permission")) return Response.json({ permission: "read" });
-        if (url.endsWith("/pulls/2163")) {
-          calls.livePullGets += 1;
-          return Response.json({ number: 2163, state: "open", head: { sha: "review-2163-sha" } });
-        }
-        return new Response("not found", { status: 404 });
-      });
-
-      await processJob(env, reviewCommandWebhook("@gittensory review", "outsider"));
-
-      expect(calls.livePullGets).toBe(0);
-      const denied = await env.DB.prepare("select event_type, actor, outcome, detail from audit_events where event_type = ?")
-        .bind("github_app.review_command_denied")
-        .first<{ event_type: string; actor: string; outcome: string; detail: string }>();
-      expect(denied).toMatchObject({
-        event_type: "github_app.review_command_denied",
-        actor: "outsider",
-        outcome: "denied",
-        detail: "not_maintainer_or_pr_author",
-      });
-      const usageEvents = await listProductUsageEvents(env, { limit: 10 });
-      expect(usageEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ eventName: "review_command_denied", outcome: "denied" }),
-        ]),
-      );
-      const completed = await env.DB.prepare("select id from audit_events where event_type = ?")
-        .bind("github_app.review_command_completed")
-        .first<{ id: string }>();
-      expect(completed ?? null).toBeNull();
-    });
-
-    it("records classifier skips for bot authors, edited comments, and missing PR targets", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedReviewCommandPr(env);
-      vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
-
-      await processJob(
-        env,
-        reviewCommandWebhook("@gittensory review", "some-bot[bot]", {
-          comment: { user: { login: "some-bot[bot]", type: "Bot" } },
-        }),
-      );
-      let skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1")
-        .bind("github_app.review_command_skipped")
-        .first<{ detail: string }>();
-      expect(skipped?.detail).toBe("bot_author");
-
-      await processJob(env, reviewCommandWebhook("@gittensory review", "maintainer", { action: "edited" }));
-      skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1")
-        .bind("github_app.review_command_skipped")
-        .first<{ detail: string }>();
-      expect(skipped?.detail).toBe("unsupported_comment_action");
-
-      await processJob(
-        env,
-        reviewCommandWebhook("@gittensory review", "maintainer", {
-          issue: { number: 2163, title: "Not a PR", state: "open", user: { login: "reporter" } },
-        }),
-      );
-      skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1")
-        .bind("github_app.review_command_skipped")
-        .first<{ detail: string }>();
-      expect(skipped?.detail).toBe("missing_repo_pr_installation_or_actor");
-    });
-
-    it("skips when the cached PR row is missing", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await upsertRepositoryFromGitHub(
-        env,
-        { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-        123,
-      );
-      await upsertInstallation(env, {
-        installation: {
-          id: 123,
-          account: { login: "JSONbored", id: 1, type: "User" },
-          repository_selection: "selected",
-          permissions: { metadata: "read", pull_requests: "write", issues: "write" },
-          events: ["issues", "issue_comment"],
-        },
-        repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
-      });
-      await upsertRepositorySettings(env, {
-        repoFullName: "JSONbored/gittensory",
-        commentMode: "off",
-        publicSurface: "off",
-        autoLabelEnabled: false,
-        checkRunMode: "off",
-        gateCheckMode: "enabled",
-        linkedIssueGateMode: "off",
-        aiReviewMode: "off",
-      });
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-        const url = input.toString();
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
-        return new Response("not found", { status: 404 });
-      });
-
-      await processJob(env, reviewCommandWebhook("@gittensory review", "maintainer"));
-
-      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?")
-        .bind("github_app.review_command_skipped")
-        .first<{ detail: string }>();
-      expect(skipped?.detail).toBe("cached_pr_missing");
-    });
-
-    it("respects agentPaused and agentDryRun without dispatching re-review", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedReviewCommandPr(env, { agentPaused: true });
-      const calls = { livePullGets: 0 };
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-        const url = input.toString();
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
-        if (url.endsWith("/pulls/2163")) {
-          calls.livePullGets += 1;
-          return Response.json({ number: 2163, state: "open", head: { sha: "review-2163-sha" } });
-        }
-        return new Response("not found", { status: 404 });
-      });
-
-      await processJob(env, reviewCommandWebhook("@gittensory review", "maintainer"));
-      expect(calls.livePullGets).toBe(0);
-      let skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1")
-        .bind("github_app.review_command_skipped")
-        .first<{ detail: string }>();
-      expect(skipped?.detail).toBe("agent_paused");
-
-      await seedReviewCommandPr(env, { agentPaused: false, agentDryRun: true });
-      await processJob(env, reviewCommandWebhook("@gittensory review", "maintainer"));
-      skipped = await env.DB.prepare("select detail from audit_events where event_type = ? order by rowid desc limit 1")
-        .bind("github_app.review_command_skipped")
-        .first<{ detail: string }>();
-      expect(skipped?.detail).toBe("dry_run");
-    });
-
-    it("records completed metadata fallbacks when head sha and comment id are absent", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await upsertRepositoryFromGitHub(
-        env,
-        { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-        123,
-      );
-      await upsertInstallation(env, {
-        installation: {
-          id: 123,
-          account: { login: "JSONbored", id: 1, type: "User" },
-          repository_selection: "selected",
-          permissions: { metadata: "read", pull_requests: "write", issues: "write" },
-          events: ["issues", "issue_comment"],
-        },
-        repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
-      });
-      await upsertRepositorySettings(env, {
-        repoFullName: "JSONbored/gittensory",
-        commentMode: "off",
-        publicSurface: "off",
-        autoLabelEnabled: false,
-        checkRunMode: "off",
-        gateCheckMode: "enabled",
-        linkedIssueGateMode: "off",
-        aiReviewMode: "off",
-      });
-      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
-        number: 2164,
-        title: "Review me (no head)",
-        state: "open",
-        user: { login: "contributor" },
-        author_association: "CONTRIBUTOR",
-        head: {},
-        labels: [],
-        body: "Validation: npm test",
-      });
-      await upsertPullRequestDetailSyncState(env, {
-        repoFullName: "JSONbored/gittensory",
-        pullNumber: 2164,
-        status: "complete",
-        reviewsSyncedAt: new Date().toISOString(),
-      });
-      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = input.toString();
-        const method = init?.method ?? "GET";
-        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
-        if (url.endsWith("/pulls/2164")) {
-          return Response.json({
-            number: 2164,
-            title: "Review me (no head)",
-            state: "open",
-            draft: false,
-            user: { login: "contributor" },
-            head: {},
-            labels: [],
-            body: "Validation: npm test",
-            mergeable_state: "clean",
-          });
-        }
-        if (url.includes("/pulls/2164/files")) {
-          return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+ok" }]);
-        }
-        if (url.includes("/issues/2164/comments")) {
-          return method === "POST" ? Response.json({ id: 21641 }, { status: 201 }) : Response.json([]);
-        }
-        if (url.includes("/branches/")) {
-          return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
-        }
-        return new Response("not found", { status: 404 });
-      });
-
-      await processJob(env, {
-        type: "github-webhook",
-        deliveryId: "review-2163-no-head",
-        eventName: "issue_comment",
-        payload: {
-          action: "created",
-          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
-          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
-          issue: { number: 2164, title: "Review me (no head)", state: "open", user: { login: "contributor" }, pull_request: {} },
-          comment: { body: "@gittensory review", author_association: "NONE", user: { login: "maintainer", type: "User" } },
-          sender: { login: "maintainer", type: "User" },
-        },
-      } as unknown as Parameters<typeof processJob>[1]);
-
-      const completed = await env.DB.prepare("select metadata_json from audit_events where event_type = ?")
-        .bind("github_app.review_command_completed")
-        .first<{ metadata_json: string }>();
-      expect(JSON.parse(completed?.metadata_json ?? "{}")).toMatchObject({
-        headSha: null,
-        commentId: null,
-      });
-    });
-
-    it("records skip metadata when the classifier has no repository context", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
-
-      await processJob(env, {
-        type: "github-webhook",
-        deliveryId: "review-2163-no-repo",
-        eventName: "issue_comment",
-        payload: {
-          action: "created",
-          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
-          issue: { number: 2163, title: "Review me", state: "open", user: { login: "contributor" }, pull_request: {} },
-          comment: { body: "@gittensory review", user: { login: "maintainer", type: "User" } },
-          sender: { login: "maintainer", type: "User" },
-        },
-      } as unknown as Parameters<typeof processJob>[1]);
-
-      const skipped = await env.DB.prepare("select metadata_json, detail from audit_events where event_type = ?")
-        .bind("github_app.review_command_skipped")
-        .first<{ metadata_json: string; detail: string }>();
-      expect(skipped?.detail).toBe("missing_repo_pr_installation_or_actor");
-      expect(JSON.parse(skipped?.metadata_json ?? "{}")).toMatchObject({ repoFullName: null });
-    });
-
-    it("does not intercept non-review comments", async () => {
-      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
-      await seedReviewCommandPr(env);
-      vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
-
-      await processJob(env, reviewCommandWebhook("just chatting, no command", "maintainer"));
-
-      const events = await env.DB.prepare("select event_type from audit_events where event_type like ?")
-        .bind("github_app.review_command%")
-        .all<{ event_type: string }>();
-      expect(events.results ?? []).toHaveLength(0);
-    });
   });
 
   // #1964 (record slice): `@gittensory resolve` records review-memory suppression signals for advisory warnings.

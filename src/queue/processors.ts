@@ -5656,22 +5656,6 @@ async function processGitHubWebhook(
 
     if (
       eventName === "issue_comment" &&
-      (await maybeProcessReviewCommand(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    if (
-      eventName === "issue_comment" &&
       (await maybeProcessGateOverrideCommand(env, deliveryId, payload))
     ) {
       await recordWebhookEvent(env, {
@@ -10892,177 +10876,6 @@ export async function resolveOverrideHeadSha(
  * payload.comment.author_association. The override is intentionally NOT persisted: a follow-up push
  * re-evaluates the Gate from scratch (no permanent bypass).
  */
-/**
- * `@gittensory review` / `re-review` (#2163): dispatch a manual auto-review re-run via the existing
- * `reReviewStoredPullRequest` path. Affects only auto-review scheduling/output — never gate disposition
- * (#1960). Honors the shared PR-command classifier, real repo permission auth, and pause/dry-run like
- * gate-override/resolve.
- */
-async function maybeProcessReviewCommand(
-  env: Env,
-  deliveryId: string,
-  payload: GitHubWebhookPayload,
-): Promise<boolean> {
-  const command = parseGittensoryMentionCommand(payload.comment?.body);
-  if (!command || command.name !== "review") return false;
-
-  const req = classifyPrCommandRequest(payload, getInstallationId(payload));
-  if (!req.ok) {
-    await recordReviewCommandSkip(
-      env,
-      deliveryId,
-      req.repoFullName,
-      req.targetKey,
-      req.actor,
-      req.reason,
-    );
-    return true;
-  }
-
-  const [pr, settings] = await Promise.all([
-    getPullRequest(env, req.repoFullName, req.pr.number),
-    resolveRepositorySettings(env, req.repoFullName),
-  ]);
-  const targetKey = `${req.repoFullName}#${req.pr.number}`;
-  if (!pr) {
-    await recordReviewCommandSkip(
-      env,
-      deliveryId,
-      req.repoFullName,
-      targetKey,
-      req.actor,
-      "cached_pr_missing",
-    );
-    return true;
-  }
-
-  const { authorization } = await authorizePrActionActor({
-    env,
-    deliveryId,
-    installationId: req.installationId,
-    repoFullName: req.repoFullName,
-    issue: payload.issue!,
-    actor: req.actor,
-    commandName: "review" as GittensoryMentionCommandName,
-    settings,
-    pr,
-    needsMinerDetection: true,
-  });
-  if (!authorization.authorized) {
-    await recordAuditEvent(env, {
-      eventType: "github_app.review_command_denied",
-      actor: req.actor,
-      targetKey,
-      outcome: "denied",
-      detail: authorization.reason,
-      metadata: {
-        deliveryId,
-        repoFullName: req.repoFullName,
-        allowedRoles: commandAuthorizationAllowedRoles(
-          settings.commandAuthorization,
-          "review",
-        ),
-      },
-    });
-    await recordGithubProductUsage(env, "review_command_denied", {
-      actor: req.actor,
-      repoFullName: req.repoFullName,
-      targetKey,
-      outcome: "denied",
-      metadata: {
-        reason: authorization.reason,
-        actorKind: authorization.actorKind,
-        allowedRoles: commandAuthorizationAllowedRoles(
-          settings.commandAuthorization,
-          "review",
-        ),
-      },
-    });
-    return true;
-  }
-
-  const mode = resolveAgentActionMode({
-    globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)),
-    agentPaused: settings.agentPaused,
-    agentDryRun: settings.agentDryRun,
-  });
-  if (mode !== "live") {
-    const skipReason = mode === "dry_run" ? "dry_run" : "agent_paused";
-    await recordReviewCommandSkip(
-      env,
-      deliveryId,
-      req.repoFullName,
-      targetKey,
-      req.actor,
-      skipReason,
-    );
-    return true;
-  }
-
-  await reReviewStoredPullRequest(
-    env,
-    deliveryId,
-    req.installationId,
-    req.repoFullName,
-    req.pr.number,
-    undefined,
-    {
-      skipAiReview: settings.aiReviewMode === "off",
-      force: true,
-    },
-  );
-
-  await recordAuditEvent(env, {
-    eventType: "github_app.review_command_completed",
-    actor: req.actor,
-    targetKey,
-    outcome: "completed",
-    metadata: {
-      deliveryId,
-      repoFullName: req.repoFullName,
-      headSha: pr.headSha ?? null,
-      commentId: payload.comment?.id ?? null,
-    },
-  });
-  await recordGithubProductUsage(env, "review_command_completed", {
-    actor: req.actor,
-    repoFullName: req.repoFullName,
-    targetKey,
-    outcome: "completed",
-    metadata: {
-      actorKind: authorization.actorKind,
-      headSha: pr.headSha ?? null,
-      commentId: payload.comment?.id ?? null,
-    },
-  });
-  return true;
-}
-
-async function recordReviewCommandSkip(
-  env: Env,
-  deliveryId: string,
-  repoFullName: string | null | undefined,
-  targetKey: string | null | undefined,
-  actor: string | null,
-  reason: string,
-): Promise<void> {
-  await recordAuditEvent(env, {
-    eventType: "github_app.review_command_skipped",
-    actor,
-    targetKey,
-    outcome: "completed",
-    detail: reason,
-    metadata: { deliveryId, repoFullName: repoFullName ?? null, reason },
-  });
-  await recordGithubProductUsage(env, "review_command_skipped", {
-    actor,
-    repoFullName,
-    targetKey,
-    outcome: "skipped",
-    metadata: { reason },
-  });
-}
-
 async function maybeProcessGateOverrideCommand(
   env: Env,
   deliveryId: string,
@@ -11384,10 +11197,21 @@ async function maybeProcessReviewCommand(env: Env, deliveryId: string, payload: 
     await recordReviewCommandSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "cached_pr_missing");
     return true;
   }
-  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "review" as GittensoryMentionCommandName, settings, pr });
+  // needsMinerDetection: true -- "review" is deliberately widened to confirmed_miner (see the doc comment
+  // above and DEFAULT_COMMAND_AUTHORIZATION_POLICY's own comment on this command), so the miner-status lookup
+  // authorizePrActionActor gates behind this flag MUST run here, or a confirmed miner re-triggering review on
+  // their own PR is wrongly denied (there is no other role they could match instead).
+  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "review" as GittensoryMentionCommandName, settings, pr, needsMinerDetection: true });
   if (!authorization.authorized) {
     await recordAuditEvent(env, { eventType: "github_app.review_command_denied", actor: req.actor, targetKey, outcome: "denied", detail: authorization.reason, metadata: { deliveryId, repoFullName: req.repoFullName, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "review") } });
     await recordGithubProductUsage(env, "review_command_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "review") } });
+    return true;
+  }
+  // Same dry-run/paused gate every other action command respects (pause/resolve/explain/gate-override/
+  // generate-tests) -- a paused or dry-run repo must not dispatch a live re-review or post a confirmation.
+  const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
+  if (mode !== "live") {
+    await recordReviewCommandSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, mode === "dry_run" ? "dry_run" : "agent_paused");
     return true;
   }
   const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Re-review triggered by @${req.actor}**`, "> Re-running auto-review for this PR. The Gate check-run and one-shot disposition are produced the same way a scheduled pass would.", "", "---", gittensoryFooter()].join("\n"));
