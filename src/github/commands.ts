@@ -98,6 +98,11 @@ export const GITTENSORY_ACTION_COMMAND_CATALOG = [
     title: "Explain finding",
     description: "Explain a specific review finding; supply the finding reference in trailing text.",
   },
+  {
+    id: "generate-tests",
+    title: "Generate E2E tests",
+    description: "Generate an AI E2E test for this PR's changed behavior and post it as a reply comment (maintainer-only).",
+  },
 ] as const;
 
 export type GittensoryActionCommandName = (typeof GITTENSORY_ACTION_COMMAND_CATALOG)[number]["id"];

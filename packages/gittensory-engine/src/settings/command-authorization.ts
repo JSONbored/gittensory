@@ -24,6 +24,14 @@ export const DEFAULT_COMMAND_AUTHORIZATION_POLICY: RepositoryCommandAuthorizatio
     resolve: ["maintainer", "collaborator"],
     configuration: ["maintainer", "collaborator"],
     explain: ["maintainer", "collaborator"],
+    // #4195 (part of the #4189 E2E-test-generation epic): deliberately NARROWER than every command above --
+    // "maintainer" ONLY, excluding "collaborator" and "confirmed_miner". This command can write real content
+    // (a generated test) attributed to the PR; a repo could grant a contributor/miner collaborator-level
+    // push access, and that tier must not be able to invoke test generation for their own scored PR (the
+    // exact loophole a click-to-generate button would otherwise open). The existing
+    // `maintainer_command_requires_maintainer` guard below already denies the PR's own author when they
+    // don't independently hold the `maintainer` role, so no bespoke pr_author check is needed here.
+    "generate-tests": ["maintainer"],
   },
 };
 

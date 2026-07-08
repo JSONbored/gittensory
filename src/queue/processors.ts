@@ -488,6 +488,8 @@ import { computeImpactMap, type ImpactMapEntry } from "../review/impact-map";
 import { formatImpactMapPromptSection, shouldComputeImpactMap } from "../review/impact-map-wire";
 import { shouldEmitFixHandoff } from "../review/fix-handoff";
 import { buildFixHandoffBlocks } from "../review/fix-handoff-render";
+import { buildE2eTestGenCommentBody } from "../review/e2e-test-gen-render";
+import { resolveE2eTestGenInstructions, runGittensoryE2eTestGeneration } from "../services/ai-e2e-test-gen";
 import {
   buildRepoCultureProfileContext,
   isRepoCultureProfileEnabled,
@@ -5669,6 +5671,7 @@ async function processGitHubWebhook(
 
     if (eventName === "issue_comment" && (await maybeProcessResolveCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessExplainCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
+    if (eventName === "issue_comment" && (await maybeProcessGenerateTestsCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessReviewCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessPauseCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessResumeCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
@@ -11404,6 +11407,113 @@ async function maybeProcessExplainCommand(env: Env, deliveryId: string, payload:
 async function recordFindingExplainedSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
   await recordAuditEvent(env, { eventType: "github_app.finding_explained_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
   await recordGithubProductUsage(env, "finding_explained_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
+}
+
+/**
+ * `@gittensory generate-tests` (#4195, part of the #4189 epic): on-demand, MAINTAINER-ONLY AI-generated E2E
+ * test coverage for this PR's changed behavior, posted as its own reply comment — mirroring
+ * `maybeProcessExplainCommand`'s classify → authorize → act → audit shape exactly, but posting fresh
+ * generated content rather than explaining already-published findings.
+ *
+ * Deliberately does NOT splice into the automated review's sticky unified comment (unlike fix-handoff):
+ * this is an explicit, cost-bearing, maintainer-triggered action, not something derived for free from data
+ * the regular review pass already computed — see `explain`/`configuration` for the same "own dedicated
+ * reply comment" precedent for on-demand actions.
+ */
+async function maybeProcessGenerateTestsCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  const command = parseGittensoryMentionCommand(payload.comment?.body);
+  if (!command || command.name !== "generate-tests") return false;
+  const { classifyPrCommandRequest } = await import("../github/pr-command-request");
+  const req = classifyPrCommandRequest(payload, getInstallationId(payload));
+  if (!req.ok) {
+    await recordGenerateTestsSkip(env, deliveryId, req.repoFullName, req.targetKey, req.actor, req.reason);
+    return true;
+  }
+  const targetKey = `${req.repoFullName}#${req.pr.number}`;
+  const [pr, settings] = await Promise.all([getPullRequest(env, req.repoFullName, req.pr.number), resolveRepositorySettings(env, req.repoFullName)]);
+  if (!pr) {
+    await recordGenerateTestsSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "cached_pr_missing");
+    return true;
+  }
+  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "generate-tests" as GittensoryMentionCommandName, settings, pr });
+  if (!authorization.authorized) {
+    await recordAuditEvent(env, { eventType: "github_app.e2e_tests_generation_denied", actor: req.actor, targetKey, outcome: "denied", detail: authorization.reason, metadata: { deliveryId, repoFullName: req.repoFullName, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "generate-tests") } });
+    await recordGithubProductUsage(env, "e2e_tests_generation_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind } });
+    return true;
+  }
+  const manifest = await loadRepoFocusManifest(env, req.repoFullName).catch(() => null);
+  if (!resolveConvergedFeature(env, manifest, "e2eTests", req.repoFullName)) {
+    await postGenerateTestsNotEnabledComment(env, req.installationId, req.repoFullName, req.pr.number);
+    await recordGenerateTestsSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "feature_disabled");
+    return true;
+  }
+  const files = await listPullRequestFiles(env, req.repoFullName, req.pr.number);
+  const changedPaths = files.map((file) => file.path);
+  // BYOK resolution mirrors runAiReviewForAdvisory's own (re-resolved per-caller is this codebase's
+  // established convention for this exact 3-line block — see e.g. the vision-capture caller above).
+  const storedKey = settings.aiReviewByok ? await getDecryptedRepositoryAiKey(env, req.repoFullName) : null;
+  const providerKey =
+    storedKey && (!settings.aiReviewProvider || settings.aiReviewProvider === storedKey.provider)
+      ? { provider: storedKey.provider, key: storedKey.key, model: settings.aiReviewModel ?? storedKey.model }
+      : null;
+  const result = await runGittensoryE2eTestGeneration(env, {
+    repoFullName: req.repoFullName,
+    prNumber: req.pr.number,
+    title: pr.title,
+    body: pr.body,
+    files: files.map((file) => ({ path: file.path, patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined })),
+    instructions: resolveE2eTestGenInstructions(manifest?.review, changedPaths),
+    actor: req.actor,
+    providerKey,
+  });
+  const testSource = result.status === "ok" ? result.testSource : null;
+  const body = buildE2eTestGenCommentBody({ actor: req.actor, testSource });
+  try {
+    await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, sanitizePublicComment(body));
+  } catch (error) {
+    // sanitizePublicComment THROWS on a forbidden term rather than stripping it -- generated test source is
+    // far less predictable than this codebase's other curated comment content, so failing closed to a safe
+    // withheld-content note (never the raw error, never the raw generated text) is the right degrade here.
+    await createIssueComment(
+      env,
+      req.installationId,
+      req.repoFullName,
+      req.pr.number,
+      sanitizePublicComment(buildE2eTestGenCommentBody({ actor: req.actor, testSource: null })),
+    );
+    console.log(JSON.stringify({ event: "e2e_test_gen_comment_withheld", repoFullName: req.repoFullName, pr: req.pr.number, error: errorMessage(error) }));
+  }
+  await recordAuditEvent(env, {
+    eventType: "github_app.e2e_tests_generation",
+    actor: req.actor,
+    targetKey,
+    outcome: "completed",
+    detail: testSource ? "Generated an E2E test." : `No usable test generated (${result.status}).`,
+    metadata: { deliveryId, repoFullName: req.repoFullName, status: result.status, byok: Boolean(providerKey) },
+  });
+  await recordGithubProductUsage(env, "e2e_tests_generation", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { status: result.status, generated: Boolean(testSource) } });
+  return true;
+}
+
+async function postGenerateTestsNotEnabledComment(env: Env, installationId: number, repoFullName: string, prNumber: number): Promise<void> {
+  const body = sanitizePublicComment(
+    [
+      AGENT_COMMAND_COMMENT_MARKER,
+      "",
+      "> [!NOTE]",
+      "> **E2E test generation is not enabled for this repository**",
+      "> Ask a maintainer to enable `features.e2eTests` in `.gittensory.yml` (the operator's global flag must also be on).",
+      "",
+      "---",
+      gittensoryFooter(),
+    ].join("\n"),
+  );
+  await createIssueComment(env, installationId, repoFullName, prNumber, body);
+}
+
+async function recordGenerateTestsSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
+  await recordAuditEvent(env, { eventType: "github_app.e2e_tests_generation_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
+  await recordGithubProductUsage(env, "e2e_tests_generation_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
 }
 
 async function appendPublishedAiReviewFindingsForResolve(

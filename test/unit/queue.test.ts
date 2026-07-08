@@ -47,6 +47,7 @@ import {
   upsertPullRequestFile,
   upsertPullRequestFromGitHub,
   upsertIssueWatchSubscription,
+  upsertRepositoryAiKey,
   upsertRepositorySettings,
   upsertRepositoryFromGitHub,
   putCachedAiReview,
@@ -24754,6 +24755,287 @@ describe("queue processors", () => {
       // The explain handler never claimed either comment — no explain audit rows at all.
       const explainRows = await env.DB.prepare("select count(*) as n from audit_events where event_type like 'github_app.finding_explained%'").first<{ n: number }>();
       expect(explainRows?.n).toBe(0);
+    });
+  });
+
+  // #4195 (part of the #4189 E2E-test-generation epic): `@gittensory generate-tests` -- on-demand,
+  // MAINTAINER-ONLY AI-generated E2E test coverage, posted as its own reply comment. Mirrors the explain
+  // harness above (classify -> authorize -> act -> audit), but with the authorization tier deliberately
+  // narrowed to ["maintainer"] only -- no collaborator, no confirmed_miner -- and a real (mocked) model call.
+  describe("@gittensory generate-tests (#4195)", () => {
+    async function seedGenerateTestsPr(env: Env, repoFullName: string, prNumber: number, headSha: string, authorLogin = "contributor") {
+      const slash = repoFullName.indexOf("/");
+      const owner = repoFullName.slice(0, slash);
+      const name = repoFullName.slice(slash + 1);
+      await upsertRepositoryFromGitHub(env, { name, full_name: repoFullName, private: false, owner: { login: owner } }, 123);
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: prNumber, title: "Add retry to checkout", state: "open", user: { login: authorLogin }, author_association: "CONTRIBUTOR", head: { sha: headSha }, labels: [], body: "Retries the payment call once on a 5xx." });
+      await upsertPullRequestFile(env, { repoFullName, pullNumber: prNumber, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
+      // A renamed-with-no-patch file (GitHub omits `patch` for pure renames) -- exercises the
+      // payload?.patch-is-not-a-string branch in the files.map() that builds E2eTestGenChangedFile[].
+      await upsertPullRequestFile(env, { repoFullName, pullNumber: prNumber, path: "src/renamed.ts", status: "renamed", additions: 0, deletions: 0, changes: 0, payload: {} });
+      await upsertRepoFocusManifest(env, repoFullName, { features: { e2eTests: true } });
+    }
+    const generateTestsWebhook = (repoFullName: string, prNumber: number, actor: string, opts: { association?: string; bot?: boolean; commenterIsAuthor?: boolean } = {}) => ({
+      type: "github-webhook" as const,
+      deliveryId: `generate-tests-${prNumber}-${actor}`,
+      eventName: "issue_comment" as const,
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: repoFullName.slice(0, repoFullName.indexOf("/")), id: 1, type: "User" } },
+        repository: { name: repoFullName.slice(repoFullName.indexOf("/") + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, repoFullName.indexOf("/")) } },
+        issue: { number: prNumber, title: "Add retry to checkout", state: "open", user: { login: opts.commenterIsAuthor ? actor : "contributor" }, pull_request: {} },
+        comment: { id: prNumber * 10, body: "@gittensory generate-tests", author_association: opts.association ?? "NONE", user: { login: actor, type: opts.bot ? "Bot" : "User" } },
+        sender: { login: actor, type: opts.bot ? "Bot" : "User" },
+      },
+    }) as unknown as Parameters<typeof processJob>[1];
+    const VALID_TEST_SOURCE = "import { test, expect } from '@playwright/test';\n\ntest('checkout retries on failure', async ({ page }) => {\n  await page.goto('/checkout');\n  await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible();\n});";
+
+    it("generates and posts an E2E test for an authorized maintainer, and records a completed audit event", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-ok";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "```typescript\n" + VALID_TEST_SOURCE + "\n```" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedGenerateTestsPr(env, repoFullName, 4195, "gen-tests-4195-ok");
+      let postedBody = "";
+      let posted = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4195/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4195/comments") && method === "POST") { posted += 1; postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 41950 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4195, "maintainer", { association: "MEMBER" }));
+
+      expect(posted).toBe(1);
+      expect(postedBody).toContain("AI-generated Playwright test for @maintainer");
+      expect(postedBody).toContain("test('checkout retries on failure'");
+      const audited = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ outcome: string; metadata_json: string }>();
+      expect(audited?.outcome).toBe("completed");
+      expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ status: "ok", byok: false });
+    });
+
+    it("denies a collaborator-tier actor (write permission, not the PR author) — narrower than every other command", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-collab";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 4196, "gen-tests-4195-collab");
+      let posted = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/writer/permission")) return Response.json({ permission: "write" });
+        if (url.includes("/issues/4196/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4196/comments") && method === "POST") { posted += 1; return Response.json({ id: 41960 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4196, "writer", { association: "COLLABORATOR" }));
+
+      expect(posted).toBe(0); // denied before any generation or comment
+      const denied = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_denied").first<{ outcome: string; detail: string }>();
+      expect(denied?.outcome).toBe("denied");
+    });
+
+    it("denies the PR's own author even though they authored it — the exact loophole a click-to-generate button must not open", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-author";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 4197, "gen-tests-4195-author", "contributor");
+      let posted = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        // No collaborator/permission relationship at all -- a plain contributor commenting on their own PR.
+        if (url.includes("/collaborators/contributor/permission")) return new Response("not found", { status: 404 });
+        if (url.includes("/issues/4197/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4197/comments") && method === "POST") { posted += 1; return Response.json({ id: 41970 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4197, "contributor", { association: "NONE", commenterIsAuthor: true }));
+
+      expect(posted).toBe(0);
+      const denied = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_denied").first<{ detail: string }>();
+      expect(denied?.detail).toBe("maintainer_command_requires_maintainer");
+    });
+
+    it("posts a not-enabled note (no generation call) when features.e2eTests is off for the repo", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-disabled";
+      const run = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      const slash = repoFullName.indexOf("/");
+      await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: 4198, title: "x", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "gen-tests-4195-disabled" }, labels: [], body: "x" });
+      // Deliberately no upsertRepoFocusManifest features.e2eTests override -- stays off (no allowlist either).
+      let postedBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4198/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4198/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 41980 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4198, "maintainer", { association: "MEMBER" }));
+
+      expect(postedBody).toContain("E2E test generation is not enabled for this repository");
+      expect(run).not.toHaveBeenCalled();
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("feature_disabled");
+    });
+
+    it("posts a did-not-produce-a-usable-result note when the model output never parses", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-garbage";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "not a test file" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedGenerateTestsPr(env, repoFullName, 4199, "gen-tests-4195-garbage");
+      let postedBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4199/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4199/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 41990 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4199, "maintainer", { association: "MEMBER" }));
+
+      expect(postedBody).toContain("did not produce a usable result");
+      const audited = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ metadata_json: string }>();
+      expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ status: "ok" });
+    });
+
+    it("skips cleanly when the cached PR record is missing", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-nopr";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      const slash = repoFullName.indexOf("/");
+      await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
+      // No upsertPullRequestFromGitHub -- the PR was never cached.
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4200, "maintainer", { association: "MEMBER" }));
+
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("cached_pr_missing");
+    });
+
+    it("declines (returns false) for a non-command comment, claiming nothing", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-decline";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 4201, "gen-tests-4195-decline");
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4201/comments")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+      const webhook = generateTestsWebhook(repoFullName, 4201, "maintainer", { association: "MEMBER" });
+      (webhook as unknown as { payload: { comment: { body: string } } }).payload.comment.body = "just chatting, no mention here";
+
+      await processJob(env, webhook);
+
+      const rows = await env.DB.prepare("select count(*) as n from audit_events where event_type like 'github_app.e2e_tests_generation%'").first<{ n: number }>();
+      expect(rows?.n).toBe(0);
+    });
+
+    it("skips cleanly when the comment classifies as invalid (a bot posted the mention)", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-bot";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 4202, "gen-tests-4195-bot");
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4202, "some-bot[bot]", { association: "NONE", bot: true }));
+
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("bot_author");
+    });
+
+    it("uses the maintainer's BYOK frontier model (not Workers AI) when aiReviewByok is on and a key is configured", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-byok";
+      const run = vi.fn(); // Workers AI must NOT be used when BYOK is configured
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        TOKEN_ENCRYPTION_SECRET: "gen-tests-byok-test-encryption-secret-32b",
+      });
+      await seedGenerateTestsPr(env, repoFullName, 4203, "gen-tests-4195-byok");
+      // aiReviewProvider set AND matching the stored key's provider -- exercises the "explicit provider
+      // pin agrees with the stored key" arm, distinct from the (also-tested-elsewhere) "no pin configured"
+      // default arm.
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", aiReviewByok: true, aiReviewProvider: "anthropic" });
+      await upsertRepositoryAiKey(env, { repoFullName, provider: "anthropic", key: "sk-ant-byok-gen-tests-9999", model: null });
+      let postedBody = "";
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("api.anthropic.com")) return Response.json({ content: [{ type: "text", text: "```typescript\n" + VALID_TEST_SOURCE + "\n```" }] });
+        if (url.includes("/issues/4203/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4203/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42030 }); }
+        return new Response("not found", { status: 404 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4203, "maintainer", { association: "MEMBER" }));
+
+      expect(run).not.toHaveBeenCalled();
+      expect(postedBody).toContain("test('checkout retries on failure'");
+      const audited = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ metadata_json: string }>();
+      expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ byok: true });
+    });
+
+    it("degrades to the not-usable-result note when the feature is on but no AI provider is configured at all", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-unavailable";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 4204, "gen-tests-4195-unavailable"); // no env.AI, no BYOK key
+      let postedBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4204/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4204/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42040 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4204, "maintainer", { association: "MEMBER" }));
+
+      expect(postedBody).toContain("did not produce a usable result");
+      const audited = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ metadata_json: string }>();
+      expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ status: "unavailable" });
     });
   });
 
