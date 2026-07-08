@@ -59,7 +59,11 @@ jobs:
       # recursion) -- that's why the next step dispatches it explicitly instead of relying on this
       # push alone. Mirrors publish-engine.yml / npm-publish.yml's identical reasoning and tagging
       # idiom.
+      # Exposes created=true/false so the dispatch step below never fires against a tag this run didn't
+      # actually just create -- a defense-in-depth backstop (independent of orb-release-core.mjs's own
+      # correctness) against ever re-triggering a build for an already-published version/tag.
       - name: Tag the new beta
+        id: tag
         if: steps.report.outputs.due == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,7 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "Tag $TAG already exists; skipping (a previous run likely already tagged it)."
+            echo "Tag $TAG already exists; skipping (a previous run likely already tagged it, or it collides with an already-published version)."
+            echo "created=false" >> "$GITHUB_OUTPUT"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -76,12 +81,15 @@ jobs:
             git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
             gh auth setup-git
             git push origin "$TAG"
+            echo "created=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # create_github_release=true: the tag above already exists and is pushed, so release-selfhost
-      # .yml's `--verify-tag` GitHub Release step can run safely (see that workflow's own comments).
+      # create_github_release=true: the tag above was just created and pushed, so release-selfhost.yml's
+      # `--verify-tag` GitHub Release step can run safely (see that workflow's own comments). Gated on
+      # steps.tag.outputs.created (not just due) so a no-op tag step -- for any reason -- never triggers a
+      # rebuild/republish of an existing GHCR image tag with different content.
       - name: Dispatch the ORB release build
-        if: steps.report.outputs.due == 'true'
+        if: steps.report.outputs.due == 'true' && steps.tag.outputs.created == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.report.outputs.version }}

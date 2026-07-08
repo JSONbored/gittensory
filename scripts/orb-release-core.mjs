@@ -160,13 +160,23 @@ export function buildOrbReleaseReport({ tags, manifestVersion, commits }) {
 
   const targetVersion = manifestVersion || inferredVersion;
   const commitsSinceLastTag = selectImageRelevantCommits(commits.sinceLastTag ?? []);
-  const due = commitsSinceLastTag.length > 0;
+  // A STABLE tag already exists for targetVersion (the manifest's own declared intent has already fully
+  // shipped) -- cutting a beta for that exact version now would either collide with a pre-promotion beta
+  // tag or silently mean "another beta of an already-released version," neither of which this pipeline is
+  // meant to do. Nothing is due until a human moves the manifest's target forward (manifestStale above
+  // already signals that a bigger bump than the manifest declares may be warranted).
+  const targetAlreadyStable = stableTag !== null && stableTag.version === targetVersion;
+  const due = commitsSinceLastTag.length > 0 && !targetAlreadyStable;
 
-  // The next beta number: restart at 1 when the last tag targeted a DIFFERENT version than the manifest's
-  // current target (a version bump happened since); otherwise increment the last beta seen for this version.
+  // The next beta number: restart at 1 when the last tag isn't itself a beta OF targetVersion (a version
+  // bump happened since, or -- critically -- the last tag targeting this version is its STABLE promotion,
+  // not a beta at all); otherwise increment the last beta seen for this version. Checking betaNumber !==
+  // null (not just matching major.minor.patch) is what keeps a stable tag from being misread as "the beta
+  // to continue counting from."
   const anyTagBeta = anyTag ? parseOrbBetaVersion(anyTag.version) : null;
-  const anyTagTargetsSameVersion = anyTagBeta && `${anyTagBeta.major}.${anyTagBeta.minor}.${anyTagBeta.patch}` === targetVersion;
-  const nextBetaNumber = anyTagTargetsSameVersion && anyTagBeta.betaNumber ? anyTagBeta.betaNumber + 1 : 1;
+  const anyTagIsBetaOfTargetVersion =
+    anyTagBeta !== null && anyTagBeta.betaNumber !== null && `${anyTagBeta.major}.${anyTagBeta.minor}.${anyTagBeta.patch}` === targetVersion;
+  const nextBetaNumber = anyTagIsBetaOfTargetVersion ? anyTagBeta.betaNumber + 1 : 1;
 
   return {
     due,

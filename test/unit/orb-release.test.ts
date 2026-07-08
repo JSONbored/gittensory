@@ -174,4 +174,33 @@ describe("buildOrbReleaseReport", () => {
     expect(report.latestTag).toBeNull();
     expect(report.nextTag).toBe("orb-v0.1.0-beta.1");
   });
+
+  it("is not due once targetVersion's own STABLE tag already exists, even though new commits landed and the manifest wasn't bumped forward", () => {
+    // orb-v0.4.0-beta.1..5 were cut leading up to the stable orb-v0.4.0 promotion; the manifest still says
+    // "0.4.0" (the maintainer hasn't moved the target forward yet) and a new image-relevant commit lands.
+    // Proposing another beta for 0.4.0 now would either collide with beta.1 (a tag that already exists from
+    // before the promotion) or just be a nonsensical "beta of an already-shipped version".
+    const report = buildOrbReleaseReport({
+      tags: ["orb-v0.3.0", "orb-v0.4.0-beta.1", "orb-v0.4.0-beta.5", "orb-v0.4.0"],
+      manifestVersion: "0.4.0",
+      commits: { sinceStable: [], sinceLastTag: [commit("fix(queue): x", ["src/queue/processors.ts"])] },
+    });
+    expect(report.due).toBe(false);
+    expect(report.latestStableTag).toBe("orb-v0.4.0");
+    expect(report.latestTag).toBe("orb-v0.4.0");
+  });
+
+  it("does not mistake the STABLE tag for a beta to continue counting from when the manifest is bumped forward again", () => {
+    // Even with the manifest correctly bumped to a new target, latestOrbTag can still resolve to the prior
+    // stable release (nothing has been tagged for the new target yet) -- the beta counter must restart at 1
+    // from that stable tag, not read a betaNumber off it (it has none; parseOrbBetaVersion returns
+    // betaNumber: null for a version with no prerelease suffix at all, not null itself).
+    const report = buildOrbReleaseReport({
+      tags: ["orb-v0.4.0-beta.5", "orb-v0.4.0"],
+      manifestVersion: "0.5.0",
+      commits: { sinceStable: [commit("feat(review): x", ["src/review/x.ts"])], sinceLastTag: [commit("feat(review): x", ["src/review/x.ts"])] },
+    });
+    expect(report.due).toBe(true);
+    expect(report.nextTag).toBe("orb-v0.5.0-beta.1");
+  });
 });
