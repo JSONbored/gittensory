@@ -102,7 +102,7 @@ jobs:
             echo "Unexpected file in package tarball"
             exit 1
           fi
-          if tar -xOf "$TARBALL_PATH" | grep -E '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_|gh[pousr]_|gts_[0-9a-f]{64}|[A-Z0-9_]*(TOKEN|SECRET|PRIVATE_KEY)=)'; then
+          if tar -xOf "$TARBALL_PATH" | grep -qE '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_|gh[pousr]_|gts_[0-9a-f]{64}|[A-Z0-9_]*(TOKEN|SECRET|PRIVATE_KEY)=)'; then
             echo "Secret-like content found in package tarball"
             exit 1
           fi
