@@ -3240,6 +3240,7 @@ async function reReviewStoredPullRequest(
   ]);
   let pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
+  if (await hasAutoreviewPausedMarker(env, repoFullName, prNumber)) return;
   const liveFacts = createLiveGithubFacts();
   // #sweep-resync: RESYNC the stored PR to its LIVE head before reviewing. The self-host relay can drop the
   // `synchronize` webhook (relay down), so a push/rebase never refreshes the stored head SHA + cached files; the
@@ -10950,6 +10951,20 @@ async function maybeProcessPauseCommand(env: Env, deliveryId: string, payload: G
 async function recordAutoreviewPausedSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
   await recordAuditEvent(env, { eventType: "github_app.autoreview_paused_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
   await recordGithubProductUsage(env, "autoreview_paused_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
+}
+
+async function hasAutoreviewPausedMarker(env: Env, repoFullName: string, prNumber: number): Promise<boolean> {
+  try {
+    const row = await env.DB.prepare(
+      "select 1 from audit_events where event_type = ? and target_key = ? and outcome = ? order by created_at desc limit 1",
+    )
+      .bind("github_app.autoreview_paused", `${repoFullName}#${prNumber}`, "completed")
+      .first();
+    return Boolean(row);
+  } catch {
+    /* v8 ignore next -- audit lookup failures fail open so a stale/corrupt ledger cannot wedge review processing. */
+    return false;
+  }
 }
 
 /**

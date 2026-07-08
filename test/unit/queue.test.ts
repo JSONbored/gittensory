@@ -4258,6 +4258,68 @@ describe("queue processors", () => {
       expect(skipAudit).toBeUndefined();
     });
 
+    it("does not publish the re-review surface once a PR has an autoreview pause marker (#2164 regression)", async () => {
+      let aiCalls = 0;
+      let commentPosted = false;
+      let checkRunWritten = false;
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }; } } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env);
+      await upsertRepositorySettings(env, {
+        repoFullName: "JSONbored/gittensory",
+        commentMode: "all_prs",
+        publicSurface: "comment_only",
+        autoLabelEnabled: false,
+        checkRunMode: "enabled",
+        gateCheckMode: "enabled",
+        aiReviewMode: "block",
+        gatePack: "oss-anti-slop",
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+        number: 83,
+        title: "Ready feature",
+        state: "open",
+        draft: false,
+        user: { login: "contributor" },
+        head: { sha: "a83" },
+        labels: [],
+        body: "Closes #1",
+      } as never);
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 83, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      await env.DB.prepare(
+        "insert into audit_events (id, event_type, actor, target_key, outcome, detail, metadata_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+        .bind("pause-83", "github_app.autoreview_paused", "maintainer1", "JSONbored/gittensory#83", "completed", "stop reviewing", "{}", new Date().toISOString())
+        .run();
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.endsWith("/pulls/83")) return Response.json({ number: 83, title: "Ready feature", state: "open", draft: false, user: { login: "contributor" }, head: { sha: "a83" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/issues/83/comments") && method === "POST") {
+          commentPosted = true;
+          return Response.json({ id: 83 }, { status: 201 });
+        }
+        if (url.includes("/check-runs") && (method === "POST" || method === "PATCH")) {
+          checkRunWritten = true;
+          return Response.json({ id: 983, html_url: "https://github.com/check/983" }, { status: method === "POST" ? 201 : 200 });
+        }
+        return Response.json({});
+      });
+
+      await expect(
+        processJob(env, { type: "agent-regate-pr", deliveryId: "paused-autoreview", repoFullName: "JSONbored/gittensory", prNumber: 83, installationId: 123 }),
+      ).resolves.toBeUndefined();
+      expect(aiCalls).toBe(0);
+      expect(commentPosted).toBe(false);
+      expect(checkRunWritten).toBe(false);
+    });
+
     it("threads review.ai_model through the full webhook pipeline into ai.run's options (#selfhost-ai-model-override)", async () => {
       let seenOptions: Record<string, unknown> = {};
       const env = createTestEnv({
