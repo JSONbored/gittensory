@@ -20,14 +20,25 @@ describe("isInlineCommentsEnabled (#inline-comments)", () => {
   });
 });
 
-describe("shouldRequestInlineFindings (#inline-comments)", () => {
+describe("shouldRequestInlineFindings (#inline-comments / #4099)", () => {
   const on = { GITTENSORY_REVIEW_INLINE_COMMENTS: "true", GITTENSORY_REVIEW_REPOS: "acme/widgets" };
-  it("requires ALL THREE gates: the per-repo manifest toggle, the operator flag, and the cutover allowlist", () => {
+  it("operator flag is a master kill-switch — off ⇒ always false regardless of the manifest toggle", () => {
+    expect(shouldRequestInlineFindings({ GITTENSORY_REVIEW_REPOS: "acme/widgets" }, "acme/widgets", true)).toBe(false);
+    expect(shouldRequestInlineFindings({}, "acme/widgets", true)).toBe(false);
+  });
+
+  it("REGRESSION (#4099): unset manifest toggle stays false regardless of the cutover allowlist — byte-identical to before this change (being allowlisted was never sufficient on its own)", () => {
+    expect(shouldRequestInlineFindings(on, "acme/widgets", undefined)).toBe(false);
+    expect(shouldRequestInlineFindings(on, "other/repo", undefined)).toBe(false);
+  });
+
+  it("(#4099) an explicit manifest toggle: true fully controls the feature, even for a repo NOT on the cutover allowlist", () => {
     expect(shouldRequestInlineFindings(on, "acme/widgets", true)).toBe(true);
-    expect(shouldRequestInlineFindings(on, "acme/widgets", false)).toBe(false); // manifest toggle off
-    expect(shouldRequestInlineFindings(on, "acme/widgets", undefined)).toBe(false); // manifest toggle absent
-    expect(shouldRequestInlineFindings({ GITTENSORY_REVIEW_REPOS: "acme/widgets" }, "acme/widgets", true)).toBe(false); // operator flag off
-    expect(shouldRequestInlineFindings(on, "other/repo", true)).toBe(false); // repo not allowlisted
+    expect(shouldRequestInlineFindings(on, "other/repo", true)).toBe(true);
+  });
+
+  it("(#4099) an explicit manifest toggle: false forces the feature off, even for an allowlisted repo", () => {
+    expect(shouldRequestInlineFindings(on, "acme/widgets", false)).toBe(false);
   });
 });
 

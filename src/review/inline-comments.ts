@@ -1,15 +1,15 @@
 // Quiet inline PR review comments (#inline-comments) — the CodeRabbit-style line-level layer ON TOP OF the
 // decision summary. Posts the AI reviewer's line-anchored findings as a single NON-BLOCKING review (GitHub
 // `event: COMMENT`, never REQUEST_CHANGES/APPROVE), so a contributor sees exactly what to fix on a resubmission
-// without the gate or its verdict ever changing. Default OFF at BOTH layers: the operator flag
-// GITTENSORY_REVIEW_INLINE_COMMENTS (+ the per-repo GITTENSORY_REVIEW_REPOS cutover allowlist) AND the per-repo
-// `.gittensory.yml` review.inline_comments toggle — the caller ANDs all three to decide whether to ASK the model
-// for inline findings AND passes the same resolved gate to the write boundary. Fully FAIL-SAFE: a finding whose
-// line is not a commentable line in the PR diff is dropped (GitHub 422s otherwise), and any API error degrades to
-// "no inline comments" — it NEVER throws and NEVER touches the gate.
+// without the gate or its verdict ever changing. Default OFF: the operator flag GITTENSORY_REVIEW_INLINE_COMMENTS
+// is a master kill-switch, and the per-repo `.gittensory.yml` review.inline_comments toggle (#4099) fully
+// controls activation by itself when explicitly set — the GITTENSORY_REVIEW_REPOS cutover allowlist no longer
+// applies to this feature (an unset manifest toggle preserves the ORIGINAL always-off default; it was never
+// sufficient to be allowlisted alone). Fully FAIL-SAFE: a finding whose line is not a commentable line in the PR
+// diff is dropped (GitHub 422s otherwise), and any API error degrades to "no inline comments" — it NEVER throws
+// and NEVER touches the gate.
 
 import { createPullRequestReviewComments } from "../github/pr-actions";
-import { isConvergenceRepoAllowed } from "./cutover-gate";
 import { formatInlineCommentSeverityLabel } from "./inline-comment-label";
 import { resolveInlineCommentAnchor, rightLinesByPath } from "./inline-comment-range";
 import { addedLinesByPath, anchoredSuggestionBlock } from "./inline-suggestion-anchor";
@@ -28,16 +28,27 @@ export function isInlineCommentsEnabled(env: { GITTENSORY_REVIEW_INLINE_COMMENTS
   return /^(1|true|yes|on)$/i.test(env.GITTENSORY_REVIEW_INLINE_COMMENTS ?? "");
 }
 
-/** PURE: should the reviewer be asked to emit line-anchored inline findings for this PR? True ONLY when ALL THREE
- *  gates pass — the per-repo `.gittensory.yml` toggle (`manifestToggle`), the operator flag, AND the cutover
- *  allowlist — so the feature is off by default at every layer. Keeps the three-way gate in one unit-testable
- *  place instead of inline in the review path. */
+/** PURE (#4099): should the reviewer be asked to emit line-anchored inline findings for this PR? (1) The
+ *  operator's GITTENSORY_REVIEW_INLINE_COMMENTS flag is a MASTER KILL-SWITCH — off ⇒ always false, regardless of
+ *  the manifest. (2) An explicit per-repo `.gittensory.yml` `review.inlineComments` override (`true`/`false`) now
+ *  FULLY controls the feature by itself — a repo can turn this on without needing the GITTENSORY_REVIEW_REPOS
+ *  cutover allowlist at all. (3) `manifestToggle` unset (`null`/`undefined`) preserves this feature's ORIGINAL
+ *  design exactly: unlike rag/reputation/safety/unifiedComment (which already fall back to the cutover allowlist
+ *  when their manifest field is unset), inline comments have always required an EXPLICIT per-repo opt-in — being
+ *  on the allowlist alone was never sufficient, so this stays `false` regardless of the allowlist, byte-identical
+ *  to every repo's behavior before this change. `repoFullName` is kept for a stable call signature even though
+ *  it's unused now that the allowlist no longer applies here. */
 export function shouldRequestInlineFindings(
+  // GITTENSORY_REVIEW_REPOS is accepted (not just GITTENSORY_REVIEW_INLINE_COMMENTS) purely for call-site
+  // signature stability with existing callers/tests that pass a wider env object -- it's no longer read, see
+  // the doc comment above.
   env: { GITTENSORY_REVIEW_INLINE_COMMENTS?: string | undefined; GITTENSORY_REVIEW_REPOS?: string | undefined },
   repoFullName: string,
-  manifestToggle: boolean | undefined,
+  manifestToggle: boolean | null | undefined,
 ): boolean {
-  return manifestToggle === true && isInlineCommentsEnabled(env) && isConvergenceRepoAllowed(env, repoFullName);
+  void repoFullName; // kept for call-site signature stability, see doc comment above
+  if (!isInlineCommentsEnabled(env)) return false;
+  return manifestToggle === true;
 }
 
 /** PURE (#1956): should a `suggestion` be rendered as a GitHub-native ` ```suggestion ` block? This is an
