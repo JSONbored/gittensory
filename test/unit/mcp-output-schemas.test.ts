@@ -36,6 +36,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "gittensory_explain_score_breakdown",
   "gittensory_get_eligibility_plan",
   "gittensory_simulate_open_pr_pressure",
+  "gittensory_get_gate_precision",
 ];
 
 async function connectTestClient(env: Env = createTestEnv(), identity?: AuthIdentity) {

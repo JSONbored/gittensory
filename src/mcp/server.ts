@@ -95,6 +95,7 @@ import { loadMaintainerNoiseReport, maintainerNoiseSummary } from "../services/m
 import { loadLabelAudit, labelAuditSummary } from "../services/label-audit";
 import { loadMaintainerLaneReport, maintainerLaneSummary } from "../services/maintainer-lane";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
+import { loadGatePrecisionReport } from "../services/gate-precision";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -778,6 +779,18 @@ const maintainerMeasurementReportOutputSchema = {
   status: z.string().optional(),
 };
 
+// #2220 - gate-precision measurement surfaced over MCP. Mirrors the
+// maintainerMeasurementReportOutputSchema pattern: report fields optional, structured sub-reports as
+// z.unknown() (buildGatePrecisionReport is the single source of truth for their shape).
+const gatePrecisionOutputSchema = {
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  windowDays: z.number().nullable().optional(),
+  perGateType: z.array(z.unknown()).optional(),
+  overall: z.unknown().optional(),
+  signals: z.array(z.string()).optional(),
+};
+
 const contributorProfileOutputSchema = {
   login: z.string().optional(),
   github: z.unknown().optional(),
@@ -1402,6 +1415,17 @@ export class GittensoryMcp {
         outputSchema: maintainerMeasurementReportOutputSchema,
       },
       async (input) => this.toolResult(await this.getOutcomeCalibration(input)),
+    );
+
+    server.registerTool(
+      "gittensory_get_gate_precision",
+      {
+        description:
+          "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged / overridden counts and false-positive rates with low-sample guards. Maintainer-authenticated; measurement only.",
+        inputSchema: ownerRepoWindowShape,
+        outputSchema: gatePrecisionOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getGatePrecision(input)),
     );
 
     server.registerTool(
@@ -2583,6 +2607,20 @@ export class GittensoryMcp {
     const report = await buildRepoOutcomeCalibration(this.env, fullName, input.windowDays);
     return {
       summary: outcomeCalibrationSummary(fullName, report.slop),
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #2220 - surface the existing gate-precision measurement over MCP. Same per-repo read gate as
+  // getOutcomeCalibration (requireRepoAccess); loadGatePrecisionReport is measurement-only and already
+  // scoped to the single repo, so nothing cross-repo is revealed. The options object is spread-omitted
+  // when windowDays is absent to satisfy exactOptionalPropertyTypes.
+  private async getGatePrecision(input: { owner: string; repo: string; windowDays?: number | undefined }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const report = await loadGatePrecisionReport(this.env, fullName, input.windowDays === undefined ? {} : { windowDays: input.windowDays });
+    return {
+      summary: `Gittensory gate precision for ${fullName}: ${report.overall.blocked} gate blocks, overall false-positive rate ${report.overall.falsePositiveRate ?? "n/a (below sample threshold)"}.`,
       data: report as unknown as Record<string, unknown>,
     };
   }
