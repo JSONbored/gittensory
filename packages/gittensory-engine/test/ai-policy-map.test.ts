@@ -495,6 +495,7 @@ test("renderAiPolicyFatigueMarkdown escapes summaries and policy source fields",
 
 test("resolveAiPolicyFatigueVerdict is byte-stable for the same metadata", () => {
   const input = {
+    repoFullName: "JSONbored/gittensory",
     now: NOW,
     docs: { aiUsage: null, contributing: "Normal guide." },
     pullRequests: [aiPr({ id: "a" }), aiPr({ id: "b" })],
