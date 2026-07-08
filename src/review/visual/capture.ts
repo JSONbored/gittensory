@@ -62,12 +62,18 @@ export interface CaptureResult {
   previewPending: boolean;
 }
 
-/** True when `url` is a REAL rendered shot — not a missing slot (`undefined`) and not one of `capturePage`'s
- *  own placeholder cards (`?placeholder=loading|failed|auth`, minted when there's no preview yet, the deploy
- *  failed, or the route sign-in-walled). An on-demand `?url=` fallback link (no R2 binding configured) still
- *  counts as real — it resolves to an actual render, just not a cached one. */
-function isRealShotUrl(url: string | undefined): boolean {
-  return typeof url === "string" && url.length > 0 && !url.includes("placeholder=");
+/** True when `url` is a persisted rendered shot. `capturePage` can also return an on-demand `?url=`
+ *  fallback when R2 is unavailable or a browser render fails; that link is useful review UI, but it is not
+ *  proof the bot produced a before/after PNG pair for the current head. Only cached `?key=` shots are strong
+ *  enough to satisfy the screenshot-table gate without a hand-authored table. */
+function isPersistedShotUrl(url: string | undefined): boolean {
+  return (
+    typeof url === "string" &&
+    url.length > 0 &&
+    url.includes("/shot?") &&
+    url.includes("key=") &&
+    !url.includes("placeholder=")
+  );
 }
 
 /** True when `route` has a real before+after PAIR on at least one viewport (desktop or mobile) — the
@@ -75,8 +81,8 @@ function isRealShotUrl(url: string | undefined): boolean {
  *  viewport (not "any before" + "any after" mixed across viewports) mirrors what a reviewer actually sees in
  *  the "Visual preview" table: one comparable pair, not two unrelated renders. */
 function routeHasRealBeforeAfterPair(route: CaptureRoute): boolean {
-  const desktopReal = isRealShotUrl(route.beforeUrl) && isRealShotUrl(route.afterUrl);
-  const mobileReal = isRealShotUrl(route.beforeUrlMobile) && isRealShotUrl(route.afterUrlMobile);
+  const desktopReal = isPersistedShotUrl(route.beforeUrl) && isPersistedShotUrl(route.afterUrl);
+  const mobileReal = isPersistedShotUrl(route.beforeUrlMobile) && isPersistedShotUrl(route.afterUrlMobile);
   return desktopReal || mobileReal;
 }
 

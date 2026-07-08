@@ -1353,8 +1353,10 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
 });
 
 describe("hasSuccessfulBotCapture (#4110)", () => {
-  const REAL_BEFORE = "https://api.example/gittensory/shot?url=https%3A%2F%2Fprod.example%2Fapp&w=1440&h=900";
-  const REAL_AFTER = "https://api.example/gittensory/shot?url=https%3A%2F%2Fpreview.example%2Fapp&w=1440&h=900";
+  const REAL_BEFORE = "https://api.example/gittensory/shot?key=gittensory%2Fshots%2Fbefore.png";
+  const REAL_AFTER = "https://api.example/gittensory/shot?key=gittensory%2Fshots%2Fafter.png";
+  const ON_DEMAND_BEFORE = "https://api.example/gittensory/shot?url=https%3A%2F%2Fprod.example%2Fapp&w=1440&h=900";
+  const ON_DEMAND_AFTER = "https://api.example/gittensory/shot?url=https%3A%2F%2Fpreview.example%2Fapp&w=1440&h=900";
   const LOADING_PLACEHOLDER = "https://api.example/gittensory/shot?placeholder=loading";
   const FAILED_PLACEHOLDER = "https://api.example/gittensory/shot?placeholder=failed";
 
@@ -1376,6 +1378,10 @@ describe("hasSuccessfulBotCapture (#4110)", () => {
 
   it("false when afterUrl is the failed-deploy placeholder", () => {
     expect(hasSuccessfulBotCapture([route({ beforeUrl: REAL_BEFORE, afterUrl: FAILED_PLACEHOLDER })])).toBe(false);
+  });
+
+  it("false for on-demand fallback URLs because they do not prove rendered PNGs (regression for failed visual renders satisfying the gate)", () => {
+    expect(hasSuccessfulBotCapture([route({ beforeUrl: ON_DEMAND_BEFORE, afterUrl: ON_DEMAND_AFTER })])).toBe(false);
   });
 
   it("false when beforeUrl is missing (no production render)", () => {
