@@ -217,6 +217,12 @@ function Tuning() {
           Global, and safe to leave on.
         </li>
         <li>
+          <code>GITTENSORY_REVIEW_RECAP</code> — the multi-repo maintainer recap digest. Folds every
+          registered repo's gate-precision and outcome-calibration data into one report and
+          best-effort delivers it to your configured Discord webhook. Read-only; changes no review
+          behavior. Global.
+        </li>
+        <li>
           <code>GITTENSORY_REVIEW_PARITY_AUDIT</code> — parity readiness, shadow record-only.
           Records each finalized gate decision and serves a readiness report at{" "}
           <code>GET /v1/internal/parity</code>. Changes no review behavior. Global.

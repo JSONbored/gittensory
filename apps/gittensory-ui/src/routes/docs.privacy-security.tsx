@@ -100,6 +100,7 @@ GITTENSORY_REVIEW_E2E_TESTS="true"               # AI-generated E2E test coverag
 # Global (cron / endpoint) flags, not scoped by GITTENSORY_REVIEW_REPOS.
 GITTENSORY_REVIEW_OPS="true"                     # read-only anomaly scan + outcome stats endpoint
 GITTENSORY_REVIEW_SELFTUNE="true"                # self-tightening tuning loop, never loosens
+GITTENSORY_REVIEW_RECAP="true"                   # multi-repo maintainer recap digest, best-effort delivery
 GITTENSORY_REVIEW_PARITY_AUDIT="true"            # shadow-record gate-decision parity readiness
 GITTENSORY_REVIEW_CONTENT_LANE="true"            # dedicated content/registry-repo review lane
 GITTENSORY_REVIEW_DRAFT="true"                   # public draft-submission (contributor fork PR) flow`}

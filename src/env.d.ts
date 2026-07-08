@@ -174,6 +174,11 @@ declare global {
     /** Self-host Slack incoming-webhook URL (`https://hooks.slack.com/services/…`) — per-action notifications
      *  (merged/closed/manual) for ANY repo. Sibling of DISCORD_WEBHOOK_URL; set either, both, or neither. */
     SLACK_WEBHOOK_URL?: string;
+    /** #2247: opt-in flag for the multi-repo MAINTAINER recap digest (#1963) — gates services/maintainer-
+     *  recap-wire.ts's runMaintainerRecap. Default OFF — unset/false means the recap never builds or
+     *  delivers, so the worker is byte-identical to today. Same truthy convention as GITTENSORY_REVIEW_OPS
+     *  (`/^(1|true|yes|on)$/i`). */
+    GITTENSORY_REVIEW_RECAP?: string;
     GITTENSORY_CONTRIBUTOR_ISSUE_TOKEN?: string;
     PRODUCT_USAGE_HASH_SALT?: string;
     GITTENSORY_API_TOKEN: string;
