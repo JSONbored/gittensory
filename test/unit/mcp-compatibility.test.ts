@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { buildMcpClientTelemetry } from "../../src/services/client-telemetry";
-import { classifyMcpClientVersion, compareMcpSemver } from "../../src/services/mcp-compatibility";
+import { classifyMcpClientVersion, compareMcpSemver, LATEST_RECOMMENDED_MCP_VERSION, MINIMUM_SUPPORTED_MCP_VERSION } from "../../src/services/mcp-compatibility";
+
+// Derives values relative to the actual current recommended release instead of hardcoding a literal
+// that only happens to be correct for whichever version is current when the test is written --
+// LATEST_RECOMMENDED_MCP_VERSION now derives from packages/gittensory-mcp/package.json (no longer a
+// second hand-synced literal), so these assertions stay correct across every future release too.
+// MINIMUM_SUPPORTED_MCP_VERSION-relative literals ("0.5.9" etc.) stay hardcoded on purpose: unlike the
+// recommended version, that constant is deliberately NOT bumped every release.
+function bumpMinor(version: string): string {
+  const [major, minor] = version.split(".").map(Number) as [number, number, number];
+  return `${major}.${minor + 1}.0`;
+}
+function bumpPatch(version: string): string {
+  const [major, minor, patch] = version.split(".").map(Number) as [number, number, number];
+  return `${major}.${minor}.${patch + 1}`;
+}
 
 describe("MCP compatibility telemetry", () => {
   it("classifies local MCP package versions against the advertised support window", () => {
@@ -8,10 +23,9 @@ describe("MCP compatibility telemetry", () => {
     expect(classifyMcpClientVersion("0.2.1")).toBe("incompatible");
     expect(classifyMcpClientVersion("0.3.0")).toBe("incompatible");
     expect(classifyMcpClientVersion("0.4.0")).toBe("incompatible");
-    expect(classifyMcpClientVersion("0.5.0")).toBe("stale");
+    expect(classifyMcpClientVersion(MINIMUM_SUPPORTED_MCP_VERSION)).toBe("stale");
     expect(classifyMcpClientVersion("0.5.9")).toBe("stale");
-    expect(classifyMcpClientVersion("0.6.0")).toBe("stale");
-    expect(classifyMcpClientVersion("0.7.0")).toBe("current");
+    expect(classifyMcpClientVersion(LATEST_RECOMMENDED_MCP_VERSION)).toBe("current");
     expect(classifyMcpClientVersion("not-a-version")).toBe("unknown");
     expect(classifyMcpClientVersion(undefined)).toBe("unknown");
     expect(classifyMcpClientVersion(null)).toBe("unknown");
@@ -19,16 +33,16 @@ describe("MCP compatibility telemetry", () => {
 
   it("treats prerelease builds below the minimum or recommended cutoffs as incompatible or stale", () => {
     expect(classifyMcpClientVersion("0.4.9-rc.1")).toBe("incompatible");
-    expect(classifyMcpClientVersion("0.5.0-rc.1")).toBe("incompatible");
-    expect(classifyMcpClientVersion("0.7.0-rc.1")).toBe("stale");
+    expect(classifyMcpClientVersion(`${MINIMUM_SUPPORTED_MCP_VERSION}-rc.1`)).toBe("incompatible");
+    expect(classifyMcpClientVersion(`${LATEST_RECOMMENDED_MCP_VERSION}-rc.1`)).toBe("stale");
   });
 
   it("classifies the exact recommended version and newer releases as current", () => {
-    expect(classifyMcpClientVersion("0.7.0")).toBe("current");
-    expect(classifyMcpClientVersion("0.7.1")).toBe("current");
-    expect(classifyMcpClientVersion("1.0.0")).toBe("current");
-    expect(compareMcpSemver("0.7.0", "0.7.0")).toBe(0);
-    expect(compareMcpSemver("0.8.0", "0.7.0")).toBe(1);
+    expect(classifyMcpClientVersion(LATEST_RECOMMENDED_MCP_VERSION)).toBe("current");
+    expect(classifyMcpClientVersion(bumpPatch(LATEST_RECOMMENDED_MCP_VERSION))).toBe("current");
+    expect(classifyMcpClientVersion("999.0.0")).toBe("current");
+    expect(compareMcpSemver(LATEST_RECOMMENDED_MCP_VERSION, LATEST_RECOMMENDED_MCP_VERSION)).toBe(0);
+    expect(compareMcpSemver(bumpMinor(LATEST_RECOMMENDED_MCP_VERSION), LATEST_RECOMMENDED_MCP_VERSION)).toBe(1);
   });
 
   it("builds bounded telemetry from allowlisted MCP headers", () => {

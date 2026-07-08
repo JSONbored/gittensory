@@ -8,10 +8,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 
+// Read name/version from this package's own package.json (always present in any install --
+// global, npx, or local -- npm ships it regardless of the "files" allowlist) instead of hand-synced
+// literals, so a release bump never has a second place to forget.
+const ownPackageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
 const defaultApiUrl = "https://gittensory-api.aethereal.dev";
 const legacyDefaultApiUrls = new Set(["https://gittensory-api.zeronode.workers.dev"]);
-const packageName = "@jsonbored/gittensory-mcp";
-const packageVersion = "0.7.0";
+const packageName = ownPackageJson.name;
+const packageVersion = ownPackageJson.version;
 const npmRegistryUrl = (process.env.GITTENSORY_NPM_REGISTRY_URL ?? "https://registry.npmjs.org").replace(/\/+$/, "");
 const upgradeCommand = `npm install -g ${packageName}@latest`;
 const npxFallbackCommand = `npx ${packageName}@latest <command>`;

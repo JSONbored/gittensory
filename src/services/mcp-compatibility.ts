@@ -1,7 +1,14 @@
+// Derives the recommended version from the actual published package instead of a second hand-synced
+// literal (src/server.ts:14 uses the same pattern for the root package.json) -- a release bump now has
+// one fewer place to forget. Deploys with the Worker on merge, same as today's manual-sync timing: this
+// advertises the new version to /health and /v1/mcp/compatibility as soon as the release PR merges,
+// before the npm package itself is actually tagged/published.
+import gittensoryMcpPackageJson from "../../packages/gittensory-mcp/package.json";
+
 export const GITTENSORY_API_VERSION = "0.1.0";
 export const GITTENSORY_MCP_PACKAGE_NAME = "@jsonbored/gittensory-mcp";
 export const MINIMUM_SUPPORTED_MCP_VERSION = "0.5.0";
-export const LATEST_RECOMMENDED_MCP_VERSION = "0.7.0";
+export const LATEST_RECOMMENDED_MCP_VERSION: string = gittensoryMcpPackageJson.version;
 
 export type McpCompatibilityStatus = "current" | "stale" | "incompatible" | "unknown";
 

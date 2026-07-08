@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeFixtureServer, createPacketRepo, run, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
+import mcpPackageJson from "../../packages/gittensory-mcp/package.json";
 
 describe("gittensory-mcp CLI — basics", () => {
   let tempDir: string | null = null;
@@ -118,7 +119,7 @@ describe("gittensory-mcp CLI — basics", () => {
   });
 
   it("reports the package version via version, --version, and -v", () => {
-    const expected = "@jsonbored/gittensory-mcp/0.7.0";
+    const expected = `@jsonbored/gittensory-mcp/${mcpPackageJson.version}`;
     for (const flag of ["version", "--version", "-v"]) {
       const plain = run([flag]).trim();
       expect(plain).toContain(expected);
@@ -131,7 +132,7 @@ describe("gittensory-mcp CLI — basics", () => {
   it("emits machine-readable version output with --json", () => {
     const payload = JSON.parse(run(["version", "--json"])) as { name: string; version: string; apiVersion: string; node: string };
     expect(payload.name).toBe("@jsonbored/gittensory-mcp");
-    expect(payload.version).toBe("0.7.0");
+    expect(payload.version).toBe(mcpPackageJson.version);
     expect(payload.apiVersion).toBe("0.1.0");
     expect(payload.node).toBe(process.version);
   });
