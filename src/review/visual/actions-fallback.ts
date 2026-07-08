@@ -144,6 +144,45 @@ export function parseFallbackRunCorrelation(displayTitle: string | undefined | n
   return { prNumber, headSha: (match[2] as string).toLowerCase() };
 }
 
+/** True when a fallback run for this EXACT (prNumber, headSha) is already queued or in progress -- checked
+ *  by buildCapture before dispatching, so the existing recapture-poll retry (every 90s, up to 5 attempts,
+ *  see PREVIEW_POLL_SECONDS/MAX_PREVIEW_POLLS in processors.ts) doesn't repeatedly re-dispatch while waiting
+ *  for the SAME run's workflow_run completion. That matters because the workflow's own `concurrency: group:
+ *  visual-capture-fallback-${{ inputs.head_sha }}` + `cancel-in-progress: true` means a second dispatch for
+ *  the same head SHA CANCELS the first -- without this check, a poll firing before a slow build finishes
+ *  would cancel-and-restart it every 90s and the fallback could never complete. Queries GitHub's own run
+ *  list rather than persisting new dispatch-tracking state, mirroring this pipeline's existing
+ *  live-query-don't-persist pattern (getLatestDeploymentStatus, findPreviewUrlFromChecks). Fails OPEN (false,
+ *  "nothing in flight") on any error -- a transient list-runs failure should still let the existing
+ *  concurrency group be the backstop dedup, not silently stop the fallback from ever being tried. */
+export async function hasInFlightFallbackDispatch(params: {
+  token: string;
+  repo: GitHubRepo;
+  prNumber: number;
+  headSha: string;
+  rateLimitAdmissionKey?: GitHubRateLimitAdmissionKey | undefined;
+}): Promise<boolean> {
+  const base = `https://api.github.com/repos/${params.repo.owner}/${params.repo.repo}`;
+  try {
+    const response = await timeoutFetch(`${base}/actions/workflows/${FALLBACK_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=20`, {
+      headers: githubApiHeaders(params.token),
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      githubRateLimitAdmission: params.rateLimitAdmissionKey !== undefined,
+      ...(params.rateLimitAdmissionKey ? { githubRateLimitAdmissionKey: params.rateLimitAdmissionKey } : {}),
+    });
+    if (!response.ok) return false;
+    const payload = (await response.json().catch(() => null)) as { workflow_runs?: Array<{ status?: string; display_title?: string }> } | null;
+    const headSha = params.headSha.toLowerCase();
+    return (payload?.workflow_runs ?? []).some((run) => {
+      if (run.status !== "queued" && run.status !== "in_progress") return false;
+      const correlation = parseFallbackRunCorrelation(run.display_title);
+      return correlation !== null && correlation.prNumber === params.prNumber && correlation.headSha === headSha;
+    });
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Minimal ZIP reader -- just enough to read a GitHub Actions artifact (STORED / DEFLATE entries only).
 // ---------------------------------------------------------------------------------------------------------

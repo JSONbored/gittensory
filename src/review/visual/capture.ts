@@ -12,7 +12,7 @@
 // default TanStack route convention; those hooks can return if a per-repo visual config is added.
 import { sha256Hex } from "../../utils/crypto";
 import type { GitHubRateLimitAdmissionKey } from "../../github/client";
-import { dispatchVisualCaptureFallback, fallbackShotR2Key } from "./actions-fallback";
+import { dispatchVisualCaptureFallback, fallbackShotR2Key, hasInFlightFallbackDispatch } from "./actions-fallback";
 import {
   findPreviewUrlFromChecks,
   findPreviewUrlFromPrComments,
@@ -405,15 +405,23 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
   const actionsFallbackEnabled = visualConfig?.actionsFallback === true;
   const routes = resolveVisualRoutes(visualFiles, visualConfig?.routes);
   if (!previewBase && !previewFailed && !previewPending && actionsFallbackEnabled && target.headSha && target.defaultBranchRef) {
-    const dispatched = await dispatchVisualCaptureFallback({
-      token,
-      repo,
-      ref: target.defaultBranchRef,
-      prNumber: target.prNumber,
-      headSha: target.headSha,
-      routes,
-      rateLimitAdmissionKey,
-    });
+    // Never re-dispatch onto an already in-flight run (#4112 review fix): the workflow's own `concurrency:
+    // cancel-in-progress: true` group would CANCEL that run the instant a second dispatch for the same head
+    // SHA lands, so a recapture-poll retry (every 90s -- see PREVIEW_POLL_SECONDS in processors.ts) firing
+    // before a slower build finishes could cancel-and-restart it forever and never complete. See
+    // hasInFlightFallbackDispatch's own doc comment for the full rationale.
+    const alreadyInFlight = await hasInFlightFallbackDispatch({ token, repo, prNumber: target.prNumber, headSha: target.headSha, rateLimitAdmissionKey });
+    const dispatched =
+      alreadyInFlight ||
+      (await dispatchVisualCaptureFallback({
+        token,
+        repo,
+        ref: target.defaultBranchRef,
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        routes,
+        rateLimitAdmissionKey,
+      }));
     if (dispatched) previewPending = true;
   }
 

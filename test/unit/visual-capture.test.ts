@@ -1289,6 +1289,64 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
     expect(result.previewPending).toBe(true);
   });
 
+  it("skips dispatching a NEW run when one is already queued/in-progress for this exact pr+headSha, but still marks the capture pending (#4112 review fix)", async () => {
+    let dispatchCalled = false;
+    vi.stubGlobal(
+      "fetch",
+      stubNoPreviewFound((url) => {
+        if (url.includes("/actions/workflows/visual-capture-fallback.yml/runs")) {
+          return Response.json({ workflow_runs: [{ status: "in_progress", display_title: "gittensory-visual-fallback pr=20 sha=cafebabecafebabecafebabecafebabecafebabe" }] });
+        }
+        if (url.includes("/dispatches")) {
+          dispatchCalled = true;
+          return new Response(null, { status: 204 });
+        }
+        return null;
+      }),
+    );
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 20, headSha: "cafebabecafebabecafebabecafebabecafebabe", previewFromChecks: true, defaultBranchRef: "main" },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      undefined,
+      { actionsFallback: true },
+    );
+
+    expect(dispatchCalled).toBe(false);
+    expect(result.previewPending).toBe(true);
+  });
+
+  it("dispatches a NEW run when the only in-flight run found is for a DIFFERENT headSha (a later push)", async () => {
+    let dispatchCalled = false;
+    vi.stubGlobal(
+      "fetch",
+      stubNoPreviewFound((url) => {
+        if (url.includes("/actions/workflows/visual-capture-fallback.yml/runs")) {
+          return Response.json({ workflow_runs: [{ status: "in_progress", display_title: "gittensory-visual-fallback pr=20 sha=ffffffffffffffffffffffffffffffffffffffff" }] });
+        }
+        if (url.includes("/dispatches")) {
+          dispatchCalled = true;
+          return new Response(null, { status: 204 });
+        }
+        return null;
+      }),
+    );
+
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 20, headSha: "cafebabecafebabecafebabecafebabecafebabe", previewFromChecks: true, defaultBranchRef: "main" },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      undefined,
+      { actionsFallback: true },
+    );
+
+    expect(dispatchCalled).toBe(true);
+    expect(result.previewPending).toBe(true);
+  });
+
   it("leaves the capture non-pending when the dispatch call itself fails", async () => {
     vi.stubGlobal(
       "fetch",

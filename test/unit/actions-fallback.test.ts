@@ -7,6 +7,7 @@ import {
   fallbackShotR2Key,
   fetchFallbackArtifactShots,
   FALLBACK_ARTIFACT_NAME,
+  hasInFlightFallbackDispatch,
   isGithubArtifactStorageUrl,
   parseFallbackRunCorrelation,
   parseZipEntries,
@@ -346,6 +347,82 @@ describe("dispatchVisualCaptureFallback", () => {
       routes: ["/"],
     });
     expect(ok).toBe(false);
+  });
+});
+
+describe("hasInFlightFallbackDispatch (#4112 review fix -- avoid cancel-in-progress re-dispatch)", () => {
+  const HEAD_SHA = "cafebabecafebabecafebabecafebabecafebabe";
+
+  function runsResponse(runs: Array<{ status?: string; display_title?: string }>): Response {
+    return Response.json({ workflow_runs: runs });
+  }
+
+  it("true when a QUEUED run matches this exact pr+headSha", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "queued", display_title: `gittensory-visual-fallback pr=7 sha=${HEAD_SHA}` }]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(true);
+  });
+
+  it("true when an IN_PROGRESS run matches (case-insensitive headSha)", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "in_progress", display_title: `gittensory-visual-fallback pr=7 sha=${HEAD_SHA}` }]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA.toUpperCase() });
+    expect(inFlight).toBe(true);
+  });
+
+  it("false for an empty run list", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("false when the matching run has already COMPLETED (not queued/in_progress)", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "completed", display_title: `gittensory-visual-fallback pr=7 sha=${HEAD_SHA}` }]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("false when an in-progress run exists for a DIFFERENT PR", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "in_progress", display_title: `gittensory-visual-fallback pr=99 sha=${HEAD_SHA}` }]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("false when an in-progress run exists for the same PR but a DIFFERENT headSha (new push)", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "in_progress", display_title: `gittensory-visual-fallback pr=7 sha=${"f".repeat(40)}` }]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("false when the run's display_title doesn't match the expected correlation shape at all", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "in_progress", display_title: "Manually triggered run" }]));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("false on a non-ok response", async () => {
+    vi.stubGlobal("fetch", async () => new Response("nope", { status: 500 }));
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("false (never throws) on a network failure", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("network down");
+    });
+    const inFlight = await hasInFlightFallbackDispatch({ token: "tok", repo: { owner: "acme", repo: "widgets" }, prNumber: 7, headSha: HEAD_SHA });
+    expect(inFlight).toBe(false);
+  });
+
+  it("true when a rateLimitAdmissionKey is supplied and a match is found", async () => {
+    vi.stubGlobal("fetch", async () => runsResponse([{ status: "queued", display_title: `gittensory-visual-fallback pr=7 sha=${HEAD_SHA}` }]));
+    const inFlight = await hasInFlightFallbackDispatch({
+      token: "tok",
+      repo: { owner: "acme", repo: "widgets" },
+      prNumber: 7,
+      headSha: HEAD_SHA,
+      rateLimitAdmissionKey: "installation:1",
+    });
+    expect(inFlight).toBe(true);
   });
 });
 
