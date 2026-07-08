@@ -21,6 +21,10 @@ on:
       version:
         description: "Version to publish (e.g. 0.1.0, or a prerelease 0.1.0-rc.1 / 0.1.0-beta.1)"
         required: true
+      create_github_release:
+        description: "Also create/update the GitHub Release for this tag (the tag must already exist and be pushed). Used by the automated orb-beta-release dispatch; leave unchecked for an ad-hoc image rebuild."
+        type: boolean
+        default: false
 
 permissions:
   contents: write # create the GitHub Release
@@ -34,8 +38,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Environment gate — requires reviewer approval before a release runs (configure under repo Settings > Environments).
-    environment: release
+    # Environment gate. Only an actual `-beta.N` version routes to `release-beta` (no required
+    # reviewers -- see orb-beta-release.yml, which dispatches daily with no human in the loop); every
+    # other version (stable X.Y.Z or an -rc.N) stays on `release`, which requires reviewer approval
+    # under repo Settings > Environments. The check reads the raw version string directly (not a step
+    # output), since a job's `environment:` is resolved before any step runs.
+    environment: ${{ ((github.event_name == 'push' && contains(github.ref_name, '-beta.')) || (github.event_name == 'workflow_dispatch' && contains(inputs.version, '-beta.'))) && 'release-beta' || 'release' }}
     env:
       SENTRY_ORG: jsonbored
       SENTRY_PROJECT: gittensory
@@ -286,10 +294,13 @@ jobs:
           exit 1
 
       - name: GitHub Release
-        if: github.event_name == 'push'
+        # A dispatch-triggered run only reaches here when the caller explicitly opted in (used by the
+        # automated orb-beta-release dispatch, which pushes the tag itself before dispatching --
+        # `--verify-tag` below needs the tag to already exist). A plain manual dispatch (image rebuild,
+        # flag left off) skips this step, same as before.
+        if: github.event_name == 'push' || inputs.create_github_release == true
         env:
           GH_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
           RELEASE_VERSION: ${{ steps.version.outputs.v }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_ID: ${{ steps.version.outputs.release }}
@@ -334,7 +345,7 @@ jobs:
           # actually pushed first. Not a correctness problem in practice: the changelog for that specific
           # release would just come out emptier than expected, never wrong or release-blocking. Excludes
           # the tag being released so a workflow re-run never diffs a tag against itself.
-          PREV_TAG=$(git tag -l 'orb-v*' --sort=-creatordate | grep -vF -x "$REF_NAME" | head -1 || true)
+          PREV_TAG=$(git tag -l 'orb-v*' --sort=-creatordate | grep -vF -x "$RELEASE_TAG" | head -1 || true)
 
           # The very first orb release here hit GitHub's 125000-character release-body limit
           # generating notes across the ENTIRE repo history, because no prior orb-v tag existed yet to
@@ -347,13 +358,13 @@ jobs:
           CHANGELOG=""
           if [ -n "$PREV_TAG" ]; then
             if ! CHANGELOG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-              -f tag_name="$REF_NAME" \
+              -f tag_name="$RELEASE_TAG" \
               -f previous_tag_name="$PREV_TAG" \
               --jq '.body' 2>/dev/null); then
               # Fails open below (plain notes, no changelog) either way -- this warning just tells an
               # operator reading the run log that the section is missing because the API call itself
               # failed, not because the range between PREV_TAG and this release genuinely had no PRs.
-              echo "::warning::Fetching the release changelog (${PREV_TAG}...${REF_NAME}) failed; publishing without it."
+              echo "::warning::Fetching the release changelog (${PREV_TAG}...${RELEASE_TAG}) failed; publishing without it."
               CHANGELOG=""
             fi
           fi
@@ -368,16 +379,16 @@ jobs:
           # pull-command notes plus a compare link if the combined body would exceed GitHub's limit.
           if [ "${#FULL_NOTES}" -gt 120000 ]; then
             echo "::warning::Generated release notes would be ${#FULL_NOTES} chars, near GitHub's 125000 release-body limit -- falling back to the plain notes without the changelog."
-            FULL_NOTES="${NOTES}"$'\n\n'"_Changelog omitted (too large for a GitHub Release body) -- see https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${REF_NAME}_"
+            FULL_NOTES="${NOTES}"$'\n\n'"_Changelog omitted (too large for a GitHub Release body) -- see https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${RELEASE_TAG}_"
           fi
 
-          if gh release view "$REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --title "gittensory-orb ${RELEASE_TAG}" \
               --notes "$FULL_NOTES" \
               "${PRERELEASE_ARGS[@]}"
           else
-            gh release create "$REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "gittensory-orb ${RELEASE_TAG}" \
               "${PRERELEASE_ARGS[@]}" \

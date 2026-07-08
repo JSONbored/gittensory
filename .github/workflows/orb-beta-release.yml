@@ -1,0 +1,109 @@
+# Automated ORB (self-host container image, ghcr.io/jsonbored/gittensory-selfhost) beta channel.
+# Daily (or on demand via workflow_dispatch), checks whether any image-relevant commit has landed
+# since the last orb-v tag (scripts/check-orb-release-due.mjs / scripts/orb-release-core.mjs) and,
+# if so, cuts the next `orb-vX.Y.Z-beta.N` tag and dispatches release-selfhost.yml to build + publish
+# it -- fully unattended: that workflow's `environment:` routes an actual beta version to
+# `release-beta` (no required reviewers), while a stable/rc version still requires the human-gated
+# `release` environment. Promoting a beta to a stable release stays a manual `git tag orb-vX.Y.Z` by
+# a maintainer -- this workflow never bumps orb-manifest.json's version or cuts a non-beta tag.
+#
+# Deliberately independent of the MCP package's release automation (mcp-release-watch.yml /
+# mcp-release-core.mjs) -- see scripts/orb-release-core.mjs's own header for why.
+name: orb-beta-release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "10 6 * * *"
+
+permissions:
+  contents: write # create + push the beta tag
+  actions: write # dispatch release-selfhost.yml for the new tag
+
+concurrency:
+  group: orb-beta-release
+  cancel-in-progress: false
+
+jobs:
+  cut-beta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.18.0
+
+      - name: Check whether an ORB beta is due
+        id: report
+        run: |
+          set -euo pipefail
+          node scripts/check-orb-release-due.mjs --json --output orb-release-due.json
+          node <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("orb-release-due.json", "utf8"));
+          const version = report.nextTag.replace(/^orb-v/, "");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `due=${report.due}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${report.nextTag}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+
+      # Pushed with the default GITHUB_TOKEN, which does NOT fire release-selfhost.yml's own
+      # `push: tags:` trigger (GitHub suppresses workflow-triggered-workflow pushes to prevent
+      # recursion) -- that's why the next step dispatches it explicitly instead of relying on this
+      # push alone. Mirrors publish-engine.yml / npm-publish.yml's identical reasoning and tagging
+      # idiom.
+      - name: Tag the new beta
+        if: steps.report.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.report.outputs.tag }}
+          VERSION: ${{ steps.report.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists; skipping (a previous run likely already tagged it)."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "gittensory-orb ${VERSION}"
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            gh auth setup-git
+            git push origin "$TAG"
+          fi
+
+      # create_github_release=true: the tag above already exists and is pushed, so release-selfhost
+      # .yml's `--verify-tag` GitHub Release step can run safely (see that workflow's own comments).
+      - name: Dispatch the ORB release build
+        if: steps.report.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.report.outputs.version }}
+        run: gh workflow run release-selfhost.yml --ref main -f "version=${VERSION}" -f create_github_release=true
+
+      - name: Summarize
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("orb-release-due.json", "utf8"));
+          const lines = [
+            "## ORB Beta Release",
+            "",
+            `- Due: \`${report.due}\``,
+            `- Next tag: \`${report.nextTag}\``,
+            `- Target version: \`${report.targetVersion}\``,
+            `- Manifest version: \`${report.manifestVersion ?? "none"}\``,
+            `- Manifest stale (commits imply a bigger bump than the manifest declares): \`${report.manifestStale}\``,
+            `- Latest stable tag: \`${report.latestStableTag ?? "none"}\``,
+            `- Latest tag: \`${report.latestTag ?? "none"}\``,
+            `- Image-relevant commits since last tag: \`${report.commits.length}\``,
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          NODE
