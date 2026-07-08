@@ -4,26 +4,12 @@
     "packages/gittensory-mcp": {
       "release-type": "node",
       "component": "mcp",
-      "package-name": "@jsonbored/gittensory-mcp",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": "package-lock.json",
-          "jsonpath": "$.packages['packages/gittensory-mcp'].version"
-        }
-      ]
+      "package-name": "@jsonbored/gittensory-mcp"
     },
     "packages/gittensory-engine": {
       "release-type": "node",
       "component": "engine",
-      "package-name": "@jsonbored/gittensory-engine",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": "package-lock.json",
-          "jsonpath": "$.packages['packages/gittensory-engine'].version"
-        }
-      ]
+      "package-name": "@jsonbored/gittensory-engine"
     }
   },
   "include-component-in-tag": true,

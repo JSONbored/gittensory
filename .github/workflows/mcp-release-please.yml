@@ -52,6 +52,39 @@ jobs:
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # release-please's extra-files JSON-path updater doesn't reliably reach package-lock.json's
+      # per-workspace version fields (keys containing "/", nested under a manifest-mode component
+      # block) -- confirmed empirically (both the mcp-v0.7.0 dry run's precursor and the first two
+      # engine-v0.2.0 dry runs left it stale, breaking npm ci with "Missing: <pkg>@<version> from
+      # lock file"). Patches it directly on whichever release branch(es) release-please just
+      # created/updated, using the same branch naming convention its own commits already rely on.
+      - name: Sync package-lock.json on any release branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          gh auth setup-git
+          for component in mcp engine; do
+            branch="release-please--branches--main--components--${component}"
+            if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "No release branch for $component, skipping."
+              continue
+            fi
+            git fetch origin "$branch"
+            git checkout -B "sync-check-${component}" "origin/$branch"
+            node scripts/sync-release-lockfile-versions.mjs packages/gittensory-mcp packages/gittensory-engine
+            if git diff --quiet package-lock.json; then
+              echo "package-lock.json already in sync on $branch."
+            else
+              git add package-lock.json
+              git commit -m "chore(release): sync package-lock.json"
+              git push origin "HEAD:$branch"
+            fi
+          done
+
       # release-please creates the component tag + GitHub Release with GITHUB_TOKEN, which (by
       # GitHub's recursion-prevention rule) does NOT fire push/tag-based workflows. workflow_dispatch
       # IS exempt from that rule, so dispatch the OIDC publish workflow explicitly, telling it
