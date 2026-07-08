@@ -6922,7 +6922,7 @@ export async function resolveAutoReviewSkipForPullRequest(
   if (args.authorBlacklisted || args.isFrozenForManualReview) {
     return { skipReason: null, reviewManifest };
   }
-  const reviewedCommitCount = await countPublishedAiReviewHeads(env, args.repoFullName, args.pr.number, args.headSha).catch(() => 0);
+  const reviewedCommitCount = await countPublishedAiReviewHeads(env, args.repoFullName, args.pr.number).catch(() => 0);
   const skipReason = resolvePullRequestAutoReviewSkipReason({
     forceAiReview: args.forceAiReview,
     manifest: reviewManifest,
@@ -9324,6 +9324,28 @@ async function maybePublishPrPublicSurface(
            * a non-null head SHA (it no-ops on a nullish one), and an open PR does not lose its head SHA once
            * set; the `?? null` is a type-level fallback for a practically-unreachable branch, mirroring the
            * identical `advisory.headSha ?? null` fallbacks elsewhere in this function. */
+          metadata: { deliveryId: webhook.deliveryId, repoFullName, headSha: advisory.headSha ?? null },
+        }).catch(() => undefined);
+      }
+    } else if (autoReviewSkipReason === "review paused (commit threshold)") {
+      // #selfhost-token-burn: countPublishedAiReviewHeads now counts the PR's OWN current head (see that
+      // function's own doc comment), so this reason can fire repeatedly for the SAME unchanged head across
+      // every scheduled sweep pass, not just once when a truly new commit lands. Without reusing the cached
+      // findings here, an already-published blocker would silently vanish from every later gate evaluation
+      // the instant the pause engaged (#3719's original regression) — reapply them the SAME way a
+      // frozen-for-manual-review PR does, just under this reason's own distinct audit event.
+      const pausedReview = await getLatestPublishedAiReview(env, repoFullName, pr.number, settings.aiReviewMode).catch(() => null);
+      if (pausedReview && hasPublicReviewAssessment(pausedReview.notes)) {
+        advisory.findings.push(...pausedReview.findings);
+        aiReview = pausedReview;
+        aiReviewWasReused = true;
+        incr("gittensory_ai_review_paused_reuse_total");
+        await recordAuditEvent(env, {
+          eventType: "github_app.ai_review_paused_reuse",
+          actor: author,
+          targetKey: `${repoFullName}#${pr.number}`,
+          outcome: "completed",
+          detail: "Auto-review is paused (commit threshold); reused the last published AI review instead of spending a fresh call",
           metadata: { deliveryId: webhook.deliveryId, repoFullName, headSha: advisory.headSha ?? null },
         }).catch(() => undefined);
       }

@@ -487,15 +487,20 @@ describe("AI review cache (#1)", () => {
       expect(await countPublishedAiReviewHeads(env, "o/r", 61)).toBe(2);
     });
 
-    it("excludes the current published head from the pause threshold (regression for cached blocker suppression)", async () => {
+    it("regression (#selfhost-token-burn): COUNTS the PR's own current head too, not just prior ones — a repeated sweep of an unchanged PR must actually reach the pause threshold", async () => {
+      // #3719 previously excluded the current head from this count specifically so a PR swept repeatedly with
+      // NO new commits would never reach the threshold — which meant it never paused at all for that (the
+      // overwhelmingly common) case. The findings-reuse-on-pause branch in processors.ts is what actually
+      // prevents #3719's real concern (a published blocker silently vanishing once paused) now, so this
+      // count is free to reflect its own documented contract: the total published-review count, full stop.
       const env = createTestEnv();
-      await putCachedAiReview(env, "o/r", 63, "sha1", "block", { notes: "first", reviewerCount: 1 });
+      await putCachedAiReview(env, "o/r", 63, "sha1", "block", { notes: "only", reviewerCount: 1 });
       await markAiReviewPublished(env, "o/r", 63, "sha1");
-      await putCachedAiReview(env, "o/r", 63, "sha2", "block", { notes: "current", reviewerCount: 1 });
-      await markAiReviewPublished(env, "o/r", 63, "sha2");
+      expect(await countPublishedAiReviewHeads(env, "o/r", 63)).toBe(1);
 
-      expect(await countPublishedAiReviewHeads(env, "o/r", 63, "sha2")).toBe(1);
-      expect(await countPublishedAiReviewHeads(env, "o/r", 63, null)).toBe(2);
+      await putCachedAiReview(env, "o/r", 63, "sha2", "block", { notes: "second", reviewerCount: 1 });
+      await markAiReviewPublished(env, "o/r", 63, "sha2");
+      expect(await countPublishedAiReviewHeads(env, "o/r", 63)).toBe(2);
     });
 
     it("returns 0 when the count query yields no row (fail-safe)", async () => {

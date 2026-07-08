@@ -4468,21 +4468,29 @@ export async function getLatestPublishedAiReview(
   };
 }
 
-/** Count distinct prior PR head SHAs that already received a published AI review — used by `review.auto_review.auto_pause_after_reviewed_commits`. (#2042) */
+/** Count distinct PR head SHAs that already received a published AI review — used by
+ *  `review.auto_review.auto_pause_after_reviewed_commits`. (#2042)
+ *
+ *  #selfhost-token-burn: previously excluded the PR's OWN current head SHA from this count (#3719), so a PR
+ *  swept repeatedly with NO new commits could never reach the pause threshold — the one head it had ever
+ *  been reviewed on was always the "current" one, so it was always subtracted back out, and the count stayed
+ *  at 0 forever regardless of how many times that same head was actually reviewed. This is what #3719 was
+ *  actually protecting against: `resolveAutoReviewSkipForPullRequest`'s caller used to drop the AI review's
+ *  cached findings entirely once paused, so counting the current head would have silently removed an
+ *  already-published blocker from later gate evaluations. That reuse gap is now fixed at the call site
+ *  (`maybeReuseAiReviewOnAutoPause` in processors.ts reapplies the cached findings whenever the pause reason
+ *  fires), so the count no longer needs to avoid the current head to keep blockers from vanishing — it can
+ *  (and must) count it, matching this function's own always-documented "published AI review count" contract. */
 export async function countPublishedAiReviewHeads(
   env: Env,
   repoFullName: string,
   pullNumber: number,
-  currentHeadSha?: string | null | undefined,
 ): Promise<number> {
-  const currentHeadClause = currentHeadSha ? " AND head_sha != ?" : "";
   const row = await env.DB
     .prepare(
-      `SELECT COUNT(DISTINCT head_sha) AS cnt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND published_at IS NOT NULL${currentHeadClause}`,
+      "SELECT COUNT(DISTINCT head_sha) AS cnt FROM ai_review_cache WHERE repo_full_name = ? AND pull_number = ? AND published_at IS NOT NULL",
     )
-    .bind(
-      ...(currentHeadSha ? [repoFullName, pullNumber, currentHeadSha] : [repoFullName, pullNumber]),
-    )
+    .bind(repoFullName, pullNumber)
     .first<{ cnt: number }>();
   /* v8 ignore next -- SQL aggregate count always returns one row; fallback protects D1 driver anomalies. */
   return row?.cnt ?? 0;

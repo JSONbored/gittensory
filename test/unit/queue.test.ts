@@ -4565,6 +4565,76 @@ describe("queue processors", () => {
       expect(audit?.detail).toBe("review paused (commit threshold)");
     });
 
+    // #selfhost-token-burn: the PREVIOUS test only ever presents a NEW, never-before-reviewed head to the
+    // threshold check (a77-v3 has no cache row of its own) -- countPublishedAiReviewHeads correctly counted
+    // the two PRIOR distinct heads even before this fix, so that test alone can't prove the actual bug: a PR
+    // repeatedly swept with NO new commits (the same head, over and over) never reached its OWN threshold,
+    // because the count used to exclude "the current head" -- which, on every single one of those repeat
+    // sweeps, IS the one and only head this PR has ever had. Confirmed live: one real PR took 63 fresh AI
+    // calls across 12 hours of scheduled sweeps with zero new commits.
+    it("regression (#selfhost-token-burn): pauses AND reuses the cached blocker when the SAME unchanged head is swept repeatedly", async () => {
+      let aiCalls = 0;
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }; } } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env, { publicSurface: "comment_and_label" });
+      await upsertRepoFocusManifest(env, "JSONbored/gittensory", { review: { auto_review: { auto_pause_after_reviewed_commits: 1 } } });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+        number: 78,
+        title: "Stuck-open feature",
+        state: "open",
+        draft: false,
+        user: { login: "contributor" },
+        head: { sha: "a78-only" },
+        labels: [],
+        body: "Closes #1",
+      } as never);
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 78, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      // The ONLY review this PR has ever had -- for its OWN current (unchanged) head -- carrying a real blocker.
+      await putCachedAiReview(env, "JSONbored/gittensory", 78, "a78-only", "block", {
+        notes: "Prior published review with a real defect.",
+        reviewerCount: 1,
+        findings: [{ code: "ai_consensus_defect", title: "Null pointer on empty input", severity: "critical", detail: "The reviewer flagged a real defect that will break on an empty array." }],
+      });
+      await markAiReviewPublished(env, "JSONbored/gittensory", 78, "a78-only");
+      let publicCommentBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/78/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        if (url.endsWith("/pulls/78")) return Response.json({ number: 78, title: "Stuck-open feature", state: "open", draft: false, user: { login: "contributor" }, head: { sha: "a78-only" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a78-only/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a78-only/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/issues/78/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/78/comments")) { publicCommentBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? publicCommentBody); return Response.json({ id: 78 }, { status: 201 }); }
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      // Simulate THREE consecutive scheduled sweeps of the exact same unchanged PR -- exactly the real-world
+      // pattern (no new commits, just the periodic sweep firing over and over).
+      for (const deliveryId of ["sweep-1", "sweep-2", "sweep-3"]) {
+        await expect(
+          processJob(env, { type: "agent-regate-pr", deliveryId, repoFullName: "JSONbored/gittensory", prNumber: 78, installationId: 123 }),
+        ).resolves.toBeUndefined();
+      }
+
+      expect(aiCalls).toBe(0); // never spent a fresh AI call -- paused from the very first repeat sweep
+      const pausedReuseCount = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.ai_review_paused_reuse", "JSONbored/gittensory#78")
+        .first<{ n: number }>();
+      expect(pausedReuseCount?.n).toBe(3); // every one of the 3 sweeps reused the cached review, none skipped it silently
+      // The blocker from the ONE real review is still visible in the public comment on every pass -- it never
+      // silently vanished once the pause engaged (the exact regression #3719 was originally guarding against).
+      expect(publicCommentBody).toContain("Null pointer on empty input");
+    });
+
     it("#9: the public surface is not republished when already current at the head (check-run-only repo, req 6)", async () => {
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
