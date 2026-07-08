@@ -88,6 +88,7 @@ import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast
 import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import { buildRepoOutcomeCalibration, outcomeCalibrationSummary } from "../services/outcome-calibration";
+import { buildRecommendationQualityReport } from "../services/recommendation-quality-report";
 import { computeFleetAnalytics } from "../orb/analytics";
 import { loadMaintainerNoiseReport, maintainerNoiseSummary } from "../services/maintainer-noise";
 import { loadLabelAudit, labelAuditSummary } from "../services/label-audit";
@@ -184,6 +185,27 @@ const fleetAnalyticsOutputSchema = {
   fleet: z.unknown().optional(),
   instances: z.array(z.unknown()).optional(),
   outliers: z.array(z.unknown()).optional(),
+};
+
+// Operator-only, same as fleetAnalyticsOutputSchema: buildRecommendationQualityReport aggregates
+// agent-recommendation outcomes across every repo (visibility: "operator_only" in the report itself),
+// so this mirrors the fleet-analytics tool's windowDays-only input + operator gate rather than the
+// per-repo ownerRepoWindowShape pattern -- a single repo's maintainer access must never unlock
+// cross-repo recommendation data.
+const recommendationQualityOutputSchema = {
+  generatedAt: z.string().optional(),
+  windowDays: z.number().optional(),
+  visibility: z.string().optional(),
+  empty: z.boolean().optional(),
+  sparse: z.boolean().optional(),
+  totals: z.unknown().optional(),
+  trends: z.array(z.unknown()).optional(),
+  failureCategories: z.array(z.unknown()).optional(),
+  rollups: z.array(z.unknown()).optional(),
+  roleSurfaces: z.array(z.unknown()).optional(),
+  warnings: z.array(z.string()).optional(),
+  publicExport: z.unknown().optional(),
+  privateSummary: z.string().optional(),
 };
 
 const loginShape = {
@@ -1323,6 +1345,17 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_recommendation_quality",
+      {
+        description:
+          "Operator-only: how agent recommendations panned out across every repo (positive/negative outcome totals, trends, failure categories, and per-role surfaces). Measurement only.",
+        inputSchema: windowOnlyShape,
+        outputSchema: recommendationQualityOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getRecommendationQuality(input)),
+    );
+
+    server.registerTool(
       "gittensory_simulate_open_pr_pressure",
       {
         description:
@@ -2386,19 +2419,20 @@ export class GittensoryMcp {
     };
   }
 
-  // Operator-only gate: the fleet view aggregates ALL self-hosters' calibration, so a session must be an
-  // operator. api/internal static identities are trusted (operator-only Worker secrets). The static `mcp`
-  // identity is NOT trusted by default — it is a shared, end-user-obtainable CLI credential, and fleet analytics
-  // has no single repo to scope a MCP_READ_REPO_ALLOWLIST entry against, so only the full wildcard opt-in
-  // (mirroring requireContributorAccess) unlocks it. (#2455)
+  // Operator-only gate, shared by every cross-repo tool (fleet analytics, recommendation quality, ...): those
+  // reports aggregate ALL self-hosters'/repos' data, so a session must be an operator. api/internal static
+  // identities are trusted (operator-only Worker secrets). The static `mcp` identity is NOT trusted by default
+  // — it is a shared, end-user-obtainable CLI credential, and these operator-only reports have no single repo
+  // to scope a MCP_READ_REPO_ALLOWLIST entry against, so only the full wildcard opt-in (mirroring
+  // requireContributorAccess) unlocks them. (#2455)
   private async requireOperatorAccess(): Promise<void> {
     if (this.identity.kind === "session") {
       const scope = await this.loadSessionAccessScope();
       if (scope.operator) return;
-      throw new Error("Forbidden: operator authority is required for fleet analytics.");
+      throw new Error("Forbidden: operator authority is required for this operator-only tool.");
     }
     if (this.identity.kind === "static" && this.identity.actor === "mcp" && !isMcpReadUnscoped(this.env.MCP_READ_REPO_ALLOWLIST)) {
-      throw new Error("Forbidden: this MCP token is not authorized for operator-only fleet analytics.");
+      throw new Error("Forbidden: this MCP token is not authorized for operator-only cross-repo tools.");
     }
   }
 
@@ -2408,6 +2442,15 @@ export class GittensoryMcp {
     const merge = report.fleet.mergePrecision !== null ? `${Math.round(report.fleet.mergePrecision * 100)}%` : "n/a";
     return {
       summary: `Fleet calibration over ${report.windowDays}d: ${report.instanceCount} instance(s), median merge precision ${merge}, ${report.outliers.length} outlier(s).`,
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getRecommendationQuality(input: { windowDays?: number | undefined }): Promise<ToolPayload> {
+    await this.requireOperatorAccess();
+    const report = await buildRecommendationQualityReport(this.env, input.windowDays !== undefined ? { windowDays: input.windowDays } : {});
+    return {
+      summary: report.privateSummary,
       data: report as unknown as Record<string, unknown>,
     };
   }
