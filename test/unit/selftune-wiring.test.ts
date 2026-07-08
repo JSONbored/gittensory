@@ -13,6 +13,7 @@ import {
   SELFTUNE_BASE_CONFIDENCE_FLOOR,
 } from "../../src/review/selftune-wire";
 import { computeTuningRecommendations } from "../../src/review/auto-tune";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
 // Wrap env.DB.prepare so any SQL matching `pattern` throws (exercising a fail-safe catch); all other
@@ -255,6 +256,49 @@ describe("runSelfTune — shadow-soak over gittensory's own outcome data", () =>
 
     expect(warn.mock.calls.map((c) => String(c[0])).some((line) => line.includes("selftune_error"))).toBe(true);
     warn.mockRestore();
+  });
+});
+
+describe("selfTuneRepos — per-repo review.selftune FORCE-OFF (#4104)", () => {
+  it("REGRESSION: an explicit review.selftune: false excludes an otherwise agent-configured repo from the tuning pass entirely", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_SELFTUNE: "true" });
+    await seedRegisteredRepo(env, "owner/opted-out", ACTING_AUTONOMY);
+    await seedRecommendationOutcomes(env, "owner/opted-out", 5, 10); // would otherwise be a clear tightening signal
+    await upsertRepoFocusManifest(env, "owner/opted-out", { review: { selftune: false } });
+
+    await runSelfTune(env);
+
+    expect(await loadShadowOverride(env as never, "owner/opted-out")).toBeNull();
+    expect(await loadOverride(env as never, "owner/opted-out")).toBeNull();
+    expect((await listOverrideAudit(env as never, "owner/opted-out")).length).toBe(0);
+  });
+
+  it("unset review.selftune (the default) does not change today's behavior — an agent-configured repo still tunes normally", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_SELFTUNE: "true" });
+    await seedRegisteredRepo(env, "owner/repo", ACTING_AUTONOMY);
+    await seedRecommendationOutcomes(env, "owner/repo", 5, 10);
+    // No manifest published at all for this repo -- byte-identical to every repo before this change.
+
+    await runSelfTune(env);
+
+    expect((await loadShadowOverride(env as never, "owner/repo"))?.override.confidenceFloor).toBeGreaterThan(0);
+  });
+
+  it("an explicit review.selftune: true is a no-op — it does not force a NON-agent-configured repo into the tuning pass", async () => {
+    const owner = "owner";
+    const name = "no-autonomy";
+    const env = createTestEnv({ GITTENSORY_REVIEW_SELFTUNE: "true" });
+    await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, ?, ?, 1, 1)")
+      .bind(`${owner}/${name}`, owner, name)
+      .run();
+    // Deliberately NOT opted into the acting-autonomy surface (no repository_settings row at all).
+    await seedRecommendationOutcomes(env, `${owner}/${name}`, 5, 10);
+    await upsertRepoFocusManifest(env, `${owner}/${name}`, { review: { selftune: true } });
+
+    await runSelfTune(env);
+
+    // Still excluded -- review.selftune has no `true` override; isAgentConfigured is the only way in.
+    expect(await loadShadowOverride(env as never, `${owner}/${name}`)).toBeNull();
   });
 });
 

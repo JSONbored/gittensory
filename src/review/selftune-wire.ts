@@ -38,6 +38,7 @@ import { listRepositories } from "../db/repositories";
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { errorMessage } from "../utils/json";
 import { computeTuningRecommendations, type GateEvalReport, type GateEvalRow } from "./auto-tune";
 import { runAutoApplyRecommendations, type StorageEnv } from "./auto-apply";
@@ -88,14 +89,28 @@ async function buildEvalRow(env: Env, repoFullName: string): Promise<GateEvalRow
 }
 
 /** The registered, agent-configured repos to tune over — SAME scoping the ops scan + regate sweep use (only
- *  repos that opt into the acting-autonomy surface). A repo whose settings blip is skipped, never aborts. */
+ *  repos that opt into the acting-autonomy surface). A repo whose settings blip is skipped, never aborts.
+ *
+ *  Per-repo opt-out (#4104): unlike rag/reputation/grounding, selftune has no `GITTENSORY_REVIEW_REPOS`
+ *  allowlist to fall back to — every agent-configured repo is already IN by default once the global flag is
+ *  on. So this doesn't fit `resolveConvergedFeature`'s env-kill-switch → override → allowlist-default shape;
+ *  there is no allowlist. Instead, deliberately FORCE-OFF-ONLY (mirroring the `safety` feature's asymmetric
+ *  precedent, #2269, just in the opposite direction): an explicit per-repo `.gittensory.yml`
+ *  `review.selftune: false` excludes that one repo from the tuning pass even though it's otherwise
+ *  agent-configured. There is no `true` override — forcing a NON-agent-configured repo INTO the tuning pass
+ *  would bypass its owner's separate, broader acting-autonomy consent (`isAgentConfigured`), an unrelated
+ *  safety boundary this config key must not touch. Unset (the default) changes nothing. A manifest-load error
+ *  fails open (repo stays included), matching the existing settings-blip fail-safe below. */
 async function selfTuneRepos(env: Env): Promise<string[]> {
   const repos = (await listRepositories(env)).filter((repo) => repo.isRegistered);
   const configured: string[] = [];
   for (const repo of repos) {
     try {
       const settings = await resolveRepositorySettings(env, repo.fullName);
-      if (isAgentConfigured(settings.autonomy)) configured.push(repo.fullName);
+      if (!isAgentConfigured(settings.autonomy)) continue;
+      const manifest = await loadRepoFocusManifest(env, repo.fullName).catch(() => null);
+      if (manifest?.review.selftune === false) continue; // explicit per-repo opt-out
+      configured.push(repo.fullName);
     } catch {
       /* a settings blip on one repo must not abort the whole tuning pass */
     }

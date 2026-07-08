@@ -434,6 +434,14 @@ review:
   # null. Default: null/false — byte-identical. (#2995)
   # culture_profile: false
 
+  # Per-repo FORCE-OFF for the self-improvement/auto-tune cron pass (#4104) -- `false` excludes this repo from
+  # tuning even though it's otherwise agent-configured and the operator's GITTENSORY_REVIEW_SELFTUNE flag is on.
+  # Deliberately FORCE-OFF-ONLY (no `true` override): unlike most `review.*` toggles above, this does NOT live
+  # under a per-repo allowlist -- selftune's own scoping is whether the repo already opted into the
+  # acting-autonomy surface, a separate consent boundary this key must not bypass. Bool or null. Default:
+  # null/true -- no change to today's agent-configured-repos-only behavior.
+  # selftune: false
+
   # Repeat-false-positive suppression (#2179, part of #1964). Bool | null. Default: null/false — byte-identical
   # (no suppression-store read, no matching). Also requires the operator's GITTENSORY_REVIEW_MEMORY env flag to
   # be on -- this manifest field alone cannot enable it. When both are on, an advisory (non-blocking) AI finding
@@ -889,6 +897,11 @@ settings:
 #   # (recent_merged_pull_requests). Reference-only grounding, never a gate/scoring input; requires the operator
 #   # flag GITTENSORY_REVIEW_CULTURE_PROFILE. Bool or null. Default: null/false. (#2995)
 #   culture_profile: false
+#   # Per-repo FORCE-OFF for the self-improvement/auto-tune cron pass (#4104) -- false excludes this repo from
+#   # tuning even though it's otherwise agent-configured and the operator flag is on. FORCE-OFF-ONLY, no true
+#   # override -- selftune's own scoping is the acting-autonomy consent boundary, not a per-repo allowlist. Bool
+#   # or null. Default: null/true -- no change to today's agent-configured-repos-only behavior.
+#   selftune: false
 #   # When true (AND the operator's GITTENSORY_REVIEW_MEMORY env flag is also on), an advisory (non-blocking)
 #   # AI finding is matched against this repo's stored review_suppression signals (a maintainer's own past
 #   # false-positive dismissals) before it is surfaced, and demoted/dropped on a match. ADVISORY-ONLY: never
