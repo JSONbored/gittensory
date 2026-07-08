@@ -2900,6 +2900,29 @@ export async function hasAuditEventForDelivery(env: Env, actor: string, eventTyp
   return (row?.count ?? 0) > 0;
 }
 
+/** Whether `eventType` has ALREADY been recorded for this `targetKey` at this EXACT `headSha` -- unlike
+ *  `hasAuditEventForDelivery` above (which guards a single redelivered webhook within a short window), this has
+ *  no time bound: a head SHA is a stable, permanent identity, so a match at any point in the past is still a
+ *  match. Used by the `manifest_missing_tests` auto-trigger (#4196) to guard against re-spending an LLM call on
+ *  every re-review/sweep pass over an UNCHANGED commit -- a genuinely new push (a new head SHA) is always a
+ *  fresh miss regardless of how many prior SHAs already fired. json_extract mirrors hasAuditEventForDelivery's
+ *  own metadata-predicate pattern rather than a fragile LIKE match on the raw JSON string. */
+export async function hasAuditEventForHeadSha(env: Env, eventType: string, targetKey: string, headSha: string): Promise<boolean> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.eventType, eventType),
+        eq(auditEvents.targetKey, targetKey),
+        sql`json_extract(${auditEvents.metadataJson}, '$.headSha') = ${headSha}`,
+      ),
+    );
+  /* v8 ignore next -- count(*) always returns exactly one row; the empty-array guard only satisfies the destructure type. */
+  return (row?.count ?? 0) > 0;
+}
+
 /** Observability for the queue dead-letter rate (#1276): how many jobs (across BOTH the maintenance and webhook
  *  lanes) were dead-lettered since `sinceIso`. Reads the `github_app.dlq_dead_lettered` audit events written by
  *  processDlqBatch — NOT gated behind any review-ops flag, so the infra drop rate is always visible. */

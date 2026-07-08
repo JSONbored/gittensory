@@ -24934,6 +24934,45 @@ describe("queue processors", () => {
       expect(denied?.detail).toBe("maintainer_command_requires_maintainer");
     });
 
+    it("falls back to a safe withheld-content note when posting the real generated-test comment fails", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-post-fails";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "```typescript\n" + VALID_TEST_SOURCE + "\n```" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedGenerateTestsPr(env, repoFullName, 4200, "gen-tests-4195-post-fails");
+      let postAttempts = 0;
+      let fallbackBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4200/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4200/comments") && method === "POST") {
+          postAttempts += 1;
+          // The FIRST attempt (the real generated-test comment) fails with a genuine GitHub API error; the
+          // SECOND attempt (the withheld-content fallback) must still succeed.
+          if (postAttempts === 1) return new Response("server exploded", { status: 500 });
+          fallbackBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          return Response.json({ id: 42000 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4200, "maintainer", { association: "MEMBER" }));
+
+      expect(postAttempts).toBe(2);
+      expect(fallbackBody).toContain("did not produce a usable result");
+      expect(fallbackBody).not.toContain("test('checkout retries on failure'");
+      expect(logSpy.mock.calls.map((c) => String(c[0])).some((line) => line.includes("e2e_test_gen_comment_withheld"))).toBe(true);
+      logSpy.mockRestore();
+    });
+
     it("posts a not-enabled note (no generation call) when features.e2eTests is off for the repo", async () => {
       const repoFullName = "JSONbored/gen-tests-4195-disabled";
       const run = vi.fn();
@@ -25401,6 +25440,352 @@ describe("queue processors", () => {
         const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
         expect(skipped?.detail).toBe("agent_paused");
       });
+    });
+  });
+
+  // #4196 (part of the #4189 epic): promotes the existing manifest_missing_tests advisory finding into an
+  // actual auto-trigger for #4192/#4194's generation-and-render path, additive to the explicit
+  // `@gittensory generate-tests` command (#4195) tested above -- this describe block drives the AUTOMATED
+  // review pass (maybePublishPrPublicSurface, via a `pull_request` webhook) rather than an issue_comment.
+  describe("manifest_missing_tests auto-trigger (#4196)", () => {
+    const AUTO_TEST_SOURCE = "import { test, expect } from '@playwright/test';\n\ntest('auto-generated coverage', async ({ page }) => {\n  await page.goto('/');\n  await expect(page).toHaveTitle(/./);\n});";
+
+    async function seedAutoTriggerPr(
+      env: Env,
+      repoFullName: string,
+      prNumber: number,
+      headSha: string,
+      opts: { e2eTests?: boolean; hasTestFile?: boolean; validationNote?: boolean; manifestPolicyGateMode?: "advisory" | "block" } = {},
+    ) {
+      const slash = repoFullName.indexOf("/");
+      const owner = repoFullName.slice(0, slash);
+      const name = repoFullName.slice(slash + 1);
+      await upsertRepositoryFromGitHub(env, { name, full_name: repoFullName, private: false, owner: { login: owner } }, 123);
+      await upsertRepositorySettings(env, {
+        repoFullName,
+        commentMode: "off",
+        publicSurface: "off",
+        autoLabelEnabled: false,
+        checkRunMode: "off",
+        // "enabled" (not "off") -- resolveRepositorySettings derives reviewCheckMode: "required" from this
+        // when reviewCheckMode itself is unset, and gateEnabled (which the whole manifestPolicyGateMode block
+        // this auto-trigger lives inside is downstream of) requires a truthy reviewCheckMode + a headSha. With
+        // gateCheckMode: "off" the function bails out via its own early-return before ever reaching guidance.
+        gateCheckMode: "enabled",
+        requireLinkedIssue: false,
+        linkedIssueGateMode: "off",
+        manifestPolicyGateMode: opts.manifestPolicyGateMode ?? "advisory",
+        aiReviewMode: "off",
+        typeLabelsEnabled: false,
+      });
+      await upsertPullRequestFromGitHub(env, repoFullName, {
+        number: prNumber,
+        title: "Add retry to checkout",
+        state: "open",
+        user: { login: "contributor" },
+        author_association: "CONTRIBUTOR",
+        head: { sha: headSha, ref: "feature/checkout-retry" },
+        labels: [],
+        body: opts.validationNote ? "Ran npm run test:ci -- all green." : "No validation evidence mentioned here.",
+      });
+      await upsertPullRequestFile(env, {
+        repoFullName,
+        pullNumber: prNumber,
+        path: opts.hasTestFile ? "test/unit/checkout.test.ts" : "src/checkout.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 0,
+        changes: 3,
+        payload: { patch: "+function retryPayment() {\n+  return true;\n+}" },
+      });
+      // testExpectations is a TOP-LEVEL manifest field (unlike review.e2e_test_delivery's nested snake_case) --
+      // both it and features.e2eTests must land in the SAME upsertRepoFocusManifest call, since a second
+      // separate call replaces rather than merges with the first.
+      await upsertRepoFocusManifest(env, repoFullName, {
+        testExpectations: ["Run npm run test:ci."],
+        features: { e2eTests: opts.e2eTests ?? true },
+      });
+    }
+
+    const autoTriggerWebhook = (repoFullName: string, prNumber: number, headSha: string, action: "opened" | "synchronize" = "opened", body = "No validation evidence mentioned here.") => ({
+      type: "github-webhook" as const,
+      deliveryId: `auto-e2e-${prNumber}-${headSha}-${action}`,
+      eventName: "pull_request" as const,
+      payload: {
+        action,
+        installation: { id: 123, account: { login: repoFullName.slice(0, repoFullName.indexOf("/")), id: 1, type: "User" } },
+        repository: { name: repoFullName.slice(repoFullName.indexOf("/") + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, repoFullName.indexOf("/")) } },
+        pull_request: {
+          number: prNumber,
+          title: "Add retry to checkout",
+          state: "open",
+          user: { login: "contributor" },
+          head: { sha: headSha },
+          labels: [],
+          // The incoming webhook payload's own body ALWAYS re-upserts the cached PR record before this pass
+          // runs, overwriting whatever body seedAutoTriggerPr wrote directly to the DB -- so a test that needs
+          // a specific validation-note body must pass it here, not rely on the DB seed alone.
+          body,
+        },
+      },
+    }) as unknown as Parameters<typeof processJob>[1];
+
+    function stubAutoTriggerFetch(prNumber: number, posted: { count: number; body: string }) {
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        // gateCheckMode: "enabled" means this pass ALSO publishes/updates a gate check-run -- these three
+        // endpoints back that unrelated publish, not the e2e-test-gen comment itself.
+        if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/check-runs") && method === "POST") return Response.json({ id: prNumber * 100 }, { status: 201 });
+        if (url.includes("/check-runs") && method === "PATCH") return Response.json({ id: prNumber * 100, html_url: `https://github.com/checks/${prNumber * 100}` });
+        if (url.includes(`/issues/${prNumber}/comments`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/${prNumber}/comments`) && method === "POST") {
+          posted.count += 1;
+          posted.body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          return Response.json({ id: prNumber * 10 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+    }
+
+    it("auto-triggers generation when manifest_missing_tests fires and features.e2eTests is enabled", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-ok";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "```typescript\n" + AUTO_TEST_SOURCE + "\n```" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedAutoTriggerPr(env, repoFullName, 5001, "auto-4196-ok-sha");
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5001, posted);
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5001, "auto-4196-ok-sha"));
+
+      expect(posted.count).toBe(1);
+      expect(posted.body).toContain("test('auto-generated coverage'");
+      const audited = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ outcome: string; metadata_json: string }>();
+      expect(audited?.outcome).toBe("completed");
+      expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ trigger: "auto", headSha: "auto-4196-ok-sha" });
+    });
+
+    it("does not auto-trigger when manifest_missing_tests fires but features.e2eTests is disabled for the repo", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-disabled";
+      const run = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedAutoTriggerPr(env, repoFullName, 5002, "auto-4196-disabled-sha", { e2eTests: false });
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5002, posted);
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5002, "auto-4196-disabled-sha"));
+
+      expect(run).not.toHaveBeenCalled();
+      expect(posted.count).toBe(0);
+      const audited = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ n: number }>();
+      expect(audited?.n).toBe(0);
+    });
+
+    it("does not auto-trigger when the PR already carries a test file (the manifest_missing_tests signal never fires)", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-has-test";
+      const run = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedAutoTriggerPr(env, repoFullName, 5003, "auto-4196-has-test-sha", { hasTestFile: true });
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5003, posted);
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5003, "auto-4196-has-test-sha"));
+
+      expect(run).not.toHaveBeenCalled();
+      expect(posted.count).toBe(0);
+    });
+
+    it("does not auto-trigger when the PR body already carries a validation note (the manifest_missing_tests signal never fires)", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-validated";
+      const run = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedAutoTriggerPr(env, repoFullName, 5004, "auto-4196-validated-sha", { validationNote: true });
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5004, posted);
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5004, "auto-4196-validated-sha", "opened", "Ran npm run test:ci -- all green."));
+
+      expect(run).not.toHaveBeenCalled();
+      expect(posted.count).toBe(0);
+    });
+
+    it("does not re-trigger generation on a second automated pass over the SAME unchanged head SHA (double-generation guard)", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-dedup";
+      let runCalls = 0;
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => { runCalls += 1; return { response: "```typescript\n" + AUTO_TEST_SOURCE + "\n```" }; } } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedAutoTriggerPr(env, repoFullName, 5005, "auto-4196-dedup-sha");
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5005, posted);
+
+      // Two passes over the identical head SHA -- e.g. a `synchronize` redelivery or a re-review sweep tick
+      // with no new push in between.
+      await processJob(env, autoTriggerWebhook(repoFullName, 5005, "auto-4196-dedup-sha", "opened"));
+      await processJob(env, autoTriggerWebhook(repoFullName, 5005, "auto-4196-dedup-sha", "synchronize"));
+
+      expect(runCalls).toBe(1);
+      expect(posted.count).toBe(1);
+      const rows = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ n: number }>();
+      expect(rows?.n).toBe(1);
+    });
+
+    it("DOES trigger again for a genuinely NEW head SHA (a real push) even though a prior SHA on the same PR already fired", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-new-push";
+      let runCalls = 0;
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => { runCalls += 1; return { response: "```typescript\n" + AUTO_TEST_SOURCE + "\n```" }; } } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedAutoTriggerPr(env, repoFullName, 5006, "auto-4196-first-sha");
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5006, posted);
+      await processJob(env, autoTriggerWebhook(repoFullName, 5006, "auto-4196-first-sha", "opened"));
+      expect(runCalls).toBe(1);
+
+      // A genuine new push: the PR's cached head SHA moves, re-seeding the manifest (features.e2eTests stays
+      // on) and re-running the webhook at the NEW sha.
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: 5006, title: "Add retry to checkout", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "auto-4196-second-sha", ref: "feature/checkout-retry" }, labels: [], body: "No validation evidence mentioned here." });
+      await processJob(env, autoTriggerWebhook(repoFullName, 5006, "auto-4196-second-sha", "synchronize"));
+
+      expect(runCalls).toBe(2);
+      expect(posted.count).toBe(2);
+    });
+
+    it("an explicit @gittensory generate-tests command still regenerates on the SAME head SHA the auto-trigger already covered", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-explicit-after-auto";
+      let runCalls = 0;
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => { runCalls += 1; return { response: "```typescript\n" + AUTO_TEST_SOURCE + "\n```" }; } } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedAutoTriggerPr(env, repoFullName, 5007, "auto-4196-explicit-sha");
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5007, posted);
+      await processJob(env, autoTriggerWebhook(repoFullName, 5007, "auto-4196-explicit-sha"));
+      expect(runCalls).toBe(1);
+
+      // Now the maintainer explicitly asks, on the SAME PR at the SAME (still-unpushed) head SHA. The
+      // auto-trigger's dedup guard must not leak into the explicit command's own path.
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/5007/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/5007/comments") && method === "POST") { posted.count += 1; posted.body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 50070 }); }
+        return new Response("not found", { status: 404 });
+      });
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "auto-e2e-4196-explicit-command",
+        eventName: "issue_comment",
+        payload: {
+          action: "created",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "auto-e2e-4196-explicit-after-auto", full_name: repoFullName, private: false, owner: { login: "JSONbored" } },
+          issue: { number: 5007, title: "Add retry to checkout", state: "open", user: { login: "contributor" }, pull_request: {} },
+          comment: { id: 50071, body: "@gittensory generate-tests", author_association: "MEMBER", user: { login: "maintainer", type: "User" } },
+          sender: { login: "maintainer", type: "User" },
+        },
+      } as unknown as Parameters<typeof processJob>[1]);
+
+      expect(runCalls).toBe(2);
+      expect(posted.count).toBe(2);
+      const rows = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ n: number }>();
+      expect(rows?.n).toBe(2);
+    });
+
+    it("respects agentPaused — records a skip and never spends an LLM call, even though the signal fired", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-paused";
+      const run = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedAutoTriggerPr(env, repoFullName, 5008, "auto-4196-paused-sha");
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentPaused: true });
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5008, posted);
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5008, "auto-4196-paused-sha"));
+
+      expect(run).not.toHaveBeenCalled();
+      expect(posted.count).toBe(0);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("agent_paused");
+    });
+
+    it("respects agentDryRun — records a skip with detail dry_run (not agent_paused), and never spends an LLM call", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-dryrun";
+      const run = vi.fn();
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedAutoTriggerPr(env, repoFullName, 5009, "auto-4196-dryrun-sha");
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentDryRun: true });
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5009, posted);
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5009, "auto-4196-dryrun-sha"));
+
+      expect(run).not.toHaveBeenCalled();
+      expect(posted.count).toBe(0);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.e2e_tests_generation_skipped").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("dry_run");
+    });
+
+    it("attributes the generated test to \"the PR author\" when the cached PR has no author login at all (a ghost/deleted account)", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-no-author";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "```typescript\n" + AUTO_TEST_SOURCE + "\n```" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      const slash = repoFullName.indexOf("/");
+      await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off" });
+      // Deliberately no `user` field at all -- authorLogin resolves to null, exercising the `author ?? "the PR
+      // author"` fallback arm (the explicit command's own `actor` is always a real commenter login, so this
+      // branch is reachable only from the auto-trigger, which has no comment-invoker to fall back on).
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: 5010, title: "Add retry to checkout", state: "open", author_association: "CONTRIBUTOR", head: { sha: "auto-4196-no-author-sha", ref: "feature/checkout-retry" }, labels: [], body: "No validation evidence mentioned here." });
+      await upsertPullRequestFile(env, { repoFullName, pullNumber: 5010, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
+      await upsertRepoFocusManifest(env, repoFullName, { testExpectations: ["Run npm run test:ci."], features: { e2eTests: true } });
+      const posted = { count: 0, body: "" };
+      stubAutoTriggerFetch(5010, posted);
+
+      // Built inline (not via autoTriggerWebhook) so the incoming payload's own pull_request sub-object omits
+      // `user` too -- autoTriggerWebhook always hardcodes a real `user.login`, which would re-upsert (and thus
+      // restore) an author login before this pass ever runs.
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "auto-e2e-4196-no-author",
+        eventName: "pull_request",
+        payload: {
+          action: "opened",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "auto-e2e-4196-no-author", full_name: repoFullName, private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 5010, title: "Add retry to checkout", state: "open", head: { sha: "auto-4196-no-author-sha" }, labels: [], body: "No validation evidence mentioned here." },
+        },
+      } as unknown as Parameters<typeof processJob>[1]);
+
+      expect(posted.count).toBe(1);
+      expect(posted.body).toContain("AI-generated Playwright test for @the PR author");
     });
   });
 

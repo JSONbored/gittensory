@@ -65,6 +65,7 @@ import {
   countRecentAuditEventsForActorInRepo,
   countRecentAuditEventsForActorInRepoWithTargetSuffix,
   hasAuditEventForDelivery,
+  hasAuditEventForHeadSha,
   recordGateBlockOutcome,
   getGateBlockOutcome,
   hasActiveReviewForHeadSha,
@@ -9102,6 +9103,48 @@ async function maybePublishPrPublicSurface(
         if (!policyCodes.has(finding.code)) continue;
         advisory.findings.push(publicSafeManifestPolicyFinding(finding));
       }
+      // E2E test-generation auto-trigger (#4196, part of the #4189 epic): promotes the deterministic
+      // manifest_missing_tests finding above from advisory-only text into an actual trigger for #4192/#4194's
+      // generation-and-render path -- additive to, never a replacement for, the explicit `@gittensory
+      // generate-tests` command (#4195), which stays available regardless of whether this signal fired.
+      // Filters the SAME guidance.findings just computed above rather than re-deriving "PR probably needs
+      // tests" from scratch, per the issue's own requirement -- this is why the auto-trigger lives inside this
+      // exact manifestPolicyGateMode-gated block instead of a parallel code path: that is the only place this
+      // finding is computed at all today.
+      if (pr.headSha && guidance.findings.some((finding) => finding.code === "manifest_missing_tests") && resolveConvergedFeature(env, manifest, "e2eTests", repoFullName)) {
+        const e2eTargetKey = `${repoFullName}#${pr.number}`;
+        // Double-generation guard: an unchanged head SHA re-entering this pass (a re-review/sweep tick, not a
+        // new push) must never re-spend an LLM call or repost a duplicate suggestion. A genuinely NEW push
+        // (a new head SHA) is always a fresh miss here regardless of how many prior SHAs already fired. The
+        // explicit command deliberately does NOT consult this guard -- a maintainer typing the command always
+        // gets a fresh generation, even on a SHA the auto-trigger already covered (simplicity over a cache that
+        // would need its own invalidation rules; the daily neuron budget shared by both paths already bounds
+        // the cost of a maintainer choosing to ask twice).
+        const alreadyTriggered = await hasAuditEventForHeadSha(env, "github_app.e2e_tests_generation", e2eTargetKey, pr.headSha);
+        if (!alreadyTriggered) {
+          const e2eMode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
+          if (e2eMode === "live") {
+            await runE2eTestGenerationAndDeliver(env, {
+              repoFullName,
+              installationId,
+              pr,
+              settings,
+              manifest,
+              files: manifestFiles,
+              // No comment-invoker exists for an automated trigger -- the PR's own author is the closest
+              // analogue to "who this generated test is for" (unlike the explicit command, where `actor` is
+              // whoever typed the command).
+              actor: author ?? "the PR author",
+              mode: e2eMode,
+              deliveryId: webhook.deliveryId,
+              targetKey: e2eTargetKey,
+              trigger: "auto",
+            });
+          } else {
+            await recordGenerateTestsSkip(env, webhook.deliveryId, repoFullName, e2eTargetKey, author, e2eMode === "dry_run" ? "dry_run" : "agent_paused");
+          }
+        }
+      }
     }
     // Pre-merge checks (#review-pre-merge-checks, opt-in via .gittensory.yml review.pre_merge_checks). DETERMINISTIC
     // content assertions (title/description must contain a phrase, a label must be present), optionally path-gated.
@@ -11468,22 +11511,62 @@ async function maybeProcessGenerateTestsCommand(env: Env, deliveryId: string, pa
     return true;
   }
   const files = await listPullRequestFiles(env, req.repoFullName, req.pr.number);
-  const changedPaths = files.map((file) => file.path);
+  await runE2eTestGenerationAndDeliver(env, {
+    repoFullName: req.repoFullName,
+    installationId: req.installationId,
+    pr,
+    settings,
+    manifest,
+    files,
+    actor: req.actor,
+    mode,
+    deliveryId,
+    targetKey,
+    trigger: "command",
+  });
+  return true;
+}
+
+/**
+ * The shared generation-and-delivery core behind BOTH `@gittensory generate-tests` (#4195, the explicit
+ * command) and the `manifest_missing_tests` auto-trigger (#4196) — one code path, so the two triggers can
+ * never silently drift apart. Everything the caller must have already resolved BEFORE this runs: the feature
+ * is enabled (#4192's `resolveConvergedFeature` gate), the repo is not paused/dry-run (`mode === "live"`), and
+ * (for the auto-trigger specifically) the per-head-SHA double-generation guard has already passed — this
+ * function itself has no opinion on any of that, it only generates, delivers, and audits.
+ */
+async function runE2eTestGenerationAndDeliver(
+  env: Env,
+  args: {
+    repoFullName: string;
+    installationId: number;
+    pr: PullRequestRecord;
+    settings: RepositorySettings;
+    manifest: FocusManifest | null;
+    files: Awaited<ReturnType<typeof listPullRequestFiles>>;
+    actor: string;
+    mode: ReturnType<typeof resolveAgentActionMode>;
+    deliveryId: string;
+    targetKey: string;
+    trigger: "command" | "auto";
+  },
+): Promise<void> {
+  const changedPaths = args.files.map((file) => file.path);
   // BYOK resolution mirrors runAiReviewForAdvisory's own (re-resolved per-caller is this codebase's
   // established convention for this exact 3-line block — see e.g. the vision-capture caller above).
-  const storedKey = settings.aiReviewByok ? await getDecryptedRepositoryAiKey(env, req.repoFullName) : null;
+  const storedKey = args.settings.aiReviewByok ? await getDecryptedRepositoryAiKey(env, args.repoFullName) : null;
   const providerKey =
-    storedKey && (!settings.aiReviewProvider || settings.aiReviewProvider === storedKey.provider)
-      ? { provider: storedKey.provider, key: storedKey.key, model: settings.aiReviewModel ?? storedKey.model }
+    storedKey && (!args.settings.aiReviewProvider || args.settings.aiReviewProvider === storedKey.provider)
+      ? { provider: storedKey.provider, key: storedKey.key, model: args.settings.aiReviewModel ?? storedKey.model }
       : null;
   const result = await runGittensoryE2eTestGeneration(env, {
-    repoFullName: req.repoFullName,
-    prNumber: req.pr.number,
-    title: pr.title,
-    body: pr.body,
-    files: files.map((file) => ({ path: file.path, patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined })),
-    instructions: resolveE2eTestGenInstructions(manifest?.review, changedPaths),
-    actor: req.actor,
+    repoFullName: args.repoFullName,
+    prNumber: args.pr.number,
+    title: args.pr.title,
+    body: args.pr.body,
+    files: args.files.map((file) => ({ path: file.path, patch: typeof file.payload?.patch === "string" ? file.payload.patch : undefined })),
+    instructions: resolveE2eTestGenInstructions(args.manifest?.review, changedPaths),
+    actor: args.actor,
     providerKey,
   });
   const testSource = result.status === "ok" ? result.testSource : null;
@@ -11493,24 +11576,24 @@ async function maybeProcessGenerateTestsCommand(env: Env, deliveryId: string, pa
   // scoring-integrity safeguard) — that check runs regardless of this repo's own delivery config, since the
   // external, upstream-computed score must never be able to include a maintainer-authored line a miner didn't
   // write themselves.
-  const deliveryMode = resolveReviewPromptOverrides(manifest).e2eTestDelivery ?? "comment";
+  const deliveryMode = resolveReviewPromptOverrides(args.manifest).e2eTestDelivery ?? "comment";
   let commitOutcome: E2eTestGenCommitOutcome | undefined;
   if (testSource && deliveryMode === "commit") {
-    const minerDetection = pr.authorLogin
-      ? await getCachedOfficialMinerDetection(env, pr.authorLogin, { targetKey, deliveryId })
+    const minerDetection = args.pr.authorLogin
+      ? await getCachedOfficialMinerDetection(env, args.pr.authorLogin, { targetKey: args.targetKey, deliveryId: args.deliveryId })
       : ({ status: "not_found" } as const);
     if (minerDetection.status === "confirmed") {
       commitOutcome = { status: "blocked" };
-    } else if (pr.headSha && pr.headRef) {
+    } else if (args.pr.headSha && args.pr.headRef) {
       const attempt = await commitE2eTestToPrBranch(env, {
-        installationId: req.installationId,
-        repoFullName: req.repoFullName,
-        prNumber: req.pr.number,
-        headRef: pr.headRef,
-        headSha: pr.headSha,
+        installationId: args.installationId,
+        repoFullName: args.repoFullName,
+        prNumber: args.pr.number,
+        headRef: args.pr.headRef,
+        headSha: args.pr.headSha,
         testSource,
-        actor: req.actor,
-        mode,
+        actor: args.actor,
+        mode: args.mode,
       });
       // The render layer only distinguishes committed/declined/blocked -- an "error" (unexpected failure,
       // vs. an expected can-never-work case) is still surfaced to the maintainer as "declined", with its
@@ -11521,32 +11604,35 @@ async function maybeProcessGenerateTestsCommand(env: Env, deliveryId: string, pa
     }
   }
 
-  const body = buildE2eTestGenCommentBody({ actor: req.actor, testSource, commit: commitOutcome });
+  const body = buildE2eTestGenCommentBody({ actor: args.actor, testSource, commit: commitOutcome });
   try {
-    await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, sanitizePublicComment(body));
+    await createIssueComment(env, args.installationId, args.repoFullName, args.pr.number, sanitizePublicComment(body));
   } catch (error) {
-    // sanitizePublicComment THROWS on a forbidden term rather than stripping it -- generated test source is
-    // far less predictable than this codebase's other curated comment content, so failing closed to a safe
-    // withheld-content note (never the raw error, never the raw generated text) is the right degrade here.
+    // Generated test source is far less predictable than this codebase's other curated comment content, so
+    // a failure posting it (a GitHub API error, a rate limit, or any other unexpected throw) degrades to a
+    // safe withheld-content note (never the raw error, never the raw generated text) rather than leaving the
+    // maintainer with silence.
     await createIssueComment(
       env,
-      req.installationId,
-      req.repoFullName,
-      req.pr.number,
-      sanitizePublicComment(buildE2eTestGenCommentBody({ actor: req.actor, testSource: null })),
+      args.installationId,
+      args.repoFullName,
+      args.pr.number,
+      sanitizePublicComment(buildE2eTestGenCommentBody({ actor: args.actor, testSource: null })),
     );
-    console.log(JSON.stringify({ event: "e2e_test_gen_comment_withheld", repoFullName: req.repoFullName, pr: req.pr.number, error: errorMessage(error) }));
+    console.log(JSON.stringify({ event: "e2e_test_gen_comment_withheld", repoFullName: args.repoFullName, pr: args.pr.number, error: errorMessage(error) }));
   }
   await recordAuditEvent(env, {
     eventType: "github_app.e2e_tests_generation",
-    actor: req.actor,
-    targetKey,
+    actor: args.actor,
+    targetKey: args.targetKey,
     outcome: "completed",
     detail: testSource ? "Generated an E2E test." : `No usable test generated (${result.status}).`,
-    metadata: { deliveryId, repoFullName: req.repoFullName, status: result.status, byok: Boolean(providerKey), deliveryMode, ...(commitOutcome ? { commitStatus: commitOutcome.status } : {}) },
+    // headSha is included so the #4196 auto-trigger's per-commit double-generation guard (hasAuditEventForHeadSha)
+    // can find this row again; a null headSha (never observed in practice -- both callers require a truthy one
+    // before reaching here) degrades to simply never matching that guard, not a thrown error.
+    metadata: { deliveryId: args.deliveryId, repoFullName: args.repoFullName, status: result.status, byok: Boolean(providerKey), deliveryMode, trigger: args.trigger, headSha: args.pr.headSha ?? null, ...(commitOutcome ? { commitStatus: commitOutcome.status } : {}) },
   });
-  await recordGithubProductUsage(env, "e2e_tests_generation", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { status: result.status, generated: Boolean(testSource), deliveryMode, ...(commitOutcome ? { commitStatus: commitOutcome.status } : {}) } });
-  return true;
+  await recordGithubProductUsage(env, "e2e_tests_generation", { actor: args.actor, repoFullName: args.repoFullName, targetKey: args.targetKey, outcome: "completed", metadata: { status: result.status, generated: Boolean(testSource), deliveryMode, trigger: args.trigger, ...(commitOutcome ? { commitStatus: commitOutcome.status } : {}) } });
 }
 
 async function postGenerateTestsNotEnabledComment(env: Env, installationId: number, repoFullName: string, prNumber: number): Promise<void> {

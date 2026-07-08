@@ -8,6 +8,7 @@ import {
   countRecentAuditEventsForActorInRepoWithTargetSuffix,
   findHottestReviewTargetForRepo,
   hasAuditEventForDelivery,
+  hasAuditEventForHeadSha,
   getLatestScorePreview,
   getRepoAuthorPullRequestHistory,
   getLatestScoringModelSnapshot,
@@ -753,6 +754,26 @@ describe("database row parser hardening", () => {
 
     expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-target", "2026-06-24T09:00:00.000Z")).toBe(true);
     expect(await hasAuditEventForDelivery(env, "maintainer", "github_app.command_invocation", "owner/repo#1#help", "delivery-never-recorded", "2026-06-24T09:00:00.000Z")).toBe(false);
+  });
+
+  it("hasAuditEventForHeadSha finds a matching headSha inside metadata_json, scoped to eventType+targetKey, with no time bound (#4196)", async () => {
+    const env = createTestEnv();
+    await recordAuditEvent(env, {
+      eventType: "github_app.e2e_tests_generation",
+      actor: "contributor",
+      targetKey: "owner/repo#7",
+      outcome: "completed",
+      createdAt: "2020-01-01T00:00:00.000Z", // ancient -- there is no time window on this lookup at all
+      metadata: { headSha: "sha-a" },
+    });
+
+    expect(await hasAuditEventForHeadSha(env, "github_app.e2e_tests_generation", "owner/repo#7", "sha-a")).toBe(true);
+    // A DIFFERENT head SHA on the same targetKey/eventType must not match -- a genuinely new push is always a fresh miss.
+    expect(await hasAuditEventForHeadSha(env, "github_app.e2e_tests_generation", "owner/repo#7", "sha-b")).toBe(false);
+    // The SAME headSha but a different targetKey (a different PR) must not match.
+    expect(await hasAuditEventForHeadSha(env, "github_app.e2e_tests_generation", "owner/repo#8", "sha-a")).toBe(false);
+    // The SAME headSha and targetKey but a different eventType must not match.
+    expect(await hasAuditEventForHeadSha(env, "github_app.some_other_event", "owner/repo#7", "sha-a")).toBe(false);
   });
 
   it("computes complete case-insensitive repo author PR history for gate grace", async () => {
