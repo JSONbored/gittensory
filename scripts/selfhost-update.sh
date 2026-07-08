@@ -46,6 +46,11 @@ fi
 cd "$SCRIPT_DIR/.."
 
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$current_branch" = "HEAD" ]; then
+  echo "error: checkout is in a detached HEAD state, expected to be on '$BRANCH' -- checkout" \
+    "$BRANCH first (this script only updates a branch-tracking checkout)" >&2
+  exit 1
+fi
 if [ "$current_branch" != "$BRANCH" ]; then
   echo "error: currently on '$current_branch', expected '$BRANCH' -- checkout $BRANCH first, or" \
     "set SELFHOST_UPDATE_BRANCH=$current_branch if that is deliberate" >&2
@@ -60,6 +65,13 @@ fi
 
 echo "selfhost update: fetching $REMOTE"
 git fetch "$REMOTE"
+
+if ! git rev-parse --verify --quiet "$REMOTE/$BRANCH" >/dev/null; then
+  echo "error: $REMOTE/$BRANCH does not exist after fetching $REMOTE -- check" \
+    "SELFHOST_UPDATE_REMOTE/SELFHOST_UPDATE_BRANCH for a typo, or confirm $REMOTE actually has a" \
+    "'$BRANCH' branch" >&2
+  exit 1
+fi
 
 echo "selfhost update: fast-forwarding $BRANCH to $REMOTE/$BRANCH"
 if ! git merge --ff-only "$REMOTE/$BRANCH"; then

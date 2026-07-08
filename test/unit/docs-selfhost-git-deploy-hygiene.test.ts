@@ -31,10 +31,15 @@ describe("self-host git-deploy hygiene (#1660)", () => {
   });
 
   it("does not shadow any file actually tracked in the repo", () => {
-    // The real regression concern: a future PR could add a legitimately-tracked file whose name
-    // happens to match `*.bak-*` or `*.backup-*`, which would silently untrack it the moment
-    // someone re-clones. Ask git itself, rather than approximating the glob in JS, since git's
-    // own matcher is the one that actually enforces these patterns.
+    // The real regression concern: .gitignore has no effect on a file git already tracks -- it
+    // keeps being tracked, staged, and diffed normally forever, ignore pattern or not (verified:
+    // `git add -A` still stages a modification to an already-tracked-but-now-ignored file). The
+    // actual risk is the opposite direction -- a future PR that genuinely intends to add a NEW
+    // tracked file whose name happens to match `*.bak-*` or `*.backup-*` would have that file
+    // silently excluded from `git status`'s untracked list and from `git add -A`/`git add .`, so
+    // it could go uncommitted without anyone noticing (an explicit `git add <path>` at least warns
+    // and needs `-f`; a broad add just skips it quietly). Ask git itself, rather than approximating
+    // the glob in JS, since git's own matcher is the one that actually enforces these patterns.
     const result = spawnSync("git", ["ls-files"], { encoding: "utf8" });
     expect(result.status).toBe(0);
     const trackedFiles = result.stdout.split("\n").filter(Boolean);

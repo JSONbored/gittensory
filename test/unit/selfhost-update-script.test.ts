@@ -182,6 +182,34 @@ describe("selfhost-update.sh", () => {
     expect(readCallLog(callLog)).toBe("");
   });
 
+  it("refuses a detached HEAD with a distinct message instead of the generic branch mismatch", () => {
+    const { seedDir, checkoutDir, callLog } = createSandbox();
+    advanceOrigin(seedDir, "advance for detached-head");
+    git(["checkout", "-q", "--detach", "HEAD"], checkoutDir);
+
+    const result = run(checkoutDir, callLog);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("detached HEAD state");
+    expect(result.stderr).not.toContain("currently on 'HEAD'");
+    expect(readCallLog(callLog)).toBe("");
+  });
+
+  it("gives a distinct error when SELFHOST_UPDATE_BRANCH names a branch the remote doesn't have", () => {
+    const { checkoutDir, callLog } = createSandbox();
+    // The local checkout must actually be on the named branch for the branch-mismatch check to
+    // pass, so this exercises the *next* guard: the branch exists locally but has no upstream
+    // counterpart to fast-forward from.
+    git(["checkout", "-q", "-b", "no-such-branch-upstream"], checkoutDir);
+
+    const result = run(checkoutDir, callLog, { SELFHOST_UPDATE_BRANCH: "no-such-branch-upstream" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("origin/no-such-branch-upstream does not exist");
+    expect(result.stderr).not.toContain("could not be fast-forwarded");
+    expect(readCallLog(callLog)).toBe("");
+  });
+
   it("accepts a non-default branch when SELFHOST_UPDATE_BRANCH names it explicitly", () => {
     const { seedDir, checkoutDir, callLog } = createSandbox();
     git(["checkout", "-q", "-b", "release"], seedDir);
