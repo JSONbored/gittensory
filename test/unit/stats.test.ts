@@ -152,6 +152,10 @@ describe("aggregateReviewEffort — maintainer complexity fold (#2155)", () => {
     // minutes 4 -> band 1; minutes 96 -> band 4 -> rounded avg 3; total 100.
     expect(aggregateReviewEffort([4, 96])).toEqual({ avgBand: 3, totalEstimatedMinutes: 100 });
   });
+
+  it("keeps boundary-rounded minutes in the higher possible avgBand (regression for #2155)", () => {
+    expect(aggregateReviewEffort([5, 20, 60, 150])).toEqual({ avgBand: 4, totalEstimatedMinutes: 235 });
+  });
 });
 
 describe("computeStats — review-effort read is fail-safe", () => {

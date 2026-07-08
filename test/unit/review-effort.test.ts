@@ -69,4 +69,11 @@ describe("bandFromMinutes (#2155)", () => {
       expect(bandFromMinutes(sample.minutes)).toBe(sample.band);
     }
   });
+
+  it("keeps rounded boundary minutes in the higher possible band (regression for #2155)", () => {
+    expect(bandFromMinutes(5)).toBe(2);
+    expect(bandFromMinutes(20)).toBe(3);
+    expect(bandFromMinutes(60)).toBe(4);
+    expect(bandFromMinutes(150)).toBe(5);
+  });
 });
