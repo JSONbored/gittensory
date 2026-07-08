@@ -544,6 +544,11 @@ export type PullRequestRecord = {
    *  pairing with mergeBlockedSha) — so a later close can still cite the concrete rule even when the live re-parse
    *  can no longer reproduce it. */
   linkedIssueHardRuleViolationReason?: string | null | undefined;
+  /** Visual-capture gate satisfaction (#4110): the head SHA at which the bot's before/after capture pipeline
+   *  last produced a REAL before+after render pair (not a placeholder/failed/pending shot) for this PR. The
+   *  screenshotTableGate treats visualCaptureSatisfiedSha === headSha as evidence equivalent to a hand-authored
+   *  before/after table. Publish-written; read straight from the row. */
+  visualCaptureSatisfiedSha?: string | null | undefined;
   /** File paths changed by this open PR, when the caller has already resolved them (e.g. from the
    *  `pull_request_files` cache). Absent/undefined when not resolved — callers must not assume an empty array
    *  means "no files changed". Mirrors {@link RecentMergedPullRequestRecord.changedFiles} so the same
@@ -1059,7 +1064,11 @@ export type RepositorySettings = {
   updatedAt?: string | null | undefined;
 };
 
-export type ScreenshotTableGateAction = "close" | "request_changes" | "comment";
+/** #4110: `request_changes`/`comment` were REMOVED (not just left unused) -- they were fully typed/validated
+ *  but `src/queue/processors.ts` only ever branched on `=== "close"`, so setting either in `.gittensory.yml`
+ *  silently did nothing. `"close"` is the only value this gate has ever enforced; a legacy config with either
+ *  removed value normalizes to the default ("close") with a warning, exactly like any other invalid value. */
+export type ScreenshotTableGateAction = "close";
 
 /** Per-repo config for the before/after screenshot-table gate (#2006). See {@link RepositorySettings.screenshotTableGate}
  *  and `review/screenshot-table-gate.ts` for the normalizer + pure evaluator. */

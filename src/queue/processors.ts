@@ -56,6 +56,7 @@ import {
   markPullRequestsRegated,
   markPullRequestReviewsInvalidated,
   markPullRequestSurfacePublished,
+  markPullRequestVisualCaptureSatisfied,
   getLatestRegatedAt,
   claimRegateFanoutSlot,
   recordAgentCommandFeedback,
@@ -358,7 +359,7 @@ import { randomUUID } from "node:crypto";
 import { isRetryableJobError, RetryableJobError } from "./retryable";
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
-import { buildCapture, type CaptureRoute } from "../review/visual/capture";
+import { buildCapture, hasSuccessfulBotCapture, type CaptureRoute } from "../review/visual/capture";
 import { incr } from "../selfhost/metrics";
 import {
   renderReviewingPlaceholder,
@@ -2778,17 +2779,22 @@ async function runAgentMaintenancePlanAndExecute(
   );
 
   // Screenshot-table gate (#2006): a DETERMINISTIC check (no AI) that an in-scope (label/path-matched)
-  // contributor visual/frontend PR's body contains a before/after screenshot table. Off by default
-  // (settings.screenshotTableGate.enabled === false), so the pure evaluator below is effectively free for the
-  // common case. Only "close" is wired as an enforcement action here (the other configured actions stay
-  // advisory, matching the issue's phased rollout) -- the ternary below is the ONLY place that reads `.action`.
+  // contributor visual/frontend PR's body contains a before/after screenshot table -- OR (#4110) that the
+  // bot's own visual-capture pipeline already produced a real before/after render for this exact head
+  // (markPullRequestVisualCaptureSatisfied, written earlier in this same webhook by maybePublishPrPublicSurface
+  // -- see that function's beforeAfter block -- and re-read here on `pr`, which this caller already re-fetched
+  // fresh from the DB). Off by default (settings.screenshotTableGate.enabled === false), so the pure evaluator
+  // below is effectively free for the common case. "close" is the only enforcement action this gate has (#4110
+  // removed the dead request_changes/comment surface) -- the check below is the ONLY place that reads `.action`.
   /* v8 ignore next -- defensive: resolveRepositorySettings always populates screenshotTableGate (getRepositorySettings's DB defaults), so this fallback is unreachable in practice. */
   const screenshotTableGateConfig = settings.screenshotTableGate ?? DEFAULT_SCREENSHOT_TABLE_GATE;
+  const botCaptureSatisfied = Boolean(pr.headSha) && pr.visualCaptureSatisfiedSha === pr.headSha;
   const screenshotTableGateResult = evaluateScreenshotTableGate({
     config: screenshotTableGateConfig,
     prBody: pr.body,
     prLabels: pr.labels,
     changedFiles: changedPaths,
+    botCaptureSatisfied,
   });
   const screenshotTableMatch =
     screenshotTableGateResult.violated && screenshotTableGateConfig.action === "close"
@@ -10260,6 +10266,24 @@ async function maybePublishPrPublicSurface(
               ? { routes: [], previewPending: false }
               : await buildCapture(env, token, captureTarget, visualFiles, githubRateLimitAdmissionKeyForInstallation(installationId), reviewVisualConfig);
           beforeAfter = capture.routes;
+          // Screenshot-table gate satisfaction (#4110): a successful capture (a real before+after render pair
+          // on at least one route) is evidence equivalent to a hand-authored before/after table -- persist the
+          // head SHA it was proven at so the LATER maintenance pass (runAgentMaintenancePlanAndExecute, which
+          // re-reads this PR row fresh) can see it without re-running the capture or threading a new return
+          // value through every caller of this function. Best-effort: a write failure here just means the gate
+          // falls back to requiring a body table, never blocks the rest of the review.
+          if (pr.headSha && hasSuccessfulBotCapture(beforeAfter)) {
+            await markPullRequestVisualCaptureSatisfied(env, repoFullName, pr.number, pr.headSha).catch((error) => {
+              console.log(
+                JSON.stringify({
+                  event: "visual_capture_satisfied_mark_failed",
+                  repoFullName,
+                  pull: pr.number,
+                  message: errorMessage(error).slice(0, 200),
+                }),
+              );
+            });
+          }
           // Visual self-poll: the FIRST capture returns a "loading" placeholder for the AFTER shot when the
           // preview deploy isn't live yet (capture.previewPending). Schedule a delayed re-review to re-capture
           // the now-ready shot — bounded by `attempt` so a never-resolving preview can't loop (the deployment_status

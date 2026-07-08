@@ -477,6 +477,14 @@ export const pullRequests = sqliteTable(
     // pairing with merge_blocked_sha) -- so a later close can still cite the concrete rule even if the live
     // re-parse can no longer reproduce it (the issue was unlinked or its state changed).
     linkedIssueHardRuleViolationReason: text("linked_issue_hard_rule_violation_reason"),
+    // Visual-capture gate satisfaction (#4110): the head SHA at which the bot's before/after capture pipeline
+    // (review.visual.enabled) last produced a REAL before+after render pair (not a placeholder/failed/pending
+    // shot) for this PR. Lets the deterministic screenshotTableGate treat a successful automated capture as
+    // equivalent evidence to a hand-authored before/after table. Keyed to head SHA (mirrors approved_head_sha /
+    // last_published_surface_sha) -- a new commit re-arms the requirement until capture succeeds again for the
+    // new head. gittensory-computed (publish-written), omitted from the GitHub-sync SET clause so a later sync
+    // cannot clobber it.
+    visualCaptureSatisfiedSha: text("visual_capture_satisfied_sha"),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
     updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
   },

@@ -776,7 +776,7 @@ export const RepositorySettingsSchema = z
         enabled: z.boolean(),
         whenLabels: z.array(z.string()),
         whenPaths: z.array(z.string()),
-        action: z.enum(["close", "request_changes", "comment"]),
+        action: z.enum(["close"]),
         message: z.string().optional(),
       })
       .optional(),

@@ -9265,9 +9265,7 @@
               "action": {
                 "type": "string",
                 "enum": [
-                  "close",
-                  "request_changes",
-                  "comment"
+                  "close"
                 ]
               },
               "message": {

@@ -4,7 +4,8 @@ import {
   githubRateLimitAdmissionKeyForInstallation,
   latestGitHubRestRateLimitObservation,
 } from "../../src/github/client";
-import { buildCapture, mapFilesToRoutes, resolvePreviewUrlTemplate, resolveVisualRoutes } from "../../src/review/visual/capture";
+import { buildCapture, hasSuccessfulBotCapture, mapFilesToRoutes, resolvePreviewUrlTemplate, resolveVisualRoutes } from "../../src/review/visual/capture";
+import type { CaptureRoute } from "../../src/review/visual/capture";
 import * as pixelDiffModule from "../../src/review/visual/pixel-diff";
 import * as previewUrlModule from "../../src/review/visual/preview-url";
 import * as scrollGifModule from "../../src/review/visual/scroll-gif";
@@ -1073,5 +1074,58 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
       captureScrollSpy.mockRestore();
       encodeSpy.mockRestore();
     }
+  });
+});
+
+describe("hasSuccessfulBotCapture (#4110)", () => {
+  const REAL_BEFORE = "https://api.example/gittensory/shot?url=https%3A%2F%2Fprod.example%2Fapp&w=1440&h=900";
+  const REAL_AFTER = "https://api.example/gittensory/shot?url=https%3A%2F%2Fpreview.example%2Fapp&w=1440&h=900";
+  const LOADING_PLACEHOLDER = "https://api.example/gittensory/shot?placeholder=loading";
+  const FAILED_PLACEHOLDER = "https://api.example/gittensory/shot?placeholder=failed";
+
+  function route(overrides: Partial<CaptureRoute> = {}): CaptureRoute {
+    return { path: "/app", ...overrides };
+  }
+
+  it("true when a route has a real before+after pair on desktop", () => {
+    expect(hasSuccessfulBotCapture([route({ beforeUrl: REAL_BEFORE, afterUrl: REAL_AFTER })])).toBe(true);
+  });
+
+  it("true when only the MOBILE pair is real (desktop absent)", () => {
+    expect(hasSuccessfulBotCapture([route({ beforeUrlMobile: REAL_BEFORE, afterUrlMobile: REAL_AFTER })])).toBe(true);
+  });
+
+  it("false when afterUrl is a placeholder (preview still building)", () => {
+    expect(hasSuccessfulBotCapture([route({ beforeUrl: REAL_BEFORE, afterUrl: LOADING_PLACEHOLDER })])).toBe(false);
+  });
+
+  it("false when afterUrl is the failed-deploy placeholder", () => {
+    expect(hasSuccessfulBotCapture([route({ beforeUrl: REAL_BEFORE, afterUrl: FAILED_PLACEHOLDER })])).toBe(false);
+  });
+
+  it("false when beforeUrl is missing (no production render)", () => {
+    expect(hasSuccessfulBotCapture([route({ afterUrl: REAL_AFTER })])).toBe(false);
+  });
+
+  it("false when afterUrl is an empty string", () => {
+    expect(hasSuccessfulBotCapture([route({ beforeUrl: REAL_BEFORE, afterUrl: "" })])).toBe(false);
+  });
+
+  it("false for a route with no shots at all", () => {
+    expect(hasSuccessfulBotCapture([route()])).toBe(false);
+  });
+
+  it("false for an empty routes array (capture never ran / found nothing)", () => {
+    expect(hasSuccessfulBotCapture([])).toBe(false);
+  });
+
+  it("true when only ONE of several routes has a real pair (some() semantics, not every())", () => {
+    const routes = [route({ path: "/a", afterUrl: LOADING_PLACEHOLDER, beforeUrl: REAL_BEFORE }), route({ path: "/b", beforeUrl: REAL_BEFORE, afterUrl: REAL_AFTER })];
+    expect(hasSuccessfulBotCapture(routes)).toBe(true);
+  });
+
+  it("false when every route is all-placeholder", () => {
+    const routes = [route({ path: "/a", beforeUrl: REAL_BEFORE, afterUrl: LOADING_PLACEHOLDER }), route({ path: "/b", beforeUrl: REAL_BEFORE, afterUrl: FAILED_PLACEHOLDER })];
+    expect(hasSuccessfulBotCapture(routes)).toBe(false);
   });
 });

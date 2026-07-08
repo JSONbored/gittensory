@@ -1,0 +1,13 @@
+-- Visual-capture gate satisfaction (#4110, visual-capture convergence epic #3607). The bot's before/after
+-- capture pipeline (review.visual.enabled, #4093) can now satisfy the deterministic screenshotTableGate
+-- (#2006) exactly like a hand-authored before/after table -- but the capture is computed and persisted by the
+-- public-surface publish pass (maybePublishPrPublicSurface), which runs BEFORE the maintenance/gate pass
+-- (maybeRunAgentMaintenance) re-reads this same PR row. Persisting the marker lets the maintenance pass see
+-- "did the bot already prove this PR visually?" without re-running the capture or threading a new return value
+-- through every caller of either function.
+--
+-- visual_capture_satisfied_sha is the head SHA at which the capture pipeline last produced a REAL before+after
+-- render pair (not a placeholder/failed/pending shot) -- scoped to head SHA (mirrors approved_head_sha, 0053 /
+-- last_published_surface_sha, 0080: a new commit re-arms the requirement until capture succeeds again for the
+-- new head).
+ALTER TABLE pull_requests ADD COLUMN visual_capture_satisfied_sha TEXT;

@@ -18,7 +18,9 @@ export type CombineStrategy = "single" | "consensus" | "synthesis";
 
 export type OnMerge = "either" | "both";
 
-export type ScreenshotTableGateAction = "close" | "request_changes" | "comment";
+// #4110: `request_changes`/`comment` were REMOVED (see src/types.ts's mirror of this type for why) -- `"close"`
+// is the only value this gate has ever enforced.
+export type ScreenshotTableGateAction = "close";
 
 export type ScreenshotTableGateConfig = {
   enabled: boolean;

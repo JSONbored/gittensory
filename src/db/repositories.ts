@@ -3657,6 +3657,19 @@ export async function markPullRequestSurfacePublished(env: Env, fullName: string
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, headSha)));
 }
 
+/** Visual-capture gate satisfaction (#4110): record the head SHA at which the bot's before/after capture
+ *  pipeline just produced a REAL before+after render pair for this PR (see `hasSuccessfulBotCapture`,
+ *  `review/visual/capture.ts`). The screenshotTableGate evaluator treats `visualCaptureSatisfiedSha ===
+ *  headSha` as evidence equivalent to a hand-authored table. Scoped to headSha (mirrors markPullRequestApproved)
+ *  so a later commit re-arms the requirement until capture succeeds again for the new head. */
+export async function markPullRequestVisualCaptureSatisfied(env: Env, fullName: string, number: number, headSha: string): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .update(pullRequests)
+    .set({ visualCaptureSatisfiedSha: headSha, updatedAt: nowIso() })
+    .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, headSha)));
+}
+
 /** Sweep convergence: stamp the timestamp the scheduled re-gate sweep just recomputed this PR. A plain D1 UPDATE
  *  — NOT routed through the agent-action-executor chokepoint (#1258) — so it advances even when GitHub writes are
  *  suppressed (dry-run / paused). selectRegateCandidates orders the sweep by last_regated_at, so a just-regated PR
@@ -5799,6 +5812,7 @@ function toPullRequestRecordFromRow(row: typeof pullRequests.$inferSelect): Pull
     lastPublishedSurfaceSha: row.lastPublishedSurfaceSha,
     linkedIssueHardRuleViolatedAt: row.linkedIssueHardRuleViolatedAt,
     linkedIssueHardRuleViolationReason: row.linkedIssueHardRuleViolationReason,
+    visualCaptureSatisfiedSha: row.visualCaptureSatisfiedSha,
   };
 }
 

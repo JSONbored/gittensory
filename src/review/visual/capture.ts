@@ -57,6 +57,36 @@ export interface CaptureResult {
   previewPending: boolean;
 }
 
+/** True when `url` is a REAL rendered shot — not a missing slot (`undefined`) and not one of `capturePage`'s
+ *  own placeholder cards (`?placeholder=loading|failed|auth`, minted when there's no preview yet, the deploy
+ *  failed, or the route sign-in-walled). An on-demand `?url=` fallback link (no R2 binding configured) still
+ *  counts as real — it resolves to an actual render, just not a cached one. */
+function isRealShotUrl(url: string | undefined): boolean {
+  return typeof url === "string" && url.length > 0 && !url.includes("placeholder=");
+}
+
+/** True when `route` has a real before+after PAIR on at least one viewport (desktop or mobile) — the
+ *  deterministic signal {@link hasSuccessfulBotCapture} uses per-route. Requiring BOTH sides of the SAME
+ *  viewport (not "any before" + "any after" mixed across viewports) mirrors what a reviewer actually sees in
+ *  the "Visual preview" table: one comparable pair, not two unrelated renders. */
+function routeHasRealBeforeAfterPair(route: CaptureRoute): boolean {
+  const desktopReal = isRealShotUrl(route.beforeUrl) && isRealShotUrl(route.afterUrl);
+  const mobileReal = isRealShotUrl(route.beforeUrlMobile) && isRealShotUrl(route.afterUrlMobile);
+  return desktopReal || mobileReal;
+}
+
+/**
+ * True when at least one captured route has a REAL before+after render pair (#4110) — the deterministic
+ * signal the screenshot-table gate (`review/screenshot-table-gate.ts`) treats as equivalent to a hand-authored
+ * before/after table: a bot-rendered pair already proves the reviewer can SEE the change, so demanding a
+ * manual table on top of it would be redundant friction. A capture whose routes are all placeholders (preview
+ * still building, deploy failed, auth-walled) or empty (capture never ran / found nothing) does NOT satisfy —
+ * only a genuinely rendered pair does.
+ */
+export function hasSuccessfulBotCapture(routes: readonly CaptureRoute[]): boolean {
+  return routes.some(routeHasRealBeforeAfterPair);
+}
+
 /** Inputs the capture pipeline needs about the PR under review (resolved by the caller from gittensory data). */
 export interface CaptureTarget {
   repoFullName: string;

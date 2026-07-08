@@ -28,7 +28,7 @@ export const DEFAULT_SCREENSHOT_TABLE_GATE: ScreenshotTableGateConfig = {
   action: "close",
 };
 
-const VALID_ACTIONS: readonly ScreenshotTableGateAction[] = ["close", "request_changes", "comment"];
+const VALID_ACTIONS: readonly ScreenshotTableGateAction[] = ["close"];
 
 export function isScreenshotTableGateAction(value: unknown): value is ScreenshotTableGateAction {
   return typeof value === "string" && (VALID_ACTIONS as readonly string[]).includes(value);
@@ -72,7 +72,7 @@ export function normalizeScreenshotTableGateConfig(input: unknown, warnings: str
   const action = isScreenshotTableGateAction(record.action)
     ? record.action
     : (() => {
-        if (record.action !== undefined) warnings.push(`settings.requireScreenshotTable.action must be one of close, request_changes, comment; using the default "close".`);
+        if (record.action !== undefined) warnings.push(`settings.requireScreenshotTable.action must be "close" (the only supported value; #4110 removed request_changes/comment as dead config surface); using the default "close".`);
         return DEFAULT_SCREENSHOT_TABLE_GATE.action;
       })();
   const message = typeof record.message === "string" && record.message.trim().length > 0 ? record.message.trim() : undefined;
@@ -184,16 +184,25 @@ const NO_VIOLATION: ScreenshotTableGateResult = { violated: false, reason: null 
 
 /** PURE evaluator. Off (`enabled: false`) or out-of-scope (no configured label/path match) ⇒ no violation. In
  *  scope AND (no image-bearing table in the body OR an image pasted outside a table OR a committed image file
- *  under a scoped path) ⇒ violated, with the configured (or default) templated message as the reason. */
+ *  under a scoped path), UNLESS `botCaptureSatisfied` ⇒ violated, with the configured (or default) templated
+ *  message as the reason. */
 export function evaluateScreenshotTableGate(input: {
   config: ScreenshotTableGateConfig;
   prBody: string | null | undefined;
   prLabels: string[];
   changedFiles: string[];
+  /** #4110: true when the bot's own before/after capture pipeline (review.visual.enabled) already produced a
+   *  REAL before+after render pair for this PR's current head — evidence equivalent to a hand-authored table.
+   *  A successful automated capture satisfies the gate on its own, ahead of (and regardless of) the body-table
+   *  anti-gaming checks below — those exist to stop a contributor from FAKING compliance without the bot's
+   *  help, which doesn't apply once the bot has already proven the change visually. Absent/false ⇒
+   *  byte-identical to pre-#4110 behavior (body-table evidence only). */
+  botCaptureSatisfied?: boolean | undefined;
 }): ScreenshotTableGateResult {
   const { config } = input;
   if (!config.enabled) return NO_VIOLATION;
   if (!isScreenshotTableGateInScope(config, input.prLabels, input.changedFiles)) return NO_VIOLATION;
+  if (input.botCaptureSatisfied === true) return NO_VIOLATION;
   const hasTable = hasImageBearingMarkdownTable(input.prBody);
   const outsideTable = hasImageOutsideTable(input.prBody);
   const committedImage = hasCommittedImageFile(input.changedFiles, config.whenPaths);

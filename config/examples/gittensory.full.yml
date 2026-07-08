@@ -835,13 +835,14 @@ settings:
   #   minConfidence: 0.85  # Number 0-1. Minimum AI-verifier confidence to treat a candidate as a real match.
 
   # Before/after screenshot-table gate (#2006): deterministic check that a visual/frontend PR's body has a
-  # before/after image table. Scoped to whenLabels OR whenPaths (either matches); both empty = every PR. Off
-  # by default.
+  # before/after image table -- OR (#4110) that the bot's own visual-capture pipeline (review.visual.enabled)
+  # already produced a real before/after render for this PR's head, which satisfies the gate on its own.
+  # Scoped to whenLabels OR whenPaths (either matches); both empty = every PR. Off by default.
   # screenshotTableGate:
   #   enabled: false                        # Default: false.
   #   whenLabels: [frontend, visual]         # Default: [] (no label scoping).
   #   whenPaths: ["apps/ui/**", "src/**/*.tsx"]  # Default: [] (no path scoping).
-  #   action: close                          # close | request_changes | comment. Default: close.
+  #   action: close                          # close is the only supported value. Default: close.
   #   message: "Custom close reason..."      # Default: null (built-in message).
 
 # Maintainer AI review tuning (`.gittensory.yml` top-level `review:` block). These knobs shape the advisory AI

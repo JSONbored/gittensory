@@ -20,16 +20,19 @@ function config(overrides: Partial<ScreenshotTableGateConfig> = {}): ScreenshotT
 const TABLE_BODY = ["| Before | After |", "| --- | --- |", "| ![before](https://x/before.png) | ![after](https://x/after.png) |"].join("\n");
 
 describe("isScreenshotTableGateAction", () => {
-  it("accepts every valid action", () => {
+  it("accepts the only valid action", () => {
     expect(isScreenshotTableGateAction("close")).toBe(true);
-    expect(isScreenshotTableGateAction("request_changes")).toBe(true);
-    expect(isScreenshotTableGateAction("comment")).toBe(true);
   });
 
   it("rejects a non-string or unknown value", () => {
     expect(isScreenshotTableGateAction("hold")).toBe(false);
     expect(isScreenshotTableGateAction(123)).toBe(false);
     expect(isScreenshotTableGateAction(undefined)).toBe(false);
+  });
+
+  it("rejects request_changes/comment (#4110 removed as dead config surface)", () => {
+    expect(isScreenshotTableGateAction("request_changes")).toBe(false);
+    expect(isScreenshotTableGateAction("comment")).toBe(false);
   });
 });
 
@@ -184,10 +187,10 @@ describe("normalizeScreenshotTableGateConfig", () => {
 
   it("parses a fully valid object", () => {
     const result = normalizeScreenshotTableGateConfig(
-      { enabled: true, whenLabels: ["frontend", "visual"], whenPaths: ["apps/ui/**"], action: "comment", message: "custom text" },
+      { enabled: true, whenLabels: ["frontend", "visual"], whenPaths: ["apps/ui/**"], action: "close", message: "custom text" },
       [],
     );
-    expect(result).toEqual({ enabled: true, whenLabels: ["frontend", "visual"], whenPaths: ["apps/ui/**"], action: "comment", message: "custom text" });
+    expect(result).toEqual({ enabled: true, whenLabels: ["frontend", "visual"], whenPaths: ["apps/ui/**"], action: "close", message: "custom text" });
   });
 
   it("rejects a non-boolean enabled with a warning, falling back to false", () => {
@@ -199,6 +202,13 @@ describe("normalizeScreenshotTableGateConfig", () => {
   it("rejects an invalid action with a warning, falling back to close", () => {
     const warnings: string[] = [];
     expect(normalizeScreenshotTableGateConfig({ action: "delete" }, warnings).action).toBe("close");
+    expect(warnings.some((w) => w.includes("action"))).toBe(true);
+  });
+
+  it("rejects the removed request_changes/comment values (#4110), falling back to close", () => {
+    const warnings: string[] = [];
+    expect(normalizeScreenshotTableGateConfig({ action: "request_changes" }, warnings).action).toBe("close");
+    expect(normalizeScreenshotTableGateConfig({ action: "comment" }, []).action).toBe("close");
     expect(warnings.some((w) => w.includes("action"))).toBe(true);
   });
 
@@ -309,5 +319,52 @@ describe("evaluateScreenshotTableGate", () => {
   it("handles a null/undefined PR body without throwing (treated as no table)", () => {
     expect(evaluateScreenshotTableGate({ config: config({ enabled: true }), prBody: null, prLabels: [], changedFiles: [] }).violated).toBe(true);
     expect(evaluateScreenshotTableGate({ config: config({ enabled: true }), prBody: undefined, prLabels: [], changedFiles: [] }).violated).toBe(true);
+  });
+
+  describe("botCaptureSatisfied (#4110)", () => {
+    it("no violation when the bot's own capture already succeeded, even with no body table at all", () => {
+      const result = evaluateScreenshotTableGate({
+        config: config({ enabled: true }),
+        prBody: "Just changed some CSS, trust me.",
+        prLabels: [],
+        changedFiles: [],
+        botCaptureSatisfied: true,
+      });
+      expect(result).toEqual({ violated: false, reason: null });
+    });
+
+    it("satisfies the gate even when the body would otherwise fail the anti-gaming checks (image outside table + committed image)", () => {
+      const gamedBody = `${TABLE_BODY}\n\nAlso here's a bonus shot: ![bonus](https://x/bonus.png)`;
+      const result = evaluateScreenshotTableGate({
+        config: config({ enabled: true, whenPaths: ["apps/ui/**"] }),
+        prBody: gamedBody,
+        prLabels: [],
+        changedFiles: ["apps/ui/public/screenshot.png"],
+        botCaptureSatisfied: true,
+      });
+      expect(result).toEqual({ violated: false, reason: null });
+    });
+
+    it("still violates when botCaptureSatisfied is explicitly false and there is no table", () => {
+      const result = evaluateScreenshotTableGate({
+        config: config({ enabled: true }),
+        prBody: "no table here",
+        prLabels: [],
+        changedFiles: [],
+        botCaptureSatisfied: false,
+      });
+      expect(result.violated).toBe(true);
+    });
+
+    it("does not put an out-of-scope PR into scope just because the bot captured something", () => {
+      const result = evaluateScreenshotTableGate({
+        config: config({ enabled: true, whenLabels: ["frontend"] }),
+        prBody: "no table here",
+        prLabels: ["backend"],
+        changedFiles: [],
+        botCaptureSatisfied: true,
+      });
+      expect(result).toEqual({ violated: false, reason: null });
+    });
   });
 });
