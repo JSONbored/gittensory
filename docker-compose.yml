@@ -510,7 +510,15 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-180d}"
+      # 90d, not the 336h/14d of Loki or 168h/7d of Tempo below (#1828): that gap is deliberate, not an
+      # oversight — Prometheus's TSDB compresses numeric samples to ~1-2 bytes each after compaction, so
+      # metrics cost far less disk per retained day than Loki's raw log lines or Tempo's full span trees,
+      # and the self-hosting-operations docs' own capacity-planning guidance wants a multi-week/month
+      # trend window for metrics specifically. That said, 180d (six months) had no sizing rationale of
+      # its own — it silently replaced a deliberate 30d default when this became an override-able var in
+      # #1678 — so 90d is the considered number here: a full quarter of history for trend/capacity
+      # review, without defaulting a small self-host box to open-ended, unbounded-looking retention.
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-90d}"
     deploy:
       resources:
         limits:

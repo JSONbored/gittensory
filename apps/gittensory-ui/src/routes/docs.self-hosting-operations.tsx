@@ -328,16 +328,20 @@ DISCORD_REPO_WEBHOOKS={"owner/repoA":"https://discord.com/api/webhooks/...","own
                 + <code>--profile runners</code>
               </td>
               <td className="py-2 pr-4 align-top text-muted-foreground">
-                Unbounded by default — can starve the app under CI load
+                Unbounded by default — can still starve the app under CI load
               </td>
-              <td className="py-2 pr-4 align-top text-muted-foreground">Unbounded by default</td>
+              <td className="py-2 pr-4 align-top text-muted-foreground">
+                Bounded by <code>RUNNER_MEM_LIMIT</code> (default 2g) per replica
+              </td>
               <td className="py-2 align-top text-muted-foreground">
-                Estimated, and explicitly a known risk, not a guess about typical usage: the{" "}
-                <code>runner</code> service ships with no CPU/memory limit at all. Production
-                experience already documented in <code>docker-compose.override.yml.example</code>{" "}
-                found 3 uncapped runner containers starving the app for CPU on an 8-vCPU box under
-                real CI load — see that file for the <code>cpu_shares</code>/<code>cpus</code>{" "}
-                mitigation before co-locating runners with the review stack.
+                Estimated, and explicitly a known risk on the CPU side, not a guess about typical
+                usage: the <code>runner</code> service ships with a default memory ceiling (
+                <code>RUNNER_MEM_LIMIT</code>, default 2g, added by #3893) but no CPU limit.
+                Production experience already documented in{" "}
+                <code>docker-compose.override.yml.example</code> found 3 uncapped runner containers
+                starving the app for CPU on an 8-vCPU box under real CI load — see that file for the{" "}
+                <code>cpu_shares</code>/<code>cpus</code> mitigation before co-locating runners with
+                the review stack.
               </td>
             </tr>
             <tr>
@@ -402,10 +406,11 @@ DISCORD_REPO_WEBHOOKS={"owner/repoA":"https://discord.com/api/webhooks/...","own
         and still has real headroom), and nothing is so oversized relative to plausible usage that
         it should be lowered — including Ollama&apos;s comparatively large 8GiB ceiling, which is
         sized for holding one quantized model in memory, not idle overhead. The one real gap is{" "}
-        <code>--profile runners</code>, which ships with no limit at all; that is a known,
-        documented tradeoff (see the table above and{" "}
+        <code>--profile runners</code>&apos;s CPU side: the service has a default memory ceiling (
+        <code>RUNNER_MEM_LIMIT</code>, default 2g) but ships with no CPU limit at all; that is a
+        known, documented tradeoff (see the table above and{" "}
         <code>docker-compose.override.yml.example</code>) rather than an oversight, since the right
-        ceiling depends entirely on the host's core count and how many runner replicas you run.
+        CPU ceiling depends entirely on the host's core count and how many runner replicas you run.
       </p>
 
       <h3>Capacity planning: how much disk for N repos at M PRs/month</h3>
