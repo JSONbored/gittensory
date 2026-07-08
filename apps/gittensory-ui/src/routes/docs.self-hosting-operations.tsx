@@ -882,8 +882,15 @@ SENTRY_RELEASE=gittensory-selfhost@2026.07.05
           <Link to="/docs/self-hosting-backup-scaling">Backup and scaling</Link>.
         </li>
         <li>
-          Source path only: <code>git pull</code> and confirm <code>git status</code> is clean (no
-          uncommitted local changes the build would silently pick up).
+          Source path only: confirm <code>git status</code> is clean (no uncommitted local changes
+          the build would silently pick up). An ad-hoc snapshot like{" "}
+          <code>cp docker-compose.yml docker-compose.yml.bak-notes-20260707</code> does not count
+          against this — the trailing <code>*.bak-*</code>/<code>*.backup-*</code> patterns in{" "}
+          <code>.gitignore</code> keep stray manual backups out of <code>git status</code> entirely,
+          on top of the narrower <code>gittensory-config.backup-*/</code> and{" "}
+          <code>.deploy-backups/</code> patterns that already covered those specific directories.
+          <code>scripts/selfhost-update.sh</code> (below) checks this for you and refuses to
+          continue on a dirty tree.
         </li>
         <li>
           Image path only: note the current tag or digest from <code>docker inspect</code> on the
@@ -921,19 +928,57 @@ GITTENSORY_IMAGE=ghcr.io/jsonbored/gittensory-selfhost@sha256:... ./scripts/depl
 
       <h3>Path 2: build from the current git checkout</h3>
       <p>
-        <code>scripts/deploy-selfhost-prebuilt.sh</code> is for a source-based deploy (this is how{" "}
-        <code>GITTENSORY_VERSION</code> ends up as a short git SHA instead of an image tag). It
-        builds the bundle inside a Dockerized Node container — the host itself never needs Node or
-        npm installed — then restarts only the <code>gittensory</code> service the same way as the
-        image path.
+        <code>scripts/selfhost-update.sh</code> is the recommended entry point for a Git-backed
+        source checkout (#1660) — it is the single command that turns <code>git fetch</code> +
+        fast-forward + rebuild + verify into one flow, instead of an operator having to remember the
+        right order:
+      </p>
+      <CodeBlock lang="bash" code={`./scripts/selfhost-update.sh`} />
+      <p>
+        It refuses to continue, with a clear error and no side effects, on any of the three things
+        that make a plain <code>git pull</code> unsafe to script blindly: the working tree is not
+        clean, the checkout is not on the expected branch (<code>main</code> by default), or local
+        history has diverged from <code>origin/main</code> in a way that is not a fast-forward (
+        <code>git merge --ff-only</code> — it never rebases, force-merges, or picks a side for you).
+        Only once the fast-forward succeeds does it call{" "}
+        <code>scripts/deploy-selfhost-prebuilt.sh</code> (below) to rebuild and restart, then{" "}
+        <code>scripts/selfhost-post-update-check.sh</code> to verify health — so a normal update is
+        one command and a failure at any step stops before the next one runs.
+      </p>
+      <p>
+        None of this touches operator-owned state: <code>.env</code>, the{" "}
+        <code>gittensory-config/</code> mount, <code>.deploy-backups/</code>, any{" "}
+        <code>*.local</code> compose override or Alertmanager file, and every named data volume are
+        already gitignored or outside the source tree entirely, so a fetch-and-rebuild never touches
+        them. See the <Link to="/docs/self-hosting-quickstart">Quickstart</Link> for the initial
+        clone; this script assumes that checkout already exists and already tracks{" "}
+        <code>origin/main</code>.
       </p>
       <CodeBlock
         lang="bash"
-        code={`git pull
+        code={`# Point at a fork remote or a non-default branch (e.g. testing a release candidate branch)
+SELFHOST_UPDATE_REMOTE=upstream SELFHOST_UPDATE_BRANCH=main ./scripts/selfhost-update.sh
+
+# Skip the health probe step (e.g. you'll run it yourself, or right after a schema-changing release
+# where you want to inspect logs before curling /ready)
+SELFHOST_SKIP_POST_UPDATE_CHECK=1 ./scripts/selfhost-update.sh`}
+      />
+      <p>
+        Want finer control — a pinned <code>SENTRY_RELEASE</code>, a Sentry source-map upload, or to
+        fetch and rebuild as separate manual steps? Call the two scripts it wraps directly:
+      </p>
+      <CodeBlock
+        lang="bash"
+        code={`git fetch origin
+git merge --ff-only origin/main
 ./scripts/deploy-selfhost-prebuilt.sh`}
       />
       <p>
-        <code>SENTRY_RELEASE</code> defaults to{" "}
+        <code>scripts/deploy-selfhost-prebuilt.sh</code> is the actual rebuild step (this is how{" "}
+        <code>GITTENSORY_VERSION</code> ends up as a short git SHA instead of an image tag). It
+        builds the bundle inside a Dockerized Node container — the host itself never needs Node or
+        npm installed — then restarts only the <code>gittensory</code> service the same way as the
+        image path. <code>SENTRY_RELEASE</code> defaults to{" "}
         <code>gittensory-selfhost@&lt;short git SHA of the current HEAD&gt;</code> unless you
         override it, so each deploy from a new commit gets a distinct release id automatically. When{" "}
         <code>SENTRY_AUTH_TOKEN</code>, <code>SENTRY_ORG</code>, and <code>SENTRY_PROJECT</code> are
@@ -943,6 +988,12 @@ GITTENSORY_IMAGE=ghcr.io/jsonbored/gittensory-selfhost@sha256:... ./scripts/depl
       </p>
 
       <h3>Post-update checklist</h3>
+      <p>
+        <code>scripts/selfhost-update.sh</code> already runs the health probe below for you unless
+        you set <code>SELFHOST_SKIP_POST_UPDATE_CHECK=1</code>. Run it manually after the image
+        path, after calling the two wrapped scripts directly, or after any manual{" "}
+        <code>docker compose</code> update.
+      </p>
       <ol>
         <li>
           Wait for the deploy script&apos;s health wait to finish (or run the helper below if you
