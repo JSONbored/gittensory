@@ -29,22 +29,24 @@ export function isInlineCommentsEnabled(env: { GITTENSORY_REVIEW_INLINE_COMMENTS
 }
 
 /** PURE (#4099): should the reviewer be asked to emit line-anchored inline findings for this PR? (1) The
- *  operator's GITTENSORY_REVIEW_INLINE_COMMENTS flag is a MASTER KILL-SWITCH — off ⇒ always false, regardless of
- *  the manifest. (2) An explicit per-repo `.gittensory.yml` `review.inlineComments` override (`true`/`false`) now
- *  FULLY controls the feature by itself — a repo can turn this on without needing the GITTENSORY_REVIEW_REPOS
- *  cutover allowlist at all. (3) `manifestToggle` unset (`null`/`undefined`) preserves this feature's ORIGINAL
- *  design exactly: unlike rag/reputation/safety/unifiedComment (which already fall back to the cutover allowlist
- *  when their manifest field is unset), inline comments have always required an EXPLICIT per-repo opt-in — being
- *  on the allowlist alone was never sufficient, so this stays `false` regardless of the allowlist, byte-identical
- *  to every repo's behavior before this change. `repoFullName` is kept for a stable call signature even though
- *  it's unused now that the allowlist no longer applies here. */
+ *  operator's GITTENSORY_REVIEW_INLINE_COMMENTS flag is an absolute MASTER KILL-SWITCH — off ⇒ always false,
+ *  regardless of the manifest, and no per-repo config can bypass it (consistent with every other converged
+ *  feature — see `resolveConvergedFeature` in `feature-activation.ts`). (2) An explicit per-repo
+ *  `.gittensory.yml` `review.inlineComments` override (`true`/`false`) now FULLY controls the feature by itself
+ *  — a repo can turn this on without needing the GITTENSORY_REVIEW_REPOS cutover allowlist at all. (3)
+ *  `manifestToggle` unset (`undefined`) preserves this feature's ORIGINAL design exactly: unlike
+ *  rag/reputation/safety/unifiedComment/grounding (which already fall back to the cutover allowlist when their
+ *  manifest field is unset), inline comments have always required an EXPLICIT per-repo opt-in — being on the
+ *  allowlist alone was never sufficient, so this stays `false` regardless of the allowlist, byte-identical to
+ *  every repo's behavior before this change. `repoFullName` is kept for a stable call signature even though it's
+ *  unused now that the allowlist no longer applies here. */
 export function shouldRequestInlineFindings(
   // GITTENSORY_REVIEW_REPOS is accepted (not just GITTENSORY_REVIEW_INLINE_COMMENTS) purely for call-site
   // signature stability with existing callers/tests that pass a wider env object -- it's no longer read, see
   // the doc comment above.
   env: { GITTENSORY_REVIEW_INLINE_COMMENTS?: string | undefined; GITTENSORY_REVIEW_REPOS?: string | undefined },
   repoFullName: string,
-  manifestToggle: boolean | null | undefined,
+  manifestToggle: boolean | undefined,
 ): boolean {
   void repoFullName; // kept for call-site signature stability, see doc comment above
   if (!isInlineCommentsEnabled(env)) return false;

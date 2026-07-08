@@ -13,13 +13,15 @@ export function isFixHandoffEnabled(env: { GITTENSORY_REVIEW_FIX_HANDOFF?: strin
 }
 
 /** PURE (#4099): should the reviewer emit fix-handoff blocks for this PR? (1) The operator's
- *  GITTENSORY_REVIEW_FIX_HANDOFF flag is a MASTER KILL-SWITCH — off ⇒ always false, regardless of the manifest.
- *  (2) An explicit per-repo `.gittensory.yml` `review.fixHandoff` override (`true`/`false`) now FULLY controls
- *  the feature by itself — a repo can turn this on without needing the GITTENSORY_REVIEW_REPOS cutover allowlist
- *  at all. (3) `manifestToggle` unset (`undefined`) preserves this feature's ORIGINAL design exactly: being on
- *  the allowlist alone was never sufficient, so this stays `false` regardless of the allowlist, byte-identical to
- *  every repo's behavior before this change. Mirrors `shouldRequestInlineFindings`. `repoFullName` is kept for a
- *  stable call signature even though it's unused now that the allowlist no longer applies here. */
+ *  GITTENSORY_REVIEW_FIX_HANDOFF flag is an absolute MASTER KILL-SWITCH — off ⇒ always false, regardless of the
+ *  manifest, and no per-repo config can bypass it (consistent with every other converged feature — see
+ *  `resolveConvergedFeature` in `feature-activation.ts`). (2) An explicit per-repo `.gittensory.yml`
+ *  `review.fixHandoff` override (`true`/`false`) now FULLY controls the feature by itself — a repo can turn this
+ *  on without needing the GITTENSORY_REVIEW_REPOS cutover allowlist at all. (3) `manifestToggle` unset
+ *  (`undefined`) preserves this feature's ORIGINAL design exactly: being on the allowlist alone was never
+ *  sufficient, so this stays `false` regardless of the allowlist, byte-identical to every repo's behavior before
+ *  this change. Exactly mirrors `shouldRequestInlineFindings`'s shape and precedence. `repoFullName` is kept for
+ *  a stable call signature even though it's unused now that the allowlist no longer applies here. */
 export function shouldEmitFixHandoff(
   // GITTENSORY_REVIEW_REPOS is accepted (not just GITTENSORY_REVIEW_FIX_HANDOFF) purely for call-site signature
   // stability with existing callers/tests that pass a wider env object -- it's no longer read, see the doc
