@@ -648,6 +648,14 @@ export type VisualConfig = {
    *  capture mode this pipeline has (up to 6 extra renders per side) — false (default, every existing
    *  manifest) ⇒ byte-identical to today, no scroll frames captured at all. */
   gif: boolean;
+  /** `review.visual.enabled` (#4083): a config-as-code override layered ON TOP OF the outer
+   *  `GITTENSORY_REVIEW_SCREENSHOTS` / `GITTENSORY_REVIEW_REPOS` env-var gate, not a replacement for it. null
+   *  (default, unset at every config layer) ⇒ defers entirely to that gate's own decision. `false` (settable at
+   *  the global-default layer, or overridden per-repo) ⇒ forces capture off for this repo even when the env-var
+   *  gate would otherwise allow it. `true` ⇒ no additional restriction — it does NOT bypass the env-var gate,
+   *  it only opts back in at a layer where a global default of `false` disabled this repo. This is what lets an
+   *  operator flip visual review on/off per-repo purely through the VPS config files, without a redeploy. */
+  enabled: boolean | null;
 };
 
 /** A `prefers-color-scheme` value the capture pipeline can emulate before rendering (#3678). */
@@ -685,6 +693,7 @@ export const EMPTY_VISUAL_CONFIG: VisualConfig = {
   routes: { paths: [], maxRoutes: null },
   themes: [],
   gif: false,
+  enabled: null,
 };
 
 /** One `review.path_instructions[]` entry: a manifest path glob + the public-safe instructions to apply when a
@@ -2092,6 +2101,7 @@ function overlayVisualConfig(base: VisualConfig, override: VisualConfig): Visual
     },
     themes: override.themes.length > 0 ? [...override.themes] : [...base.themes],
     gif: override.gif ? override.gif : base.gif,
+    enabled: pickOverlayNullable(override.enabled, base.enabled),
   };
 }
 
@@ -2321,7 +2331,7 @@ function parseSelfHostAiModelConfig(value: JsonValue | undefined, warnings: stri
 }
 
 function visualConfigPresent(config: VisualConfig): boolean {
-  return config.preview.urlTemplate !== null || config.routes.paths.length > 0 || config.routes.maxRoutes !== null || config.themes.length > 0 || config.gif;
+  return config.preview.urlTemplate !== null || config.routes.paths.length > 0 || config.routes.maxRoutes !== null || config.themes.length > 0 || config.gif || config.enabled !== null;
 }
 
 const VISUAL_THEME_VALUES: readonly VisualTheme[] = ["light", "dark"];
@@ -2402,8 +2412,9 @@ function parseVisualConfig(value: JsonValue | undefined, warnings: string[]): Vi
 
   const themes = parseVisualThemes(record.themes, warnings);
   const gif = normalizeOptionalBoolean(record.gif, "review.visual.gif", warnings) === true;
+  const enabled = normalizeOptionalBoolean(record.enabled, "review.visual.enabled", warnings);
 
-  return { preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif };
+  return { preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif, enabled };
 }
 
 function parseAutoReviewTitleKeywords(value: JsonValue | undefined, warnings: string[]): string[] {
@@ -2718,6 +2729,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     }
     if (review.visual.themes.length > 0) visual.themes = [...review.visual.themes];
     if (review.visual.gif) visual.gif = true;
+    if (review.visual.enabled !== null) visual.enabled = review.visual.enabled;
     out.visual = visual;
   }
   if (review.linkedIssueSatisfaction !== null) out.linkedIssueSatisfaction = review.linkedIssueSatisfaction;

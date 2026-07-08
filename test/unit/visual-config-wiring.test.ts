@@ -20,6 +20,7 @@ describe("review.visual wiring (#3609 / #3610)", () => {
       routes: { paths: ["/pricing"], maxRoutes: 3 },
       themes: [],
       gif: false,
+      enabled: null,
     });
     expect(loadSpy).toHaveBeenCalledWith(expect.anything(), "acme/widgets");
     loadSpy.mockRestore();
@@ -34,6 +35,13 @@ describe("review.visual wiring (#3609 / #3610)", () => {
   it("fails open to the empty defaults when the manifest load rejects", async () => {
     const loadSpy = vi.spyOn(focusManifestLoader, "loadRepoFocusManifest").mockRejectedValue(new Error("manifest unavailable"));
     await expect(resolveVisualCaptureConfig({} as Env, "acme/widgets")).resolves.toEqual({ ...EMPTY_VISUAL_CONFIG });
+    loadSpy.mockRestore();
+  });
+
+  it("resolves a configured enabled: false from the repo's focus manifest (#4083)", async () => {
+    const manifest = parseFocusManifest({ review: { visual: { enabled: false } } });
+    const loadSpy = vi.spyOn(focusManifestLoader, "loadRepoFocusManifest").mockResolvedValue(manifest);
+    await expect(resolveVisualCaptureConfig({} as Env, "acme/widgets")).resolves.toEqual({ ...EMPTY_VISUAL_CONFIG, enabled: false });
     loadSpy.mockRestore();
   });
 });

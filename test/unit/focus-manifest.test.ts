@@ -3745,6 +3745,7 @@ describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
       routes: { paths: ["/pricing", "/docs"], maxRoutes: 3 },
       themes: [],
       gif: false,
+      enabled: null,
     });
     expect(m.review.present).toBe(true);
     expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.visual).toEqual(m.review.visual);
@@ -3840,7 +3841,7 @@ describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
   it("resolveReviewVisualConfig: null manifest yields empty defaults; a set manifest passes through", () => {
     expect(resolveReviewVisualConfig(null)).toEqual({ ...EMPTY_VISUAL_CONFIG });
     const manifest = parseFocusManifest({ review: { visual: { routes: { paths: ["/app"] } } } });
-    expect(resolveReviewVisualConfig(manifest)).toEqual({ preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null }, themes: [], gif: false });
+    expect(resolveReviewVisualConfig(manifest)).toEqual({ preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null }, themes: [], gif: false, enabled: null });
   });
 });
 
@@ -3925,13 +3926,68 @@ describe("review.visual.gif (#3612 scroll-through GIF capture)", () => {
 
   it("composes with themes — both configured independently and both round-trip", () => {
     const m = parseFocusManifest({ review: { visual: { gif: true, themes: ["dark"] } } });
-    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: true });
+    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: true, enabled: null });
     expect(reviewConfigToJson(m.review)).toEqual({ visual: { themes: ["dark"], gif: true } });
   });
 
   it("resolveReviewVisualConfig passes a configured gif: true through", () => {
     const manifest = parseFocusManifest({ review: { visual: { gif: true } } });
     expect(resolveReviewVisualConfig(manifest).gif).toBe(true);
+  });
+});
+
+describe("review.visual.enabled (#4083 config-as-code enable/disable)", () => {
+  it("parses enabled: true, marks present, and round-trips", () => {
+    const m = parseFocusManifest({ review: { visual: { enabled: true } } });
+    expect(m.review.visual.enabled).toBe(true);
+    expect(m.review.present).toBe(true);
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { enabled: true } });
+  });
+
+  it("parses enabled: false, marks present, and round-trips", () => {
+    const m = parseFocusManifest({ review: { visual: { enabled: false } } });
+    expect(m.review.visual.enabled).toBe(false);
+    expect(m.review.present).toBe(true);
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { enabled: false } });
+  });
+
+  it("absent enabled stays null and does not mark review present on its own", () => {
+    expect(parseFocusManifest({}).review.visual.enabled).toBeNull();
+    expect(parseFocusManifest({ review: { visual: {} } }).review.present).toBe(false);
+  });
+
+  it("null enabled does not serialize into the round-tripped visual block", () => {
+    const m = parseFocusManifest({ review: { visual: { gif: true } } });
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { gif: true } });
+  });
+
+  it("warns and defaults to null when enabled is not a boolean", () => {
+    const bad = parseFocusManifest({ review: { visual: { enabled: "yes" } } });
+    expect(bad.review.visual.enabled).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.enabled.*must be a boolean/.test(w))).toBe(true);
+  });
+
+  it("marks present via enabled alone (preview + routes + themes + gif all empty)", () => {
+    const m = parseFocusManifest({ review: { visual: { enabled: false } } });
+    expect(m.review.present).toBe(true);
+  });
+
+  it("resolveReviewVisualConfig passes a configured enabled: false through", () => {
+    const manifest = parseFocusManifest({ review: { visual: { enabled: false } } });
+    expect(resolveReviewVisualConfig(manifest).enabled).toBe(false);
+  });
+
+  it("overlay: a per-repo enabled: false wins over a global-default enabled: true", () => {
+    const globalDefault = parseReviewConfigMapping({ visual: { enabled: true } }, []);
+    const perRepo = parseReviewConfigMapping({ visual: { enabled: false } }, []);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.enabled).toBe(false);
+  });
+
+  it("overlay: an unset per-repo enabled falls back to the global-default value", () => {
+    const globalDefault = parseReviewConfigMapping({ visual: { enabled: false } }, []);
+    const perRepo = parseReviewConfigMapping({ visual: { routes: { paths: ["/app"] } } }, []);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.enabled).toBe(false);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.routes.paths).toEqual(["/app"]);
   });
 });
 
