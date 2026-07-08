@@ -103,7 +103,7 @@ export async function decryptSecret(ciphertext: string, iv: string, keyMaterial:
   return new TextDecoder().decode(decrypted);
 }
 
-function base64Encode(bytes: Uint8Array): string {
+export function base64Encode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);

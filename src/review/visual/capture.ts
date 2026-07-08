@@ -10,7 +10,8 @@
 // buildCapture), adapted to gittensory bindings + origins. The agent-config-driven route rules, authed-route
 // preview session, and explicit-route override are intentionally dropped here — gittensory's UI uses the
 // default TanStack route convention; those hooks can return if a per-repo visual config is added.
-import { sha256Hex } from "../../utils/crypto";
+import { base64Encode, sha256Hex } from "../../utils/crypto";
+import type { AiContentBlock } from "../../types";
 import type { GitHubRateLimitAdmissionKey } from "../../github/client";
 import { dispatchVisualCaptureFallback, fallbackShotR2Key, isFallbackDispatchInFlight, markFallbackDispatched } from "./actions-fallback";
 import {
@@ -86,6 +87,25 @@ function routeHasRealBeforeAfterPair(route: CaptureRoute): boolean {
  */
 export function hasSuccessfulBotCapture(routes: readonly CaptureRoute[]): boolean {
   return routes.some(routeHasRealBeforeAfterPair);
+}
+
+/**
+ * Fetch an already-captured shot (a `CaptureRoute.before*`/`after*` URL) and return it as an `AiContentBlock`
+ * for a vision-capable AI call (#4111 wiring) — every captured shot is a PNG (see `capturePage`'s
+ * `screenshot({type: "png", ...})` call in `./shot.ts`), so the MIME type is fixed rather than sniffed.
+ * Returns undefined on any fetch/read failure so one broken image degrades to "drop this image", never a
+ * thrown error — mirrors `capturePage`'s own "returns null on any failure so callers degrade gracefully"
+ * convention.
+ */
+export async function fetchShotContentBlock(url: string): Promise<AiContentBlock | undefined> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return undefined;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { type: "image", data: base64Encode(bytes), mimeType: "image/png" };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Inputs the capture pipeline needs about the PR under review (resolved by the caller from gittensory data). */

@@ -359,7 +359,7 @@ import { randomUUID } from "node:crypto";
 import { isRetryableJobError, RetryableJobError } from "./retryable";
 import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
-import { buildCapture, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureRoute } from "../review/visual/capture";
+import { buildCapture, fetchShotContentBlock, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureRoute } from "../review/visual/capture";
 import {
   clearFallbackDispatchMarker,
   fallbackShotFileName,
@@ -368,6 +368,13 @@ import {
   FALLBACK_WORKFLOW_NAME,
   parseFallbackRunCorrelation,
 } from "../review/visual/actions-fallback";
+import {
+  buildVisualRegressionFindings,
+  buildVisualVisionUserPrompt,
+  evaluateVisualVisionGate,
+  parseVisualVisionResponse,
+  VISUAL_VISION_SYSTEM_PROMPT,
+} from "../review/visual/visual-findings";
 import { incr } from "../selfhost/metrics";
 import {
   renderReviewingPlaceholder,
@@ -419,6 +426,7 @@ import { getLastRepoDocRefreshAttemptedAtBulk, performRepoDocRefresh } from "../
 import { isRepoDocRefreshDue } from "../review/repo-doc-refresh-schedule";
 import type { LocalBranchAnalysisInput } from "../signals/local-branch";
 import {
+  callAiProvider,
   hasPublicReviewAssessment,
   isEnabled,
   runGittensoryAiReview,
@@ -535,9 +543,10 @@ import {
   runSelfTuneBreaker,
 } from "../review/outcomes-wire";
 import { neutralHoldReasonCode, recordNativeGateDecision } from "../review/parity-wire";
-import type { SubmissionOutcome } from "../review/submitter-reputation";
+import { getSubmitterReputation, type SubmissionOutcome } from "../review/submitter-reputation";
 import type {
   AdvisoryFinding,
+  AiContentBlock,
   ContributorEvidenceRecord,
   ContributorRepoStatRecord,
   DetectedNotificationEvent,
@@ -8187,6 +8196,97 @@ class RetryablePublicSurfacePublishFailedError extends RetryableJobError {
   }
 }
 
+/**
+ * AI-vision analysis of a confirmed visual regression (#4111 wiring): the existing pixel-diff threshold can
+ * tell "the pixels changed" but not "does it look broken" — a route the capture pipeline already flagged
+ * changed gets ONE more look from a real vision-capable model. Mirrors runAiReviewForAdvisory's own shape
+ * (resolve reputation + BYOK, gate, call, parse, mutate `args.advisory.findings`) so it can be exercised
+ * directly in tests without driving the full webhook pipeline. STRICTLY ADVISORY: `visual_regression_finding`
+ * can never become a gate blocker (see visual-findings.ts's header) — this only ever adds a "Visual findings"
+ * collapsible to the comment. Never throws: any failure (a broken image fetch, a provider error, an
+ * unparseable response) degrades to "no finding added", exactly like the capture block it runs after.
+ */
+export async function runVisualVisionForAdvisory(
+  env: Env,
+  args: {
+    repoFullName: string;
+    pr: { number: number };
+    author: string | null;
+    confirmedContributor: boolean;
+    settings: RepositorySettings;
+    advisory: { findings: AdvisoryFinding[] };
+    routes: readonly CaptureRoute[];
+  },
+): Promise<void> {
+  if (args.routes.length === 0) return;
+  try {
+    const visionReputation = await getSubmitterReputation(env, args.repoFullName, args.author ?? undefined);
+    // BYOK resolution mirrors runAiReviewForAdvisory's own (re-resolved per-caller is this codebase's
+    // established convention for this exact 3-line block, not an anti-pattern — see e.g. runAiSlopForAdvisory).
+    const storedVisionKey =
+      args.confirmedContributor && args.settings.aiReviewByok
+        ? await getDecryptedRepositoryAiKey(env, args.repoFullName)
+        : null;
+    const visionProviderKey =
+      storedVisionKey &&
+      (!args.settings.aiReviewProvider || args.settings.aiReviewProvider === storedVisionKey.provider)
+        ? {
+            provider: storedVisionKey.provider,
+            key: storedVisionKey.key,
+            model: args.settings.aiReviewModel ?? storedVisionKey.model,
+          }
+        : null;
+    const visionGate = evaluateVisualVisionGate({
+      routes: args.routes,
+      reputationSignal: visionReputation.signal,
+      providerKey: visionProviderKey,
+    });
+    if (!visionGate.run) return;
+    // evaluateVisualVisionGate only ever returns run:true when its own providerKey input (the SAME
+    // visionProviderKey resolved above) was non-null -- this is a defensive type-narrowing guard for the
+    // callAiProvider call below, not a reachable false case.
+    /* v8 ignore next -- see comment above */
+    if (!visionProviderKey) return;
+    const images: AiContentBlock[] = [];
+    for (const route of visionGate.routes) {
+      // Show the model the viewport that actually crossed the pixel-diff threshold — a route can qualify via
+      // desktop, mobile, or both; preferring desktop only when BOTH changed keeps this a single before/after
+      // pair per route (the prompt's own "before, after order" contract), same as
+      // routeHasConfirmedVisualRegression's own desktop-first `||` check.
+      const useMobile = !route.diffUrl && Boolean(route.diffUrlMobile);
+      const beforeShotUrl = useMobile ? route.beforeUrlMobile : route.beforeUrl;
+      const afterShotUrl = useMobile ? route.afterUrlMobile : route.afterUrl;
+      if (!beforeShotUrl || !afterShotUrl) continue;
+      const [beforeBlock, afterBlock] = await Promise.all([
+        fetchShotContentBlock(beforeShotUrl),
+        fetchShotContentBlock(afterShotUrl),
+      ]);
+      if (beforeBlock) images.push(beforeBlock);
+      if (afterBlock) images.push(afterBlock);
+    }
+    if (images.length === 0) return;
+    const visionResponse = await callAiProvider(
+      visionProviderKey,
+      VISUAL_VISION_SYSTEM_PROMPT,
+      buildVisualVisionUserPrompt(visionGate.routes),
+      600,
+      images,
+    );
+    if (!visionResponse.text) return;
+    const visionFindings = parseVisualVisionResponse(visionResponse.text);
+    args.advisory.findings.push(...buildVisualRegressionFindings(visionFindings));
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        event: "visual_vision_error",
+        repoFullName: args.repoFullName,
+        pull: args.pr.number,
+        message: errorMessage(error).slice(0, 200),
+      }),
+    );
+  }
+}
+
 async function maybePublishPrPublicSurface(
   env: Env,
   installationId: number,
@@ -8224,6 +8324,11 @@ async function maybePublishPrPublicSurface(
   },
 ): Promise<ReturnType<typeof evaluateGateCheck> | undefined> {
   const author = pr.authorLogin ?? null;
+  // Hoisted out of the try-block below (where it's actually resolved) so the AI-vision step further down --
+  // which needs the SAME already-resolved confirmed-Gittensor status for its own BYOK gate, mirroring
+  // runAiReviewForAdvisory's identical check -- can read it without a second, audit-event-duplicating
+  // getCachedOfficialMinerDetection lookup. Defaults false; only ever set true inside that try-block.
+  let confirmedContributor = false;
   // Resolve the repo's action mode ONCE for the whole publish pass and thread it into every GitHub write below, so
   // a dry-run / pause / global-freeze publishes NOTHING (check-run, comment, label) — the gate verdict is still
   // computed + returned for the disposition logic, the writes are just suppressed + audited. (#dry-run-chokepoint)
@@ -8908,7 +9013,7 @@ async function maybePublishPrPublicSurface(
     // Resolve the author's confirmed-Gittensor status. It feeds on-chain SCORING and the public surface, but
     // it no longer gates the verdict — every author is hard-blocked the same way on a configured blocker, and
     // a clean PR passes the same way. (#gate-nonconfirmed)
-    const confirmedContributor = official?.status === "confirmed";
+    confirmedContributor = official?.status === "confirmed";
 
     // Anti-slop (#530/#532): only when opted in (slopGateMode !== "off"). Surface the deterministic slop
     // findings as advisory context, and feed the score to the gate (it only blocks under slop: block + the
@@ -10431,6 +10536,18 @@ async function maybePublishPrPublicSurface(
           );
         }
       }
+      // AI-vision analysis of a confirmed visual regression (#4111 wiring) — see runVisualVisionForAdvisory's
+      // own doc comment. Deliberately independent of the capture block above (its own try/catch there) so a
+      // vision failure can never affect the "Visual preview" section that block already rendered.
+      await runVisualVisionForAdvisory(env, {
+        repoFullName,
+        pr,
+        author,
+        confirmedContributor,
+        settings,
+        advisory,
+        routes: beforeAfter,
+      });
       // review.memory (#2181, apply slice of #1964): before the unified comment renders, suppress/demote
       // advisory (non-blocking) findings a maintainer already dismissed as false positives for this repo. ONLY
       // ever applied to `commentGate.warnings` -- NEVER `commentGate.blockers` -- so this can never change the

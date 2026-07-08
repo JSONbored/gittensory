@@ -5,7 +5,7 @@ import {
   latestGitHubRestRateLimitObservation,
 } from "../../src/github/client";
 import { fallbackShotR2Key, markFallbackDispatched } from "../../src/review/visual/actions-fallback";
-import { buildCapture, hasSuccessfulBotCapture, mapFilesToRoutes, resolvePreviewUrlTemplate, resolveVisualRoutes } from "../../src/review/visual/capture";
+import { buildCapture, fetchShotContentBlock, hasSuccessfulBotCapture, mapFilesToRoutes, resolvePreviewUrlTemplate, resolveVisualRoutes } from "../../src/review/visual/capture";
 import type { CaptureRoute } from "../../src/review/visual/capture";
 import * as pixelDiffModule from "../../src/review/visual/pixel-diff";
 import * as previewUrlModule from "../../src/review/visual/preview-url";
@@ -1553,5 +1553,27 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
     );
 
     expect(result.routes[0]?.afterUrl).toContain("placeholder=loading");
+  });
+});
+
+describe("fetchShotContentBlock (#4111)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns a base64-encoded image content block on a successful fetch", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200 })));
+    const block = await fetchShotContentBlock("https://x/gittensory/shot?key=before");
+    expect(block).toEqual({ type: "image", data: Buffer.from([137, 80, 78, 71]).toString("base64"), mimeType: "image/png" });
+  });
+
+  it("returns undefined on a non-2xx response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not found", { status: 404 })));
+    await expect(fetchShotContentBlock("https://x/gittensory/shot?key=missing")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined (never throws) when fetch itself rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
+    await expect(fetchShotContentBlock("https://x/gittensory/shot?key=broken")).resolves.toBeUndefined();
   });
 });
