@@ -2002,8 +2002,8 @@ function runCacheCli(args) {
   }
   if (subcommand === "list" || subcommand === "ls") {
     const payload = listDecisionPackCache();
-    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    else if (payload.count === 0) process.stdout.write("Decision-pack cache is empty.\n");
+    if (emitList(options, payload.entries, payload)) return;
+    if (payload.count === 0) process.stdout.write("Decision-pack cache is empty.\n");
     else for (const entry of payload.entries) process.stdout.write(`- ${entry.login ?? "unknown"} (cached ${entry.cachedAt ?? "unknown"}, ${entry.bytes} bytes)\n`);
     return;
   }
@@ -2380,7 +2380,7 @@ function printHelp() {
 function printCacheHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp cache status [--json]
-  gittensory-mcp cache list [--json]
+  gittensory-mcp cache list [--json | --format ndjson]
   gittensory-mcp cache clear [--json]
 
 Decision-pack cache entries are local-only stale fallbacks for temporary API/network outages.
@@ -2402,7 +2402,7 @@ Source upload remains disabled.
 
 function printProfileHelp() {
   process.stdout.write(`Usage:
-  gittensory-mcp profile list [--json]
+  gittensory-mcp profile list [--json | --format ndjson]
   gittensory-mcp profile create <name> [--json]
   gittensory-mcp profile switch <name> [--json]
   gittensory-mcp profile remove <name> [--json]
@@ -2432,6 +2432,22 @@ function parseOptions(args) {
     else options[key] = value;
   }
   return options;
+}
+
+// Shared machine-readable output for list-shaped commands. `--format ndjson` streams one JSON object per
+// array element per line (for piping into jq/log processors); `--json` (or `--format json`) keeps the
+// existing pretty object. Returns true when it emitted a machine-readable format, so the caller skips the
+// human view. Each record ends in "\n" and Node flushes stdout on exit, so piped output is not truncated.
+function emitList(options, items, pretty) {
+  if (options.format === "ndjson") {
+    for (const item of items) process.stdout.write(`${JSON.stringify(item)}\n`);
+    return true;
+  }
+  if (options.json || options.format === "json") {
+    process.stdout.write(`${JSON.stringify(pretty, null, 2)}\n`);
+    return true;
+  }
+  return false;
 }
 
 async function login(options) {
@@ -2499,12 +2515,10 @@ function profileCommand(args) {
   if (subcommand === "list" || subcommand === "ls") {
     const profiles = profileList(config);
     const payload = { activeProfile: activeProfileName, profiles };
-    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    else {
-      process.stdout.write(`Active profile: ${activeProfileName}\n`);
-      for (const profile of profiles) {
-        process.stdout.write(`- ${profile.name}${profile.active ? " (active)" : ""}: ${profile.login ?? "not authenticated"}\n`);
-      }
+    if (emitList(options, profiles, payload)) return;
+    process.stdout.write(`Active profile: ${activeProfileName}\n`);
+    for (const profile of profiles) {
+      process.stdout.write(`- ${profile.name}${profile.active ? " (active)" : ""}: ${profile.login ?? "not authenticated"}\n`);
     }
     return;
   }
