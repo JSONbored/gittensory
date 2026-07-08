@@ -28,7 +28,7 @@
   },
   "include-component-in-tag": true,
   "separate-pull-requests": true,
-  "pull-request-title-pattern": "chore(release): cut ${component} v${version}",
+  "pull-request-title-pattern": "chore(release): cut${component} v${version}",
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Fixes" },
