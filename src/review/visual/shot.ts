@@ -51,6 +51,7 @@ type ScreenshotRequest = {
 };
 type ScreenshotPage = {
   evaluate<T>(fn: () => T): Promise<T>;
+  evaluate<T, A extends unknown[]>(fn: (...args: A) => T, ...args: A): Promise<T>;
   screenshot(options: { type: "png"; fullPage: true }): Promise<Uint8Array>;
 };
 // Viewport matrix (#4109): DELIBERATELY kept at 2 (desktop + mobile), not widened to metagraphed's 3-viewport
@@ -71,6 +72,7 @@ export const MAX_SCREENSHOT_PIXELS = 14_400_000; // 1440 × 10000, matching the 
 export const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const SCREENSHOT_TIMEOUT_MS = 10000;
 const SCREENSHOT_HEIGHT_PROBE_TIMEOUT_MS = 2_000;
+const THEME_STORAGE_WRITE_TIMEOUT_MS = 2_000;
 // The reload triggered by a configured `themeStorageKey` (#4109) waits for the same network-idle signal as
 // the initial navigation, with the same bound -- a reload is not expected to be any slower than the first load.
 const THEME_STORAGE_RELOAD_TIMEOUT_MS = 20000;
@@ -164,6 +166,30 @@ function readPngDimensions(png: Uint8Array): { width: number; height: number } |
   if (String.fromCharCode(png[12]!, png[13]!, png[14]!, png[15]!) !== "IHDR") return null;
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+}
+
+async function forceThemeStorage(page: ScreenshotPage, storageKey: string, storageValue: ShotTheme): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const write = page.evaluate(
+    (key: string, value: string) => {
+      try {
+        (globalThis as unknown as { localStorage: Storage }).localStorage.setItem(key, value);
+      } catch {
+        // Storage can be unavailable (privacy mode, disabled storage, a cross-origin frame, etc.) -- best-effort only.
+      }
+    },
+    storageKey,
+    storageValue,
+  );
+  const completed = await Promise.race([
+    write.then(() => true, () => true),
+    new Promise<false>((resolve) => {
+      timeoutId = setTimeout(() => resolve(false), THEME_STORAGE_WRITE_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timeoutId as ReturnType<typeof setTimeout>);
+  if (!completed) console.log(JSON.stringify({ event: "render_theme_storage_write_timeout", timeoutMs: THEME_STORAGE_WRITE_TIMEOUT_MS }));
+  return completed;
 }
 
 async function captureBoundedFullPageShot(page: ScreenshotPage, viewport: Viewport): Promise<Uint8Array | null> {
@@ -278,17 +304,7 @@ export async function captureShot(env: Env, url: string, viewport: Viewport = VI
     if (opts.theme && opts.themeStorageKey) {
       const storageKey = opts.themeStorageKey;
       const storageValue = opts.theme;
-      await page.evaluate(
-        (key: string, value: string) => {
-          try {
-            (globalThis as unknown as { localStorage: Storage }).localStorage.setItem(key, value);
-          } catch {
-            // Storage can be unavailable (privacy mode, disabled storage, a cross-origin frame, etc.) -- best-effort only.
-          }
-        },
-        storageKey,
-        storageValue,
-      );
+      if (!(await forceThemeStorage(page, storageKey, storageValue))) return { png: null, authWalled: false };
       await page.reload({ waitUntil: "networkidle0", timeout: THEME_STORAGE_RELOAD_TIMEOUT_MS });
     }
     // Full-page (not just the viewport), but bounded: before/after should include the same page position for
@@ -393,17 +409,7 @@ export async function captureScrollFrames(env: Env, url: string, viewport: Viewp
     if (opts.theme && opts.themeStorageKey) {
       const storageKey = opts.themeStorageKey;
       const storageValue = opts.theme;
-      await page.evaluate(
-        (key: string, value: string) => {
-          try {
-            (globalThis as unknown as { localStorage: Storage }).localStorage.setItem(key, value);
-          } catch {
-            // Storage can be unavailable (privacy mode, disabled storage, a cross-origin frame, etc.) -- best-effort only.
-          }
-        },
-        storageKey,
-        storageValue,
-      );
+      if (!(await forceThemeStorage(page, storageKey, storageValue))) return { frames: [], authWalled: false };
       await page.reload({ waitUntil: "networkidle0", timeout: THEME_STORAGE_RELOAD_TIMEOUT_MS });
     }
     // `document`/`window` below run inside the real page (the callback is serialized and executed in the
