@@ -135,7 +135,7 @@ import {
   buildTestGenSpec,
   type LocalWriteActionSpec,
 } from "./local-write-tools";
-import { TEST_FRAMEWORKS } from "../signals/test-evidence";
+import { classifyTestCoverage, isCodeFile, isTestPath, TEST_FRAMEWORKS } from "../signals/test-evidence";
 import { applyStepResult, buildPlanDag, nextReadySteps, planProgress, validatePlanDag, type PlanDag } from "../services/plan-dag";
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
 import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
@@ -852,6 +852,21 @@ const checkSlopRiskOutputSchema = {
   rubric: z.string().optional(),
 };
 
+// Coverage-gap self-check (#2235): pure local-metadata, like checkSlopRisk — the agent supplies its changed
+// paths (plus any test paths) and asks whether the change carries enough test evidence, no source uploaded.
+const checkTestEvidenceShape = {
+  changedPaths: z.array(z.string().min(1).max(400)).max(2000),
+  testFiles: z.array(z.string().min(1).max(400)).max(2000).optional(),
+};
+
+const checkTestEvidenceOutputSchema = {
+  classification: z.enum(["strong", "adequate", "weak", "absent"]).optional(),
+  changedFileCount: z.number().optional(),
+  codeFileCount: z.number().optional(),
+  testFileCount: z.number().optional(),
+  guidance: z.array(z.string()).optional(),
+};
+
 // Issue-side slop triage (#533): pure local-metadata, like checkSlopRisk — the agent supplies the issue
 // title + body, nothing to scope. Advisory-only; issues never block.
 const checkIssueSlopShape = {
@@ -1431,6 +1446,17 @@ export class GittensoryMcp {
         outputSchema: checkSlopRiskOutputSchema,
       },
       async (input) => this.toolResult(await this.checkSlopRisk(input)),
+    );
+
+    server.registerTool(
+      "gittensory_check_test_evidence",
+      {
+        description:
+          "Classify whether a planned change's changed files carry enough test evidence, from path metadata alone (no source uploaded) — an agent-native coverage-gap self-check before opening a PR. Returns a coverage band (strong/adequate/weak/absent) plus actionable guidance.",
+        inputSchema: checkTestEvidenceShape,
+        outputSchema: checkTestEvidenceOutputSchema,
+      },
+      async (input) => this.toolResult(await this.checkTestEvidence(input)),
     );
 
     server.registerTool(
@@ -2616,6 +2642,28 @@ export class GittensoryMcp {
     return {
       summary: `Slop risk: ${assessment.band}.`,
       data: { band: assessment.band, findings: assessment.findings } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async checkTestEvidence(input: z.infer<z.ZodObject<typeof checkTestEvidenceShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("gittensory_check_test_evidence");
+    const allPaths = [...input.changedPaths, ...(input.testFiles ?? [])];
+    const classification = classifyTestCoverage(allPaths);
+    const codeFileCount = input.changedPaths.filter(isCodeFile).length;
+    const testFileCount = allPaths.filter(isTestPath).length;
+    const guidance: string[] = [];
+    if (codeFileCount === 0) {
+      guidance.push("No hand-authored code files changed, so the missing-test-evidence signal does not apply (e.g. a docs- or config-only change).");
+    } else if (classification === "absent") {
+      guidance.push("Changed code files carry no test evidence — add or update a test that exercises the change before opening the PR.");
+    } else if (classification === "strong") {
+      guidance.push("Test coverage looks strong for this change.");
+    } else {
+      guidance.push(`Test coverage is ${classification} for this change — adding another focused test would strengthen the evidence.`);
+    }
+    return {
+      summary: `Test evidence: ${classification}.`,
+      data: { classification, changedFileCount: allPaths.length, codeFileCount, testFileCount, guidance } as unknown as Record<string, unknown>,
     };
   }
 
