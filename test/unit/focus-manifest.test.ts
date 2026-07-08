@@ -1203,6 +1203,20 @@ describe("parseFocusManifest gate config", () => {
     expect(bad.warnings.some((w) => /gate\.copycat/.test(w))).toBe(true);
   });
 
+  it("gateConfigToJson round-trips gate.copycat with only ONE of mode/minScore set (#1969)", () => {
+    // Each field is independently optional in the source YML, so gateConfigToJson must not assume they always
+    // arrive together -- mode-only and minScore-only must each serialize without the other key present.
+    const modeOnly = parseFocusManifest({ gate: { copycat: { mode: "label" } } });
+    const modeOnlyJson = gateConfigToJson(modeOnly.gate) as Record<string, Record<string, unknown>>;
+    expect(modeOnlyJson).toMatchObject({ copycat: { mode: "label" } });
+    expect(modeOnlyJson.copycat).not.toHaveProperty("minScore");
+
+    const minScoreOnly = parseFocusManifest({ gate: { copycat: { minScore: 42 } } });
+    const minScoreOnlyJson = gateConfigToJson(minScoreOnly.gate) as Record<string, Record<string, unknown>>;
+    expect(minScoreOnlyJson).toMatchObject({ copycat: { minScore: 42 } });
+    expect(minScoreOnlyJson.copycat).not.toHaveProperty("mode");
+  });
+
   it("accepts every gate.copycat.mode tier (off/warn/label/block) and warns on an unknown one (#1969)", () => {
     for (const mode of ["off", "warn", "label", "block"] as const) {
       expect(parseFocusManifest({ gate: { copycat: { mode } } }).gate.copycatMode).toBe(mode);
