@@ -149,6 +149,7 @@ import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
 import { loadUpstreamStatus } from "../upstream/ruleset";
 import { simulateOpenPrPressure, type OpenPrPressureInput } from "../services/open-pr-pressure-scenarios";
+import { buildFindingTaxonomyDocument, FINDING_TAXONOMY_URI } from "../review/finding-taxonomy";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -2002,6 +2003,26 @@ export class GittensoryMcp {
               type: "text",
               text: `Use gittensory_monitor_open_prs and gittensory_get_decision_pack for ${login} to identify which open PRs to address before starting new contribution work. Surface PRs with failing checks, pending review comments, stale queue pressure, or duplicate risk. Recommend an ordered cleanup list with a brief rationale for each item. Do not close PRs, post comments, or take any GitHub action — present the plan for the contributor to execute manually.`,
             },
+          },
+        ],
+      }),
+    );
+
+    // #2225 — read-only taxonomy discovery for AI review finding categories + severity ladder.
+    server.registerResource(
+      "gittensory_finding_taxonomy",
+      FINDING_TAXONOMY_URI,
+      {
+        title: "Gittensory Finding Taxonomy",
+        description: "Canonical AI review finding categories and severity levels for discovery without hard-coding.",
+        mimeType: "application/json",
+      },
+      async () => ({
+        contents: [
+          {
+            uri: FINDING_TAXONOMY_URI,
+            mimeType: "application/json",
+            text: JSON.stringify(buildFindingTaxonomyDocument(), null, 2),
           },
         ],
       }),
