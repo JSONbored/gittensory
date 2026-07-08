@@ -409,6 +409,11 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the latest cached Gittensor upstream ruleset drift status (stale/drift warnings) for MCP planning.",
   },
   {
+    name: "gittensory_get_label_audit",
+    description:
+      "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private Gittensory API.",
+  },
+  {
     name: "gittensory_preview_local_pr_score",
     description: "Inspect local diff metadata and request a private Gittensory scoring preview. No source contents are uploaded.",
   },
@@ -670,8 +675,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_label_audit",
   {
-    description:
-      "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private Gittensory API.",
+    description: stdioToolDescription("gittensory_get_label_audit"),
     inputSchema: ownerRepoShape,
   },
   async ({ owner, repo }) => {
