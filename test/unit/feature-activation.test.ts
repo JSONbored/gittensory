@@ -80,6 +80,20 @@ describe("resolveConvergedFeature — safety is force-on-only, never force-off (
   });
 });
 
+describe("resolveConvergedFeature — grounding remains allowlist-bound", () => {
+  it("does not let a repo manifest force grounding ON outside the operator allowlist", () => {
+    const e = env({ GITTENSORY_REVIEW_GROUNDING: "true", GITTENSORY_REVIEW_REPOS: "other/repo" });
+    expect(resolveConvergedFeature(e, manifestWith({ grounding: true }), "grounding", REPO)).toBe(false);
+  });
+
+  it("allows an allowlisted repo to enable grounding by default and force it OFF per repo", () => {
+    const e = env({ GITTENSORY_REVIEW_GROUNDING: "true", GITTENSORY_REVIEW_REPOS: REPO });
+    expect(resolveConvergedFeature(e, manifestWith({}), "grounding", REPO)).toBe(true);
+    expect(resolveConvergedFeature(e, manifestWith({ grounding: true }), "grounding", REPO)).toBe(true);
+    expect(resolveConvergedFeature(e, manifestWith({ grounding: false }), "grounding", REPO)).toBe(false);
+  });
+});
+
 describe("convergedFeatureActive — async (loads the cached manifest)", () => {
   it("short-circuits to false WITHOUT loading the manifest when the env flag is off", async () => {
     // DB-less env: if it tried to load the manifest it would throw; returning false proves the short-circuit.
