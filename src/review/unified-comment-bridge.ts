@@ -23,6 +23,7 @@ import type { GateCheckConclusion, GateCheckEvaluation } from "../rules/advisory
 import type { PublicPrPanelSignalRow } from "../signals/engine";
 import { formatManifestValidationNotice } from "../signals/focus-manifest";
 import type { CaptureRoute } from "./visual/capture";
+import { VISUAL_REGRESSION_FINDING_CODE } from "./visual/visual-findings";
 // Single-source the panel marker from its canonical home (the upsert reads it there); re-export so existing
 // importers of `PR_PANEL_COMMENT_MARKER` from this module keep working. The unified body MUST prepend this
 // verbatim or `createOrUpdatePrIntelligenceComment` posts a DUPLICATE instead of updating in place.
@@ -227,8 +228,12 @@ export function buildDualReviewNotes(args: {
   // raw warning findings). Scrub each with the private-term boundary and DROP any that still leaks. See
   // PRIVATE_FORBIDDEN_TERMS above. (The consensus-defect blocker is already public-safe via toPublicSafe; the
   // gate blockers above go through the SAME scrub as Nits.)
+  // `visual_regression_finding` is excluded here the same way `ai_consensus_defect` is excluded from
+  // gateBlockerLines above — it renders in its OWN "Visual findings" collapsible (see
+  // `visualFindingsFromFindings`/`buildVisualFindingsCollapsible`), so folding it into generic Nits too would
+  // render it twice.
   const gateNits = (args.warnings ?? [])
-    .filter((warning) => !isBoilerplateNit(warning))
+    .filter((warning) => !isBoilerplateNit(warning) && warning.code !== VISUAL_REGRESSION_FINDING_CODE)
     .map((warning) => `${warning.title}${warning.action ? ` — ${warning.action}` : ""}`.trim())
     .filter(Boolean)
     .map((line) => publicSafeNit(line))
@@ -261,6 +266,21 @@ export function consensusDefectFromFindings(findings: AdvisoryFinding[] | undefi
   const found = (findings ?? []).find((finding) => finding.code === "ai_consensus_defect");
   if (!found) return undefined;
   return { title: found.title, detail: found.detail };
+}
+
+/** Recover the advisory-only visual-regression findings (#4111 — AI-vision analysis of before/after visual
+ *  captures) from the SAME advisory findings array `consensusDefectFromFindings` reads above — feeding the
+ *  identical pipeline every other AI-judgment finding rides, so a visual finding is suppressible by
+ *  review.memory, audited the same way, and — critically — can NEVER become a gate blocker:
+ *  `visual_regression_finding` is not one of the codes `isConfiguredGateBlocker` (src/rules/advisory.ts)
+ *  recognizes, so it always stays a warning. Formatted `title: detail`, scrubbed through the same
+ *  `publicSafeNit` defense-in-depth boundary as every other bridge-recovered string. */
+export function visualFindingsFromFindings(findings: AdvisoryFinding[] | undefined): string[] {
+  return (findings ?? [])
+    .filter((finding) => finding.code === VISUAL_REGRESSION_FINDING_CODE)
+    .map((finding) => `${finding.title}: ${finding.detail}`.trim())
+    .map((line) => publicSafeNit(line))
+    .filter((line): line is string => line !== null);
 }
 
 function formatConsensusDefectBlocker(defect: { title: string; detail: string }): string {
@@ -374,6 +394,19 @@ export type UnifiedCommentBridgeArgs = {
    *  "off") ⇒ no section is rendered, byte-identical to today. */
   linkedIssueSatisfaction?: { status: "addressed" | "partial" | "unaddressed"; rationale: string } | undefined;
 };
+
+/**
+ * Build the "Visual findings" collapsible (#4111) from the advisory-only visual-regression observations
+ * `visualFindingsFromFindings` recovered — one bullet per finding. Rendered ahead of "Visual preview" so the
+ * AI's read of the screenshots leads the raw before/after table a maintainer would otherwise have to eyeball
+ * themselves. Returns null when there are none, so the caller can unconditionally chain this alongside the
+ * other optional collapsibles (byte-identical for every review where no vision call ran).
+ */
+export function buildVisualFindingsCollapsible(findings: string[]): UnifiedCollapsible | null {
+  if (findings.length === 0) return null;
+  const body = findings.map((finding) => `- ${finding}`).join("\n");
+  return { title: "Visual findings", body };
+}
 
 /**
  * Build the "Visual preview" collapsible from the before/after capture routes — a clean table whose cells are
@@ -761,10 +794,17 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     args.fixHandoffBlocks && args.fixHandoffBlocks.length > 0 ? buildFixHandoffCollapsible(args.fixHandoffBlocks) : null;
   const withFixHandoff =
     fixHandoffCollapsible !== null ? [...(withImpactMap ?? []), fixHandoffCollapsible] : withImpactMap;
+  // Advisory-only AI-vision analysis of visual captures (#4111): recovered from the SAME advisory findings
+  // array the consensus defect is recovered from, so an untouched (no vision call ran) review is unaffected —
+  // `visualFindingsFromFindings` returns `[]` unless a caller actually appended a `visual_regression_finding`.
+  const visualFindings = visualFindingsFromFindings(args.advisoryFindings);
+  const visualFindingsCollapsible = visualFindings.length > 0 ? buildVisualFindingsCollapsible(visualFindings) : null;
+  const withVisualFindings =
+    visualFindingsCollapsible !== null ? [...(withFixHandoff ?? []), visualFindingsCollapsible] : withFixHandoff;
   // Visual-capture port: when before/after routes are present, append a "Visual preview" collapsible to the
   // extra sections. Flag-OFF (the processor passes no beforeAfter) ⇒ extraCollapsibles is unchanged.
   const visualCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildBeforeAfterCollapsible(args.beforeAfter) : null;
-  const withVisual = visualCollapsible !== null ? [...(withFixHandoff ?? []), visualCollapsible] : withFixHandoff;
+  const withVisual = visualCollapsible !== null ? [...(withVisualFindings ?? []), visualCollapsible] : withVisualFindings;
   // #3612: "Scroll preview" renders ALONGSIDE "Visual preview" (never replacing it) — self-host + gif:true
   // only, so this is null (no section, no behavior change) for every repo that hasn't opted in.
   const scrollCollapsible = args.beforeAfter && args.beforeAfter.length > 0 ? buildScrollPreviewCollapsible(args.beforeAfter) : null;

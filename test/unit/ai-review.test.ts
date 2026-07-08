@@ -3,9 +3,11 @@ import {
   __aiReviewInternals,
   BEST_REVIEW_MODELS,
   buildTestEvidencePromptSection,
+  callAiProvider,
   resolveEffectiveAiReviewOnMerge,
   resolveEffectiveAiReviewPlan,
   runGittensoryAiReview,
+  type AiContentBlock,
   type GittensoryAiReviewInput,
 } from "../../src/services/ai-review";
 import { createTestEnv } from "../helpers/d1";
@@ -1221,6 +1223,58 @@ describe("BYOK provider dispatch", () => {
   });
 });
 
+describe("callAiProvider content-block union (#4111 — advisory-only visual-vision analysis)", () => {
+  const image: AiContentBlock = { type: "image", data: "QUJD", mimeType: "image/png" };
+
+  it("sends a plain string user message when no images are supplied (byte-identical to today)", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(init?.body as string) as Record<string, unknown>;
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), { status: 200 });
+      }),
+    );
+    await callAiProvider({ provider: "anthropic", key: "sk-ant" }, "sys", "user text", 256);
+    const messages = body?.messages as Array<{ content: unknown }>;
+    expect(messages[0]?.content).toBe("user text");
+  });
+
+  it("attaches an image content block to the Anthropic user message, in Anthropic's native shape", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(init?.body as string) as Record<string, unknown>;
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), { status: 200 });
+      }),
+    );
+    await callAiProvider({ provider: "anthropic", key: "sk-ant" }, "sys", "user text", 256, [image]);
+    const messages = body?.messages as Array<{ content: unknown }>;
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "user text" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "QUJD" } },
+    ]);
+  });
+
+  it("attaches an image content block to the OpenAI user message, in OpenAI's native shape", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        body = JSON.parse(init?.body as string) as Record<string, unknown>;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+      }),
+    );
+    await callAiProvider({ provider: "openai", key: "sk-secret" }, "sys", "user text", 256, [image]);
+    const messages = body?.messages as Array<{ role: string; content: unknown }>;
+    expect(messages[1]?.content).toEqual([
+      { type: "text", text: "user text" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+    ]);
+  });
+});
+
 describe("Workers AI fallback + degraded output", () => {
   it("tries the per-slot fallback model then withholds unparseable output from public notes", async () => {
     const run = vi.fn(async (_model: string) => ({
@@ -2221,6 +2275,50 @@ describe("pure helpers", () => {
       });
     });
 
+    it("REGRESSION (#4111): runDualAiTieBreakJudgeCall attaches supplied images to the judge's user message; omits them (plain string) when absent", async () => {
+      const seenContents: unknown[] = [];
+      const run = vi.fn(async (_model: string, payload: { messages?: Array<{ role: string; content: unknown }> }) => {
+        seenContents.push(payload.messages?.[1]?.content);
+        return { response: JSON.stringify({ favored: "reviewer_0" }) };
+      });
+      const env = createTestEnv({ AI: { run } as unknown as Ai });
+      const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }];
+      await runDualAiTieBreakJudgeCall(env, "primary-model", "", blockedA, clean, false, [], undefined, images);
+      expect(seenContents[0]).toEqual([
+        { type: "text", text: buildDualAiTieBreakJudgeUserPrompt(blockedA, clean, false) },
+        { type: "image", data: "QUJD", mimeType: "image/png" },
+      ]);
+      await runDualAiTieBreakJudgeCall(env, "primary-model", "", blockedA, clean, false, []);
+      expect(typeof seenContents[1]).toBe("string");
+    });
+
+    it("REGRESSION (#4111): a SPLIT verdict's tie-break judge receives the SAME images on both the normal- and swapped-order calls", async () => {
+      const seenContents: unknown[] = [];
+      const run = vi.fn(async (_model: string, payload: { messages?: Array<{ role: string; content: unknown }> }) => {
+        seenContents.push(payload.messages?.[1]?.content);
+        return { response: JSON.stringify({ favored: "reviewer_0" }) };
+      });
+      const env = createTestEnv({ AI: { run } as unknown as Ai });
+      const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }];
+      await resolveDualAiTieBreakWithOrderStability({
+        env,
+        model: "primary-model",
+        fallback: "primary-model",
+        reviewA: blockedA,
+        reviewB: clean,
+        diagnostics: [],
+        images,
+      });
+      // One call for the normal order, one for the swapped order — BOTH must have seen the image.
+      expect(seenContents).toHaveLength(2);
+      for (const content of seenContents) {
+        expect(Array.isArray(content)).toBe(true);
+        expect(content).toEqual(
+          expect.arrayContaining([{ type: "image", data: "QUJD", mimeType: "image/png" }]),
+        );
+      }
+    });
+
     it("swap-stable consensus tie-break resolves conflicting blockers via judge title", async () => {
       resetMetrics();
       let aiCalls = 0;
@@ -2807,6 +2905,24 @@ describe("pure helpers", () => {
     );
     expect(parsed.review?.assessment).toContain("reasonable");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("REGRESSION (#4111): runWorkersOpinion attaches supplied images to the user message; omits them (plain string) when absent", async () => {
+    const seenContents: unknown[] = [];
+    const run = vi.fn(async (_model: string, options: Record<string, unknown>) => {
+      const messages = options.messages as Array<{ content: unknown }>;
+      seenContents.push(messages[1]?.content);
+      return { response: reviewJson() };
+    });
+    const env = createTestEnv({ AI: { run } as unknown as Ai });
+    const images = [{ type: "image" as const, data: "QUJD", mimeType: "image/png" }];
+    await runWorkersOpinion(env, "m", "m", "sys", "user text", 256, [], "", undefined, images);
+    expect(seenContents[0]).toEqual([
+      { type: "text", text: "user text" },
+      { type: "image", data: "QUJD", mimeType: "image/png" },
+    ]);
+    await runWorkersOpinion(env, "m", "m", "sys", "user text", 256);
+    expect(seenContents[1]).toBe("user text");
   });
 
   it("runWorkersOpinion stops retrying a model after ONE subscription_cli_timeout, but the fallback still gets its full retry budget (#gaming-tactic-draft-cycle)", async () => {

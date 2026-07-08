@@ -34,7 +34,7 @@ import type { ReviewProfile } from "../signals/focus-manifest";
 import { isCodeFile } from "../signals/local-branch";
 import { isTestPath } from "../signals/test-evidence";
 import { isFindingCategory, type FindingCategory } from "../review/finding-category-classify";
-import type { CombineStrategy, OnMerge } from "../types";
+import type { AiContentBlock, CombineStrategy, OnMerge } from "../types";
 
 /**
  * The legacy free Workers-AI model pair — used ONLY when neither a self-host `AI_REVIEW_PLAN` reviewer
@@ -93,7 +93,7 @@ export type AiReviewProviderKey = {
 // Cloudflare Workers types (`Env`, `D1Database`, …) this file's runtime code depends on — a type-only
 // `import("../services/ai-review")` reference from either would still drag this whole module graph into the UI's
 // typecheck and break it (#2567 follow-up fix). See ../types.ts for the full doc comment.
-export type { CombineStrategy, OnMerge } from "../types";
+export type { AiContentBlock, CombineStrategy, OnMerge } from "../types";
 
 /**
  * Resolve the EFFECTIVE `onMerge` rule for a review call, enforcing that a per-repo `.gittensory.yml
@@ -440,6 +440,36 @@ function selfHostCliSystemAppend(model: string, systemAppend: string): string | 
   if (!trimmed) return undefined;
   const [provider = ""] = model.trim().toLowerCase().split(":");
   return provider === "claude-code" || provider === "codex" ? trimmed : undefined;
+}
+
+/** Build a message's `content` — plain text (BYTE-IDENTICAL, the only shape any call site sent before #4111)
+ *  when no images are attached, or a text+image content-block array when the caller supplies pixel-diff-
+ *  confirmed screenshots. See `review/visual/visual-findings.ts` for the gating that decides when `images` is
+ *  ever non-empty; every existing caller of the functions below passes no `images`, so this is inert today. */
+function toContentBlocks(text: string, images?: readonly AiContentBlock[] | undefined): string | AiContentBlock[] {
+  if (!images || images.length === 0) return text;
+  return [{ type: "text", text }, ...images];
+}
+
+/** Translate the generic {@link AiContentBlock} union into Anthropic's native Messages-API content-part shape
+ *  (`{type:"image", source:{type:"base64", media_type, data}}`) — the ONLY provider-specific step, since the
+ *  block's `text`/`data`/`mimeType` fields already carry everything Anthropic's wire format needs. */
+function toAnthropicContentBlocks(blocks: readonly AiContentBlock[]): Array<Record<string, unknown>> {
+  return blocks.map((block) =>
+    block.type === "image"
+      ? { type: "image", source: { type: "base64", media_type: block.mimeType, data: block.data } }
+      : { type: "text", text: block.text },
+  );
+}
+
+/** Translate the generic {@link AiContentBlock} union into OpenAI chat-completions' native content-part shape
+ *  (`{type:"image_url", image_url:{url:"data:<mime>;base64,<data>"}}`). */
+function toOpenAiContentBlocks(blocks: readonly AiContentBlock[]): Array<Record<string, unknown>> {
+  return blocks.map((block) =>
+    block.type === "image"
+      ? { type: "image_url", image_url: { url: `data:${block.mimeType};base64,${block.data}` } }
+      : { type: "text", text: block.text },
+  );
 }
 
 // Exported so the sibling AI-advisory features (e.g. the slop advisory in `./ai-slop`) share ONE budget
@@ -902,6 +932,10 @@ async function runWorkersOpinion(
   diagnostics: AiReviewDiagnostic[] = [],
   systemAppend = "",
   correlation?: AiRunCorrelation,
+  // Pixel-diff-confirmed screenshot(s) for a visual-vision pass (#4111). Absent for every existing caller —
+  // wiring a real caller (source images, invoke with them) is a deliberately deferred follow-up; see
+  // review/visual/visual-findings.ts.
+  images?: readonly AiContentBlock[] | undefined,
 ): Promise<ReviewerOpinionOutcome> {
   const ai = env.AI as unknown as AiRunner | undefined;
   if (!ai || typeof ai.run !== "function") return { review: null };
@@ -933,7 +967,7 @@ async function runWorkersOpinion(
             temperature: 0,
             messages: [
               { role: "system", content: system },
-              { role: "user", content: user },
+              { role: "user", content: toContentBlocks(user, images) },
             ],
             ...(cliSystemAppend ? { systemAppend: cliSystemAppend } : {}),
             ...(correlation?.jobId !== undefined ? { jobId: correlation.jobId } : {}),
@@ -1146,9 +1180,19 @@ export async function callAiProvider(
   system: string,
   user: string,
   maxTokens: number,
+  // Pixel-diff-confirmed screenshot(s) for a visual-vision pass (#4111). Absent for every existing caller
+  // (byte-identical `content: user` string body); vision rides the maintainer's OWN BYOK key since Workers AI
+  // is retired — see review/visual/visual-findings.ts for the gating that decides when this is ever non-empty.
+  images?: readonly AiContentBlock[] | undefined,
 ): Promise<{ text: string | null; usage?: AiReviewActualUsage | undefined; failure?: ProviderFailure }> {
   const model =
     providerKey.model || PROVIDER_DEFAULT_MODEL[providerKey.provider];
+  const userContent: string | Array<Record<string, unknown>> =
+    images && images.length > 0
+      ? providerKey.provider === "anthropic"
+        ? toAnthropicContentBlocks([{ type: "text", text: user }, ...images])
+        : toOpenAiContentBlocks([{ type: "text", text: user }, ...images])
+      : user;
   try {
     let response: Response;
     if (providerKey.provider === "anthropic") {
@@ -1163,7 +1207,7 @@ export async function callAiProvider(
           model,
           max_tokens: maxTokens,
           system,
-          messages: [{ role: "user", content: user }],
+          messages: [{ role: "user", content: userContent }],
         }),
         signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
       });
@@ -1179,7 +1223,7 @@ export async function callAiProvider(
           max_tokens: maxTokens,
           messages: [
             { role: "system", content: system },
-            { role: "user", content: user },
+            { role: "user", content: userContent },
           ],
         }),
         signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
@@ -1205,12 +1249,14 @@ async function runProviderReview(
   system: string,
   user: string,
   maxTokens: number,
+  images?: readonly AiContentBlock[] | undefined,
 ): Promise<ProviderReviewOutcome> {
   const { text, usage, failure } = await callAiProvider(
     providerKey,
     system,
     user,
     maxTokens,
+    images,
   );
   const model = providerKey.model || PROVIDER_DEFAULT_MODEL[providerKey.provider];
   if (failure) return { review: null, failure, diagnostic: { model, attempt: 0, status: "provider_error", error: failure } };
@@ -1576,6 +1622,10 @@ async function runDualAiTieBreakJudgeCall(
   swapped: boolean,
   diagnostics: AiReviewDiagnostic[],
   correlation?: AiRunCorrelation,
+  // Pixel-diff-confirmed screenshot(s) (#4111): when the two reviewers SPLIT on a visual-capture PR, the judge
+  // gets the SAME images the reviewers saw so its verdict isn't text-only reasoning about a visual defect.
+  // Absent for every existing caller — byte-identical `content: user` string.
+  images?: readonly AiContentBlock[] | undefined,
 ): Promise<{ verdict: DualAiTieBreakVerdict; consensusTitle?: string | undefined } | null> {
   const ai = env.AI as unknown as AiRunner | undefined;
   if (!ai || typeof ai.run !== "function") return null;
@@ -1598,7 +1648,7 @@ async function runDualAiTieBreakJudgeCall(
             temperature: 0,
             messages: [
               { role: "system", content: TIE_BREAK_JUDGE_SYSTEM_PROMPT },
-              { role: "user", content: user },
+              { role: "user", content: toContentBlocks(user, images) },
             ],
             ...(correlation?.jobId !== undefined ? { jobId: correlation.jobId } : {}),
             ...(correlation?.repoFullName !== undefined
@@ -1656,6 +1706,10 @@ async function resolveDualAiTieBreakWithOrderStability(input: {
   reviewB: ModelReview;
   diagnostics: AiReviewDiagnostic[];
   correlation?: AiRunCorrelation | undefined;
+  // Pixel-diff-confirmed screenshot(s) (#4111), handed to BOTH the normal- and swapped-order judge calls so
+  // the order-swap stability check still compares the SAME visual evidence either way. Absent for every
+  // existing caller — byte-identical to today.
+  images?: readonly AiContentBlock[] | undefined;
 }): Promise<{
   stable: boolean;
   verdict: DualAiTieBreakVerdict;
@@ -1672,6 +1726,7 @@ async function resolveDualAiTieBreakWithOrderStability(input: {
     false,
     input.diagnostics,
     input.correlation,
+    input.images,
   );
   const swappedOrder = await runDualAiTieBreakJudgeCall(
     input.env,
@@ -1682,6 +1737,7 @@ async function resolveDualAiTieBreakWithOrderStability(input: {
     true,
     input.diagnostics,
     input.correlation,
+    input.images,
   );
   if (!normalOrder || !swappedOrder) {
     return { stable: false, verdict: "inconclusive", orderUnstable: false };

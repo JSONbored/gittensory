@@ -6,7 +6,7 @@
 // review proceeds deterministically. Every path returns `{ response: string }` (or throws → the caller
 // records an error and degrades — never a silent wrong answer).
 
-import type { CombineStrategy, OnMerge } from "../services/ai-review";
+import type { AiContentBlock, CombineStrategy, OnMerge } from "../services/ai-review";
 import { isConfiguredSelfHostProvider, resolveConfiguredProviderNames } from "./ai-config";
 export { assertNoLegacySharedAiEnv } from "./ai-config";
 import { incr } from "./metrics";
@@ -14,7 +14,12 @@ import { withReviewSpan } from "./tracing";
 import { delimiter } from "node:path";
 
 interface AiRunOptions {
-  messages?: Array<{ role: string; content: string }>;
+  // Content is a plain string for every message any pre-#4111 caller ever built (byte-identical). A
+  // pixel-diff-confirmed visual-vision call (review/visual/visual-findings.ts) instead sends a text+image
+  // content-block array for the user turn — only the two HTTP providers below (createOpenAiCompatibleAi /
+  // createAnthropicAi) can actually forward an image to the model; the subscription CLIs degrade to text-only
+  // (see `contentText`).
+  messages?: Array<{ role: string; content: string | AiContentBlock[] }>;
   prompt?: string;
   systemAppend?: string;
   text?: string[]; // embedding input — the core's embedTexts passes { text: string[] }
@@ -57,9 +62,21 @@ export interface SelfHostAi {
   run(model: string, options: AiRunOptions): Promise<AiResult>;
 }
 
-function toMessages(options: AiRunOptions): Array<{ role: string; content: string }> {
+function toMessages(options: AiRunOptions): Array<{ role: string; content: string | AiContentBlock[] }> {
   if (Array.isArray(options.messages)) return options.messages;
   return [{ role: "user", content: String(options.prompt ?? "") }];
+}
+
+/** Plain-text projection of a message's content — extracts and joins ONLY the `text` blocks, dropping any
+ *  `image` block. The subscription CLIs (claude-code/codex) build their prompt by piping flattened text to
+ *  stdin (see `toCliPrompt` below), so an image block has nowhere to go in that invocation; a string content
+ *  passes through unchanged (byte-identical to every pre-#4111 call). */
+function contentText(content: string | AiContentBlock[]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((block): block is Extract<AiContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("");
 }
 
 function normalizedSystemAppend(options: AiRunOptions): string | undefined {
@@ -75,11 +92,10 @@ function stripSystemAppend(content: string, systemAppend: string): string {
 
 function toCliPrompt(options: AiRunOptions, systemAppend: string | undefined): string {
   return toMessages(options)
-    .map((message) =>
-      systemAppend && message.role === "system"
-        ? stripSystemAppend(message.content, systemAppend)
-        : message.content,
-    )
+    .map((message) => {
+      const text = contentText(message.content);
+      return systemAppend && message.role === "system" ? stripSystemAppend(text, systemAppend) : text;
+    })
     .join("\n\n");
 }
 
@@ -216,6 +232,18 @@ function resolveOpenAiCompatibleRepoOverride(providerName: string, options: AiRu
   return options.openaiCompatibleModel;
 }
 
+/** Translate the generic {@link AiContentBlock} union into OpenAI chat-completions' native content-part shape
+ *  (`{type:"image_url", image_url:{url:"data:<mime>;base64,<data>"}}`) — a string message passes through
+ *  unchanged (byte-identical to every pre-#4111 call). */
+function toOpenAiMessageContent(content: string | AiContentBlock[]): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") return content;
+  return content.map((block) =>
+    block.type === "image"
+      ? { type: "image_url", image_url: { url: `data:${block.mimeType};base64,${block.data}` } }
+      : { type: "text", text: block.text },
+  );
+}
+
 /** OpenAI-compatible endpoint (Ollama's /v1, OpenAI, vLLM, LM Studio, …) — chat + embeddings. */
 export function createOpenAiCompatibleAi(opts: {
   baseUrl: string;
@@ -250,7 +278,7 @@ export function createOpenAiCompatibleAi(opts: {
         headers: headers(),
         body: JSON.stringify({
           model: resolvedModel,
-          messages: toMessages(options),
+          messages: toMessages(options).map((message) => ({ role: message.role, content: toOpenAiMessageContent(message.content) })),
           max_tokens: options.max_tokens,
           temperature: options.temperature,
         }),
@@ -264,6 +292,18 @@ export function createOpenAiCompatibleAi(opts: {
   };
 }
 
+/** Translate the generic {@link AiContentBlock} union into Anthropic's native Messages-API content-part shape
+ *  (`{type:"image", source:{type:"base64", media_type, data}}`) — a string message passes through unchanged
+ *  (byte-identical to every pre-#4111 call). */
+function toAnthropicMessageContent(content: string | AiContentBlock[]): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") return content;
+  return content.map((block) =>
+    block.type === "image"
+      ? { type: "image", source: { type: "base64", media_type: block.mimeType, data: block.data } }
+      : { type: "text", text: block.text },
+  );
+}
+
 /** Native Anthropic Messages API (BYOK — bills your Anthropic API key; distinct from the claude-code
  *  subscription path). The system message becomes the top-level `system` param; the rest map to user/assistant. */
 export function createAnthropicAi(opts: { apiKey: string; model?: string | undefined; baseUrl?: string | undefined }): SelfHostAi {
@@ -274,9 +314,11 @@ export function createAnthropicAi(opts: { apiKey: string; model?: string | undef
       const system =
         msgs
           .filter((m) => m.role === "system")
-          .map((m) => m.content)
+          .map((m) => contentText(m.content))
           .join("\n\n") || undefined;
-      const messages = msgs.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      const messages = msgs
+        .filter((m) => m.role !== "system")
+        .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: toAnthropicMessageContent(m.content) }));
       // Repo override > construction-time env-resolved opts.model (#3902), same priority as the OpenAI-compatible
       // providers above and the CLI providers' claudeModel/codexModel.
       const resolvedModel = resolveModel(firstConfigured(options.anthropicModel, opts.model), model, "claude-sonnet-5");

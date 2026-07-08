@@ -636,6 +636,23 @@ export type CombineStrategy = "single" | "consensus" | "synthesis";
  *  {@link CombineStrategy} for why the canonical definition lives here rather than `services/ai-review.ts`. */
 export type OnMerge = "either" | "both";
 
+/**
+ * A multimodal content block for an AI provider message (#4111 — advisory-only AI-vision analysis of
+ * before/after visual captures). Canonical definition lives here for the same UI-safety reason as
+ * {@link CombineStrategy} above: this type carries no ambient Workers/Node types, so any file that needs it
+ * (including the UI workspace) can import it without dragging in `Env`/`D1Database`.
+ *   • `text`  — plain prompt text. The only content kind any message ever carried before this issue, so a
+ *     message whose content is a plain `string` (never an array) is byte-identical to today.
+ *   • `image` — a base64-encoded screenshot (`data`, no `data:` URI prefix) + its MIME type. Attached ONLY for
+ *     a route the EXISTING pixel-diff threshold already confirmed changed (see
+ *     `review/visual/visual-findings.ts`'s gating) — an unchanged route never costs a vision token. A
+ *     provider that cannot consume images (the self-host subscription CLIs — see `selfhost/ai.ts`'s
+ *     `contentText`) drops image blocks and sends the text blocks alone rather than failing the call.
+ */
+export type AiContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export const MAX_CONTRIBUTOR_OPEN_ITEM_CAP = 100;
 
 export type RepositorySettings = {

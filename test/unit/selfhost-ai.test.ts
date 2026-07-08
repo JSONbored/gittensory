@@ -265,6 +265,79 @@ describe("createAnthropicAi (#979 native BYOK)", () => {
   });
 });
 
+describe("content-block union (#4111 — text|image messages, advisory-only visual-vision analysis)", () => {
+  it("createOpenAiCompatibleAi translates an image content block to OpenAI's image_url shape, alongside the text block", async () => {
+    let body: { messages: unknown } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body) as { messages: unknown };
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    await createOpenAiCompatibleAi({ baseUrl: "http://o/v1" }).run("m", {
+      messages: [{ role: "user", content: [{ type: "text", text: "look at this" }, { type: "image", data: "QUJD", mimeType: "image/png" }] }],
+    });
+    expect(body?.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "look at this" }, { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } }] },
+    ]);
+  });
+
+  it("createOpenAiCompatibleAi passes a plain string content through unchanged (no images attached — byte-identical)", async () => {
+    let body: { messages: unknown } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body) as { messages: unknown };
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    await createOpenAiCompatibleAi({ baseUrl: "http://o/v1" }).run("m", { messages: [{ role: "user", content: "plain text" }] });
+    expect(body?.messages).toEqual([{ role: "user", content: "plain text" }]);
+  });
+
+  it("createAnthropicAi translates an image content block to Anthropic's base64 image shape, alongside the text block", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), { status: 200 });
+    }));
+    await createAnthropicAi({ apiKey: "sk-ant" }).run("m", {
+      messages: [
+        { role: "system", content: "be terse" },
+        { role: "user", content: [{ type: "text", text: "look at this" }, { type: "image", data: "QUJD", mimeType: "image/png" }] },
+      ],
+    });
+    expect(body?.system).toBe("be terse");
+    expect(body?.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "look at this" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "QUJD" } }] },
+    ]);
+  });
+
+  it("createAnthropicAi extracts only the text blocks when the SYSTEM message is itself a content-block array", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), { status: 200 });
+    }));
+    await createAnthropicAi({ apiKey: "sk-ant" }).run("m", {
+      messages: [
+        { role: "system", content: [{ type: "text", text: "be terse" }, { type: "image", data: "ZZZ", mimeType: "image/png" }] },
+        { role: "user", content: "go" },
+      ],
+    });
+    expect(body?.system).toBe("be terse");
+    expect(body?.messages).toEqual([{ role: "user", content: "go" }]);
+  });
+
+  it("the CLI subscription providers (codex/claude-code) degrade an image content block to text-only for the stdin prompt (images have nowhere to go through stdin JSON)", async () => {
+    let capturedInput = "";
+    const ok: StubSpawn = async (_cmd, _args, opts) => {
+      capturedInput = opts.input ?? "";
+      return { stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 };
+    };
+    await createCodexAi({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, ok, noAuthCheck).run("", {
+      messages: [{ role: "user", content: [{ type: "text", text: "look at this" }, { type: "image", data: "QUJD", mimeType: "image/png" }] }],
+    });
+    expect(capturedInput).toBe("look at this");
+    expect(capturedInput).not.toContain("QUJD");
+  });
+});
+
 describe("createChainAi (fallback)", () => {
   it("falls through to the next provider on failure, returns the first success", async () => {
     const failing = { name: "a", ai: { run: async () => { throw new Error("down"); } } };

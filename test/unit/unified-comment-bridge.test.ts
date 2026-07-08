@@ -3,6 +3,7 @@ import {
   buildClosedUnifiedCommentBody,
   buildDualReviewNotes,
   buildUnifiedCommentBody,
+  buildVisualFindingsCollapsible,
   consensusDefectFromFindings,
   gateConclusionToVerdict,
   isUnifiedReviewCommentEnabled,
@@ -11,7 +12,9 @@ import {
   PR_PANEL_COMMENT_MARKER,
   splitAiReviewNits,
   verdictToRecommendation,
+  visualFindingsFromFindings,
 } from "../../src/review/unified-comment-bridge";
+import { VISUAL_REGRESSION_FINDING_CODE } from "../../src/review/visual/visual-findings";
 import { PR_PANEL_COMMENT_MARKER as MARKER_FROM_COMMENTS } from "../../src/github/comments";
 import { deriveUnifiedStatus, type MergeReadiness, type UnifiedCollapsible, type UnifiedCommentStatus } from "../../src/review/unified-comment";
 import type { GateCheckEvaluation } from "../../src/rules/advisory";
@@ -89,6 +92,46 @@ describe("consensusDefectFromFindings", () => {
     expect(consensusDefectFromFindings(findings)).toEqual({ title: "Null deref in handler", detail: "Both models flagged it." });
     expect(consensusDefectFromFindings([])).toBeUndefined();
     expect(consensusDefectFromFindings(undefined)).toBeUndefined();
+  });
+});
+
+describe("visualFindingsFromFindings (#4111 — advisory-only AI-vision analysis)", () => {
+  it("recovers only visual_regression_finding entries, formatted 'title: detail', ignoring other codes", () => {
+    const findings: AdvisoryFinding[] = [
+      { code: "missing_linked_issue", severity: "warning", title: "No linked issue", detail: "..." },
+      { code: VISUAL_REGRESSION_FINDING_CODE, severity: "warning", title: "Possible visual regression: /pricing", detail: "The third column lost its border." },
+    ];
+    expect(visualFindingsFromFindings(findings)).toEqual([
+      "Possible visual regression: /pricing: The third column lost its border.",
+    ]);
+    expect(visualFindingsFromFindings([])).toEqual([]);
+    expect(visualFindingsFromFindings(undefined)).toEqual([]);
+  });
+
+  it("scrubs a private term out of a visual finding before it reaches the public comment (privacy invariant)", () => {
+    const findings: AdvisoryFinding[] = [
+      { code: VISUAL_REGRESSION_FINDING_CODE, severity: "warning", title: "Possible visual regression: /pricing", detail: "Your trust score looks broken here." },
+    ];
+    const [line] = visualFindingsFromFindings(findings);
+    expect(line).not.toMatch(/trust score/i);
+    expect(line).toContain("[context]");
+  });
+});
+
+describe("buildVisualFindingsCollapsible (#4111)", () => {
+  it("renders one bullet per finding", () => {
+    const c = buildVisualFindingsCollapsible([
+      "Possible visual regression: /pricing: The third column lost its border.",
+      "Possible visual regression: /about: The hero image is missing.",
+    ]);
+    expect(c?.title).toBe("Visual findings");
+    expect(c?.body).toBe(
+      "- Possible visual regression: /pricing: The third column lost its border.\n- Possible visual regression: /about: The hero image is missing.",
+    );
+  });
+
+  it("returns null when there are no findings (no empty section)", () => {
+    expect(buildVisualFindingsCollapsible([])).toBeNull();
   });
 });
 
@@ -716,6 +759,45 @@ describe("gate blockers render in 'Why this is blocked' (FIX D1)", () => {
   });
 });
 
+describe("buildUnifiedCommentBody: visual findings render in their OWN section, never duplicated as a generic Nit (#4111)", () => {
+  it("renders the 'Visual findings' collapsible from advisoryFindings and stays advisory-only (merge verdict unaffected)", () => {
+    const visualFinding: AdvisoryFinding = {
+      code: VISUAL_REGRESSION_FINDING_CODE,
+      severity: "warning",
+      title: "Possible visual regression: /pricing",
+      detail: "The third column lost its border.",
+      action: "Advisory only — verify against the Visual preview screenshots before deciding.",
+    };
+    const body = buildUnifiedCommentBody({
+      // A real evaluateGateCheck run would carry this "warning"-severity finding into gate.warnings too —
+      // simulated here so the exclusion-from-generic-Nits behavior is exercised the same way it is live.
+      gate: gate({ warnings: [visualFinding] }),
+      advisoryFindings: [visualFinding],
+      panelRows,
+      readinessTotal: 80,
+      changedFiles: 2,
+      footerMarkdown: footer,
+    });
+    expect(body).toContain("Visual findings");
+    expect(body).toContain("Possible visual regression: /pricing: The third column lost its border.");
+    // Never duplicated into the generic Nits collapsible.
+    expect(body.split("Possible visual regression: /pricing").length - 1).toBe(1);
+    // Strictly advisory: a "warning"-severity, non-blocker finding never turns a passing gate into anything else.
+    expect(body).toContain("Suggested Action - Approve/Merge");
+  });
+
+  it("omits the 'Visual findings' section entirely when no visual finding is present (byte-identical to today)", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate(),
+      panelRows,
+      readinessTotal: 80,
+      changedFiles: 2,
+      footerMarkdown: footer,
+    });
+    expect(body).not.toContain("Visual findings");
+  });
+});
+
 describe("verdictReason on a held/blocked headline (FIX D2)", () => {
   it("appends the gate summary to a BLOCKED (close) verdict headline", () => {
     const body = buildUnifiedCommentBody({
@@ -966,6 +1048,22 @@ describe("buildDualReviewNotes — public-safe Nit scrub (privacy-critical, gate
       const nit = reviews[0]?.notes?.nits?.[0] ?? "";
       expect(nit, `"${term}" must not leak`).not.toContain(term);
     }
+  });
+
+  it("excludes a visual_regression_finding warning from Nits (#4111 — it renders in its own 'Visual findings' collapsible instead)", () => {
+    const reviews = buildDualReviewNotes({
+      aiReview: { notes: "Reviewer assessment." },
+      warnings: [
+        { code: VISUAL_REGRESSION_FINDING_CODE, severity: "warning", title: "Possible visual regression: /pricing", detail: "The third column lost its border." },
+        { code: "w2", severity: "warning", title: "Add a unit test", detail: "...", action: "Cover the new branch." },
+      ],
+      recommendation: "manual_review",
+      verdict: "manual",
+    });
+    const nits = reviews[0]?.notes?.nits ?? [];
+    expect(nits).toHaveLength(1);
+    expect(nits).not.toContain(expect.stringContaining("Possible visual regression"));
+    expect(nits).toContain("Add a unit test — Cover the new branch.");
   });
 });
 
