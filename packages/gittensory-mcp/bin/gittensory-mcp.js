@@ -7,6 +7,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
+import { formatTable } from "../lib/format-table.js";
 
 // Read name/version from this package's own package.json (always present in any install --
 // global, npx, or local -- npm ships it regardless of the "files" allowlist) instead of hand-synced
@@ -1525,7 +1526,31 @@ async function runCli(args) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
+  if (options.format === "table") {
+    writeBranchAnalysisTable(result, command);
+    return;
+  }
   writeBranchAnalysisCli(result, command);
+}
+
+// Render the report-shaped branch analysis (next actions, plus score blockers for analyze-branch) as
+// aligned monospace tables when `--format table` is passed. Default and `--json` output are untouched.
+function writeBranchAnalysisTable(result, command) {
+  const analysis = result.analysis;
+  const actionRows = (analysis.nextActions ?? []).map((action) => ({
+    action: action.actionKind ?? "—",
+    priority: action.priorityScore === undefined || action.priorityScore === null ? "—" : String(action.priorityScore),
+    why: (action.whyThisHelps ?? []).join("; ") || "—",
+  }));
+  process.stdout.write(
+    `${formatTable(
+      { headers: [{ key: "action", label: "Action" }, { key: "priority", label: "Priority", align: "right" }, { key: "why", label: "Why this helps" }], rows: actionRows },
+    )}\n`,
+  );
+  if (command === "analyze-branch" && analysis.scoreBlockers?.length) {
+    process.stdout.write("\n");
+    process.stdout.write(`${formatTable({ headers: [{ key: "blocker", label: "Score blocker" }], rows: analysis.scoreBlockers.map((blocker) => ({ blocker })) })}\n`);
+  }
 }
 
 function printReviewPrHelp() {
@@ -2078,7 +2103,7 @@ _gittensory_mcp() {
   fi
   case "\${COMP_WORDS[1]}" in
 ${subcommandCases}
-      *) COMPREPLY=( $(compgen -W "--json --login --repo --profile --agent-profile --base --cwd" -- "$cur") ); return 0;;
+      *) COMPREPLY=( $(compgen -W "--json --format --login --repo --profile --agent-profile --base --cwd" -- "$cur") ); return 0;;
   esac
 }
 complete -F _gittensory_mcp gittensory-mcp`;
@@ -2164,8 +2189,8 @@ function printHelp() {
   gittensory-mcp init-client --print codex|claude|cursor|mcp|vscode [--agent-profile miner-planner|maintainer-triage|repo-owner-intake] [--json]
   gittensory-mcp decision-pack --login <github-login> [--json]
   gittensory-mcp repo-decision --login <github-login> --repo owner/repo [--json]
-  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
-  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--format table] [--json]
+  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--format table] [--json]
   gittensory-mcp review-pr --login <github-login> [--repo owner/repo] [--base origin/main] [--commit <message>]... [--body <text>] [--body-file <path>] [--linked-issue <number>] [--json]
   gittensory-mcp lint-pr-text [--commit <message>]... [--body <text>] [--body-file <path>] [--linked-issue <number>] [--json]
   gittensory-mcp validate-config --file <path> [--source repo_file|api_record|none] [--json]
@@ -2233,6 +2258,16 @@ function parseOptions(args) {
       continue;
     }
     if (!arg?.startsWith("--")) continue;
+    // Support the inline `--key=value` form (e.g. `--format=table`) alongside the space-separated
+    // `--key value` form; splitting here keeps every existing space-separated option unchanged (#2231).
+    const equals = arg.indexOf("=");
+    if (equals !== -1) {
+      const inlineKey = camel(arg.slice(2, equals));
+      const inlineValue = arg.slice(equals + 1);
+      if (repeatable.has(inlineKey)) options[inlineKey] = [...(options[inlineKey] ?? []), inlineValue];
+      else options[inlineKey] = inlineValue;
+      continue;
+    }
     const key = camel(arg.slice(2));
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
