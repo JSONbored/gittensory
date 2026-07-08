@@ -25037,6 +25037,57 @@ describe("queue processors", () => {
       const audited = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ metadata_json: string }>();
       expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ status: "unavailable" });
     });
+
+    it("generates via the GITTENSORY_REVIEW_REPOS allowlist default when no manifest is published at all", async () => {
+      // No upsertRepoFocusManifest call -- loadRepoFocusManifest resolves null, so manifest?.review (fed to
+      // resolveE2eTestGenInstructions) and the e2eTests feature gate itself both take their null/allowlist path.
+      const repoFullName = "JSONbored/gen-tests-4195-allowlist";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "```typescript\n" + VALID_TEST_SOURCE + "\n```" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        GITTENSORY_REVIEW_REPOS: repoFullName,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      const slash = repoFullName.indexOf("/");
+      await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertPullRequestFromGitHub(env, repoFullName, { number: 4205, title: "Add retry to checkout", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "gen-tests-4195-allowlist" }, labels: [], body: "x" });
+      await upsertPullRequestFile(env, { repoFullName, pullNumber: 4205, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
+      let postedBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+        if (url.includes("/issues/4205/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/4205/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42050 }); }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, generateTestsWebhook(repoFullName, 4205, "maintainer", { association: "MEMBER" }));
+
+      expect(postedBody).toContain("test('checkout retries on failure'");
+    });
+
+    it("skips cleanly when the webhook payload has no comment object at all", async () => {
+      const repoFullName = "JSONbored/gen-tests-4195-nocomment";
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
+      await seedGenerateTestsPr(env, repoFullName, 4206, "gen-tests-4195-nocomment");
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        return new Response("not found", { status: 404 });
+      });
+      const webhook = generateTestsWebhook(repoFullName, 4206, "maintainer", { association: "MEMBER" });
+      delete (webhook as unknown as { payload: { comment?: unknown } }).payload.comment;
+
+      await processJob(env, webhook);
+
+      const rows = await env.DB.prepare("select count(*) as n from audit_events where event_type like 'github_app.e2e_tests_generation%'").first<{ n: number }>();
+      expect(rows?.n).toBe(0);
+    });
   });
 
   it("ops-alerts job no-ops when GITTENSORY_REVIEW_OPS is OFF (does no anomaly scan)", async () => {
