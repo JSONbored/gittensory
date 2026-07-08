@@ -54,7 +54,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "approve", "reject", "pause", "resume", "set-level", "precision"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -1535,6 +1535,7 @@ function printMaintainHelp() {
       "",
       "Subcommands:",
       "  status                       List the agent approval queue (auto_with_approval actions awaiting a decision).",
+      "  queue                        List pending actions (id, kind, target) for approve/reject. Alias: pending.",
       "  approve <id>                 Approve a staged action -> execute it.",
       "  reject <id>                  Reject a staged action -> cancel it.",
       "  pause                        Pause ALL agent actions on the repo (kill-switch).",
@@ -1569,6 +1570,24 @@ async function maintainCli(args) {
     const payload = await apiGet(queueBase);
     const actions = payload.pendingActions ?? [];
     emit(payload, [`Agent approval queue for ${repoFullName}: ${actions.length} pending.`, ...actions.map((action) => `- ${action.id}  ${action.actionClass} on #${action.pullNumber}  ${action.reason ?? ""}`)].join("\n"));
+    return;
+  }
+  // #2236 — explicit queue listing so maintainers can discover ids for approve/reject (alias: pending).
+  if (subcommand === "queue" || subcommand === "pending") {
+    const payload = await apiGet(queueBase);
+    const actions = payload.pendingActions ?? [];
+    emit(
+      payload,
+      [
+        `Pending agent actions for ${repoFullName}: ${actions.length}.`,
+        ...actions.map((action) => {
+          const kind = action.actionClass ?? action.kind ?? "unknown";
+          const target = action.pullNumber != null ? `#${action.pullNumber}` : (action.target ?? "—");
+          const summary = action.reason ?? action.summary ?? "";
+          return `- ${action.id}  ${kind}  ${target}${summary ? `  ${summary}` : ""}`;
+        }),
+      ].join("\n"),
+    );
     return;
   }
   if (subcommand === "approve" || subcommand === "reject") {
@@ -1618,7 +1637,7 @@ async function maintainCli(args) {
     emit(payload, lines.join("\n"));
     return;
   }
-  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision.`);
+  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision.`);
 }
 
 async function runCli(args) {

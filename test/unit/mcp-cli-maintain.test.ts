@@ -28,6 +28,22 @@ describe("gittensory-mcp CLI — maintain (#784)", () => {
     expect(json.pendingActions[0]).toMatchObject({ id: "pa-1", actionClass: "merge" });
   });
 
+  it("queue lists pending action ids that maintain approve can consume (#2236)", async () => {
+    const e = await env();
+    const plain = await runAsync(["maintain", "queue", "--repo", "owner/repo"], e);
+    expect(plain).toMatch(/Pending agent actions for owner\/repo: 1\./);
+    expect(plain).toMatch(/pa-1\s+merge\s+#7\s+clean/);
+    const payload = JSON.parse(await runAsync(["maintain", "pending", "--repo", "owner/repo", "--json"], e)) as {
+      pendingActions: Array<{ id: string; actionClass: string; pullNumber: number }>;
+    };
+    expect(payload.pendingActions).toHaveLength(1);
+    expect(payload.pendingActions[0]).toMatchObject({ id: "pa-1", actionClass: "merge", pullNumber: 7 });
+    expect(plain).toContain(payload.pendingActions[0]!.id);
+    expect(await runAsync(["maintain", "approve", payload.pendingActions[0]!.id, "--repo", "owner/repo"], e)).toMatch(
+      /Accepted pa-1: accepted \(completed\)/,
+    );
+  });
+
   it("approve executes a staged action; reject cancels one", async () => {
     const e = await env();
     expect(await runAsync(["maintain", "approve", "pa-1", "--repo", "owner/repo"], e)).toMatch(/Accepted pa-1: accepted \(completed\)/);
@@ -81,6 +97,7 @@ describe("gittensory-mcp CLI — maintain (#784)", () => {
     const out = await runAsync(["maintain"], e);
     expect(out).toMatch(/Usage: gittensory-mcp maintain/);
     expect(out).toMatch(/approve <id>/);
+    expect(out).toMatch(/queue/);
     expect(out).toMatch(/pause/);
   });
 });

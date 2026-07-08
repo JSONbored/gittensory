@@ -200,7 +200,7 @@ describe("gittensory-mcp CLI — basics", () => {
     expect(ps).toContain("Register-ArgumentCompleter -Native -CommandName gittensory-mcp");
     expect(ps).toContain("[System.Management.Automation.CompletionResult]::new");
     expect(ps).toContain("$commands = @('login', 'logout'");
-    expect(ps).toContain("'maintain' = @('status', 'approve', 'reject', 'pause', 'resume', 'set-level', 'precision')");
+    expect(ps).toContain("'maintain' = @('status', 'queue', 'approve', 'reject', 'pause', 'resume', 'set-level', 'precision')");
   });
 
   it("emits completion as machine-readable json", () => {
