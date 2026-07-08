@@ -148,6 +148,7 @@ import { buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
 import { loadUpstreamStatus } from "../upstream/ruleset";
+import { simulateOpenPrPressure, type OpenPrPressureInput } from "../services/open-pr-pressure-scenarios";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -1082,6 +1083,26 @@ const explainReviewRiskOutputSchema = {
 const variantsOutputSchema = {
   variants: z.array(z.unknown()).optional(),
 };
+
+// #2224 - pure, read-only open-PR pressure simulator surfaced over MCP. queueHealth/roleContext use the same
+// permissive z.unknown() convention as the other engine-shaped MCP inputs (the simulator is the single source
+// of truth for their structure); the tool reveals nothing beyond a computation on the caller-supplied context.
+const simulateOpenPrPressureShape = {
+  repoFullName: z.string(),
+  generatedAt: z.string(),
+  queueHealth: z.unknown(),
+  roleContext: z.unknown(),
+  contributorOpenPrCount: z.number().optional(),
+};
+const simulateOpenPrPressureOutputSchema = {
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  lane: z.string().optional(),
+  queuePressure: z.string().optional(),
+  recommendedOption: z.string().optional(),
+  scenarios: z.array(z.unknown()).optional(),
+  summary: z.string().optional(),
+};
 const preflightCurrentBranchOutputSchema = {
   login: z.string().optional(),
   repoFullName: z.string().optional(),
@@ -1299,6 +1320,17 @@ export class GittensoryMcp {
         outputSchema: fleetAnalyticsOutputSchema,
       },
       async (input) => this.toolResult(await this.getFleetAnalytics(input)),
+    );
+
+    server.registerTool(
+      "gittensory_simulate_open_pr_pressure",
+      {
+        description:
+          "Simulate how opening another PR affects a repo's review-queue pressure: ranks the open-new-work / wait / clean-up-first strategy options for the supplied queue-health and role context. Deterministic, public-safe, and read-only - no repo access required and no GitHub writes.",
+        inputSchema: simulateOpenPrPressureShape,
+        outputSchema: simulateOpenPrPressureOutputSchema,
+      },
+      async (input) => this.toolResult(this.simulateOpenPrPressureTool(input)),
     );
 
     server.registerTool(
@@ -2339,6 +2371,18 @@ export class GittensoryMcp {
     return {
       summary: outcomeCalibrationSummary(fullName, report.slop),
       data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #2224 - surface the deterministic open-PR pressure simulator over MCP. Pure and read-only: the caller
+  // supplies all queue/role context, so nothing beyond a computation on that input is revealed and no repo
+  // access is required (mirrors gittensory_run_local_scorer). Output is already public-safe - every scenario
+  // line is scrubbed through sanitizePublicComment inside simulateOpenPrPressure.
+  private simulateOpenPrPressureTool(input: z.infer<z.ZodObject<typeof simulateOpenPrPressureShape>>): ToolPayload {
+    const simulation = simulateOpenPrPressure(input as unknown as OpenPrPressureInput);
+    return {
+      summary: simulation.summary,
+      data: simulation as unknown as Record<string, unknown>,
     };
   }
 
