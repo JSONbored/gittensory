@@ -888,13 +888,8 @@ describe("handleDraftCreate — nested body.fields branch + title fallbacks", ()
     expect(authUrl.searchParams.get("redirect_uri")).toBe("http://localhost/v1/drafts/auth/callback");
   });
 
-  it("falls back to 127.0.0.1 request origin when PUBLIC_API_ORIGIN is undefined (dev-only path)", async () => {
-    const env = createTestEnv({
-      GITTENSORY_REVIEW_DRAFT: "true",
-      GITHUB_OAUTH_CLIENT_ID: "Iv-test-client-id",
-      GITHUB_OAUTH_CLIENT_SECRET: "test-oauth-client-secret",
-      DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET,
-    });
+  it("falls back to 127.0.0.1 request origin when PUBLIC_API_ORIGIN is unset (dev-only path)", async () => {
+    const env = draftEnv({ PUBLIC_API_ORIGIN: "" });
     const res = await handleDraftCreate(
       new Request("http://127.0.0.1:8787/v1/drafts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(SAMPLE_FIELDS) }),
       env,
