@@ -6999,13 +6999,13 @@ export async function runAiReviewForAdvisory(
   // feature's global flag below. Empty/unset allowlist → false → every converged branch here is unreachable
   // (byte-identical to today) regardless of the global flags.
   const convergedRepoAllowed = isConvergenceRepoAllowed(env, args.repoFullName);
-  // Per-repo feature overrides (phase 2): reputation + RAG honor the container-private `.gittensory.yml` `features:`
-  // block, falling back to the `convergedRepoAllowed` allowlist when unset (byte-identical default). The (cached)
-  // manifest is loaded once and shared, and ONLY when at least one of the two features is globally enabled — so a
-  // deploy with both flags off does no extra read (preserves the no-op default). Grounding deliberately stays on
-  // `convergedRepoAllowed` here so prompt grounding remains tied to the converged review allowlist.
+  // Per-repo feature overrides (phase 2): reputation + RAG + grounding (#4100) honor the container-private
+  // `.gittensory.yml` `features:` block, falling back to the `convergedRepoAllowed` allowlist when unset
+  // (byte-identical default). The (cached) manifest is loaded once and shared, and ONLY when at least one of the
+  // three features is globally enabled — so a deploy with all three flags off does no extra read (preserves the
+  // no-op default).
   const featureManifest =
-    isReputationEnabled(env) || isRagEnabled(env)
+    isReputationEnabled(env) || isRagEnabled(env) || isGroundingEnabled(env)
       ? await loadRepoFocusManifest(env, args.repoFullName).catch(() => null)
       : null;
   const reputationActive = resolveConvergedFeature(
@@ -7018,6 +7018,12 @@ export async function runAiReviewForAdvisory(
     env,
     featureManifest,
     "rag",
+    args.repoFullName,
+  );
+  const groundingActive = resolveConvergedFeature(
+    env,
+    featureManifest,
+    "grounding",
     args.repoFullName,
   );
   // Reputation anti-abuse (convergence, flag-gated by GITTENSORY_REVIEW_REPUTATION). Extends the AI-spend gate above:
@@ -7088,12 +7094,13 @@ export async function runAiReviewForAdvisory(
       args.settings.aiReviewMode === "block"
         ? allFiles
         : filterReviewFilesForAi(allFiles, args.reviewExcludePaths ?? [], args.reviewPathFilters ?? []);
-    // Grounding (convergence, flag-gated by GITTENSORY_REVIEW_GROUNDING). Build the FINISHED CI status + the full
-    // content of the changed files so the reviewer verifies its claims against reality instead of guessing.
-    // Flag-OFF (default) → we take no new branch at all: NO check/repo load, NO file fetch, and `grounding`
-    // is left undefined so the prompt handed to the model is byte-identical to today. Fully fail-safe.
+    // Grounding (convergence, flag-gated by GITTENSORY_REVIEW_GROUNDING; per-repo `features.grounding` override,
+    // #4100). Build the FINISHED CI status + the full content of the changed files so the reviewer verifies its
+    // claims against reality instead of guessing. Flag-OFF (default) → we take no new branch at all: NO
+    // check/repo load, NO file fetch, and `grounding` is left undefined so the prompt handed to the model is
+    // byte-identical to today. Fully fail-safe.
     const grounding =
-      isGroundingEnabled(env) && convergedRepoAllowed
+      groundingActive
         ? await buildReviewGroundingText(env, {
             repoFullName: args.repoFullName,
             headSha: args.advisory.headSha,
@@ -9273,7 +9280,7 @@ async function maybePublishPrPublicSurface(
           // without fetching the content itself (which would defeat caching), so a repo with ANY of these active
           // bypasses the cache entirely rather than fingerprinting a value that can't prove freshness.
           const dynamicReviewFeatures = {
-            grounding: isGroundingEnabled(env) && convergedRepoAllowed,
+            grounding: resolveConvergedFeature(env, reviewManifest, "grounding", repoFullName),
             rag: resolveConvergedFeature(env, reviewManifest, "rag", repoFullName),
             enrichment: isEnrichmentEnabled(env) && convergedRepoAllowed,
             reputation: resolveConvergedFeature(

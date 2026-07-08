@@ -12,13 +12,14 @@ const FLAG: Record<ConvergedFeatureKey, string> = {
   reputation: "GITTENSORY_REVIEW_REPUTATION",
   unifiedComment: "GITTENSORY_REVIEW_UNIFIED_COMMENT",
   safety: "GITTENSORY_REVIEW_SAFETY",
+  grounding: "GITTENSORY_REVIEW_GROUNDING",
 };
 
 function env(overrides: Record<string, string | undefined>): Env {
   return overrides as unknown as Env;
 }
 function manifestWith(features: Partial<Record<ConvergedFeatureKey, boolean>>): Pick<FocusManifest, "features"> {
-  const base = { present: false, rag: null, reputation: null, unifiedComment: null, safety: null } as FocusManifest["features"];
+  const base = { present: false, rag: null, reputation: null, unifiedComment: null, safety: null, grounding: null } as FocusManifest["features"];
   return { features: { ...base, ...features, present: Object.keys(features).length > 0 } };
 }
 

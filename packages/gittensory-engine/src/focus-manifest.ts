@@ -168,12 +168,15 @@ export type FocusManifestGateConfig = {
 // `.gittensory.yml`. Each feature ALSO has a GLOBAL env flag (GITTENSORY_REVIEW_*) that stays a master
 // kill-switch (the feature never runs when its env flag is off, regardless of this block). See
 // review/feature-activation.ts for the resolver (env kill-switch → per-repo override → env-allowlist default).
-// NOTE: only the per-PR REVIEW features whose every activation site is migrated are listed here. grounding and
-// screenshots stay on the GITTENSORY_REVIEW_REPOS allowlist for now (grounding is coupled to the merge/close
-// DISPOSITION path; screenshots' capture path needs dedicated coverage) — a follow-up. contentLane got its own
-// richer `contentLane:` block below (#2435) instead of a boolean here, since it resolves to a whole
-// RegistryLaneSpec, not an on/off toggle — see resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts.
-export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety"] as const;
+// NOTE: only the per-PR REVIEW features whose every activation site is migrated are listed here. grounding
+// (#4100) is now migrated too — its original "coupled to the merge/close DISPOSITION path" blocker was the
+// removed AI CI-refutation path (grounding-wire.ts's aiCiRefutationActive is now a vestigial historical-
+// compatibility helper with zero real callers); grounding today only shapes reviewer PROMPT content, same
+// shape as rag/reputation. `screenshots` has its own richer `visual:` block instead (review.visual.enabled,
+// #4083) since it carries more than a single boolean. contentLane got its own richer `contentLane:` block below
+// (#2435) instead of a boolean here, since it resolves to a whole RegistryLaneSpec, not an on/off toggle — see
+// resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts.
+export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding"] as const;
 export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
 
 /** Per-repo activation overrides for the converged review features (`features:` block). `true`/`false` force the
@@ -826,6 +829,7 @@ const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
   reputation: null,
   unifiedComment: null,
   safety: null,
+  grounding: null,
 };
 
 const EMPTY_CONTENT_LANE_CONFIG: FocusManifestContentLaneConfig = {

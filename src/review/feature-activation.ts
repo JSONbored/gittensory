@@ -17,6 +17,7 @@
 // `resolveConvergedFeature` is the pure core (takes the already-loaded manifest). `convergedFeatureActive` is the
 // async convenience that loads the cached focus manifest itself — used at call sites that don't already hold one.
 import { isConvergenceRepoAllowed } from "./cutover-gate";
+import { isGroundingEnabled } from "./grounding-wire";
 import { isRagEnabled } from "./rag-wire";
 import { isReputationEnabled } from "./reputation-wire";
 import { isSafetyEnabled } from "./safety";
@@ -30,6 +31,7 @@ const FEATURE_GLOBAL_FLAG: Record<ConvergedFeatureKey, (env: Env) => boolean> = 
   reputation: isReputationEnabled,
   unifiedComment: isUnifiedReviewCommentEnabled,
   safety: isSafetyEnabled,
+  grounding: isGroundingEnabled,
 };
 
 /**
