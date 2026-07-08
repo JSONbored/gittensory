@@ -39,6 +39,7 @@ const CLI_COMMAND_SPEC = {
   changelog: [],
   completion: [],
   version: [],
+  tools: [],
   doctor: [],
   "init-client": [],
   "decision-pack": [],
@@ -351,6 +352,145 @@ const agentRunIdShape = {
   runId: z.string().min(1),
 };
 
+// Single source of truth for stdio tool name + one-line description (#2233).
+// Registration and `gittensory-mcp tools` both read this list.
+const STDIO_TOOL_DESCRIPTORS = [
+  {
+    name: "gittensory_get_repo_context",
+    description: "Return the canonical repo intelligence bundle from the private Gittensory API.",
+  },
+  {
+    name: "gittensory_preflight_pr",
+    description: "Preflight planned PR metadata against lane, duplicate, linked issue, test, and queue signals.",
+  },
+  {
+    name: "gittensory_validate_linked_issue",
+    description: "Report whether linking an issue will actually earn the standard linked-issue scoring multiplier for a planned PR — open, valid, single-owner, solvable by this PR — with the blocking reason if not. The raw multiplier value stays private.",
+  },
+  {
+    name: "gittensory_check_before_start",
+    description: "Before writing any code, check whether an issue is already claimed or solved, whether a duplicate cluster is forming, and whether it is a valid target. Returns a go/raise/avoid recommendation with public-safe reasons from cached metadata.",
+  },
+  {
+    name: "gittensory_find_opportunities",
+    description: "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list filtered by your MinerGoalSpec (lane, min rank score, languages). Metadata-only, no GitHub writes.",
+  },
+  {
+    name: "gittensory_lint_pr_text",
+    description: "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. No source upload.",
+  },
+  {
+    name: "gittensory_validate_config",
+    description: "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+  },
+  {
+    name: "gittensory_check_slop_risk",
+    description: "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. No repo data needed.",
+  },
+  {
+    name: "gittensory_check_issue_slop",
+    description: "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only.",
+  },
+  {
+    name: "gittensory_preflight_local_diff",
+    description: "Inspect local git diff metadata and run Gittensory preflight without uploading source contents.",
+  },
+  {
+    name: "gittensory_get_registry_changes",
+    description: "Return latest cached Gittensor registry change report.",
+  },
+  {
+    name: "gittensory_get_upstream_drift",
+    description: "Return the latest cached Gittensor upstream ruleset drift status (stale/drift warnings) for MCP planning.",
+  },
+  {
+    name: "gittensory_preview_local_pr_score",
+    description: "Inspect local diff metadata and request a private Gittensory scoring preview. No source contents are uploaded.",
+  },
+  {
+    name: "gittensory_explain_score_breakdown",
+    description: "Explain a private score preview multiplier-by-multiplier with plain-English levers and the highest-impact improvement.",
+  },
+  {
+    name: "gittensory_get_decision_pack",
+    description: "Return the canonical private contributor decision pack for a GitHub login.",
+  },
+  {
+    name: "gittensory_explain_repo_decision",
+    description: "Return the contributor/repo decision from the canonical decision pack.",
+  },
+  {
+    name: "gittensory_compare_pr_variants",
+    description: "Compare private Gittensory scoring previews across local/metadata variants.",
+  },
+  {
+    name: "gittensory_local_status",
+    description: "Return local Gittensory MCP status, inferred git repo metadata, and privacy defaults.",
+  },
+  {
+    name: "gittensory_preflight_current_branch",
+    description: "Analyze the current git branch and return PR readiness. Sends metadata only.",
+  },
+  {
+    name: "gittensory_review_pr_before_push",
+    description: "Run a single composed pre-PR review of the current branch: preflight (lane/duplicate/linked-issue/test/queue fit), slop-risk, and PR-text lint, merged into one report with an overall pass/warn/fail status. Thin composition of the existing checks — does not reimplement any of them. Sends metadata only, no source upload.",
+  },
+  {
+    name: "gittensory_preview_current_branch_score",
+    description: "Analyze the current git branch and return private scoreability context. Sends metadata only.",
+  },
+  {
+    name: "gittensory_rank_local_next_actions",
+    description: "Analyze the current git branch and rank local next actions by private reward/risk and review friction.",
+  },
+  {
+    name: "gittensory_explain_local_blockers",
+    description: "Analyze the current git branch and explain private scoreability, lane, and review blockers.",
+  },
+  {
+    name: "gittensory_remediation_plan",
+    description: "Analyze the current git branch and return an ordered public-safe remediation checklist with rerun conditions.",
+  },
+  {
+    name: "gittensory_prepare_pr_packet",
+    description: "Analyze the current git branch and return a public-safe PR packet. Sends metadata only.",
+  },
+  {
+    name: "gittensory_compare_local_variants",
+    description: "Compare current-branch metadata variants without uploading source contents.",
+  },
+  {
+    name: "gittensory_agent_plan_next_work",
+    description: "Run the deterministic Gittensory base-agent planner for a GitHub login.",
+  },
+  {
+    name: "gittensory_agent_start_run",
+    description: "Create a queued copilot-only Gittensory base-agent run.",
+  },
+  {
+    name: "gittensory_agent_get_run",
+    description: "Fetch a persisted Gittensory base-agent run.",
+  },
+  {
+    name: "gittensory_agent_explain_next_action",
+    description: "Explain the next deterministic action and blocker context for a GitHub login.",
+  },
+  {
+    name: "gittensory_agent_prepare_pr_packet",
+    description: "Prepare a public-safe PR packet from current branch metadata. Sends metadata only.",
+  },
+  {
+    name: "gittensory_local_status_structured",
+    description: "Return local Gittensory MCP status with a validated structured output schema.",
+  },
+];
+
+function stdioToolDescription(name) {
+  const tool = STDIO_TOOL_DESCRIPTORS.find((entry) => entry.name === name);
+  if (!tool) throw new Error(`Unknown stdio tool descriptor: ${name}`);
+  return tool.description;
+}
+
 if (cliArgs[0] && cliArgs[0] !== "--stdio") {
   const exitCode = await runCli(cliArgs);
   process.exit(typeof exitCode === "number" ? exitCode : 0);
@@ -364,7 +504,7 @@ const server = new McpServer({
 server.registerTool(
   "gittensory_get_repo_context",
   {
-    description: "Return the canonical repo intelligence bundle from the private Gittensory API.",
+    description: stdioToolDescription("gittensory_get_repo_context"),
     inputSchema: ownerRepoShape,
   },
   async ({ owner, repo }) => {
@@ -376,7 +516,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preflight_pr",
   {
-    description: "Preflight planned PR metadata against lane, duplicate, linked issue, test, and queue signals.",
+    description: stdioToolDescription("gittensory_preflight_pr"),
     inputSchema: preflightShape,
   },
   async (input) => toolResult("Gittensory PR preflight.", await apiPost("/v1/preflight/pr", input)),
@@ -385,8 +525,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_validate_linked_issue",
   {
-    description:
-      "Report whether linking an issue will actually earn the standard linked-issue scoring multiplier for a planned PR — open, valid, single-owner, solvable by this PR — with the blocking reason if not. The raw multiplier value stays private.",
+    description: stdioToolDescription("gittensory_validate_linked_issue"),
     inputSchema: validateLinkedIssueShape,
   },
   async ({ owner, repo, issueNumber, plannedChange }) => {
@@ -399,8 +538,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_check_before_start",
   {
-    description:
-      "Before writing any code, check whether an issue is already claimed or solved, whether a duplicate cluster is forming, and whether it is a valid target. Returns a go/raise/avoid recommendation with public-safe reasons from cached metadata.",
+    description: stdioToolDescription("gittensory_check_before_start"),
     inputSchema: checkBeforeStartShape,
   },
   async ({ owner, repo, issueNumber, title, plannedPaths }) => {
@@ -417,8 +555,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_find_opportunities",
   {
-    description:
-      "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list filtered by your MinerGoalSpec (lane, min rank score, languages). Metadata-only, no GitHub writes.",
+    description: stdioToolDescription("gittensory_find_opportunities"),
     inputSchema: findOpportunitiesShape,
   },
   async ({ targets, searchQuery, goalSpec, limit }) => {
@@ -435,8 +572,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_lint_pr_text",
   {
-    description:
-      "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. No source upload.",
+    description: stdioToolDescription("gittensory_lint_pr_text"),
     inputSchema: lintPrTextShape,
   },
   async (input) => toolResult("Gittensory PR-text lint.", await apiPost("/v1/lint/pr-text", input)),
@@ -445,8 +581,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_validate_config",
   {
-    description:
-      "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+    description: stdioToolDescription("gittensory_validate_config"),
     inputSchema: validateConfigShape,
   },
   async (input) => toolResult("Gittensory manifest validation.", await apiPost("/v1/validate/focus-manifest", input)),
@@ -455,8 +590,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_check_slop_risk",
   {
-    description:
-      "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. No repo data needed.",
+    description: stdioToolDescription("gittensory_check_slop_risk"),
     inputSchema: checkSlopRiskShape,
   },
   async (input) => toolResult("Gittensory slop-risk self-check.", await apiPost("/v1/lint/slop-risk", input)),
@@ -465,8 +599,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_check_issue_slop",
   {
-    description:
-      "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only.",
+    description: stdioToolDescription("gittensory_check_issue_slop"),
     inputSchema: checkIssueSlopShape,
   },
   async (input) => toolResult("Gittensory issue-slop self-check.", await apiPost("/v1/lint/issue-slop", input)),
@@ -475,7 +608,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preflight_local_diff",
   {
-    description: "Inspect local git diff metadata and run Gittensory preflight without uploading source contents.",
+    description: stdioToolDescription("gittensory_preflight_local_diff"),
     inputSchema: localDiffShape,
   },
   async (input) => {
@@ -502,7 +635,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_registry_changes",
   {
-    description: "Return latest cached Gittensor registry change report.",
+    description: stdioToolDescription("gittensory_get_registry_changes"),
     inputSchema: {},
   },
   async () => toolResult("Gittensory registry changes.", await apiGet("/v1/registry/changes")),
@@ -511,7 +644,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_upstream_drift",
   {
-    description: "Return the latest cached Gittensor upstream ruleset drift status (stale/drift warnings) for MCP planning.",
+    description: stdioToolDescription("gittensory_get_upstream_drift"),
     inputSchema: {},
   },
   async () => toolResult("Gittensory upstream drift status.", await apiGet("/v1/upstream/drift")),
@@ -520,7 +653,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preview_local_pr_score",
   {
-    description: "Inspect local diff metadata and request a private Gittensory scoring preview. No source contents are uploaded.",
+    description: stdioToolDescription("gittensory_preview_local_pr_score"),
     inputSchema: localScoreShape,
   },
   async (input) => toolResult("Gittensory private local PR scoring preview.", await previewLocalScore(await withClientWorkspaceRoots(input))),
@@ -529,7 +662,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_explain_score_breakdown",
   {
-    description: "Explain a private score preview multiplier-by-multiplier with plain-English levers and the highest-impact improvement.",
+    description: stdioToolDescription("gittensory_explain_score_breakdown"),
     inputSchema: localScoreShape,
   },
   async (input) => {
@@ -577,7 +710,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_decision_pack",
   {
-    description: "Return the canonical private contributor decision pack for a GitHub login.",
+    description: stdioToolDescription("gittensory_get_decision_pack"),
     inputSchema: loginShape,
   },
   async ({ login }) => {
@@ -589,7 +722,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_explain_repo_decision",
   {
-    description: "Return the contributor/repo decision from the canonical decision pack.",
+    description: stdioToolDescription("gittensory_explain_repo_decision"),
     inputSchema: loginRepoShape,
   },
   async ({ login, owner, repo }) => {
@@ -601,7 +734,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_compare_pr_variants",
   {
-    description: "Compare private Gittensory scoring previews across local/metadata variants.",
+    description: stdioToolDescription("gittensory_compare_pr_variants"),
     inputSchema: variantsShape,
   },
   async ({ variants }) => {
@@ -616,7 +749,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_local_status",
   {
-    description: "Return local Gittensory MCP status, inferred git repo metadata, and privacy defaults.",
+    description: stdioToolDescription("gittensory_local_status"),
     inputSchema: {
       cwd: z.string().optional(),
       baseRef: z.string().optional(),
@@ -652,7 +785,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preflight_current_branch",
   {
-    description: "Analyze the current git branch and return PR readiness. Sends metadata only.",
+    description: stdioToolDescription("gittensory_preflight_current_branch"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -669,8 +802,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_review_pr_before_push",
   {
-    description:
-      "Run a single composed pre-PR review of the current branch: preflight (lane/duplicate/linked-issue/test/queue fit), slop-risk, and PR-text lint, merged into one report with an overall pass/warn/fail status. Thin composition of the existing checks — does not reimplement any of them. Sends metadata only, no source upload.",
+    description: stdioToolDescription("gittensory_review_pr_before_push"),
     inputSchema: currentBranchShape,
   },
   async (input) => toolResult("Gittensory pre-PR review.", await reviewLocalPr(await withClientWorkspaceRoots(input))),
@@ -679,7 +811,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preview_current_branch_score",
   {
-    description: "Analyze the current git branch and return private scoreability context. Sends metadata only.",
+    description: stdioToolDescription("gittensory_preview_current_branch_score"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -697,7 +829,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_rank_local_next_actions",
   {
-    description: "Analyze the current git branch and rank local next actions by private reward/risk and review friction.",
+    description: stdioToolDescription("gittensory_rank_local_next_actions"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -709,7 +841,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_explain_local_blockers",
   {
-    description: "Analyze the current git branch and explain private scoreability, lane, and review blockers.",
+    description: stdioToolDescription("gittensory_explain_local_blockers"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -729,7 +861,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_remediation_plan",
   {
-    description: "Analyze the current git branch and return an ordered public-safe remediation checklist with rerun conditions.",
+    description: stdioToolDescription("gittensory_remediation_plan"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -743,7 +875,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_prepare_pr_packet",
   {
-    description: "Analyze the current git branch and return a public-safe PR packet. Sends metadata only.",
+    description: stdioToolDescription("gittensory_prepare_pr_packet"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -755,7 +887,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_compare_local_variants",
   {
-    description: "Compare current-branch metadata variants without uploading source contents.",
+    description: stdioToolDescription("gittensory_compare_local_variants"),
     inputSchema: currentBranchVariantsShape,
   },
   async ({ variants }) => {
@@ -782,7 +914,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_plan_next_work",
   {
-    description: "Run the deterministic Gittensory base-agent planner for a GitHub login.",
+    description: stdioToolDescription("gittensory_agent_plan_next_work"),
     inputSchema: agentPlanShape,
   },
   async (input) => toolResult(`Gittensory base-agent plan for ${input.login}.`, await apiPost("/v1/agent/plan-next-work", input)),
@@ -791,7 +923,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_start_run",
   {
-    description: "Create a queued copilot-only Gittensory base-agent run.",
+    description: stdioToolDescription("gittensory_agent_start_run"),
     inputSchema: agentRunShape,
   },
   async (input) =>
@@ -813,7 +945,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_get_run",
   {
-    description: "Fetch a persisted Gittensory base-agent run.",
+    description: stdioToolDescription("gittensory_agent_get_run"),
     inputSchema: agentRunIdShape,
   },
   async ({ runId }) => toolResult(`Gittensory base-agent run ${runId}.`, await apiGet(`/v1/agent/runs/${encodeURIComponent(runId)}`)),
@@ -822,7 +954,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_explain_next_action",
   {
-    description: "Explain the next deterministic action and blocker context for a GitHub login.",
+    description: stdioToolDescription("gittensory_agent_explain_next_action"),
     inputSchema: agentPlanShape,
   },
   async (input) => {
@@ -837,7 +969,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_prepare_pr_packet",
   {
-    description: "Prepare a public-safe PR packet from current branch metadata. Sends metadata only.",
+    description: stdioToolDescription("gittensory_agent_prepare_pr_packet"),
     inputSchema: currentBranchShape,
   },
   async (input) => toolResult("Gittensory base-agent public-safe PR packet.", await agentPreparePrPacket(await withClientWorkspaceRoots(input))),
@@ -909,7 +1041,7 @@ const agentPlanOutputSchema = {
 server.registerTool(
   "gittensory_local_status_structured",
   {
-    description: "Return local Gittensory MCP status with a validated structured output schema.",
+    description: stdioToolDescription("gittensory_local_status_structured"),
     inputSchema: {
       cwd: z.string().optional(),
       baseRef: z.string().optional(),
@@ -1494,6 +1626,7 @@ async function runCli(args) {
   if (command === "--help" || command === "help") return printHelp();
   if (command === "--version" || command === "-v" || command === "version") return printVersion(parseOptions(args.slice(1)));
   if (command === "completion") return completionCommand(args.slice(1));
+  if (command === "tools") return toolsCommand(parseOptions(args.slice(1)));
   if (command === "agent") return runAgentCli(args.slice(1));
   if (command === "cache") return runCacheCli(args.slice(1));
   if (command === "maintain") return maintainCli(args.slice(1));
@@ -2028,6 +2161,19 @@ function printVersion(options) {
   process.stdout.write(`${packageName}/${packageVersion} (api ${currentApiVersion}, node ${process.version})\n`);
 }
 
+function toolsCommand(options) {
+  const tools = STDIO_TOOL_DESCRIPTORS.map(({ name, description }) => ({ name, description }));
+  const payload = { count: tools.length, tools };
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  const nameWidth = tools.reduce((width, tool) => Math.max(width, tool.name.length), 0);
+  for (const tool of tools) {
+    process.stdout.write(`${tool.name.padEnd(nameWidth)}  ${tool.description}\n`);
+  }
+}
+
 function completionCommand(args) {
   const shell = args[0] && !args[0].startsWith("--") ? args[0] : undefined;
   const options = parseOptions(args.filter((arg) => arg.startsWith("--")));
@@ -2173,6 +2319,7 @@ function printHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp --stdio
   gittensory-mcp version [--json]
+  gittensory-mcp tools [--json]
   gittensory-mcp completion bash|zsh|fish|powershell [--json]
   gittensory-mcp login [--profile name] [--github-token <token>] [--json]
   gittensory-mcp logout [--profile name] [--all] [--json]
