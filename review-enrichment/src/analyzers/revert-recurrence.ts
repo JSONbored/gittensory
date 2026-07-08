@@ -14,13 +14,14 @@ import type {
 import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
 import { isHistoryUninformativePath } from "./history-path.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
 const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_FILES_PROBED = 5; // bound the per-file commit-history fan-out, matching the other history-class analyzers
 const COMMITS_PER_FILE = 15; // recent commits to inspect per probed file when looking for a revert
 const MAX_REVERT_LOOKUPS = 10; // global cap on revert-commit detail fetches across all probed files
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 // GitHub's auto-generated revert commit has a `Revert "<original> (#N)"` subject; a hand-written revert body
 // carries the `This reverts commit <sha>` trailer. Either shape confirms a revert without diff-classifying a patch.
 const REVERT_SUBJECT_RE = /^revert\b/i;

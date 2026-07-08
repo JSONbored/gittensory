@@ -8,9 +8,10 @@
 // exact whole-name loss is; a non-entrypoint file is out of scope (that is the caller-impact analyzer's job).
 // Deterministic, no network, no token. Reports file, old-file line, and symbol only — never surrounding code.
 import type { ApiBreakFinding, EnrichRequest } from "../types.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const MAX_ENTRYPOINTS = 25; // cap changed entrypoint files scanned per PR
-const MAX_FINDINGS = 25; // keep the brief bounded
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 
 // Files whose top-level exports form a package's PUBLIC surface: barrel/entry modules only. Restricting to these
 // entrypoint basenames keeps the signal conservative — a removed export in an internal module is not a downstream

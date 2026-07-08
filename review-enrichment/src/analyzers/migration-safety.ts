@@ -6,9 +6,10 @@
 // line-anchored: a statement split across lines is missed (fail-quiet) rather than tracked with cross-line
 // state, and each shape is a finite, documented DDL form — never a general SQL grammar.
 import type { EnrichRequest, MigrationSafetyFinding } from "../types.js";
+import { DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
 const MAX_FINDINGS = 20;
-const MAX_LINE_CHARS = 2000;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 // Migration SQL locations: a migrations/ directory (Wrangler/D1, Prisma, Flyway, …), Rails-style db/migrate/,
 // or any .sql file — the three forms named by #2022.

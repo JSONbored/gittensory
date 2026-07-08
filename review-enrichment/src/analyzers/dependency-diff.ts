@@ -6,8 +6,9 @@ import {
   extractDependencyInventoryChanges,
   type ScanLimits,
 } from "./dependency-scan.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const LIMITS: ScanLimits = {
   maxManifestFiles: 20,
   maxPatchLinesPerFile: 500,

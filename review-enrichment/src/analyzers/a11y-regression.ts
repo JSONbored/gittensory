@@ -3,9 +3,10 @@
 // positive tabindex values. Pure compute over added lines in .jsx/.tsx/.html/.vue files, no network.
 import type { A11yFinding, EnrichRequest } from "../types.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 const MARKUP_PATH_RE = /\.(?:tsx|jsx|html|vue)$/i;
 

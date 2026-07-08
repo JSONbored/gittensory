@@ -10,9 +10,10 @@
 // anchors on the leading `*`. Line-cited via hunk headers, mirroring the sibling local analyzers.
 import type { EnrichRequest, TodoMarkerFinding } from "../types.js";
 import { codeOnly } from "./secret-log.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 const MAX_NOTE_CHARS = 120;
 
 // A comment lead-in followed by an UPPERCASE tag as a whole word, then an optional separator and the note.

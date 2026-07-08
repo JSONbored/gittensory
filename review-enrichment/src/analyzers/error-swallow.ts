@@ -5,9 +5,10 @@
 // of silent failures. Pure compute over added diff lines, no network. Scoped to JS/TS/Python/Go source files.
 import type { EnrichRequest, ErrorSwallowFinding } from "../types.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 const SOURCE_EXTS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "py", "go"]);
 
@@ -139,6 +140,43 @@ function flushPending(pending: PendingCatch): ErrorSwallowFinding["kind"] | null
   return bodySwallowsError(body, pending.binding);
 }
 
+type PendingCatchResult = {
+  pending: PendingCatch | null;
+  finding: ErrorSwallowFinding["kind"] | null;
+  findingLine: number | null;
+};
+
+/** Continue tracking an already-open catch/error block for one more added line: buffer it and update its
+ *  brace depth, then flush (classify + clear) once the depth balances back to zero. Pure. Extracted out
+ *  of scanPatchForErrorSwallow's own loop to keep that loop's control-flow nesting under this analyzer's
+ *  sibling deep-nesting.ts threshold. */
+function advancePendingCatch(pending: PendingCatch, body: string): PendingCatchResult {
+  const updated = updatePending(pending, body);
+  if (updated.depth > 0) return { pending: updated, finding: null, findingLine: null };
+  return { pending: null, finding: flushPending(updated), findingLine: updated.startLine };
+}
+
+/** Look for a NEW error-handling block opening on one added line when nothing is currently pending:
+ *  either an immediate single-line finding, or the start of a multi-line block whose closing brace
+ *  hasn't appeared yet. Pure. Same extraction rationale as advancePendingCatch. */
+function tryStartPendingCatch(body: string, newLine: number): PendingCatchResult {
+  const kind = detectErrorSwallow(body);
+  if (kind) return { pending: null, finding: kind, findingLine: newLine };
+
+  const open = matchErrorOpen(body);
+  if (!open) return { pending: null, finding: null, findingLine: null };
+  const braceIndex = body.indexOf("{", open.index ?? 0);
+  if (braceIndex < 0) return { pending: null, finding: null, findingLine: null };
+  const depth = braceBalanceFrom(body, braceIndex);
+  if (depth <= 0) return { pending: null, finding: null, findingLine: null };
+
+  return {
+    pending: { startLine: newLine, binding: open[1] ?? null, body: body.slice(braceIndex), depth },
+    finding: null,
+    findingLine: null,
+  };
+}
+
 type ScanLimits = {
   maxFindings?: number;
   signal?: AbortSignal;
@@ -175,38 +213,11 @@ export function scanPatchForErrorSwallow(
     if (line.startsWith("+")) {
       const body = line.slice(1);
       if (body.length <= MAX_LINE_CHARS) {
-        if (pending) {
-          pending = updatePending(pending, body);
-          if (pending.depth <= 0) {
-            const kind = flushPending(pending);
-            if (kind) {
-              pushFinding(pending.startLine, kind);
-              if (findings.length >= maxFindings) return findings;
-            }
-            pending = null;
-          }
-        } else {
-          const kind = detectErrorSwallow(body);
-          if (kind) {
-            pushFinding(newLine, kind);
-            if (findings.length >= maxFindings) return findings;
-          } else {
-            const open = matchErrorOpen(body);
-            if (open) {
-              const braceIndex = body.indexOf("{", open.index ?? 0);
-              if (braceIndex >= 0) {
-                const depth = braceBalanceFrom(body, braceIndex);
-                if (depth > 0) {
-                  pending = {
-                    startLine: newLine,
-                    binding: open[1] ?? null,
-                    body: body.slice(braceIndex),
-                    depth,
-                  };
-                }
-              }
-            }
-          }
+        const result: PendingCatchResult = pending ? advancePendingCatch(pending, body) : tryStartPendingCatch(body, newLine);
+        pending = result.pending;
+        if (result.finding) {
+          pushFinding(result.findingLine ?? newLine, result.finding);
+          if (findings.length >= maxFindings) return findings;
         }
       }
       newLine++;

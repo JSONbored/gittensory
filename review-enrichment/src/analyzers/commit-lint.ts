@@ -12,11 +12,12 @@ import type {
 } from "../types.js";
 import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
 const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_COMMITS = 100;
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const SHA_PREFIX_LEN = 12;
 const MAX_SUBJECT_LEN = 72; // Conventional Commits / git convention soft cap for the subject line.
 

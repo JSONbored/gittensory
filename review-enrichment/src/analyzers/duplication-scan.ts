@@ -15,6 +15,7 @@ import type {
 } from "../types.js";
 import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -22,7 +23,7 @@ const GITHUB_API_VERSION = "2022-11-28";
 const MIN_RUN = 8; // a contiguous run of >= this many significant normalized lines is required to flag a duplicate
 const MAX_CANDIDATES = 40; // cap candidate files (closest-by-path first) we consider per scan
 const MAX_FETCHES = 30; // global cap on candidate blob fetches per scan
-const MAX_FINDINGS = 25; // keep the brief bounded
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const MIN_SIGNIFICANT_LEN = 12; // lines shorter than this (after trim) are treated as trivial and dropped
 const MAX_FILE_BYTES = 500_000; // skip an oversized candidate blob so one huge (likely generated) file can't eat the budget
 const MAX_TREE_JSON_BYTES = 4 * 1024 * 1024; // recursive git tree can be large; bound it like asset-weight does

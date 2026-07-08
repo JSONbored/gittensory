@@ -8,9 +8,10 @@
 // without resolving the whole tree.
 import type { EnrichRequest, LooseRangeFinding } from "../types.js";
 import { isDiffFileHeaderLine } from "./diff-lines.js";
+import { DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
 const MAX_FINDINGS = 20;
-const MAX_LINE_CHARS = 2000;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 // `"name": "spec"` on an added line, same shape the sibling dependency-scan.ts keys on.
 const NPM_LINE_RE = /^"([^"]+)"\s*:\s*"([^"]+)"/;

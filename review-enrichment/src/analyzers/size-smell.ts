@@ -4,11 +4,12 @@
 import type { EnrichRequest, SizeSmellFinding } from "../types.js";
 import { codeOnly } from "./secret-log.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
 export const DEFAULT_MAX_FILE_LINES = 400;
 export const DEFAULT_MAX_FUNCTION_LINES = 60;
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 

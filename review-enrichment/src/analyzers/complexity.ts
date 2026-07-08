@@ -27,10 +27,11 @@
 import type { ComplexityFinding, EnrichRequest } from "../types.js";
 import { codeOnly } from "./secret-log.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
 export const DEFAULT_MAX_COMPLEXITY = 10;
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 const JS_TS_PATH_RE = /\.(?:tsx?|jsx?|mts|cts|cjs|mjs)$/i;
 
@@ -88,6 +89,34 @@ function braceDepthDelta(code: string): number {
     else if (ch === "}") depth--;
   }
   return depth;
+}
+
+/** Given the current pending function (or none) and one added code line, return the updated pending
+ *  state -- mutated in place and returned when tracking continues, freshly started when the line opens
+ *  a new function, or null when neither applies. Extracted out of scanPatchForComplexity's own loop
+ *  (rather than left as an inline if/else) to keep that loop's own control-flow nesting under this
+ *  analyzer's sibling deep-nesting.ts threshold. Pure; deciding whether to flush (pending.depth <= 0)
+ *  stays the caller's job so this has no dependency on flushFunction's closure. */
+function advancePendingFunction(
+  pending: PendingFunction | null,
+  body: string,
+  commented: boolean,
+  code: string,
+  newLine: number,
+): PendingFunction | null {
+  if (pending) {
+    if (!commented) pending.complexity += countDecisionPoints(code);
+    pending.depth += braceDepthDelta(code);
+    return pending;
+  }
+  const name = functionNameFromLine(body);
+  if (!name) return null;
+  return {
+    name,
+    startLine: newLine,
+    complexity: 1 + (commented ? 0 : countDecisionPoints(code)),
+    depth: braceDepthDelta(code),
+  };
 }
 
 type ScanLimits = {
@@ -150,22 +179,8 @@ export function scanPatchForComplexity(
       if (body.length <= MAX_LINE_CHARS) {
         const commented = isCommentLine(body);
         const code = codeOnly(body);
-        if (pending) {
-          if (!commented) pending.complexity += countDecisionPoints(code);
-          pending.depth += braceDepthDelta(code);
-          if (pending.depth <= 0) flushFunction();
-        } else {
-          const name = functionNameFromLine(body);
-          if (name) {
-            pending = {
-              name,
-              startLine: newLine,
-              complexity: 1 + (commented ? 0 : countDecisionPoints(code)),
-              depth: braceDepthDelta(code),
-            };
-            if (pending.depth <= 0) flushFunction();
-          }
-        }
+        pending = advancePendingFunction(pending, body, commented, code, newLine);
+        if (pending && pending.depth <= 0) flushFunction();
       }
       newLine++;
     } else {
