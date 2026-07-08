@@ -25,8 +25,23 @@ export type ShotTheme = "light" | "dark";
 export interface CaptureShotOptions {
   isAllowedUrl?: (targetUrl: string) => boolean;
   /** Emulate `prefers-color-scheme: <theme>` before navigation (#3678). Omitted (every existing caller) ⇒
-   *  no emulation call at all — Chromium's own unconfigured default, byte-identical to today. */
+   *  no emulation call at all — Chromium's own unconfigured default, byte-identical to today.
+   *
+   *  VERIFIED (#4109): `emulateMediaFeatures` maps to CDP's `Emulation.setEmulatedMedia`, which only changes
+   *  what CSS media queries and `window.matchMedia` report — it cannot write `localStorage` and has NO effect
+   *  on any theme mechanism that reads an explicit stored preference instead of consulting
+   *  `prefers-color-scheme`. This is reproducible today against gittensory's own UI: `apps/gittensory-ui`
+   *  forces dark mode unconditionally in its no-flash script (`components/site/theme-toggle.tsx`), never
+   *  consulting the media feature at all, so a `light` vs `dark` capture of gittensory's own site renders
+   *  byte-identical regardless of this option. `themeStorageKey` below is the fallback for exactly that class
+   *  of app. */
   theme?: ShotTheme;
+  /** Also force `theme` via `localStorage.setItem(themeStorageKey, theme)` + a reload before capture (#4109),
+   *  for apps (like metagraphed's own manual-screenshot convention) whose theme is driven by a stored
+   *  preference rather than `prefers-color-scheme`. Configurable per-repo since the key name is
+   *  app-specific — there is no universal convention. Only takes effect together with `theme`; omitted
+   *  (every pre-#4109 caller) ⇒ no `localStorage` write and no reload, byte-identical to today. */
+  themeStorageKey?: string;
 }
 type ScreenshotRequest = {
   url(): string;
@@ -38,6 +53,16 @@ type ScreenshotPage = {
   evaluate<T>(fn: () => T): Promise<T>;
   screenshot(options: { type: "png"; fullPage: true }): Promise<Uint8Array>;
 };
+// Viewport matrix (#4109): DELIBERATELY kept at 2 (desktop + mobile), not widened to metagraphed's 3-viewport
+// manual convention (375×812 / 768×1024 / 1280×800). That convention is a human clicking through DevTools --
+// free to run. This pipeline's cost is Browser Rendering wall-clock: every route already renders up to 4 PNGs
+// (before+after × desktop+mobile), multiplied again by `review.visual.themes` when configured -- a 3rd
+// viewport would raise that to 6 (a 50% jump) for every repo, every review, forever, not just the reviewer
+// who wants tablet coverage. gittensory's own pair already straddles a real breakpoint on each side (1440 is
+// past a typical Tailwind `lg`; 390 is an iPhone-class portrait well under `sm`), so it is not an arbitrary
+// choice either. If a repo genuinely needs tablet coverage, that is a `review.visual` opt-in follow-up
+// (mirroring `routes.maxRoutes`'s per-repo override precedent) -- not a default-on cost increase for repos
+// that never asked for a 3rd viewport.
 export const DESKTOP_VIEWPORT: Viewport = { width: 1440, height: 900 };
 export const MOBILE_VIEWPORT: Viewport = { width: 390, height: 844 }; // iPhone-class portrait
 const VIEWPORT = DESKTOP_VIEWPORT;
@@ -46,6 +71,9 @@ export const MAX_SCREENSHOT_PIXELS = 14_400_000; // 1440 × 10000, matching the 
 export const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const SCREENSHOT_TIMEOUT_MS = 10000;
 const SCREENSHOT_HEIGHT_PROBE_TIMEOUT_MS = 2_000;
+// The reload triggered by a configured `themeStorageKey` (#4109) waits for the same network-idle signal as
+// the initial navigation, with the same bound -- a reload is not expected to be any slower than the first load.
+const THEME_STORAGE_RELOAD_TIMEOUT_MS = 20000;
 
 /** Per-call shot-route options: the R2 namespace (key prefix) + the production host for the on-demand render
  *  allowlist. Defaults to gittensory so the /gittensory/shot route works with no options. */
@@ -243,6 +271,26 @@ export async function captureShot(env: Env, url: string, viewport: Viewport = VI
       console.log(JSON.stringify({ event: "render_screenshot_auth_walled", url, final: page.url().slice(0, 200) }));
       return { png: null, authWalled: true };
     }
+    // A configured themeStorageKey (#4109) ALSO forces the theme via localStorage, then reloads so the
+    // app's own theme-init logic re-runs against the new stored value -- the fallback for a target whose
+    // theming ignores prefers-color-scheme (see CaptureShotOptions.theme's doc for what this fixes and why).
+    // Only after the safe-url/auth-wall checks above, so a page we're about to reject never pays for a reload.
+    if (opts.theme && opts.themeStorageKey) {
+      const storageKey = opts.themeStorageKey;
+      const storageValue = opts.theme;
+      await page.evaluate(
+        (key: string, value: string) => {
+          try {
+            (globalThis as unknown as { localStorage: Storage }).localStorage.setItem(key, value);
+          } catch {
+            // Storage can be unavailable (privacy mode, disabled storage, a cross-origin frame, etc.) -- best-effort only.
+          }
+        },
+        storageKey,
+        storageValue,
+      );
+      await page.reload({ waitUntil: "networkidle0", timeout: THEME_STORAGE_RELOAD_TIMEOUT_MS });
+    }
     // Full-page (not just the viewport), but bounded: before/after should include the same page position for
     // normal review pages without letting attacker-controlled document height or PNG size drive unbounded
     // Chromium raster work on the public screenshot route.
@@ -340,6 +388,24 @@ export async function captureScrollFrames(env: Env, url: string, viewport: Viewp
       console.log(JSON.stringify({ event: "render_scroll_frames_auth_walled", url, final: page.url().slice(0, 200) }));
       return { frames: [], authWalled: true };
     }
+    // A configured themeStorageKey (#4109) ALSO forces the theme via localStorage, then reloads -- mirrors
+    // captureShot's own fallback exactly (see CaptureShotOptions.theme's doc for what this fixes and why).
+    if (opts.theme && opts.themeStorageKey) {
+      const storageKey = opts.themeStorageKey;
+      const storageValue = opts.theme;
+      await page.evaluate(
+        (key: string, value: string) => {
+          try {
+            (globalThis as unknown as { localStorage: Storage }).localStorage.setItem(key, value);
+          } catch {
+            // Storage can be unavailable (privacy mode, disabled storage, a cross-origin frame, etc.) -- best-effort only.
+          }
+        },
+        storageKey,
+        storageValue,
+      );
+      await page.reload({ waitUntil: "networkidle0", timeout: THEME_STORAGE_RELOAD_TIMEOUT_MS });
+    }
     // `document`/`window` below run inside the real page (the callback is serialized and executed in the
     // browser realm, not this Worker/Node one) — this project's `lib` deliberately excludes `dom` (it would
     // shadow the Workers-runtime `Request`/`Response` globals used everywhere else), so these two reach the
@@ -403,7 +469,9 @@ export async function handleShot(request: Request, env: Env, opts: ShotOptions =
 
   // Mode B: render on demand (host-allowlisted + SSRF-guarded). Optional &w=&h= selects the viewport;
   // optional &theme= (#3678) emulates prefers-color-scheme — an unrecognized value is ignored (falls back to
-  // no emulation) rather than rejecting the whole request over a cosmetic param.
+  // no emulation) rather than rejecting the whole request over a cosmetic param. Optional &themeStorageKey=
+  // (#4109) ALSO forces the theme via localStorage + reload — only applied alongside a recognized &theme=,
+  // same as capturePage's own guard.
   const target = params.get("url");
   if (!target || !isSafeHttpUrl(target)) return new Response("bad url", { status: 400 });
   if (!isAllowedHost(target, env, opts.productionUrl)) return new Response("forbidden host", { status: 403 });
@@ -412,7 +480,13 @@ export async function handleShot(request: Request, env: Env, opts: ShotOptions =
   const viewport: Viewport = Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0 ? { width: Math.min(w, 2560), height: Math.min(h, 2560) } : DESKTOP_VIEWPORT;
   const requestedTheme = params.get("theme");
   const theme: ShotTheme | undefined = requestedTheme === "light" || requestedTheme === "dark" ? requestedTheme : undefined;
-  const png = await renderScreenshot(env, target, viewport, { isAllowedUrl: (candidate) => isAllowedHost(candidate, env, opts.productionUrl), ...(theme ? { theme } : {}) });
+  const requestedThemeStorageKey = params.get("themeStorageKey");
+  const themeStorageKey: string | undefined = theme && requestedThemeStorageKey ? requestedThemeStorageKey : undefined;
+  const png = await renderScreenshot(env, target, viewport, {
+    isAllowedUrl: (candidate) => isAllowedHost(candidate, env, opts.productionUrl),
+    ...(theme ? { theme } : {}),
+    ...(themeStorageKey ? { themeStorageKey } : {}),
+  });
   if (!png) return new Response("screenshot unavailable", { status: 502 });
   // png is always a plain (never shared) ArrayBuffer view — the cast only narrows the TYPE for the UI
   // workspace's stricter DOM-lib BodyInit, which excludes SharedArrayBuffer from ArrayBufferLike.

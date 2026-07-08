@@ -21,6 +21,7 @@ describe("review.visual wiring (#3609 / #3610)", () => {
       themes: [],
       gif: false,
       enabled: null,
+      themeStorageKey: null,
     });
     expect(loadSpy).toHaveBeenCalledWith(expect.anything(), "acme/widgets");
     loadSpy.mockRestore();

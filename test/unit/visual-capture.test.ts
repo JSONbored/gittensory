@@ -746,6 +746,122 @@ describe("buildCapture theme matrix (#3678)", () => {
   });
 });
 
+describe("buildCapture theme-storage-key wiring (#4109)", () => {
+  it("passes themeStorageKey through to captureShot's render options when both themes and theme_storage_key are configured", async () => {
+    const captureShotSpy = vi.spyOn(shotModule, "captureShot").mockResolvedValue({ png: null, authWalled: false });
+    try {
+      await buildCapture(
+        createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
+        "installation-token",
+        { repoFullName: "owner/repo", prNumber: 40, previewUrl: "https://preview.example.com" },
+        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        undefined,
+        { themes: ["dark"], themeStorageKey: "theme" },
+      );
+      expect(captureShotSpy).toHaveBeenCalled();
+      const themedCall = captureShotSpy.mock.calls.find(([, , , opts]) => opts?.theme === "dark" && opts?.themeStorageKey === "theme");
+      expect(themedCall).toBeDefined();
+    } finally {
+      captureShotSpy.mockRestore();
+    }
+  });
+
+  it("never passes themeStorageKey to captureShot when no themes are configured, even if theme_storage_key is set", async () => {
+    const captureShotSpy = vi.spyOn(shotModule, "captureShot").mockResolvedValue({ png: null, authWalled: false });
+    try {
+      await buildCapture(
+        createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
+        "installation-token",
+        { repoFullName: "owner/repo", prNumber: 41, previewUrl: "https://preview.example.com" },
+        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        undefined,
+        { themeStorageKey: "theme" },
+      );
+      expect(captureShotSpy).toHaveBeenCalled();
+      expect(captureShotSpy.mock.calls.every(([, , , opts]) => !opts?.theme && !opts?.themeStorageKey)).toBe(true);
+    } finally {
+      captureShotSpy.mockRestore();
+    }
+  });
+
+  it("carries the theme storage key in the on-demand URL fallback so a later GitHub-image-proxy retry still forces it", async () => {
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }), // no REVIEW_AUDIT -> always the on-demand fallback
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 44, previewUrl: "https://preview.example.com" },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      undefined,
+      { themes: ["dark"], themeStorageKey: "theme" },
+    );
+    expect(result.routes[0]?.beforeUrl).toBe(
+      `https://worker.example/gittensory/shot?url=${encodeURIComponent("https://prod.example.com/app")}&w=1440&h=900&theme=dark&themeStorageKey=${encodeURIComponent("theme")}`,
+    );
+  });
+
+  it("omits themeStorageKey from the on-demand URL fallback when no theme is configured", async () => {
+    const result = await buildCapture(
+      createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 45, previewUrl: "https://preview.example.com" },
+      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      undefined,
+      { themeStorageKey: "theme" },
+    );
+    expect(result.routes[0]?.beforeUrl).toBe(`https://worker.example/gittensory/shot?url=${encodeURIComponent("https://prod.example.com/app")}&w=1440&h=900`);
+  });
+
+  it("threads the theme storage key into the shot fingerprint too, so it never collides with an untagged-key capture of the same theme", async () => {
+    const captureShotSpy = vi.spyOn(shotModule, "captureShot").mockResolvedValue({ png: new Uint8Array([9, 9, 9]), authWalled: false });
+    try {
+      const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() });
+      const result = await buildCapture(
+        env,
+        "installation-token",
+        { repoFullName: "owner/repo", prNumber: 42, previewUrl: "https://preview.example.com" },
+        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        undefined,
+        { themes: ["dark"], themeStorageKey: "theme" },
+      );
+      expect(result.routes[0]?.theme).toBe("dark");
+      expect(result.routes[0]?.beforeUrl).toContain("/gittensory/shot?key=");
+      // Same PR/path/theme, but tagged with a storage key — must not reuse the untagged-key fingerprint.
+      const untaggedFingerprint = await sha256Hex(`42:before:desktop:https://prod.example.com/app:dark`);
+      expect(result.routes[0]?.beforeUrl).not.toContain(untaggedFingerprint.slice(0, 40));
+    } finally {
+      captureShotSpy.mockRestore();
+    }
+  });
+
+  it("threads the theme storage key into the scroll-GIF fingerprint too, so it never collides with an untagged-key GIF", async () => {
+    const gifAvailableSpy = vi.spyOn(scrollGifModule, "isScrollGifAvailable").mockReturnValue(true);
+    const captureScrollSpy = vi.spyOn(shotModule, "captureScrollFrames").mockResolvedValue({
+      frames: [new Uint8Array([1, 2, 3])],
+      authWalled: false,
+    });
+    const encodeSpy = vi.spyOn(scrollGifModule, "encodeScrollGif").mockResolvedValue(new Uint8Array([7, 8, 9]));
+    try {
+      const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() });
+      const result = await buildCapture(
+        env,
+        "installation-token",
+        { repoFullName: "owner/repo", prNumber: 43, previewUrl: "https://preview.example.com" },
+        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        undefined,
+        { gif: true, themes: ["dark"], themeStorageKey: "theme" },
+      );
+      expect(result.routes[0]?.theme).toBe("dark");
+      expect(result.routes[0]?.afterGifUrl).toContain("/gittensory/shot?key=");
+      const untaggedFingerprint = await sha256Hex(`43:scrollgif:after:desktop:https://preview.example.com/app:dark`);
+      expect(result.routes[0]?.afterGifUrl).not.toContain(untaggedFingerprint.slice(0, 40));
+      expect(captureScrollSpy.mock.calls.some(([, , , opts]) => opts?.themeStorageKey === "theme")).toBe(true);
+    } finally {
+      gifAvailableSpy.mockRestore();
+      captureScrollSpy.mockRestore();
+      encodeSpy.mockRestore();
+    }
+  });
+});
+
 describe("buildCapture scroll-GIF wiring (#3612)", () => {
   it("never captures scroll frames when review.visual.gif is unset, even when isScrollGifAvailable is true", async () => {
     const gifAvailableSpy = vi.spyOn(scrollGifModule, "isScrollGifAvailable").mockReturnValue(true);

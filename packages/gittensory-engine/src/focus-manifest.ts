@@ -662,6 +662,15 @@ export type VisualConfig = {
    *  it only opts back in at a layer where a global default of `false` disabled this repo. This is what lets an
    *  operator flip visual review on/off per-repo purely through the VPS config files, without a redeploy. */
   enabled: boolean | null;
+  /** `review.visual.theme_storage_key` (#4109): the `localStorage` key the capture pipeline ALSO forces
+   *  `theme` into (plus a reload) before rendering, for a target whose theming reads an explicit stored
+   *  preference instead of consulting `prefers-color-scheme` — verified (against gittensory-ui's own
+   *  dark-mode-only build) that `emulateMediaFeatures` alone has zero effect on that class of app, since it
+   *  only changes what CSS media queries / `matchMedia` report. null (default) ⇒ no `localStorage` write, no
+   *  reload — byte-identical to today. Only takes effect when `themes` is also configured; the key name is
+   *  app-specific (there is no universal convention), so it is opaque, bounded, public-safe text, same shape
+   *  as `review.ai_model`'s free-text fields. */
+  themeStorageKey: string | null;
 };
 
 /** A `prefers-color-scheme` value the capture pipeline can emulate before rendering (#3678). */
@@ -700,6 +709,7 @@ export const EMPTY_VISUAL_CONFIG: VisualConfig = {
   themes: [],
   gif: false,
   enabled: null,
+  themeStorageKey: null,
 };
 
 /** One `review.path_instructions[]` entry: a manifest path glob + the public-safe instructions to apply when a
@@ -2109,6 +2119,7 @@ function overlayVisualConfig(base: VisualConfig, override: VisualConfig): Visual
     themes: override.themes.length > 0 ? [...override.themes] : [...base.themes],
     gif: override.gif ? override.gif : base.gif,
     enabled: pickOverlayNullable(override.enabled, base.enabled),
+    themeStorageKey: pickOverlayNullable(override.themeStorageKey, base.themeStorageKey),
   };
 }
 
@@ -2338,7 +2349,15 @@ function parseSelfHostAiModelConfig(value: JsonValue | undefined, warnings: stri
 }
 
 function visualConfigPresent(config: VisualConfig): boolean {
-  return config.preview.urlTemplate !== null || config.routes.paths.length > 0 || config.routes.maxRoutes !== null || config.themes.length > 0 || config.gif || config.enabled !== null;
+  return (
+    config.preview.urlTemplate !== null ||
+    config.routes.paths.length > 0 ||
+    config.routes.maxRoutes !== null ||
+    config.themes.length > 0 ||
+    config.gif ||
+    config.enabled !== null ||
+    config.themeStorageKey !== null
+  );
 }
 
 const VISUAL_THEME_VALUES: readonly VisualTheme[] = ["light", "dark"];
@@ -2420,8 +2439,9 @@ function parseVisualConfig(value: JsonValue | undefined, warnings: string[]): Vi
   const themes = parseVisualThemes(record.themes, warnings);
   const gif = normalizeOptionalBoolean(record.gif, "review.visual.gif", warnings) === true;
   const enabled = normalizeOptionalBoolean(record.enabled, "review.visual.enabled", warnings);
+  const themeStorageKey = parsePublicSafeText(record.theme_storage_key, "review.visual.theme_storage_key", warnings);
 
-  return { preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif, enabled };
+  return { preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif, enabled, themeStorageKey };
 }
 
 function parseAutoReviewTitleKeywords(value: JsonValue | undefined, warnings: string[]): string[] {
@@ -2737,6 +2757,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     if (review.visual.themes.length > 0) visual.themes = [...review.visual.themes];
     if (review.visual.gif) visual.gif = true;
     if (review.visual.enabled !== null) visual.enabled = review.visual.enabled;
+    if (review.visual.themeStorageKey !== null) visual.theme_storage_key = review.visual.themeStorageKey;
     out.visual = visual;
   }
   if (review.linkedIssueSatisfaction !== null) out.linkedIssueSatisfaction = review.linkedIssueSatisfaction;

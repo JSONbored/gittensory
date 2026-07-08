@@ -963,6 +963,13 @@ settings:
 #     themes:
 #       - light
 #       - dark
+#     # The localStorage key to ALSO force `theme` into (plus a reload) before rendering (#4109) -- a
+#     # fallback for a target whose theming reads an explicit stored preference instead of consulting
+#     # `prefers-color-scheme` (VERIFIED: emulateMediaFeatures alone has zero effect on that class of app,
+#     # since it only changes what CSS media queries / matchMedia report -- it never touches localStorage).
+#     # Only takes effect when `themes` above is also configured. String or null. Default: null (no
+#     # localStorage write, no reload -- byte-identical to today).
+#     theme_storage_key: "theme"
 #     # Also capture a short scroll-through GIF per route (desktop only) — evidence for scroll-linked behavior
 #     # (parallax, reveal-on-scroll, a sticky header) that a static screenshot can't show (#3612). Rendered as
 #     # a separate "Scroll preview" section alongside the static before/after table, never replacing it.

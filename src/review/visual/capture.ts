@@ -165,18 +165,27 @@ async function capturePage(
   // #3678: emulate prefers-color-scheme before rendering. Undefined (every pre-#3678 caller) ⇒ no emulation
   // call and an UNCHANGED cache key — byte-identical to today.
   theme?: ShotTheme | undefined,
+  // #4109: ALSO force `theme` via localStorage.setItem(themeStorageKey, theme) + a reload, for a target whose
+  // theming ignores prefers-color-scheme (see shot.ts's CaptureShotOptions.theme doc). Only takes effect
+  // together with `theme`; undefined (every pre-#4109 caller) ⇒ byte-identical to today.
+  themeStorageKey?: string | undefined,
 ): Promise<{ url?: string | undefined; png?: Uint8Array | undefined }> {
   if (!page) return {};
   const shotBase = env.PUBLIC_API_ORIGIN; // this worker's public origin (serves /gittensory/shot)
-  // Carries the theme (#3678) so a LATER on-demand fetch of this exact URL (e.g. a failed/never-persisted
-  // render retried by GitHub's image proxy) still requests the matching prefers-color-scheme, not the
-  // default — handleShot's Mode B reads this same &theme= param. Omitted when unset, unchanged from today.
-  const onDemand = shotBase ? `${shotBase}/${NAMESPACE}/shot?url=${encodeURIComponent(page)}&w=${viewport.width}&h=${viewport.height}${theme ? `&theme=${theme}` : ""}` : page;
+  // Carries the theme (#3678) and, when set, the storage key (#4109) so a LATER on-demand fetch of this
+  // exact URL (e.g. a failed/never-persisted render retried by GitHub's image proxy) still requests the
+  // matching prefers-color-scheme/localStorage forcing, not the default — handleShot's Mode B reads these
+  // same &theme=/&themeStorageKey= params. Omitted when unset, unchanged from today.
+  const onDemand = shotBase
+    ? `${shotBase}/${NAMESPACE}/shot?url=${encodeURIComponent(page)}&w=${viewport.width}&h=${viewport.height}${theme ? `&theme=${theme}` : ""}${theme && themeStorageKey ? `&themeStorageKey=${encodeURIComponent(themeStorageKey)}` : ""}`
+    : page;
 
   if (env.REVIEW_AUDIT) {
-    // Key includes the viewport (and, when set, the theme) so desktop/mobile and light/dark shots of the
-    // same page don't collide in R2.
-    const fingerprint = await sha256Hex(`${target.headSha ?? target.prNumber}:${slot}:${viewportName}:${page}${theme ? `:${theme}` : ""}`);
+    // Key includes the viewport (and, when set, the theme + storage key) so desktop/mobile, light/dark, and
+    // differently-configured-storage-key shots of the same page don't collide in R2.
+    const fingerprint = await sha256Hex(
+      `${target.headSha ?? target.prNumber}:${slot}:${viewportName}:${page}${theme ? `:${theme}` : ""}${theme && themeStorageKey ? `:${themeStorageKey}` : ""}`,
+    );
     const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.png`;
     const url = shotBase ? `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}` : onDemand;
     const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
@@ -185,7 +194,7 @@ async function capturePage(
       const bytes = await new Response(cached.body).arrayBuffer().then((buf) => new Uint8Array(buf)).catch(() => undefined);
       return { url, ...(bytes ? { png: bytes } : {}) };
     }
-    const { png, authWalled } = await captureShot(env, page, viewport, theme ? { theme } : {}).catch(() => ({ png: null, authWalled: false }));
+    const { png, authWalled } = await captureShot(env, page, viewport, theme ? { theme, ...(themeStorageKey ? { themeStorageKey } : {}) } : {}).catch(() => ({ png: null, authWalled: false }));
     // A protected route that redirected to a sign-in wall: show an honest "requires authentication"
     // placeholder rather than caching/serving a screenshot of the login screen.
     if (authWalled) {
@@ -238,16 +247,20 @@ async function captureScrollGif(
   viewportName: "desktop" | "mobile",
   viewport: Viewport,
   theme?: ShotTheme | undefined,
+  // #4109: see capturePage's own themeStorageKey param — same fallback, same "only with theme" guard.
+  themeStorageKey?: string | undefined,
 ): Promise<string | undefined> {
   if (!page) return undefined;
   const shotBase = env.PUBLIC_API_ORIGIN;
   if (!env.REVIEW_AUDIT || !shotBase) return undefined;
-  const fingerprint = await sha256Hex(`${target.headSha ?? target.prNumber}:scrollgif:${slot}:${viewportName}:${page}${theme ? `:${theme}` : ""}`);
+  const fingerprint = await sha256Hex(
+    `${target.headSha ?? target.prNumber}:scrollgif:${slot}:${viewportName}:${page}${theme ? `:${theme}` : ""}${theme && themeStorageKey ? `:${themeStorageKey}` : ""}`,
+  );
   const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.gif`;
   const url = `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}`;
   const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
   if (cached) return url;
-  const { frames, authWalled } = await captureScrollFrames(env, page, viewport, theme ? { theme } : {}).catch(() => ({ frames: [] as Uint8Array[], authWalled: false }));
+  const { frames, authWalled } = await captureScrollFrames(env, page, viewport, theme ? { theme, ...(themeStorageKey ? { themeStorageKey } : {}) } : {}).catch(() => ({ frames: [] as Uint8Array[], authWalled: false }));
   if (authWalled || frames.length === 0) return undefined;
   const gifBytes = await encodeScrollGif(
     frames.map((png) => ({ png })),
@@ -259,13 +272,18 @@ async function captureScrollGif(
 }
 
 /** Per-repo `review.visual` config, as resolved by the caller from the manifest (#3609 / #3610 / #3678 /
- *  #3612). Absent ⇒ byte-identical to today (GitHub-native discovery, automatic route inference, single
- *  default-theme capture, built-in route cap, no scroll-GIF). */
+ *  #3612 / #4109). Absent ⇒ byte-identical to today (GitHub-native discovery, automatic route inference,
+ *  single default-theme capture, built-in route cap, no scroll-GIF, no localStorage theme forcing). */
 export type VisualCaptureConfig = {
   preview?: VisualPreviewInput | null | undefined;
   routes?: VisualRoutesInput | null | undefined;
   themes?: readonly ShotTheme[] | null | undefined;
   gif?: boolean | null | undefined;
+  /** #4109: the localStorage key `emulateMediaFeatures`-driven captures fall back to for a target whose
+   *  theming reads an explicit stored preference instead of `prefers-color-scheme` — see shot.ts's
+   *  `CaptureShotOptions.theme` doc for the verified finding this fixes. null/undefined (default) ⇒ no
+   *  localStorage write, byte-identical to today. Only takes effect when `themes` is also configured. */
+  themeStorageKey?: string | null | undefined;
 };
 
 /**
@@ -339,6 +357,10 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
   // capturePage/captureShot already treat an undefined theme as "no emulation call at all", so this one
   // iteration is byte-identical to every pre-#3678 call.
   const themes: readonly (ShotTheme | undefined)[] = visualConfig?.themes && visualConfig.themes.length > 0 ? visualConfig.themes : [undefined];
+  // #4109: the localStorage fallback only ever matters alongside a configured theme — resolved once, threaded
+  // through every capturePage/captureScrollGif call below, each of which independently no-ops it when its own
+  // `theme` iteration is undefined (the untagged default pass).
+  const themeStorageKey = visualConfig?.themeStorageKey ? visualConfig.themeStorageKey : undefined;
   const captureRoutes: CaptureRoute[] = [];
   for (const theme of themes) {
     for (const path of routes) {
@@ -346,10 +368,10 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
       const afterPage = previewBase ? joinUrl(previewBase, path) : "";
       // Render desktop + mobile for each slot in parallel (4 PNGs/route) to bound wall-clock.
       const [beforeShot, beforeMobileShot, afterShot, afterMobileShot] = await Promise.all([
-        capturePage(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT, diffAvailable, theme),
-        capturePage(env, target, beforePage, "before", "mobile", MOBILE_VIEWPORT, diffAvailable, theme),
-        afterPage ? capturePage(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, diffAvailable, theme) : Promise.resolve<{ url?: string | undefined; png?: Uint8Array | undefined }>({ url: afterPlaceholder }),
-        afterPage ? capturePage(env, target, afterPage, "after", "mobile", MOBILE_VIEWPORT, diffAvailable, theme) : Promise.resolve<{ url?: string | undefined; png?: Uint8Array | undefined }>({ url: afterPlaceholder }),
+        capturePage(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT, diffAvailable, theme, themeStorageKey),
+        capturePage(env, target, beforePage, "before", "mobile", MOBILE_VIEWPORT, diffAvailable, theme, themeStorageKey),
+        afterPage ? capturePage(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, diffAvailable, theme, themeStorageKey) : Promise.resolve<{ url?: string | undefined; png?: Uint8Array | undefined }>({ url: afterPlaceholder }),
+        afterPage ? capturePage(env, target, afterPage, "after", "mobile", MOBILE_VIEWPORT, diffAvailable, theme, themeStorageKey) : Promise.resolve<{ url?: string | undefined; png?: Uint8Array | undefined }>({ url: afterPlaceholder }),
       ]);
       // A diff needs BOTH sides' real bytes — a placeholder/dash slot (no preview yet, auth-walled, render
       // failure) has no `png`, so compareCapturedScreenshots degrades to null exactly like a missing shot does.
@@ -365,8 +387,8 @@ export async function buildCapture(env: Env, token: string, target: CaptureTarge
       ]);
       const [beforeGifUrl, afterGifUrl] = gifWanted
         ? await Promise.all([
-            captureScrollGif(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT, theme),
-            afterPage ? captureScrollGif(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, theme) : Promise.resolve<string | undefined>(undefined),
+            captureScrollGif(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT, theme, themeStorageKey),
+            afterPage ? captureScrollGif(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, theme, themeStorageKey) : Promise.resolve<string | undefined>(undefined),
           ])
         : [undefined, undefined];
       captureRoutes.push({

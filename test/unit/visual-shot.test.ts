@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
   launch: vi.fn(),
   emulateMediaFeatures: vi.fn(async () => undefined),
+  reload: vi.fn(async () => undefined),
   evaluate: vi.fn(),
   // captureScrollFrames' FIRST page.evaluate() call queries scrollHeight; every later call (scrollTo, the
   // settle delay) discards its return value — so only the first call's resolved value matters to the code
@@ -85,7 +86,11 @@ describe("visual screenshot on-demand SSRF guard", () => {
       } catch {
         // expected — see above.
       }
-      return mocks.evaluateCallCount === 1 ? mocks.scrollHeight : undefined;
+      // The height/scrollHeight probe is the only zero-arg evaluate() call in either function — everything
+      // else (scrollTo, the #4109 localStorage-forcing callback) always passes at least one extra arg. Keying
+      // off arg count (not call order) keeps this resolvable regardless of whether a themeStorageKey-forcing
+      // evaluate() call runs BEFORE the height probe, which it now can (#4109).
+      return fnArgs.length === 0 ? mocks.scrollHeight : undefined;
     });
     mocks.launch.mockImplementation(async () => {
       let onRequest: ((request: ReturnType<typeof makeRequest>) => void) | undefined;
@@ -101,6 +106,7 @@ describe("visual screenshot on-demand SSRF guard", () => {
             onRequest?.(makeRequest(url));
             if (mocks.finalUrl !== url) onRequest?.(makeRequest(mocks.finalUrl));
           }),
+          reload: mocks.reload,
           url: vi.fn(() => mocks.finalUrl),
           screenshot: mocks.screenshot,
           evaluate: mocks.evaluate,
@@ -286,6 +292,40 @@ describe("visual screenshot on-demand SSRF guard", () => {
     expect(mocks.emulateMediaFeatures).not.toHaveBeenCalled();
   });
 
+  it("forces the theme via localStorage.setItem + reload when both theme and themeStorageKey are set (#4109)", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    await captureShot(env(), "https://preview.pages.dev/page", undefined, { theme: "dark", themeStorageKey: "theme" });
+    expect(mocks.evaluate).toHaveBeenCalledWith(expect.any(Function), "theme", "dark");
+    expect(mocks.reload).toHaveBeenCalledWith({ waitUntil: "networkidle0", timeout: 20000 });
+  });
+
+  it("never forces a theme via localStorage/reload when no themeStorageKey is configured — byte-identical to pre-#4109", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    await captureShot(env(), "https://preview.pages.dev/page", undefined, { theme: "dark" });
+    expect(mocks.reload).not.toHaveBeenCalled();
+  });
+
+  it("never forces a theme via localStorage/reload when themeStorageKey is set but theme is not (#4109)", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    await captureShot(env(), "https://preview.pages.dev/page", undefined, { themeStorageKey: "theme" });
+    expect(mocks.emulateMediaFeatures).not.toHaveBeenCalled();
+    expect(mocks.reload).not.toHaveBeenCalled();
+  });
+
+  it("handleShot's on-demand render reads &themeStorageKey= only alongside a recognized &theme= (#4109)", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    const response = await handleShot(shotRequest(`url=${encodeURIComponent("https://preview.pages.dev/page")}&theme=dark&themeStorageKey=theme`), env());
+    expect(response.status).toBe(200);
+    expect(mocks.reload).toHaveBeenCalledWith({ waitUntil: "networkidle0", timeout: 20000 });
+  });
+
+  it("handleShot ignores &themeStorageKey= when &theme= is absent (#4109)", async () => {
+    mocks.finalUrl = "https://preview.pages.dev/page";
+    const response = await handleShot(shotRequest(`url=${encodeURIComponent("https://preview.pages.dev/page")}&themeStorageKey=theme`), env());
+    expect(response.status).toBe(200);
+    expect(mocks.reload).not.toHaveBeenCalled();
+  });
+
   it("captureShot rejects an unsafe target before launching the browser (defense-in-depth)", async () => {
     const result = await captureShot(env(), "http://127.0.0.1/admin");
     expect(result).toEqual({ png: null, authWalled: false });
@@ -341,7 +381,11 @@ describe("captureScrollFrames (#3612 scroll-through GIF evidence)", () => {
       } catch {
         // expected — see above.
       }
-      return mocks.evaluateCallCount === 1 ? mocks.scrollHeight : undefined;
+      // The height/scrollHeight probe is the only zero-arg evaluate() call in either function — everything
+      // else (scrollTo, the #4109 localStorage-forcing callback) always passes at least one extra arg. Keying
+      // off arg count (not call order) keeps this resolvable regardless of whether a themeStorageKey-forcing
+      // evaluate() call runs BEFORE the height probe, which it now can (#4109).
+      return fnArgs.length === 0 ? mocks.scrollHeight : undefined;
     });
     mocks.launch.mockImplementation(async () => {
       let onRequest: ((request: ReturnType<typeof makeRequest>) => void) | undefined;
@@ -357,6 +401,7 @@ describe("captureScrollFrames (#3612 scroll-through GIF evidence)", () => {
             onRequest?.(makeRequest(url));
             if (mocks.finalUrl !== url) onRequest?.(makeRequest(mocks.finalUrl));
           }),
+          reload: mocks.reload,
           url: vi.fn(() => mocks.finalUrl),
           screenshot: mocks.screenshot,
           evaluate: mocks.evaluate,
@@ -391,6 +436,17 @@ describe("captureScrollFrames (#3612 scroll-through GIF evidence)", () => {
   it("emulates prefers-color-scheme when a theme is requested, same as captureShot", async () => {
     await captureScrollFrames(env(), "https://preview.pages.dev/page", { width: 1440, height: 900 }, { theme: "dark" });
     expect(mocks.emulateMediaFeatures).toHaveBeenCalledWith([{ name: "prefers-color-scheme", value: "dark" }]);
+  });
+
+  it("forces the theme via localStorage.setItem + reload when both theme and themeStorageKey are set, mirroring captureShot (#4109)", async () => {
+    await captureScrollFrames(env(), "https://preview.pages.dev/page", { width: 1440, height: 900 }, { theme: "dark", themeStorageKey: "theme" });
+    expect(mocks.evaluate).toHaveBeenCalledWith(expect.any(Function), "theme", "dark");
+    expect(mocks.reload).toHaveBeenCalledWith({ waitUntil: "networkidle0", timeout: 20000 });
+  });
+
+  it("never forces a theme via localStorage/reload when no themeStorageKey is configured — byte-identical to pre-#4109", async () => {
+    await captureScrollFrames(env(), "https://preview.pages.dev/page", { width: 1440, height: 900 }, { theme: "dark" });
+    expect(mocks.reload).not.toHaveBeenCalled();
   });
 
   it("returns no frames when a redirect leads to a private endpoint", async () => {

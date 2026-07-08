@@ -3726,6 +3726,7 @@ describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
       themes: [],
       gif: false,
       enabled: null,
+      themeStorageKey: null,
     });
     expect(m.review.present).toBe(true);
     expect(parseFocusManifest({ review: reviewConfigToJson(m.review) }).review.visual).toEqual(m.review.visual);
@@ -3821,7 +3822,7 @@ describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
   it("resolveReviewVisualConfig: null manifest yields empty defaults; a set manifest passes through", () => {
     expect(resolveReviewVisualConfig(null)).toEqual({ ...EMPTY_VISUAL_CONFIG });
     const manifest = parseFocusManifest({ review: { visual: { routes: { paths: ["/app"] } } } });
-    expect(resolveReviewVisualConfig(manifest)).toEqual({ preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null }, themes: [], gif: false, enabled: null });
+    expect(resolveReviewVisualConfig(manifest)).toEqual({ preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null }, themes: [], gif: false, enabled: null, themeStorageKey: null });
   });
 });
 
@@ -3906,7 +3907,7 @@ describe("review.visual.gif (#3612 scroll-through GIF capture)", () => {
 
   it("composes with themes — both configured independently and both round-trip", () => {
     const m = parseFocusManifest({ review: { visual: { gif: true, themes: ["dark"] } } });
-    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: true, enabled: null });
+    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: true, enabled: null, themeStorageKey: null });
     expect(reviewConfigToJson(m.review)).toEqual({ visual: { themes: ["dark"], gif: true } });
   });
 
@@ -3967,6 +3968,67 @@ describe("review.visual.enabled (#4083 config-as-code enable/disable)", () => {
     const globalDefault = parseReviewConfigMapping({ visual: { enabled: false } }, []);
     const perRepo = parseReviewConfigMapping({ visual: { routes: { paths: ["/app"] } } }, []);
     expect(overlayReviewConfig(globalDefault, perRepo).visual.enabled).toBe(false);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.routes.paths).toEqual(["/app"]);
+  });
+});
+
+describe("review.visual.theme_storage_key (#4109 localStorage theme-forcing fallback)", () => {
+  it("parses theme_storage_key, marks present, and round-trips", () => {
+    const m = parseFocusManifest({ review: { visual: { theme_storage_key: "theme" } } });
+    expect(m.review.visual.themeStorageKey).toBe("theme");
+    expect(m.review.present).toBe(true);
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { theme_storage_key: "theme" } });
+  });
+
+  it("absent theme_storage_key stays null and does not mark review present on its own", () => {
+    expect(parseFocusManifest({}).review.visual.themeStorageKey).toBeNull();
+    expect(parseFocusManifest({ review: { visual: {} } }).review.present).toBe(false);
+  });
+
+  it("null theme_storage_key does not serialize into the round-tripped visual block", () => {
+    const m = parseFocusManifest({ review: { visual: { gif: true } } });
+    expect(m.review.visual.themeStorageKey).toBeNull();
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { gif: true } });
+  });
+
+  it("drops a non-public-safe value with a warning and falls back to null", () => {
+    const bad = parseFocusManifest({ review: { visual: { theme_storage_key: "reward payout" } } });
+    expect(bad.review.visual.themeStorageKey).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.theme_storage_key.*not public-safe/.test(w))).toBe(true);
+  });
+
+  it("warns and defaults to null when theme_storage_key is not a string", () => {
+    const bad = parseFocusManifest({ review: { visual: { theme_storage_key: 42 } } });
+    expect(bad.review.visual.themeStorageKey).toBeNull();
+    expect(bad.warnings.some((w) => /theme_storage_key.*must be a non-empty string/.test(w))).toBe(true);
+  });
+
+  it("marks present via theme_storage_key alone (preview + routes + themes + gif + enabled all empty)", () => {
+    const m = parseFocusManifest({ review: { visual: { theme_storage_key: "colorMode" } } });
+    expect(m.review.present).toBe(true);
+  });
+
+  it("composes with themes — both configured independently and both round-trip", () => {
+    const m = parseFocusManifest({ review: { visual: { themes: ["dark"], theme_storage_key: "theme" } } });
+    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: false, enabled: null, themeStorageKey: "theme" });
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { themes: ["dark"], theme_storage_key: "theme" } });
+  });
+
+  it("resolveReviewVisualConfig passes a configured theme_storage_key through", () => {
+    const manifest = parseFocusManifest({ review: { visual: { theme_storage_key: "theme" } } });
+    expect(resolveReviewVisualConfig(manifest).themeStorageKey).toBe("theme");
+  });
+
+  it("overlay: a per-repo theme_storage_key wins over a global-default value", () => {
+    const globalDefault = parseReviewConfigMapping({ visual: { theme_storage_key: "theme" } }, []);
+    const perRepo = parseReviewConfigMapping({ visual: { theme_storage_key: "colorMode" } }, []);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.themeStorageKey).toBe("colorMode");
+  });
+
+  it("overlay: an unset per-repo theme_storage_key falls back to the global-default value", () => {
+    const globalDefault = parseReviewConfigMapping({ visual: { theme_storage_key: "theme" } }, []);
+    const perRepo = parseReviewConfigMapping({ visual: { routes: { paths: ["/app"] } } }, []);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.themeStorageKey).toBe("theme");
     expect(overlayReviewConfig(globalDefault, perRepo).visual.routes.paths).toEqual(["/app"]);
   });
 });
