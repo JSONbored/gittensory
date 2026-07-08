@@ -346,7 +346,6 @@ import {
   buildQueueHealth,
   buildRoleContext,
   detectGittensorContributor,
-  hasClearNoIssueRationale,
   PR_PANEL_RETRIGGER_MARKER,
   type ContributorProfile,
 } from "../signals/engine";
@@ -8881,7 +8880,6 @@ async function maybePublishPrPublicSurface(
         testFileCount: manifestFiles.filter((file) => isTestPath(file.path))
           .length,
         passedValidationCount: hasValidationNote(pr.body ?? "") ? 1 : 0,
-        hasNoIssueRationale: hasClearNoIssueRationale(pr),
       });
       const policyCodes = new Set([
         "manifest_blocked_path",

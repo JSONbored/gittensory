@@ -584,9 +584,10 @@ describe("buildFocusManifestGuidance", () => {
     expect(guidance.findings.some((finding) => finding.code === "manifest_linked_issue_required")).toBe(true);
   });
 
-  it("REGRESSION (#no-issue-rationale-exemption): does not require a linked issue when the caller reports a clear no-issue rationale", () => {
-    const guidance = buildFocusManifestGuidance({ manifest: wanted, changedPaths: ["src/x.ts"], linkedIssueCount: 0, testFileCount: 1, hasNoIssueRationale: true });
-    expect(guidance.findings.some((finding) => finding.code === "manifest_linked_issue_required")).toBe(false);
+  it("REGRESSION (#manifest-linked-issue-rationale-bypass): keeps required linked-issue enforcement strict", () => {
+    const guidance = buildFocusManifestGuidance({ manifest: wanted, changedPaths: ["src/x.ts"], linkedIssueCount: 0, testFileCount: 1 });
+    expect(guidance.findings.some((finding) => finding.code === "manifest_linked_issue_required")).toBe(true);
+    expect(guidance.publicNextSteps).toContain("Link the relevant tracked issue; the maintainer requires linked issues on PRs.");
   });
 
   it("prefers a linked issue under the preferred policy", () => {
