@@ -152,6 +152,7 @@ export { resolvePlanOverallStatus, type PlanOverallStatus } from "./plan-overall
 export { hasPlanReadySteps } from "./plan-ready.js";
 export { isPlanTerminated } from "./plan-terminated.js";
 export * from "./plan-templates.js";
+export * from "./issue-plan-decomposition.js";
 export {
   PROMPT_PACKET_REDACTED_PATH,
   PROMPT_PACKET_REDACTED_TERM,
