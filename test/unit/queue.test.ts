@@ -17661,7 +17661,10 @@ describe("queue processors", () => {
             title: "Update the app index route",
             state: "open",
             user: { login: "oktofeesh1" },
-            head: { sha: "visualcfgdisabled" },
+            // Empty sha + a present ref (the opposite combination from the sibling "threads review.visual config"
+            // test's { sha: "visualcfg123" }) so between the two tests, both branches of captureTarget's
+            // optional headSha/headRef spreads are exercised.
+            head: { sha: "", ref: "feature/visual-config-disabled" },
             labels: [{ name: "bug" }],
             body: "Fixes #1\n\nValidation: npm test",
           },

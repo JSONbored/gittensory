@@ -10231,6 +10231,13 @@ async function maybePublishPrPublicSurface(
           // (the default for every repo today) ⇒ EMPTY_VISUAL_CONFIG ⇒ buildCapture's discovery/inference
           // behavior is byte-identical to pre-#3609.
           const reviewVisualConfig = await resolveVisualCaptureConfig(env, repoFullName);
+          const captureTarget = {
+            repoFullName,
+            prNumber: pr.number,
+            ...(pr.headSha ? { headSha: pr.headSha } : {}),
+            ...(pr.headRef ? { headRef: pr.headRef } : {}),
+            previewFromChecks: true,
+          };
           // review.visual.enabled (#4083): a config-as-code override layered on top of the screenshotsAllowed
           // env-var gate above, not a replacement for it. Unset/true ⇒ defer to that gate's decision (buildCapture
           // runs exactly as before); explicit `false` (global default or per-repo, VPS-only) ⇒ force capture off
@@ -10239,20 +10246,7 @@ async function maybePublishPrPublicSurface(
           const capture =
             reviewVisualConfig.enabled === false
               ? { routes: [], previewPending: false }
-              : await buildCapture(
-                  env,
-                  token,
-                  {
-                    repoFullName,
-                    prNumber: pr.number,
-                    ...(pr.headSha ? { headSha: pr.headSha } : {}),
-                    ...(pr.headRef ? { headRef: pr.headRef } : {}),
-                    previewFromChecks: true,
-                  },
-                  visualFiles,
-                  githubRateLimitAdmissionKeyForInstallation(installationId),
-                  reviewVisualConfig,
-                );
+              : await buildCapture(env, token, captureTarget, visualFiles, githubRateLimitAdmissionKeyForInstallation(installationId), reviewVisualConfig);
           beforeAfter = capture.routes;
           // Visual self-poll: the FIRST capture returns a "loading" placeholder for the AFTER shot when the
           // preview deploy isn't live yet (capture.previewPending). Schedule a delayed re-review to re-capture
