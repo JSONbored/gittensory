@@ -42,6 +42,19 @@ export interface GateEvalRow {
   decided: number; // predictions that have a known outcome
   mergePrecision: number | null;
   closePrecision: number | null;
+  /** #2348: mergeConfirmed, discounted by REVERSAL_DISCOUNT_WEIGHT for any target later marked
+   *  reversal_reverted (a merge a human subsequently undid) -- see the constant's own doc comment for the
+   *  formula and rationale. wouldMerge (the denominator) is UNCHANGED -- only the credit for a merge that
+   *  didn't hold up is discounted, not whether a merge was predicted at all. */
+  weightedMergeConfirmed: number;
+  /** #2348: closeConfirmed, discounted by REVERSAL_DISCOUNT_WEIGHT for any target later marked
+   *  reversal_reopened (a bot-closed PR a contributor disputed by reopening it). wouldClose is UNCHANGED,
+   *  same rationale as weightedMergeConfirmed. */
+  weightedCloseConfirmed: number;
+  /** weightedMergeConfirmed / wouldMerge, or null when wouldMerge is 0. Always <= mergePrecision. */
+  weightedMergePrecision: number | null;
+  /** weightedCloseConfirmed / wouldClose, or null when wouldClose is 0. Always <= closePrecision. */
+  weightedClosePrecision: number | null;
 }
 
 export interface GateEvalReport {
@@ -52,12 +65,26 @@ export interface GateEvalReport {
 
 const MIN_DECIDED_FOR_SIGNAL = 10;
 
+/** #2348: the value-weighting formula's ONE tunable knob, deliberately hardcoded (not read from config/env)
+ *  so the objective function itself stays auditable — changing what "accuracy" measures is a code change +
+ *  review, not a runtime toggle. 0 = a merge/close later reversed earns ZERO credit toward
+ *  weightedMergeConfirmed/weightedCloseConfirmed (full discount): a miner or the fleet cannot game the
+ *  accuracy number by producing high volumes of barely-passing, later-reverted PRs, because a reverted merge
+ *  contributes nothing to the weighted-correct bucket regardless of volume. This is a DISCOUNT on credit, not
+ *  a change to the denominator — wouldMerge/wouldClose (how many merge/close predictions were made) is
+ *  unchanged, so weightedMergePrecision/weightedClosePrecision can only ever be <= the raw precision, never
+ *  higher. Bump this constant's value (and this comment) if the maintainer later wants partial credit
+ *  instead of a hard zero — never make it runtime-configurable. */
+export const REVERSAL_DISCOUNT_WEIGHT = 0;
+
 /** Join the latest prediction (gate_decision) and the latest ground truth (pr_outcome) per target, then
  *  fold into a per-project confusion matrix + precisions. Pure read; fail-safe → empty report.
  *  `source` scopes the predictions to ONE writer (#preconv-parity standalone accuracy) — default the
  *  authoritative 'reviewbot' rows when set; omit to score ALL writers' predictions as before. The
  *  pr_outcome (ground truth) is the human's realized merge/close, so it is NOT source-scoped — both
- *  systems are graded against the same answer key. */
+ *  systems are graded against the same answer key. Also LEFT JOINs a reversal existence check (#2348) so the
+ *  fold below can additionally compute weightedMergeConfirmed/weightedCloseConfirmed alongside the existing
+ *  raw counts — see REVERSAL_DISCOUNT_WEIGHT's doc comment for the formula. */
 export async function computeGateEval(env: Env, opts: { days: number; nowMs: number; source?: string }): Promise<GateEvalReport> {
   const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(opts.days, 730) : 90;
   const fromIso = new Date(opts.nowMs - days * 86_400_000).toISOString().slice(0, 10);
@@ -74,16 +101,21 @@ export async function computeGateEval(env: Env, opts: { days: number; nowMs: num
       SELECT target_id, decision AS truth, MAX(created_at) AS t
       FROM review_audit WHERE event_type = 'pr_outcome' AND decision IS NOT NULL
       GROUP BY target_id
+    ),
+    rev AS (
+      SELECT DISTINCT target_id FROM review_audit WHERE event_type IN ('reversal_reverted', 'reversal_reopened')
     )
-    SELECT gd.project AS project, gd.pred AS pred, po.truth AS truth, COUNT(*) AS n
+    SELECT gd.project AS project, gd.pred AS pred, po.truth AS truth,
+           CASE WHEN rev.target_id IS NOT NULL THEN 1 ELSE 0 END AS reversed, COUNT(*) AS n
     FROM gd JOIN po ON gd.target_id = po.target_id
-    GROUP BY gd.project, gd.pred, po.truth`;
+    LEFT JOIN rev ON gd.target_id = rev.target_id
+    GROUP BY gd.project, gd.pred, po.truth, reversed`;
 
-  let cells: Array<{ project: string; pred: string; truth: string; n: number }> = [];
+  let cells: Array<{ project: string; pred: string; truth: string; reversed: number; n: number }> = [];
   try {
     const stmt = storage(env).prepare(sql);
     const bound = opts.source ? stmt.bind(fromIso, opts.source) : stmt.bind(fromIso);
-    const res = await bound.all<{ project: string; pred: string; truth: string; n: number }>();
+    const res = await bound.all<{ project: string; pred: string; truth: string; reversed: number; n: number }>();
     cells = res.results ?? [];
   } catch {
     return { rows: [], hasSignal: false };
@@ -93,7 +125,10 @@ export async function computeGateEval(env: Env, opts: { days: number; nowMs: num
   const row = (p: string): GateEvalRow => {
     let r = byProject.get(p);
     if (!r) {
-      r = { project: p, wouldMerge: 0, mergeConfirmed: 0, mergeFalse: 0, wouldClose: 0, closeConfirmed: 0, closeFalse: 0, hold: 0, decided: 0, mergePrecision: null, closePrecision: null };
+      r = {
+        project: p, wouldMerge: 0, mergeConfirmed: 0, mergeFalse: 0, wouldClose: 0, closeConfirmed: 0, closeFalse: 0, hold: 0, decided: 0,
+        mergePrecision: null, closePrecision: null, weightedMergeConfirmed: 0, weightedCloseConfirmed: 0, weightedMergePrecision: null, weightedClosePrecision: null,
+      };
       byProject.set(p, r);
     }
     return r;
@@ -102,14 +137,21 @@ export async function computeGateEval(env: Env, opts: { days: number; nowMs: num
   for (const c of cells) {
     const r = row(c.project);
     r.decided += c.n;
+    // A reversed cell's credit toward the CONFIRMED (weighted) bucket is discounted by REVERSAL_DISCOUNT_WEIGHT;
+    // the raw (unweighted) buckets below are always the full count, byte-identical to pre-#2348 behavior.
+    const weightedN = c.reversed ? c.n * REVERSAL_DISCOUNT_WEIGHT : c.n;
     if (c.pred === "merge") {
       r.wouldMerge += c.n;
-      if (c.truth === "merged") r.mergeConfirmed += c.n;
-      else if (c.truth === "closed") r.mergeFalse += c.n;
+      if (c.truth === "merged") {
+        r.mergeConfirmed += c.n;
+        r.weightedMergeConfirmed += weightedN;
+      } else if (c.truth === "closed") r.mergeFalse += c.n;
     } else if (c.pred === "close") {
       r.wouldClose += c.n;
-      if (c.truth === "closed") r.closeConfirmed += c.n;
-      else if (c.truth === "merged") r.closeFalse += c.n;
+      if (c.truth === "closed") {
+        r.closeConfirmed += c.n;
+        r.weightedCloseConfirmed += weightedN;
+      } else if (c.truth === "merged") r.closeFalse += c.n;
     } else if (c.pred === "hold") {
       r.hold += c.n;
     }
@@ -119,6 +161,8 @@ export async function computeGateEval(env: Env, opts: { days: number; nowMs: num
     ...r,
     mergePrecision: r.wouldMerge > 0 ? r.mergeConfirmed / r.wouldMerge : null,
     closePrecision: r.wouldClose > 0 ? r.closeConfirmed / r.wouldClose : null,
+    weightedMergePrecision: r.wouldMerge > 0 ? r.weightedMergeConfirmed / r.wouldMerge : null,
+    weightedClosePrecision: r.wouldClose > 0 ? r.weightedCloseConfirmed / r.wouldClose : null,
   }));
   rows.sort((a, b) => a.project.localeCompare(b.project));
   return { rows, hasSignal: rows.some((r) => r.decided >= MIN_DECIDED_FOR_SIGNAL) };
