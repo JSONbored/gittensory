@@ -126,11 +126,7 @@ npm run ui:build
 
 <p align="center">
   <a href="https://gittensor.io/miners/repository?name=JSONbored/gittensory">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/JSONbored/gittensory/gittensor-impact-assets/gittensor-impact-dark.svg">
-      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/JSONbored/gittensory/gittensor-impact-assets/gittensor-impact-light.svg">
-      <img src="https://raw.githubusercontent.com/JSONbored/gittensory/gittensor-impact-assets/gittensor-impact-light.svg" alt="Gittensor contributor impact" width="600">
-    </picture>
+    <img src="https://raw.githubusercontent.com/JSONbored/gittensory/gittensor-impact-assets/gittensor-impact-dark.svg" alt="Gittensor contributor impact" width="600">
   </a>
 </p>
 
