@@ -48,12 +48,31 @@ export async function ensurePullRequestAssignee(
     return { applied: true };
   }
 
-  const result = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/assignees", {
-    owner,
-    repo,
-    issue_number: pullNumber,
-    assignees: [login],
-  });
+  let result;
+  try {
+    result = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/assignees", {
+      owner,
+      repo,
+      issue_number: pullNumber,
+      assignees: [login],
+    });
+  } catch (error: unknown) {
+    // GitHub blocks assigning bot/agent logins via App installation tokens (HTTP 403). This is a GitHub
+    // platform restriction with no workaround using installation-token auth. Return applied:false so the
+    // caller can fall back to a by:{login} label instead of propagating an unactionable error.
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "status" in error &&
+      (error as { status: number }).status === 403 &&
+      "message" in error &&
+      typeof (error as { message: unknown }).message === "string" &&
+      (error as { message: string }).message.includes("Assigning agents is not supported")
+    ) {
+      return { applied: false };
+    }
+    throw error;
+  }
   const resultAssignees = (result.data.assignees ?? []) as GitHubUser[];
   return { applied: resultAssignees.some((assignee) => assignee.login?.toLowerCase() === login.toLowerCase()) };
 }
