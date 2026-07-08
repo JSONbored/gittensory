@@ -114,6 +114,7 @@ export async function startFixtureServer(
     prTextLintStatus?: number;
     onPacketRequest?: (body: unknown) => void;
     onApiRequest?: (request: IncomingMessage) => void;
+    validateConfigWarnings?: string[];
   } = {},
 ) {
   server = createServer(async (request, response) => {
@@ -250,7 +251,7 @@ export async function startFixtureServer(
         JSON.stringify(
           malformed
             ? { present: false, status: "error", warnings: ["Manifest content was not valid JSON; ignoring it and falling back to deterministic signals."], normalized: { present: false, source: "repo_file" } }
-            : { present: true, status: "ok", warnings: [], normalized: { present: true, source: "repo_file", wantedPaths: ["src/"] } },
+            : { present: true, status: "ok", warnings: options.validateConfigWarnings ?? [], normalized: { present: true, source: "repo_file", wantedPaths: ["src/"] } },
         ),
       );
       return;

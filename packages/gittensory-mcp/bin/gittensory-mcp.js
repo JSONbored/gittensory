@@ -1632,6 +1632,12 @@ async function lintPrTextCli(args) {
   for (const fix of payload.fixes ?? []) process.stdout.write(`- ${fix}\n`);
 }
 
+function sanitizePlainTextTerminalOutput(value) {
+  return String(value)
+    .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*(?:\x1b\\)|[@-_])/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+}
+
 function printValidateConfigHelp() {
   process.stdout.write(
     [
@@ -1664,7 +1670,7 @@ async function validateConfigCli(args) {
   }
   process.stdout.write(`Manifest validation: ${payload.status}\n`);
   process.stdout.write(`present=${payload.present}\n`);
-  for (const warning of payload.warnings ?? []) process.stdout.write(`- ${warning}\n`);
+  for (const warning of payload.warnings ?? []) process.stdout.write(`- ${sanitizePlainTextTerminalOutput(warning)}\n`);
 }
 
 function printSlopRiskHelp() {
