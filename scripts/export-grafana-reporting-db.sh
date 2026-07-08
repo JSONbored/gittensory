@@ -137,7 +137,7 @@ SQL
 
 # Incremental fast-path (#3895): a live review pipeline is bursty -- most 30s cycles change nothing since the
 # last export, yet the full rebuild below re-exports and re-imports every row of every table every time. Hash
-# the complete source rows for mutable tables (pull_requests, review_targets) since an in-place UPDATE can
+# the complete source rows for mutable tables (pull_requests, review_targets, issues) since an in-place UPDATE can
 # leave row count and max(updated_at) unchanged; use a cheap count+max aggregate for insert-only tables
 # (review_audit, ai_usage_events) since nothing ever edits a row in place there, and ai_usage_events grows
 # without bound so a full dump/hash on every cycle would reproduce the unbounded I/O #3895 was fixing. Skip
@@ -164,8 +164,8 @@ sqlite_table_fingerprint() {
 # review_audit/ai_usage_events are insert-only event/audit logs (nothing ever UPDATEs a row in
 # place), so a row count + max(created_at) aggregate can never miss a real change -- and unlike
 # the full-dump hash above, it stays O(1)-ish instead of O(row-count) as ai_usage_events grows
-# without bound. pull_requests/review_targets DO receive in-place UPDATEs (e.g. a title or state
-# change that doesn't necessarily bump updated_at in lockstep), so those still need the full
+# without bound. pull_requests/review_targets/issues DO receive in-place UPDATEs (e.g. a title or
+# state change that doesn't necessarily bump updated_at in lockstep), so those still need the full
 # content hash to catch an edit a count+max aggregate would silently miss.
 sqlite_append_only_fingerprint() {
   tbl="$1"
@@ -175,7 +175,7 @@ sqlite_append_only_fingerprint() {
 sqlite_source_fingerprint() {
   [ -s "$APP_DB" ] || return 1
   fp=""
-  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events"; do
+  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events" "issues"; do
     if source_table_exists "$tbl"; then
       case "$tbl" in
         review_audit | ai_usage_events) val="$(sqlite_append_only_fingerprint "$tbl")" || return 1 ;;
@@ -198,7 +198,7 @@ pg_append_only_fingerprint() {
 
 pg_source_fingerprint() {
   fp=""
-  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events"; do
+  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events" "issues"; do
     if pg_table_exists "$tbl"; then
       case "$tbl" in
         review_audit | ai_usage_events) val="$(pg_append_only_fingerprint "$tbl")" || return 1 ;;
@@ -282,6 +282,21 @@ CREATE TABLE ai_usage_events (
 CREATE INDEX ai_usage_events_feature_created_idx ON ai_usage_events(feature, created_at);
 CREATE INDEX ai_usage_events_model_created_idx ON ai_usage_events(model, created_at);
 CREATE INDEX ai_usage_events_provider_created_idx ON ai_usage_events(provider, created_at);
+
+-- #3716: minimal redacted mirror of the app `issues` table (webhook-observed, same philosophy as
+-- review_targets above) -- just enough for dashboard issue-activity stat panels. No title/labels/payload:
+-- unlike review_targets (whose title already surfaces on the PR table panel), this table backs count-only
+-- stat panels, so there is no dashboard need to carry issue titles into the reporting export at all.
+CREATE TABLE issues (
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX issues_updated_idx ON issues(updated_at);
+CREATE INDEX issues_state_idx ON issues(state);
+CREATE INDEX issues_created_idx ON issues(created_at);
 SQL
 
 if pg_enabled; then
@@ -296,7 +311,8 @@ if pg_enabled; then
      ! pg_table_exists "advisories" &&
      ! pg_table_exists "review_targets" &&
      ! pg_table_exists "ai_usage_events" &&
-     ! pg_table_exists "review_audit"; then
+     ! pg_table_exists "review_audit" &&
+     ! pg_table_exists "issues"; then
     if [ -s "$OUT_DB" ]; then
       rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
       echo "reporting export skipped: no reporting source tables in Postgres; preserving last good $OUT_DB" >&2
@@ -433,6 +449,20 @@ FROM ai_usage_events
     sqlite_import_csv "$AI_CSV" "ai_usage_events"
   fi
 
+  if pg_table_exists "issues"; then
+    ISSUES_CSV="$(csv_temp_file "issues")"
+    pg_copy_csv "
+SELECT
+  repo_full_name AS repo,
+  number,
+  state,
+  created_at,
+  updated_at
+FROM issues
+" "$ISSUES_CSV"
+    sqlite_import_csv "$ISSUES_CSV" "issues"
+  fi
+
   sqlite3 "$TMP_DB" "PRAGMA quick_check;" | grep -qx "ok"
   mv "$TMP_DB" "$OUT_DB"
   rm -f "$TMP_DB-wal" "$TMP_DB-shm"
@@ -459,7 +489,8 @@ if ! source_table_exists "pull_requests" &&
    ! source_table_exists "advisories" &&
    ! source_table_exists "review_targets" &&
    ! source_table_exists "ai_usage_events" &&
-   ! source_table_exists "review_audit"; then
+   ! source_table_exists "review_audit" &&
+   ! source_table_exists "issues"; then
   if [ -s "$OUT_DB" ]; then
     rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
     echo "reporting export skipped: no reporting source tables in $APP_DB; preserving last good $OUT_DB" >&2
@@ -628,6 +659,27 @@ SELECT
   ) AS metadata_json,
   created_at
 FROM main.ai_usage_events;
+DETACH report;
+"
+fi
+
+if source_table_exists "issues"; then
+  sqlite3 -cmd ".timeout 5000" "$APP_DB" "
+ATTACH '$TMP_DB_SQL' AS report;
+INSERT INTO report.issues (
+  repo,
+  number,
+  state,
+  created_at,
+  updated_at
+)
+SELECT
+  repo_full_name,
+  number,
+  state,
+  created_at,
+  updated_at
+FROM main.issues;
 DETACH report;
 "
 fi

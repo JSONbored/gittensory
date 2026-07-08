@@ -4,7 +4,8 @@
   "tags": ["gittensory", "maintainer"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 5,
+  "version": 6,
+  "description": "All panels, including the 'GitHub issues' row, read the local frser-sqlite-datasource reporting export (webhook-observed, consistent with this dashboard's own established datasource) rather than the grafana-github-datasource live-API plugin used on the sibling 'Gittensory — Upstream PRs & issues (GitHub)' dashboard -- so this only reflects repos/events this app has actually received webhooks for, not a full upstream census. For an upstream-accurate, time-range-independent open-issue count instead, see that sibling dashboard's 'Open issues' panel (#3716).",
   "editable": false,
   "graphTooltip": 1,
   "refresh": "1m",
@@ -136,6 +137,45 @@
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "right", "showLegend": true, "values": ["value", "percent"] }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "tooltip": { "mode": "single", "sort": "none" } },
       "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE verdict IS NOT NULL AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC", "rawQueryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE verdict IS NOT NULL AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC" }]
+    },
+    {
+      "type": "row",
+      "id": 11,
+      "title": "GitHub issues",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 }
+    },
+    {
+      "type": "stat",
+      "id": 12,
+      "title": "Issues opened",
+      "description": "Counts issues whose created_at falls in this window -- unlike every other panel on this dashboard (which key off updated_at), an issue's created_at never changes after the fact, so this is the one panel that answers 'newly opened' rather than 'most recently observed active' for the range (#3716).",
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 30 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short" }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS opened FROM issues WHERE unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS opened FROM issues WHERE unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}" }]
+    },
+    {
+      "type": "stat",
+      "id": 13,
+      "title": "Issues closed",
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 30 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short" }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "Issues open",
+      "description": "Counts issues whose most recent observed update falls in this window AND are currently 'open' -- the same in-window-latest-state snapshot semantics as 'Manual review' above, NOT a lifetime open-issue backlog: an issue opened long before this window and untouched since will not appear here. For the upstream-accurate, time-range-independent open-issue count, see the 'Open issues' panel on the 'Gittensory — Upstream PRs & issues (GitHub)' dashboard, which queries the live GitHub API instead of this webhook-observed local table (#3716).",
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 30 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short" }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     }
   ]
 }

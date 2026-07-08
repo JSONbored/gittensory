@@ -72,7 +72,7 @@ case "$args" in
     echo 'unexpected psql meta-command copy' >&2
     exit 9
     ;;
-  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*|*"information_schema.tables"*"review_audit"*)
+  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*|*"information_schema.tables"*"review_audit"*|*"information_schema.tables"*"issues"*)
     printf '1\\n'
     ;;
   *"information_schema.columns"*"ai_usage_events"*"estimated_neurons"*|\
@@ -94,6 +94,10 @@ case "$args" in
   *"FROM ai_usage_events"*)
     printf 'ai_review_pr,codex:gpt-5.5,codex,medium,ok,42,120,15,135,0.25,done,"{""repoFullName"" : ""JSONbored/gittensory"", ""pullNumber"" : 1678}",2026-06-28T00:00:00Z\\n'
     printf 'issue_plan,codex:gpt-5.5,codex,medium,ok,8,50,10,60,0.05,done,"{""repoFullName"" : ""JSONbored/gittensory"", ""pullNumber"" : null}",2026-06-28T00:01:00Z\\n'
+    ;;
+  *"FROM issues"*)
+    printf '"JSONbored/gittensory",1701,open,2026-06-28T20:00:00Z,2026-06-28T21:41:00Z\\n'
+    printf '"JSONbored/metagraphed",42,closed,2026-06-20T00:00:00Z,2026-06-28T21:42:00Z\\n'
     ;;
 esac
 `,
@@ -469,6 +473,107 @@ esac
     );
   });
 
+  // ── GitHub Issues stats mirror (#3716) ──────────────────────────────────────────────────────────────
+  it("exports a redacted issues mirror across every repo the app has observed, matching the dashboard's opened/closed/open stat queries", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE issues (
+        id TEXT PRIMARY KEY,
+        repo_full_name TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        state TEXT NOT NULL,
+        author_login TEXT,
+        labels_json TEXT NOT NULL DEFAULT '[]',
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO issues (id, repo_full_name, number, title, state, created_at, updated_at)
+      VALUES
+        ('JSONbored/gittensory#100', 'JSONbored/gittensory', 100, 'an open gittensory issue', 'open', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z'),
+        ('JSONbored/gittensory#101', 'JSONbored/gittensory', 101, 'a closed gittensory issue', 'closed', '2026-06-01T00:00:00Z', '2026-07-02T00:00:00Z'),
+        ('JSONbored/metagraphed#5', 'JSONbored/metagraphed', 5, 'an open metagraphed issue', 'open', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+
+    runExporter(root, appDb, outDb);
+
+    expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
+    // No title/labels/payload leak into the redacted mirror -- only the columns the stat panels need.
+    expect(sqlite(outDb, "SELECT sql FROM sqlite_master WHERE name = 'issues';")).not.toContain("title");
+    expect(sqlite(outDb, "SELECT repo || '|' || number || '|' || state FROM issues ORDER BY repo, number;")).toBe(
+      "JSONbored/gittensory|100|open\nJSONbored/gittensory|101|closed\nJSONbored/metagraphed|5|open",
+    );
+    // The exact query shapes the dashboard panels use (#3716): opened keys off created_at (an issue's
+    // created_at never moves), closed/open key off updated_at within the window, mirroring the existing
+    // PR panels' unixepoch(updated_at) convention.
+    const windowFrom = "unixepoch('2026-06-15T00:00:00Z')";
+    const windowTo = "unixepoch('2026-07-08T00:00:00Z')";
+    expect(sqlite(outDb, `SELECT count(*) FROM issues WHERE unixepoch(created_at) >= ${windowFrom} AND unixepoch(created_at) < ${windowTo};`)).toBe("2");
+    expect(sqlite(outDb, `SELECT count(*) FROM issues WHERE state='closed' AND unixepoch(updated_at) >= ${windowFrom} AND unixepoch(updated_at) < ${windowTo};`)).toBe("1");
+    expect(sqlite(outDb, `SELECT count(*) FROM issues WHERE state='open' AND unixepoch(updated_at) >= ${windowFrom} AND unixepoch(updated_at) < ${windowTo};`)).toBe("2");
+  });
+
+  it("keeps the reporting schema valid and the issues mirror empty when the source predates the issues table", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+        author_login TEXT, merged_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES ('JSONbored/gittensory', 6001, 'a PR from a pre-issues-table install', 'open', 'JSONbored', NULL, '2026-07-06T00:00:00Z', '2026-07-06T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+
+    runExporter(root, appDb, outDb);
+
+    expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
+    expect(sqlite(outDb, "SELECT count(*) FROM issues;")).toBe("0");
+    expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("1");
+  });
+
+  it("redoes the rebuild when an issue's state flips in place, even though row count and max(created_at) stay unchanged (full-hash fingerprint, not the append-only aggregate)", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE issues (
+        id TEXT PRIMARY KEY, repo_full_name TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL,
+        state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO issues (id, repo_full_name, number, title, state, created_at, updated_at)
+      VALUES ('JSONbored/gittensory#7001', 'JSONbored/gittensory', 7001, 'will be closed', 'open', '2026-07-06T00:00:00Z', '2026-07-06T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+    runExporter(root, appDb, outDb);
+    expect(sqlite(outDb, "SELECT state FROM issues WHERE number = 7001;")).toBe("open");
+
+    // Row count and max(created_at) are IDENTICAL before and after -- only `state` (and updated_at,
+    // deliberately left untouched here to isolate the effect) changed.
+    sqlite(appDb, "UPDATE issues SET state = 'closed' WHERE number = 7001;");
+    const second = runExporter(root, appDb, outDb);
+    expect(second).toContain("reporting export complete");
+    expect(sqlite(outDb, "SELECT state FROM issues WHERE number = 7001;")).toBe("closed");
+  });
+
   it("copies durable AI usage estimate rows into the redacted reporting database", () => {
     const root = tmpRoot();
     const appDb = join(root, "app.sqlite");
@@ -552,6 +657,12 @@ esac
     expect(sqlite(outDb, "SELECT provider || '|' || effort || '|' || input_tokens || '|' || output_tokens || '|' || total_tokens || '|' || cost_usd FROM ai_usage_events ORDER BY created_at;")).toBe("codex|medium|120|15|135|0.25\ncodex|medium|50|10|60|0.05");
     expect(sqlite(outDb, "SELECT DISTINCT json_extract(metadata_json, '$.repoFullName') FROM ai_usage_events;")).toBe("JSONbored/gittensory");
     expect(sqlite(outDb, "SELECT group_concat(json_extract(metadata_json, '$.private') IS NULL, '|') FROM ai_usage_events;")).toBe("1|1");
+    // #3716: the redacted `issues` mirror travels through the same Postgres COPY pipeline, across more than
+    // one repo -- proving the export is repo-agnostic, not a gittensory-only special case.
+    expect(sqlite(outDb, "SELECT count(*) FROM issues;")).toBe("2");
+    expect(sqlite(outDb, "SELECT repo || '|' || number || '|' || state FROM issues ORDER BY repo;")).toBe(
+      "JSONbored/gittensory|1701|open\nJSONbored/metagraphed|42|closed",
+    );
     expect(readdirSync(csvTmp)).toEqual([]);
   });
 

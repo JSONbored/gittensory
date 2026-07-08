@@ -21,6 +21,7 @@ type DashboardPanel = {
 };
 
 type Dashboard = {
+  description?: string;
   panels: DashboardPanel[];
 };
 
@@ -48,6 +49,12 @@ function reviewTargets(dashboard = readDashboard()): DashboardTarget[] {
   return dashboard.panels
     .flatMap((panel) => panel.targets ?? [])
     .filter((target) => target.queryText?.includes("review_targets"));
+}
+
+function issueTargets(dashboard = readDashboard()): DashboardTarget[] {
+  return dashboard.panels
+    .flatMap((panel) => panel.targets ?? [])
+    .filter((target) => target.queryText?.includes("FROM issues"));
 }
 
 function targetForPanel(panelId: number): DashboardTarget {
@@ -296,5 +303,67 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
 
     expect(rows).toContain("owner/repo|2|new|commented|comment|new row|2026-06-29T21:00:00Z");
     expect(rows).not.toContain("old row");
+  });
+
+  it("binds every issues panel query to Grafana's selected time range, keying opened off created_at and closed/open off updated_at (#3716)", () => {
+    const targets = issueTargets();
+
+    expect(targets.length).toBe(3);
+    for (const target of targets) {
+      expect(target.rawQueryText).toBe(target.queryText);
+      expect(target.queryText).toContain(timeFrom);
+      expect(target.queryText).toContain(timeTo);
+    }
+    // "Issues opened" is the deliberate exception to this dashboard's updated_at convention: an issue's
+    // created_at never changes after the fact, so it is the only one of the three keyed off created_at.
+    expect(targets.filter((target) => target.queryText?.includes("unixepoch(created_at)")).length).toBe(1);
+    expect(targets.filter((target) => target.queryText?.includes("unixepoch(updated_at)")).length).toBe(2);
+  });
+
+  it("documents the issues row's datasource choice and the in-window-snapshot caveat (#3716)", () => {
+    const dashboard = readDashboard();
+    expect(dashboard.description).toContain("frser-sqlite-datasource");
+    expect(dashboard.description).toContain("Upstream PRs & issues (GitHub)");
+
+    const panelsById = new Map(dashboard.panels.map((panel) => [panel.id, panel]));
+    const opened = panelsById.get(12);
+    expect(opened?.title).toBe("Issues opened");
+    expect(opened?.description).toContain("created_at");
+
+    const open = panelsById.get(14);
+    expect(open?.title).toBe("Issues open");
+    expect(open?.description?.length ?? 0).toBeGreaterThan(0);
+    expect(open?.description).toContain("window");
+    expect(open?.description).toContain("Open issues");
+  });
+
+  (sqliteCliAvailable ? it : it.skip)("counts issues opened/closed/open within the selected time window, each driven by a different row (#3716)", () => {
+    const root = tmpRoot();
+    const db = join(root, "reporting.sqlite");
+    sqlite(db, `
+      CREATE TABLE issues (
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO issues (repo, number, state, created_at, updated_at)
+      VALUES
+        ('owner/repo', 1, 'open', '2026-06-29T20:15:00Z', '2026-06-29T20:15:00Z'),
+        ('owner/repo', 2, 'closed', '2026-06-20T00:00:00Z', '2026-06-29T20:45:00Z'),
+        ('owner/repo', 3, 'open', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+    `);
+
+    const openedQuery = expandGrafanaRange(targetForPanel(12).queryText!);
+    const closedQuery = expandGrafanaRange(targetForPanel(13).queryText!);
+    const openQuery = expandGrafanaRange(targetForPanel(14).queryText!);
+
+    // Row 1: created AND updated in-window, open -> counts for "opened" and "open", not "closed".
+    // Row 2: created OUTSIDE the window but updated inside it, closed -> counts for "closed" only.
+    // Row 3: created and updated well outside the window, open -> excluded from every count.
+    expect(sqlite(db, openedQuery)).toBe("1");
+    expect(sqlite(db, closedQuery)).toBe("1");
+    expect(sqlite(db, openQuery)).toBe("1");
   });
 });
