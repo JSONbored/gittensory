@@ -58,6 +58,57 @@ test("parseMinerGoalSpec: exactly 100 unique entries are accepted without a cap 
   assert.ok(!parsed.warnings.some((warning) => /exceeded 100 entries/i.test(warning)));
 });
 
+test("parseMinerGoalSpec: caps inspection of a hostile all-non-string list instead of scanning it in full", () => {
+  // Regression: the cap used to be checked only after a candidate was accepted (duplicate-check-adjacent), so
+  // an array of entries that ALWAYS take the `continue` path (non-string, duplicate, or empty-after-trim) never
+  // hit the cap and got fully scanned -- unbounded CPU/memory work and unbounded warnings for a hostile input.
+  // The cap must be checked against the raw index, before any per-entry work. `minerEnabled: false` keeps the
+  // spec "present" regardless of what wantedPaths ends up as, so these assertions stay focused on the list cap.
+  const parsed = parseMinerGoalSpec({
+    minerEnabled: false,
+    wantedPaths: Array.from({ length: 1_000 }, () => null),
+  });
+
+  assert.deepEqual(parsed.spec.wantedPaths, []);
+  assert.equal(parsed.warnings.length, 101);
+  assert.match(parsed.warnings.at(-1) ?? "", /exceeded 100 entries/);
+});
+
+test("parseMinerGoalSpec: caps inspection of a hostile all-duplicate or all-empty list to a single cap warning", () => {
+  const duplicates = parseMinerGoalSpec({
+    minerEnabled: false,
+    wantedPaths: Array.from({ length: 1_000 }, () => "src/**"),
+  });
+  assert.deepEqual(duplicates.spec.wantedPaths, ["src/**"]);
+  assert.deepEqual(duplicates.warnings, [
+    'MinerGoalSpec field "wantedPaths" exceeded 100 entries; extra entries ignored.',
+  ]);
+
+  const empty = parseMinerGoalSpec({
+    minerEnabled: false,
+    wantedPaths: Array.from({ length: 1_000 }, () => "   "),
+  });
+  assert.deepEqual(empty.spec.wantedPaths, []);
+  assert.deepEqual(empty.warnings, [
+    'MinerGoalSpec field "wantedPaths" exceeded 100 entries; extra entries ignored.',
+  ]);
+});
+
+test("parseMinerGoalSpec: caps inspection of a hostile all-overlong list, even though each entry still warns once", () => {
+  // Different from the duplicate/empty case: an overlong entry is TRUNCATED (with its own warning), not
+  // silently dropped, so every one of the 100 inspected entries produces a truncation warning before the
+  // post-truncation duplicate check collapses them into one result entry. Still bounded to exactly
+  // 100 truncate warnings + 1 cap warning, never proportional to the input's true length.
+  const parsed = parseMinerGoalSpec({
+    minerEnabled: false,
+    wantedPaths: Array.from({ length: 1_000 }, () => "x".repeat(300)),
+  });
+
+  assert.deepEqual(parsed.spec.wantedPaths, ["x".repeat(256)]);
+  assert.equal(parsed.warnings.length, 101);
+  assert.match(parsed.warnings.at(-1) ?? "", /exceeded 100 entries/);
+});
+
 test("parseMinerGoalSpec: malformed fields fall back independently with targeted warnings", () => {
   const longEntry = "x".repeat(300);
   const parsed = parseMinerGoalSpec({

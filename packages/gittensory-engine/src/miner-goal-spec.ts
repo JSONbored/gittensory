@@ -105,7 +105,11 @@ function normalizeStringList(value: unknown, field: string, warnings: string[]):
   }
   const result: string[] = [];
   const seen = new Set<string>();
-  for (const entry of value) {
+  for (const [index, entry] of value.entries()) {
+    if (index >= MAX_LIST_ITEMS) {
+      warnings.push(`MinerGoalSpec field "${field}" exceeded ${MAX_LIST_ITEMS} entries; extra entries ignored.`);
+      break;
+    }
     if (typeof entry !== "string") {
       warnings.push(`MinerGoalSpec field "${field}" skipped a non-string entry.`);
       continue;
@@ -118,10 +122,6 @@ function normalizeStringList(value: unknown, field: string, warnings: string[]):
       normalized = normalized.slice(0, MAX_ITEM_LENGTH);
     }
     if (seen.has(normalized)) continue;
-    if (result.length >= MAX_LIST_ITEMS) {
-      warnings.push(`MinerGoalSpec field "${field}" exceeded ${MAX_LIST_ITEMS} entries; extra entries ignored.`);
-      break;
-    }
     result.push(normalized);
     seen.add(normalized);
   }

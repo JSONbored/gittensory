@@ -31,10 +31,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./miner-goal-spec-parse": {
-      "types": "./dist/miner-goal-spec-parse.d.ts",
-      "default": "./dist/miner-goal-spec-parse.js"
-    },
     "./scoring/model": {
       "types": "./dist/scoring/model.d.ts",
       "default": "./dist/scoring/model.js"
