@@ -5618,7 +5618,9 @@ async function processGitHubWebhook(
 
     if (eventName === "issue_comment" && (await maybeProcessResolveCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessExplainCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
+    if (eventName === "issue_comment" && (await maybeProcessReviewCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (eventName === "issue_comment" && (await maybeProcessPauseCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
+    if (eventName === "issue_comment" && (await maybeProcessResumeCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
     if (
       eventName === "issue_comment" &&
       (await maybeProcessConfigurationCommand(env, deliveryId, payload))
@@ -11089,6 +11091,52 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   await recordGithubProductUsage(env, "finding_resolved", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); return true; }
 
 /**
+ * `@gittensory review` (#2163, part of #1960, alias `re-review`): a maintainer/collaborator/confirmed-miner
+ * asks for a fresh AUTO-REVIEW pass on this PR. AUTO-REVIEW SCOPE ONLY, same hard constraint as pause/resolve/
+ * explain (#1960): this dispatches to the EXISTING reReviewStoredPullRequest path with `force: true` (bypasses
+ * the AI-review cache/dedup, since a maintainer explicitly typing the command wants a fresh verdict, not a
+ * cached one) — it never touches the Gate check-run, the AgentActionMode, or the one-shot disposition directly;
+ * whatever reReviewStoredPullRequest's own gate evaluation produces is exactly what a scheduled sweep pass
+ * would produce. If the PR is currently paused (hasAutoreviewPausedMarker), reReviewStoredPullRequest's own
+ * existing skipAiReview-on-pause behavior still applies — this command does not special-case or bypass pause;
+ * it is a re-review trigger, not a resume. Mirrors maybeProcessResolveCommand's classify → authorize → dispatch
+ * shape. Returns true once it owns the event.
+ */
+async function maybeProcessReviewCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  const command = parseGittensoryMentionCommand(payload.comment?.body);
+  if (!command || command.name !== "review") return false;
+  const { classifyPrCommandRequest } = await import("../github/pr-command-request");
+  const req = classifyPrCommandRequest(payload, getInstallationId(payload));
+  if (!req.ok) {
+    await recordReviewCommandSkip(env, deliveryId, req.repoFullName, req.targetKey, req.actor, req.reason);
+    return true;
+  }
+  const targetKey = `${req.repoFullName}#${req.pr.number}`;
+  const [pr, settings] = await Promise.all([getPullRequest(env, req.repoFullName, req.pr.number), resolveRepositorySettings(env, req.repoFullName)]);
+  if (!pr) {
+    await recordReviewCommandSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "cached_pr_missing");
+    return true;
+  }
+  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "review" as GittensoryMentionCommandName, settings, pr });
+  if (!authorization.authorized) {
+    await recordAuditEvent(env, { eventType: "github_app.review_command_denied", actor: req.actor, targetKey, outcome: "denied", detail: authorization.reason, metadata: { deliveryId, repoFullName: req.repoFullName, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "review") } });
+    await recordGithubProductUsage(env, "review_command_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "review") } });
+    return true;
+  }
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Re-review triggered by @${req.actor}**`, "> Re-running auto-review for this PR. The Gate check-run and one-shot disposition are produced the same way a scheduled pass would.", "", "---", gittensoryFooter()].join("\n"));
+  await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation);
+  await reReviewStoredPullRequest(env, deliveryId, req.installationId, req.repoFullName, req.pr.number, undefined, { force: true });
+  await recordAuditEvent(env, { eventType: "github_app.review_command_completed", actor: req.actor, targetKey, outcome: "completed", detail: "Re-review dispatched.", metadata: { deliveryId, repoFullName: req.repoFullName } });
+  await recordGithubProductUsage(env, "review_command_completed", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { actorKind: authorization.actorKind } });
+  return true;
+}
+
+async function recordReviewCommandSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
+  await recordAuditEvent(env, { eventType: "github_app.review_command_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
+  await recordGithubProductUsage(env, "review_command_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
+}
+
+/**
  * `@gittensory pause` (#2164, part of #1960): a maintainer pauses AUTO-REVIEW for THIS PR only by recording a
  * per-PR `github_app.autoreview_paused` marker (an audit event keyed to repo#pr) that the sweep/webhook re-review
  * path can honor. AUTO-REVIEW SCOPE ONLY — it deliberately touches neither the Gate check-run, the AgentActionMode,
@@ -11136,14 +11184,66 @@ async function recordAutoreviewPausedSkip(env: Env, deliveryId: string, repoFull
   await recordGithubProductUsage(env, "autoreview_paused_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
 }
 
+/**
+ * `@gittensory resume` (#2165, part of #1960): the inverse of pause — clears the per-PR auto-review-paused
+ * marker by recording a `github_app.autoreview_resumed` event that SUPERSEDES an earlier pause (see
+ * hasAutoreviewPausedMarker below, which now reads the MOST RECENT of {paused, resumed} rather than merely
+ * checking pause existence — see that function's own doc comment for why the old existence-only check made
+ * resume a no-op). Same hard constraint as pause: AUTO-REVIEW SCOPE ONLY, never touches the Gate check-run,
+ * AgentActionMode, or the one-shot disposition. Mirrors maybeProcessPauseCommand's classify → authorize →
+ * record shape exactly. Returns true once it owns the event.
+ */
+async function maybeProcessResumeCommand(env: Env, deliveryId: string, payload: GitHubWebhookPayload): Promise<boolean> {
+  const command = parseGittensoryMentionCommand(payload.comment?.body);
+  if (!command || command.name !== "resume") return false;
+  const { classifyPrCommandRequest } = await import("../github/pr-command-request");
+  const req = classifyPrCommandRequest(payload, getInstallationId(payload));
+  if (!req.ok) {
+    await recordAutoreviewResumedSkip(env, deliveryId, req.repoFullName, req.targetKey, req.actor, req.reason);
+    return true;
+  }
+  const targetKey = `${req.repoFullName}#${req.pr.number}`;
+  const [pr, settings] = await Promise.all([getPullRequest(env, req.repoFullName, req.pr.number), resolveRepositorySettings(env, req.repoFullName)]);
+  if (!pr) {
+    await recordAutoreviewResumedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "cached_pr_missing");
+    return true;
+  }
+  const { authorization } = await authorizePrActionActor({ env, deliveryId, installationId: req.installationId, repoFullName: req.repoFullName, issue: payload.issue!, actor: req.actor, commandName: "resume" as GittensoryMentionCommandName, settings, pr });
+  if (!authorization.authorized) {
+    await recordAuditEvent(env, { eventType: "github_app.autoreview_resumed_denied", actor: req.actor, targetKey, outcome: "denied", detail: authorization.reason, metadata: { deliveryId, repoFullName: req.repoFullName, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "resume") } });
+    await recordGithubProductUsage(env, "autoreview_resumed_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "resume") } });
+    return true;
+  }
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Auto-review resumed by @${req.actor}**`, "> Auto-review is resumed for this PR. Gate enforcement and the one-shot disposition were never affected by pause.", "", "---", gittensoryFooter()].join("\n"));
+  await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation);
+  await recordAuditEvent(env, { eventType: "github_app.autoreview_resumed", actor: req.actor, targetKey, outcome: "completed", detail: "Auto-review resumed.", metadata: { deliveryId, repoFullName: req.repoFullName } });
+  await recordGithubProductUsage(env, "autoreview_resumed", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { actorKind: authorization.actorKind } });
+  return true;
+}
+
+async function recordAutoreviewResumedSkip(env: Env, deliveryId: string, repoFullName: string | null, targetKey: string | null, actor: string | null, reason: string): Promise<void> {
+  await recordAuditEvent(env, { eventType: "github_app.autoreview_resumed_skipped", actor, targetKey, outcome: "completed", detail: reason, metadata: { deliveryId, repoFullName, reason } });
+  await recordGithubProductUsage(env, "autoreview_resumed_skipped", { actor, repoFullName, targetKey, outcome: "skipped", metadata: { reason } });
+}
+
+/** True when the MOST RECENT of {autoreview_paused, autoreview_resumed} for this target is a pause (#2165
+ *  fix): the original version of this check only tested for the EXISTENCE of any autoreview_paused row ever
+ *  recorded, so a resume command could parse/authorize/post its confirmation but silently fail to actually
+ *  resume auto-review -- the very next re-review pass would still read the stale pause as active forever.
+ *  Ordering by created_at DESC across BOTH event types and checking which one is latest lets a resume
+ *  genuinely supersede an earlier pause, while a later pause after a resume still re-pauses correctly.
+ *  `created_at` is millisecond-precision text, so two rows written within the same millisecond (a real
+ *  possibility for back-to-back commands) would tie under created_at alone -- `rowid DESC` (audit_events'
+ *  implicit insertion-order column; `id` itself is a non-chronological TEXT primary key) breaks the tie by
+ *  true write order, not timestamp precision. */
 async function hasAutoreviewPausedMarker(env: Env, repoFullName: string, prNumber: number): Promise<boolean> {
   try {
     const row = await env.DB.prepare(
-      "select 1 from audit_events where event_type = ? and target_key = ? and outcome = ? order by created_at desc limit 1",
+      "select event_type from audit_events where event_type in (?, ?) and target_key = ? and outcome = ? order by created_at desc, rowid desc limit 1",
     )
-      .bind("github_app.autoreview_paused", `${repoFullName}#${prNumber}`, "completed")
-      .first();
-    return Boolean(row);
+      .bind("github_app.autoreview_paused", "github_app.autoreview_resumed", `${repoFullName}#${prNumber}`, "completed")
+      .first<{ event_type: string }>();
+    return row?.event_type === "github_app.autoreview_paused";
   } catch {
     /* v8 ignore next -- audit lookup failures fail open so a stale/corrupt ledger cannot wedge review processing. */
     return false;
