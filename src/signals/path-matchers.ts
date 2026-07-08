@@ -1,4 +1,4 @@
-import { isSourcePath, isTestPath } from "./test-evidence";
+import { isCodeFile, isTestPath } from "./test-evidence";
 
 // Pure, deterministic path matchers for slop classification (#561). Siblings to `isTestFile` /
 // `isTestPath`: they identify changed files that are NOT genuine hand-authored effort — machine-
@@ -15,17 +15,10 @@ export function isTestFile(file: string): boolean {
   return isTestPath(file);
 }
 
-// Extensions recognized as code outside test-evidence's isSourcePath core set (php, native, front-end
-// frameworks, Dart). isSourcePath owns the JVM/.NET/Swift/Groovy/Kotlin-script set symmetric with isTestPath.
-const EXTENDED_SOURCE_EXTENSION = /\.(php|cpp|cc|c|h|hpp|m|vue|svelte|astro|dart)$/i;
-
-/** cs/swift/groovy/kts plus php, C/C++/Objective-C, vue/svelte/astro, and dart — see isSourcePath for the
- *  canonical JVM/.NET/Swift/Groovy/Kotlin-script matcher kept symmetric with isTestPath. Generated Dart part
- *  files (.g.dart/.freezed.dart/.gr.dart) stay non-code (#3724). */
-export function isCodeFile(file: string): boolean {
-  if (isSourcePath(file)) return true;
-  return EXTENDED_SOURCE_EXTENSION.test(file) && !isTestFile(file) && !/\.(g|freezed|gr)\.dart$/i.test(file);
-}
+// isCodeFile is the single source of truth the published gittensory-mcp/gittensory-miner CLIs also
+// depend on (via @jsonbored/gittensory-engine) — defined once in test-evidence.ts alongside the
+// isSourcePath/isTestPath pair it composes, re-exported here so this file's existing callers don't change.
+export { isCodeFile };
 
 function normalize(path: string): string {
   return String(path ?? "")

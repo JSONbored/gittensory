@@ -46,6 +46,10 @@
     "./scoring/pending-pr-scenarios": {
       "types": "./dist/scoring/pending-pr-scenarios.d.ts",
       "default": "./dist/scoring/pending-pr-scenarios.js"
+    },
+    "./signals/test-evidence": {
+      "types": "./dist/signals/test-evidence.d.ts",
+      "default": "./dist/signals/test-evidence.js"
     }
   },
   "files": [
