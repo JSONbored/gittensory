@@ -21,15 +21,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Unprivileged: resolves the version, runs the full test gate, and packs the tarball -- all with
+  # contents: read only. npm ci here executes dependency lifecycle scripts; keeping that in a job
+  # with no write/id-token permission means a compromised build dependency has nothing to abuse
+  # (Superagent P2 / mirrors metagraphed's publish-client.yml "validate" job, codex #251).
+  validate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
     timeout-minutes: 20
+    permissions:
+      contents: read
     outputs:
-      tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -41,17 +44,14 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24.18.0
-          registry-url: https://registry.npmjs.org
 
       # workflow_dispatch has no tag ref to derive a version from (unlike the old push:tags: trigger),
-      # so the dispatched commit's package.json is now the single source of truth for VERSION/TAG. If
-      # the tag already exists (release automation tagged it before dispatching this workflow), just
-      # verify it points at HEAD rather than re-creating it; a bare manual dispatch with no pre-existing
-      # tag self-tags HEAD.
-      - name: Resolve and verify release version
+      # so the dispatched commit's package.json is now the single source of truth for VERSION/TAG. Pure
+      # read here -- if the tag already exists (release automation tagged it before dispatching this
+      # workflow) it's verified against HEAD; if not, the privileged publish job below creates it, since
+      # this job has no contents: write.
+      - name: Resolve release version
         id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./packages/gittensory-mcp/package.json').version")"
@@ -60,8 +60,8 @@ jobs:
             exit 1
           fi
           TAG="mcp-v${VERSION}"
-          HEAD_SHA="$(git rev-parse HEAD)"
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            HEAD_SHA="$(git rev-parse HEAD)"
             TAG_SHA="$(git rev-list -n 1 "$TAG")"
             if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
               echo "::error::Tag $TAG already exists but points at $TAG_SHA, not the dispatched commit $HEAD_SHA"
@@ -69,13 +69,7 @@ jobs:
             fi
             echo "Tag $TAG already exists and matches HEAD."
           else
-            echo "Tag $TAG does not exist yet; creating it at HEAD ($HEAD_SHA)."
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "@jsonbored/gittensory-mcp v${VERSION}"
-            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-            gh auth setup-git
-            git push origin "$TAG"
+            echo "Tag $TAG does not exist yet; the publish job will create it."
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -94,32 +88,105 @@ jobs:
       - name: MCP release validation gate
         run: npm run test:release:mcp
 
-      - name: Packed tarball smoke test
+      # Build + pack happen in THIS unprivileged job (no id-token). The privileged publish job below
+      # never runs npm install/build, so a compromised build dependency can't reach the OIDC token.
+      - name: Pack and smoke-test the tarball
         run: |
           set -euo pipefail
-          PACK_JSON="$(npm pack --workspace @jsonbored/gittensory-mcp --json)"
+          PACK_JSON="$(npm pack --workspace @jsonbored/gittensory-mcp --pack-destination "$RUNNER_TEMP" --json)"
           TARBALL="$(node -e 'const fs=require("fs"); const input=fs.readFileSync(0,"utf8"); process.stdout.write(JSON.parse(input)[0].filename)' <<< "$PACK_JSON")"
-          UNEXPECTED_FILES="$(tar -tzf "$TARBALL" | grep -Ev '^(package/(bin|lib|scripts)/.+|package/(package.json|README.md|CHANGELOG.md|LICENSE))$' || true)"
+          TARBALL_PATH="$RUNNER_TEMP/$TARBALL"
+          UNEXPECTED_FILES="$(tar -tzf "$TARBALL_PATH" | grep -Ev '^(package/(bin|lib|scripts)/.+|package/(package.json|README.md|CHANGELOG.md|LICENSE))$' || true)"
           if [ -n "$UNEXPECTED_FILES" ]; then
             printf '%s\n' "$UNEXPECTED_FILES"
             echo "Unexpected file in package tarball"
             exit 1
           fi
-          if tar -xOf "$TARBALL" | grep -E '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_|gh[pousr]_|gts_[0-9a-f]{64}|[A-Z0-9_]*(TOKEN|SECRET|PRIVATE_KEY)=)'; then
+          if tar -xOf "$TARBALL_PATH" | grep -E '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_|gh[pousr]_|gts_[0-9a-f]{64}|[A-Z0-9_]*(TOKEN|SECRET|PRIVATE_KEY)=)'; then
             echo "Secret-like content found in package tarball"
             exit 1
           fi
           TMP="$(mktemp -d)"
           npm --prefix "$TMP" init -y >/dev/null
-          npm --prefix "$TMP" install "$PWD/$TARBALL" >/dev/null
+          npm --prefix "$TMP" install "$TARBALL_PATH" >/dev/null
           "$TMP/node_modules/.bin/gittensory-mcp" --help >/dev/null
 
-      - name: Publish with npm trusted publishing
-        run: npx -y npm@11.15.0 publish --workspace @jsonbored/gittensory-mcp --access public --provenance
+      - name: Upload package tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gittensory-mcp-tarball
+          path: ${{ runner.temp }}/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Privileged: tags + publishes the EXACT tarball the unprivileged job already tested. No npm
+  # install/build runs here, so nothing with dependency-lifecycle-script access ever sees contents:
+  # write or the OIDC token (Superagent P2). environment: release requires reviewer approval per repo
+  # Settings > Environments, same gate release-selfhost.yml already uses (Superagent P1).
+  publish:
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: release
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Create or verify release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists (verified against HEAD by the validate job)."
+          else
+            echo "Creating tag $TAG at HEAD ($HEAD_SHA)."
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "@jsonbored/gittensory-mcp v${VERSION}"
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            gh auth setup-git
+            git push origin "$TAG"
+          fi
+
+      - name: Download package tarball
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gittensory-mcp-tarball
+          path: ${{ runner.temp }}/gittensory-mcp-package
+
+      - name: Publish to npm (OIDC trusted publishing)
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          set -euo pipefail
+          count=$(find "$RUNNER_TEMP/gittensory-mcp-package" -maxdepth 1 -type f -name "*.tgz" | wc -l | tr -d ' ')
+          if [ "$count" != "1" ]; then
+            echo "Expected exactly one tarball, found $count" >&2
+            find "$RUNNER_TEMP/gittensory-mcp-package" -maxdepth 1 -type f -name "*.tgz" -print >&2
+            exit 1
+          fi
+          tarball=$(find "$RUNNER_TEMP/gittensory-mcp-package" -maxdepth 1 -type f -name "*.tgz" -print -quit)
+          npx -y npm@11.15.0 publish "$tarball" --access public --provenance
 
   github-release:
     runs-on: ubuntu-latest
-    needs: publish
+    needs: [validate, publish]
     # Skip when the release automation dispatched this run: it already created the GitHub release
     # with its own generated changelog notes before dispatching, so running this unconditionally
     # would overwrite those richer notes with the generic blurb below.
@@ -131,8 +198,8 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.publish.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.publish.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           NOTES_FILE="$(mktemp)"
