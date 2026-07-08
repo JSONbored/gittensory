@@ -374,6 +374,17 @@ export async function startFixtureServer(
             suspiciousLabels: ["visual"],
             trustedLabelPipelineReady: false,
           },
+          burdenForecast: {
+            projectedReviewLoad: "elevated",
+            queueGrowthRisk: "medium",
+            stalePrSignals: ["#101 idle 21d"],
+          },
+          burdenForecastFreshness: {
+            source: "cache",
+            generatedAt: "2026-05-30T00:00:00.000Z",
+            ageSeconds: 120,
+            freshness: "fresh",
+          },
         }),
       );
       return;

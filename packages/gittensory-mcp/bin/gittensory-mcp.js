@@ -414,6 +414,11 @@ const STDIO_TOOL_DESCRIPTORS = [
       "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private Gittensory API.",
   },
   {
+    name: "gittensory_get_burden_forecast",
+    description:
+      "Return the repo's cached maintainer burden forecast (projected review load, queue-growth risk, and stale-PR signals) with a freshness marker, from the private Gittensory API.",
+  },
+  {
     name: "gittensory_preview_local_pr_score",
     description: "Inspect local diff metadata and request a private Gittensory scoring preview. No source contents are uploaded.",
   },
@@ -685,6 +690,24 @@ server.registerTool(
       repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
       generatedAt: intelligence?.generatedAt,
       labelAudit: intelligence?.labelAudit ?? null,
+    });
+  },
+);
+
+server.registerTool(
+  "gittensory_get_burden_forecast",
+  {
+    description: stdioToolDescription("gittensory_get_burden_forecast"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const intelligence = await apiGet(`${prefix}/intelligence`);
+    return toolResult("Gittensory burden forecast.", {
+      repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
+      generatedAt: intelligence?.generatedAt,
+      burdenForecast: intelligence?.burdenForecast ?? null,
+      burdenForecastFreshness: intelligence?.burdenForecastFreshness ?? null,
     });
   },
 );
