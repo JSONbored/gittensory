@@ -10,6 +10,7 @@ import { resolveMinerVersion } from "./version.js";
 // no GitHub writes, and no network calls of any kind. Later phases add the real discover/plan/manage loop.
 
 const require = createRequire(import.meta.url);
+const moduleDir = import.meta.dirname;
 
 const PACKAGE_NAME = "@jsonbored/gittensory-miner";
 const ENGINE_PACKAGE = "@jsonbored/gittensory-engine";
@@ -75,10 +76,10 @@ export function readInstalledEnginePackageVersion() {
   try {
     return readInstalledEnginePackageVersionFromPaths(
       require.resolve(ENGINE_PACKAGE),
-      join(__dirname, "../../gittensory-engine/package.json"),
+      join(moduleDir, "../../gittensory-engine/package.json"),
     );
   } catch {
-    const workspacePkg = join(__dirname, "../../gittensory-engine/package.json");
+    const workspacePkg = join(moduleDir, "../../gittensory-engine/package.json");
     if (existsSync(workspacePkg)) {
       try {
         return JSON.parse(readFileSync(workspacePkg, "utf8")).version ?? null;
@@ -113,8 +114,8 @@ export function readExpectedEnginePackageVersionFromPaths(
 
 export function readExpectedEnginePackageVersion() {
   return readExpectedEnginePackageVersionFromPaths(
-    join(__dirname, "../../gittensory-engine/package.json"),
-    join(__dirname, "../expected-engine.version"),
+    join(moduleDir, "../../gittensory-engine/package.json"),
+    join(moduleDir, "../expected-engine.version"),
   );
 }
 
