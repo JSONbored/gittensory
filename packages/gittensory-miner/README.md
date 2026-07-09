@@ -36,6 +36,11 @@ The package also includes an append-only event ledger: `initEventLedger` / `appe
 immutable miner-loop events in local SQLite for contributor audit. Insert-only — rows are never updated or
 deleted. (#2322)
 
+The package also includes an append-only prediction ledger: `initPredictionLedger` / `appendPrediction` /
+`readPredictions` persist each predicted-gate verdict (conclusion / pack / readiness score + blocker/warning
+codes, plus the producing `ENGINE_VERSION`) in local SQLite, so a later self-improve pass can score predictions
+against realized outcomes. Insert-only. (#4263)
+
 ## Install
 
 See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.
