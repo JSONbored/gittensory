@@ -61,6 +61,7 @@ import type { PullRequestRecord } from "../../src/types";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { fingerprint as reviewMemoryFingerprint } from "../../src/review/review-memory-match";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import * as focusManifestLoaderModule from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
 import {
@@ -120,6 +121,7 @@ describe("queue processors", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("fans build-contributor-evidence out into per-batch jobs when the login set exceeds CONTRIBUTOR_EVIDENCE_BATCH_SIZE (#1941)", async () => {
@@ -830,6 +832,7 @@ describe("queue processors", () => {
   });
 
   it("REGRESSION (#3899): resolves multiple repos' settings/drain-state CONCURRENTLY, bounded by SWEEP_FANOUT_RESOLUTION_CONCURRENCY", async () => {
+    vi.useRealTimers();
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({
       GITTENSORY_REVIEW_REPOS: "",
@@ -840,24 +843,32 @@ describe("queue processors", () => {
       await upsertRepositoryFromGitHub(env, { name, full_name: `owner/${name}`, private: false, owner: { login: "owner" } });
       await upsertRepositorySettings(env, { repoFullName: `owner/${name}`, autonomy: { label: "auto" } });
     }
-    const realResolve = repositorySettingsModule.resolveRepositorySettings;
+    const { mapWithConcurrencyLimit: realMapWithConcurrencyLimit } =
+      await vi.importActual<typeof focusManifestLoaderModule>("../../src/signals/focus-manifest-loader");
     let inFlight = 0;
     let maxInFlight = 0;
-    const resolveSpy = vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockImplementation(async (e, repoFullName) => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 5)); // hold the window open long enough for others to overlap
-      const result = await realResolve(e, repoFullName);
-      inFlight -= 1;
-      return result;
-    });
+    const mapSpy = vi.spyOn(focusManifestLoaderModule, "mapWithConcurrencyLimit").mockImplementation(
+      async (items, limit, mapper) => {
+        expect(limit).toBe(SWEEP_FANOUT_RESOLUTION_CONCURRENCY);
+        return realMapWithConcurrencyLimit(items, limit, async (item) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 5)); // hold the window open long enough for others to overlap
+            return await mapper(item);
+          } finally {
+            inFlight -= 1;
+          }
+        });
+      },
+    );
 
     await processJob(env, { type: "agent-regate-sweep", requestedBy: "schedule" });
 
+    expect(mapSpy).toHaveBeenCalled();
     expect(maxInFlight).toBeGreaterThan(1); // proves real overlap — not the old strictly-sequential loop
     expect(maxInFlight).toBeLessThanOrEqual(SWEEP_FANOUT_RESOLUTION_CONCURRENCY); // proves BOUNDED, not unlimited fan-out
     expect(sent.filter((m) => m.type === "agent-regate-sweep").length).toBe(repoNames.length); // every repo still dispatched
-    resolveSpy.mockRestore();
   });
 
   it("agent re-gate sweep recomputes stale open PR verdicts as an advisory audit, never publishing (#777)", async () => {
