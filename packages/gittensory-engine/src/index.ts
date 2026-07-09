@@ -156,6 +156,15 @@ export {
   type NormalizedAttemptLogEvent,
 } from "./miner/attempt-log.js";
 export {
+  ACCEPTANCE_CRITERIA_FILENAME,
+  ACCEPTANCE_CRITERIA_VERSION,
+  buildAcceptanceCriteria,
+  serializeAcceptanceCriteria,
+  shouldWriteAcceptanceCriteria,
+  type AcceptanceCriteria,
+  type AcceptanceCriteriaInput,
+} from "./miner/acceptance-criteria.js";
+export {
   codingAgentModeExecutes,
   isGlobalMinerCodingAgentPause,
   resolveCodingAgentExecutionMode,
