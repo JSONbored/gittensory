@@ -263,6 +263,15 @@ export {
   type ParsedDiscoveryIndexResponse,
 } from "./discovery-index-contract.js";
 export {
+  buildSoftClaimRequest,
+  softClaimActionForStatus,
+  type SoftClaimAction,
+  type SoftClaimRecord,
+  type SoftClaimRequest,
+  type SoftClaimRequestContext,
+  type SoftClaimStatus,
+} from "./discovery-soft-claim.js";
+export {
   computeMetadataLaneFit,
   computeMinerGoalLaneFit,
   isMinerRepoTargetable,
