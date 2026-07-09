@@ -9242,6 +9242,196 @@ describe("queue processors", () => {
     expect(JSON.stringify(gatePatches[0])).toContain("Configured validation evidence missing");
   });
 
+  // REGRESSION (#4719 gate-review finding): passedValidationCount previously came ONLY from a PR-body
+  // prose match (hasValidationNote), with zero connection to the PR's actual CI results -- a fully green
+  // PR whose body simply doesn't happen to use a "tested"/"validated" word still tripped
+  // manifest_missing_tests. A fully-green live CI rollup must now ALSO count as validation evidence.
+  it("treats a fully-green live CI rollup as validation evidence even with no body validation note (#4719)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+      manifestPolicyGateMode: "block",
+      requireLinkedIssue: false,
+      typeLabelsEnabled: false,
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { testExpectations: ["Run npm run test:ci."] });
+    await upsertPullRequestFile(env, {
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 46,
+      path: "src/feature.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      changes: 1,
+      payload: {},
+    });
+
+    const gatePatches: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // A single completed+successful, first-party check-run with no failing/pending statuses -- the
+      // live CI aggregate resolves this to ciState: "passed".
+      if (url.includes("/commits/gate-ci-green/check-runs")) {
+        return Response.json({ total_count: 1, check_runs: [{ name: "build", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] });
+      }
+      if (url.includes("/commits/gate-ci-green/status")) return Response.json({ statuses: [] });
+      if (url.includes("/commits/gate-ci-green/check-suites")) return Response.json({ check_suites: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 904 }, { status: 201 });
+      if (url.includes("/check-runs/904") && method === "PATCH") {
+        gatePatches.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        return Response.json({ id: 904, html_url: "https://github.com/checks/904" });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-ci-green-evidence",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 46,
+          title: "CI-green change with a plain description",
+          state: "open",
+          user: { login: "contributor" },
+          head: { sha: "gate-ci-green" },
+          labels: [],
+          body: "Fixes the checkout retry bug.",
+        },
+      },
+    });
+
+    expect(gatePatches).toHaveLength(1);
+    expect(gatePatches[0]).toMatchObject({ status: "completed", conclusion: "success" });
+    expect(JSON.stringify(gatePatches[0])).not.toContain("manifest_missing_tests");
+    expect(JSON.stringify(gatePatches[0])).not.toContain("Configured validation evidence missing");
+  });
+
+  // REGRESSION (#4719): a fully-automated bot PR (e.g. a scheduled README/docs regen opened by
+  // github-actions[bot]) must not be held to "did you demonstrate test evidence" scrutiny -- mirrors the
+  // existing review.auto_review.ignore_authors exemption already applied to AI review. CI is deliberately
+  // NOT green here (empty check-runs, same as the "still flags" tests above) so this exercises the
+  // author-exemption path specifically, independent of the live-CI-evidence fix covered above.
+  it("exempts a bot author's PR from manifest_missing_tests even without CI or body validation evidence (#4719)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "off",
+      manifestPolicyGateMode: "block",
+      requireLinkedIssue: false,
+      typeLabelsEnabled: false,
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+      testExpectations: ["Run npm run test:ci."],
+      review: { auto_review: { ignore_authors: ["*[bot]"] } },
+    });
+    await upsertPullRequestFile(env, {
+      repoFullName: "JSONbored/gittensory",
+      pullNumber: 47,
+      path: "README.md",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      changes: 2,
+      payload: {},
+    });
+
+    const gatePatches: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/commits/gate-bot-exempt/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 905 }, { status: 201 });
+      if (url.includes("/check-runs/905") && method === "PATCH") {
+        gatePatches.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        return Response.json({ id: 905, html_url: "https://github.com/checks/905" });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-bot-exempt-evidence",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: {
+          number: 47,
+          title: "Update README",
+          state: "open",
+          user: { login: "github-actions[bot]" },
+          head: { sha: "gate-bot-exempt" },
+          labels: [],
+          body: "Auto-generated by a workflow.",
+        },
+      },
+    });
+
+    expect(gatePatches).toHaveLength(1);
+    expect(gatePatches[0]).toMatchObject({ status: "completed", conclusion: "success" });
+    expect(JSON.stringify(gatePatches[0])).not.toContain("manifest_missing_tests");
+    expect(JSON.stringify(gatePatches[0])).not.toContain("Configured validation evidence missing");
+  });
+
   it("stamps a gate-only surface even when local Gate check-summary persistence fails", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
