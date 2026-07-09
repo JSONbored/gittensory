@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { createSessionForGitHubUser } from "../../src/auth/security";
-import { upsertInstallation, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { isDbFrozenForRepo, setGlobalAgentFrozen, upsertInstallation, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { getRepositoryCollaboratorPermission } from "../../src/github/app";
+import { resolveEffectiveSettings } from "../../src/signals/focus-manifest";
+import type { FocusManifest } from "../../src/signals/focus-manifest";
+import type { RepositorySettings } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
 vi.mock("../../src/github/app", async (importOriginal) => ({
@@ -91,6 +94,35 @@ describe("focus-manifest route auth", () => {
       repoFullName: "repo-owner/owned-repo",
       manifest: { present: true, source: "api_record", wantedPaths: ["src/"] },
     });
+  });
+
+  it("strips operator-only freeze overrides from maintainer-writable focus-manifest updates", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    await seedRegisteredInstalledRepo(env, 201, "repo-owner", "owned-repo");
+    await setGlobalAgentFrozen(env, true, "operator");
+    mockedPermission.mockResolvedValue("write");
+    const { token } = await createSessionForGitHubUser(env, { login: "repo-owner", id: 201 });
+
+    const response = await app.request(
+      OWNED_REPO_PATH,
+      {
+        method: "PUT",
+        headers: { cookie: `gittensory_session=${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ wantedPaths: ["src/"], settings: { agentDryRun: true, agentGlobalFreezeOverride: true } }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      manifest: { settings: { agentDryRun?: boolean; agentGlobalFreezeOverride?: boolean } };
+    };
+    expect(body.manifest.settings.agentDryRun).toBe(true);
+    expect(body.manifest.settings.agentGlobalFreezeOverride).toBeUndefined();
+    const effective = resolveEffectiveSettings({ agentGlobalFreezeOverride: false } as RepositorySettings, body.manifest as FocusManifest);
+    expect(effective.agentGlobalFreezeOverride).toBe(false);
+    expect(await isDbFrozenForRepo(env, effective.agentGlobalFreezeOverride)).toBe(true);
   });
 
   it("rejects focus-manifest writes from sessions without live GitHub write permission", async () => {
