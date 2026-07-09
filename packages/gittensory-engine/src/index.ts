@@ -239,6 +239,14 @@ export {
   type ParsedMinerGoalSpec,
 } from "./miner-goal-spec.js";
 export {
+  DEFAULT_FLEET_RUN_MANIFEST,
+  parseFleetRunManifest,
+  parseFleetRunManifestContent,
+  type FleetRunManifest,
+  type FleetRunManifestRepo,
+  type ParsedFleetRunManifest,
+} from "./fleet-run-manifest.js";
+export {
   computeMetadataLaneFit,
   computeMinerGoalLaneFit,
   isMinerRepoTargetable,

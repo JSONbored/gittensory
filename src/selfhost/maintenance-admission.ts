@@ -53,6 +53,7 @@ export const MAINTENANCE_JOB_TYPES: ReadonlySet<string> = new Set([
   "prune-retention",
   "generate-weekly-value-report",
   "generate-review-recap",
+  "generate-maintainer-recap",
   "generate-signal-snapshots",
   "notify-evaluate",
   "notify-deliver",

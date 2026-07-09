@@ -454,6 +454,34 @@ describe("queue processors", () => {
     vi.unstubAllGlobals();
   });
 
+  it("runs the maintainer recap job through the queue processor when GITTENSORY_MAINTAINER_RECAP is ON (#1963, #2248)", async () => {
+    const env = createTestEnv({ DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc", GITTENSORY_MAINTAINER_RECAP: "true" });
+    await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, ?, ?, 1, 1)").bind("JSONbored/gittensory", "JSONbored", "gittensory").run();
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 204 }));
+
+    await processJob(env, { type: "generate-maintainer-recap", requestedBy: "test" });
+
+    const row = await env.DB.prepare("select outcome, detail from audit_events where event_type = ? order by created_at desc limit 1").bind("maintainer_recap_notification.discord").first();
+    expect(row).toMatchObject({ outcome: "completed", detail: "sent" });
+    vi.unstubAllGlobals();
+  });
+
+  it("skips the maintainer recap job as a no-op when GITTENSORY_MAINTAINER_RECAP is OFF (default, #2248)", async () => {
+    const env = createTestEnv({ DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc" });
+    let fetchCalled = false;
+    vi.stubGlobal("fetch", async () => {
+      fetchCalled = true;
+      return new Response(null, { status: 204 });
+    });
+
+    await processJob(env, { type: "generate-maintainer-recap", requestedBy: "test" });
+
+    expect(fetchCalled).toBe(false);
+    const row = await env.DB.prepare("select count(*) as count from audit_events where event_type = ?").bind("maintainer_recap_notification.discord").first<{ count: number }>();
+    expect(row?.count).toBe(0);
+    vi.unstubAllGlobals();
+  });
+
   it("routes upstream drift jobs through queue processors", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

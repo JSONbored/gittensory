@@ -158,6 +158,15 @@ export type JobMessage =
       windowDays?: number;
     }
   | {
+      // Cross-repo maintainer recap digest (#1963, #2248): folds gate-precision + outcome-calibration across
+      // every scanned repo into ONE RecapReport (buildMaintainerRecap, #2239) and delivers it to Discord --
+      // distinct from "generate-review-recap" above, which is single-repo. No `repoFullName`: this is always
+      // a global job, enqueued by the cron on a configurable daily/weekly cadence (GITTENSORY_RECAP_CADENCE).
+      type: "generate-maintainer-recap";
+      requestedBy: "schedule" | "api" | "test";
+      windowDays?: number;
+    }
+  | {
       // Scheduled re-gate sweep (#777). No `repoFullName` = fan-out: enqueue one per agent-configured repo.
       // With `repoFullName` = recompute the gate verdict for that repo's stale open PRs (advisory/audit only).
       type: "agent-regate-sweep";

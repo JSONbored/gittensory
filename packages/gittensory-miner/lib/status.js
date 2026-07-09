@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,128 @@ function readEngineVersion() {
   } catch {
     return null;
   }
+}
+
+export function readInstalledEnginePackageVersionFromPaths(
+  resolvedEntry,
+  workspacePkg,
+  deps = { existsSync, readFileSync },
+) {
+  try {
+    for (const pkgJson of [join(resolvedEntry, "..", "package.json"), join(resolvedEntry, "..", "..", "package.json")]) {
+      if (deps.existsSync(pkgJson)) {
+        const version = JSON.parse(deps.readFileSync(pkgJson, "utf8")).version;
+        if (version) return version;
+      }
+    }
+  } catch {
+    // fall through to monorepo workspace fallback
+  }
+  if (deps.existsSync(workspacePkg)) {
+    try {
+      return JSON.parse(deps.readFileSync(workspacePkg, "utf8")).version ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Installed @jsonbored/gittensory-engine semver from node_modules (not the declared dependency range). */
+export function readInstalledEnginePackageVersion() {
+  try {
+    return readInstalledEnginePackageVersionFromPaths(
+      require.resolve(ENGINE_PACKAGE),
+      join(__dirname, "../../gittensory-engine/package.json"),
+    );
+  } catch {
+    const workspacePkg = join(__dirname, "../../gittensory-engine/package.json");
+    if (existsSync(workspacePkg)) {
+      try {
+        return JSON.parse(readFileSync(workspacePkg, "utf8")).version ?? null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+/** Expected minimum engine semver: monorepo engine package.json when present, else the shipped pin file. */
+export function readExpectedEnginePackageVersionFromPaths(
+  monorepoEnginePkg,
+  pinFile,
+  deps = { existsSync, readFileSync },
+) {
+  if (deps.existsSync(monorepoEnginePkg)) {
+    try {
+      return JSON.parse(deps.readFileSync(monorepoEnginePkg, "utf8")).version ?? null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const pinned = deps.readFileSync(pinFile, "utf8").trim();
+    return pinned || null;
+  } catch {
+    return null;
+  }
+}
+
+export function readExpectedEnginePackageVersion() {
+  return readExpectedEnginePackageVersionFromPaths(
+    join(__dirname, "../../gittensory-engine/package.json"),
+    join(__dirname, "../expected-engine.version"),
+  );
+}
+
+function parseSemverCore(version) {
+  const match = String(version).trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+/** Returns -1 when installed is behind expected, 0 when equal, 1 when ahead. */
+export function compareInstalledEngineVersion(installed, expected) {
+  const installedCore = parseSemverCore(installed);
+  const expectedCore = parseSemverCore(expected);
+  if (!installedCore || !expectedCore) return -1;
+  for (let index = 0; index < 3; index += 1) {
+    if (installedCore[index] < expectedCore[index]) return -1;
+    if (installedCore[index] > expectedCore[index]) return 1;
+  }
+  return 0;
+}
+
+export function buildEngineVersionSkewCheck(
+  readInstalled = readInstalledEnginePackageVersion,
+  readExpected = readExpectedEnginePackageVersion,
+) {
+  const installed = readInstalled();
+  const expected = readExpected();
+  if (!expected) {
+    return { name: "engine-version-skew", ok: true, detail: "expected engine version unavailable (skipped)" };
+  }
+  if (!installed) {
+    return {
+      name: "engine-version-skew",
+      ok: false,
+      detail: `${ENGINE_PACKAGE} not installed (cannot verify version skew)`,
+    };
+  }
+  const comparison = compareInstalledEngineVersion(installed, expected);
+  return {
+    name: "engine-version-skew",
+    ok: comparison >= 0,
+    detail:
+      comparison < 0
+        ? `installed ${installed} is behind expected ${expected}`
+        : `installed ${installed} (${comparison === 0 ? "matches" : "ahead of"} expected ${expected})`,
+  };
+}
+
+function checkEngineVersionSkew() {
+  return buildEngineVersionSkewCheck();
 }
 
 /** The minimum Node major version from the package's `engines.node` floor (e.g. ">=22.13.0" → 22). */
@@ -122,6 +244,7 @@ export function runDoctorChecks(env = process.env) {
       ok: engineVersion !== null,
       detail: engineVersion ? `${ENGINE_PACKAGE} ${engineVersion}` : `${ENGINE_PACKAGE} not resolvable`,
     },
+    checkEngineVersionSkew(),
     checkStateDirWritable(resolveMinerStateDir(env)),
     checkLaptopStateSqlite(env),
     checkDockerPresent(),

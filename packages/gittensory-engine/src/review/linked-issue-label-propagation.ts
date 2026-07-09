@@ -49,9 +49,9 @@ function normalizeMapping(input: unknown, index: number, warnings: string[]): Li
     return null;
   }
   // Unlike `removeOtherTypeLabels`, a malformed value here can only ever be warned-and-defaulted (never
-  // dropped) -- defaulting to `undefined`/strict is always the SAFE direction, so there is no silent-flip
-  // risk that would justify discarding an otherwise-valid mapping over it. Mirrors `src/review/linked-issue-
-  // label-propagation.ts`'s copy of this normalizer.
+  // dropped) -- defaulting to `undefined`/strict is always the SAFE direction (no mapping accidentally
+  // starts trusting maintainer-authored issues), so there is no silent-flip risk that would justify
+  // discarding an otherwise-valid mapping over it.
   let trustMaintainerAuthoredIssue: boolean | undefined;
   if (record.trustMaintainerAuthoredIssue !== undefined) {
     if (typeof record.trustMaintainerAuthoredIssue === "boolean") {

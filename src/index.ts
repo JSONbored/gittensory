@@ -5,6 +5,7 @@ import { processDlqBatch } from "./queue/dlq";
 import { processJob } from "./queue/processors";
 import { isOrbBrokerEnabled } from "./orb/broker";
 import { isOpsEnabled } from "./review/ops-wire";
+import { isRecapEnabled, shouldFireMaintainerRecap } from "./review/maintainer-recap-wire";
 import { isSweepWatchdogEnabled } from "./review/sweep-watchdog";
 import { isPrReconciliationEnabled } from "./review/pr-reconciliation";
 import { isRagEnabled } from "./review/rag-wire";
@@ -214,6 +215,14 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
   // cadence is just how often eligibility is RE-CHECKED, not how often a repo is actually refreshed.
   if (isHourly && hour === 9 && selfHostedReviews) {
     jobs.push({ type: "repo-doc-refresh-sweep", requestedBy: "schedule" });
+  }
+  // Maintainer recap digest (#1963, #2248; flag GITTENSORY_MAINTAINER_RECAP). Cross-repo RecapReport delivered
+  // to Discord on a configurable cadence (GITTENSORY_RECAP_CADENCE=daily|weekly, default weekly) at the
+  // configured hour/day-of-week (GITTENSORY_RECAP_HOUR / GITTENSORY_RECAP_DAY). Enqueued ONLY when the flag is
+  // ON and this tick matches the configured cadence -- flag-OFF (default) this job is never created, so the
+  // cron tick does ZERO new work and the enqueued set is byte-identical to today.
+  if (selfHostedReviews && isRecapEnabled(env) && isHourly && shouldFireMaintainerRecap(env, hour, scheduledAt.getUTCDay())) {
+    jobs.push({ type: "generate-maintainer-recap", requestedBy: "schedule" });
   }
   if (isFullSyncWindow) {
     jobs.push({ type: "generate-signal-snapshots", requestedBy: "schedule" });

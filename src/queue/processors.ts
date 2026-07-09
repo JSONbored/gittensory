@@ -551,6 +551,7 @@ import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guard
 import { resolveUnlinkedIssueMatchDisposition } from "../review/unlinked-issue-guardrail";
 import { DEFAULT_SCREENSHOT_TABLE_GATE, evaluateScreenshotTableGate } from "../review/screenshot-table-gate";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
+import { isRecapEnabled, runMaintainerRecapJob } from "../review/maintainer-recap-wire";
 import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
 import { isPrReconciliationEnabled, runOpenPrReconciliation } from "../review/pr-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
@@ -1108,6 +1109,12 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "generate-review-recap":
       await runReviewRecapJob(env, message.repoFullName, message.windowDays);
+      return;
+    case "generate-maintainer-recap":
+      // Convergence (maintainer recap digest, flag GITTENSORY_MAINTAINER_RECAP, #1963/#2248). Defense-in-depth:
+      // the cron only ENQUEUES this when the flag is ON, but a stale in-flight job that lands after a flag-flip
+      // must still no-op, so flag-OFF does zero work here too.
+      if (isRecapEnabled(env)) await runMaintainerRecapJob(env, message.windowDays);
       return;
     case "agent-regate-sweep":
       if (!message.repoFullName && message.requestedBy !== "test") {

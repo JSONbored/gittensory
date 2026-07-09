@@ -816,6 +816,64 @@ describe("worker entrypoint", () => {
       ]),
     );
   });
+
+  it("enqueues the maintainer recap digest on the default weekly cadence (Monday 14:00 UTC) ONLY when GITTENSORY_MAINTAINER_RECAP is ON (#2248, flag-OFF is byte-identical)", async () => {
+    const sentFor = async (recapFlag?: string): Promise<Array<import("../../src/types").JobMessage>> => {
+      const sent: Array<import("../../src/types").JobMessage> = [];
+      const env = createTestEnv({
+        ...(recapFlag === undefined ? {} : { GITTENSORY_MAINTAINER_RECAP: recapFlag }),
+        JOBS: {
+          async send(message: import("../../src/types").JobMessage) {
+            sent.push(message);
+          },
+        } as unknown as Queue,
+      });
+      const waitUntil: Promise<unknown>[] = [];
+      await worker.scheduled(controllerFor("2026-06-01T14:00:00.000Z"), env, executionContext(waitUntil)); // Monday, 14:00 UTC
+      await Promise.all(waitUntil);
+      return sent;
+    };
+
+    // Flag OFF (default) → no recap job; the enqueued set is unchanged from today.
+    expect((await sentFor()).some((m) => m.type === "generate-maintainer-recap")).toBe(false);
+    expect((await sentFor("false")).some((m) => m.type === "generate-maintainer-recap")).toBe(false);
+    // Flag ON, on the default weekly cadence tick → exactly one recap job.
+    const on = await sentFor("true");
+    expect(on.filter((m) => m.type === "generate-maintainer-recap")).toEqual([{ type: "generate-maintainer-recap", requestedBy: "schedule" }]);
+  });
+
+  it("does NOT enqueue the maintainer recap digest outside its configured cadence even when GITTENSORY_MAINTAINER_RECAP is ON", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      GITTENSORY_MAINTAINER_RECAP: "true",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    const waitUntil: Promise<unknown>[] = [];
+    await worker.scheduled(controllerFor("2026-06-02T14:00:00.000Z"), env, executionContext(waitUntil)); // Tuesday, not the weekly default day
+    await Promise.all(waitUntil);
+    expect(sent.some((m) => m.type === "generate-maintainer-recap")).toBe(false);
+  });
+
+  it("honors a custom GITTENSORY_RECAP_CADENCE=daily, firing every day at the configured hour", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      GITTENSORY_MAINTAINER_RECAP: "true",
+      GITTENSORY_RECAP_CADENCE: "daily",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    const waitUntil: Promise<unknown>[] = [];
+    await worker.scheduled(controllerFor("2026-06-02T14:00:00.000Z"), env, executionContext(waitUntil)); // Tuesday — not the weekly default day
+    await Promise.all(waitUntil);
+    expect(sent.filter((m) => m.type === "generate-maintainer-recap")).toEqual([{ type: "generate-maintainer-recap", requestedBy: "schedule" }]);
+  });
 });
 
 function controllerFor(iso: string): ScheduledController {

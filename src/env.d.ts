@@ -338,6 +338,17 @@ declare global {
      *  recording are wired, reading a promoted override into the live gate is a noted follow-up that must not
      *  risk loosening the gate. See src/review/selftune-wire.ts. */
     GITTENSORY_REVIEW_SELFTUNE?: string;
+    /** Maintainer recap digest (#1963, #2248): when truthy, a cross-repo RecapReport -- gittensory's OWN
+     *  gate-precision + outcome-calibration data folded across every scanned repo (buildMaintainerRecap,
+     *  #2239) -- is delivered to Discord on a cron cadence. GITTENSORY_RECAP_CADENCE ("daily" | "weekly",
+     *  default "weekly"; an invalid value falls back to "weekly") picks how often; GITTENSORY_RECAP_HOUR
+     *  (0-23, default 14) and GITTENSORY_RECAP_DAY (0-6, Sunday=0, default 1/Monday, only consulted when
+     *  weekly) pick when, so the tick fires at most once per period. Default OFF -- unset/false means the
+     *  cron enqueues NO recap job, byte-identical to today. See src/review/maintainer-recap-wire.ts. */
+    GITTENSORY_MAINTAINER_RECAP?: string;
+    GITTENSORY_RECAP_CADENCE?: string;
+    GITTENSORY_RECAP_HOUR?: string;
+    GITTENSORY_RECAP_DAY?: string;
     /** #1941: route the live CI aggregate (the gate's check/status read) through ONE GraphQL statusCheckRollup
      *  query instead of the paginated /check-runs + /status + /check-suites REST reads, moving that hot path onto
      *  the separate GraphQL rate-limit bucket. Default OFF (byte-identical, proven REST aggregate); when ON the
