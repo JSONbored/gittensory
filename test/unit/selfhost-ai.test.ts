@@ -117,6 +117,28 @@ describe("createOpenAiCompatibleAi (#979)", () => {
     expect(first?.body.model).toBe("llama3.1");
   });
 
+  it("forwards providerOptions verbatim as the request's `options` field (#4327/#4335 num_ctx capping)", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    const ai = createOpenAiCompatibleAi({ baseUrl: "http://ollama:11434/v1" });
+    await ai.run("qwen3-vl:8b-instruct", { messages: [{ role: "user", content: "x" }], providerOptions: { num_ctx: 4096 } });
+    expect(body?.options).toEqual({ num_ctx: 4096 });
+  });
+
+  it("omits `options` entirely from the request body when providerOptions is unset (byte-identical to before)", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    const ai = createOpenAiCompatibleAi({ baseUrl: "http://ollama:11434/v1" });
+    await ai.run("llama3.1", { messages: [{ role: "user", content: "x" }] });
+    expect("options" in (body ?? {})).toBe(false);
+  });
+
   it("throws on a non-OK response so the caller degrades", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("err", { status: 500 })));
     await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { prompt: "p" })).rejects.toThrow(/ai_http_500/);

@@ -8203,6 +8203,11 @@ async function runSelfHostVisualVision(env: Env, system: string, user: string, i
         { role: "user", content: [{ type: "text", text: user }, ...images] },
       ],
       max_tokens: 600,
+      // Bounds per-request KV cache on a concurrency-constrained GPU (#4327/#4335 concurrency tuning docs
+      // this exact figure) -- without a cap, vision's larger-than-text context can exhaust VRAM under
+      // concurrent load faster than the embed model does, degrading to latency collapse rather than a clean
+      // OOM. Ignored by every non-Ollama provider (embeddings, subscription CLIs, Anthropic).
+      providerOptions: { num_ctx: 4096 },
     })) as { response?: string } | null;
     return result?.response?.trim() || null;
   } catch {

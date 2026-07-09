@@ -426,6 +426,7 @@ describe("runVisualVisionForAdvisory: self-host local vision provider (#4335)", 
     const [, options] = runMock.mock.calls[0]!;
     expect(options.messages[0]).toMatchObject({ role: "system" });
     expect(options.messages[1]).toMatchObject({ role: "user" });
+    expect((options as unknown as { providerOptions?: { num_ctx?: number } }).providerOptions).toEqual({ num_ctx: 4096 });
     expect(adv.findings).toEqual([
       {
         code: "visual_regression_finding",

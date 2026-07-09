@@ -25,6 +25,12 @@ interface AiRunOptions {
   text?: string[]; // embedding input — the core's embedTexts passes { text: string[] }
   max_tokens?: number;
   temperature?: number;
+  // Ollama-specific runtime options (e.g. `{ num_ctx: 4096 }` to bound per-request KV cache on a
+  // concurrency-constrained GPU, #4327/#4335) — forwarded verbatim as the OpenAI-compatible endpoint's
+  // `options` extension field. Only createOpenAiCompatibleAi's chat path reads this; every other provider
+  // (embeddings, the subscription CLIs, Anthropic) ignores it, so it is safe to set unconditionally on a
+  // call that ONLY ever targets an Ollama-backed binding (e.g. AI_VISION).
+  providerOptions?: Record<string, unknown>;
   // Correlation context for a provider-failure log (#codex-timeout-fields): purely observational, never read by a
   // provider's own request logic. The caller (runWorkersOpinion) passes whatever of these it already has in scope
   // for THIS review — job id and attempt are per-attempt, repoFullName/pullNumber identify the PR being reviewed —
@@ -281,6 +287,7 @@ export function createOpenAiCompatibleAi(opts: {
           messages: toMessages(options).map((message) => ({ role: message.role, content: toOpenAiMessageContent(message.content) })),
           max_tokens: options.max_tokens,
           temperature: options.temperature,
+          ...(options.providerOptions ? { options: options.providerOptions } : {}),
         }),
         signal: AbortSignal.timeout(120_000),
       });
