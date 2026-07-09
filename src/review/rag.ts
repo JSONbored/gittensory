@@ -70,6 +70,8 @@ export interface RagInfra {
   vector?: VectorAdapter;
   inference?: InferenceAdapter;
   embeddingDimensions?: number;
+  /** Items per embed-provider call. Defaults to `EMBED_BATCH` when unset — see `ragEmbedBatchFromEnv`. */
+  embedBatch?: number;
 }
 
 export type RagRetrievalMetrics = {
@@ -117,6 +119,11 @@ export function ragNamespace(project: string, repo: string): string {
 export function ragDimensionsFromEnv(value: string | undefined): number {
   const dim = Number(value);
   return Number.isFinite(dim) && dim > 0 ? Math.floor(dim) : RAG_DIMENSIONS;
+}
+
+export function ragEmbedBatchFromEnv(value: string | undefined): number {
+  const batch = Number(value);
+  return Number.isFinite(batch) && batch > 0 ? Math.floor(batch) : EMBED_BATCH;
 }
 
 // ── Filtering: index CODE, not content/data corpora (the primary free-tier cost guard) ───────────
@@ -284,12 +291,17 @@ export async function countRepoChunks(storage: StorageAdapter, project: string, 
 }
 
 // ── Embedding (fail-safe: null on any failure) ────────────────────────────────────────────────────
-export async function embedTexts(inference: InferenceAdapter | undefined, texts: string[], expectedDimensions = RAG_DIMENSIONS): Promise<number[][] | null> {
+export async function embedTexts(
+  inference: InferenceAdapter | undefined,
+  texts: string[],
+  expectedDimensions = RAG_DIMENSIONS,
+  batchSize = EMBED_BATCH,
+): Promise<number[][] | null> {
   if (!inference || texts.length === 0) return null;
   try {
     const out: number[][] = [];
-    for (let i = 0; i < texts.length; i += EMBED_BATCH) {
-      const batch = texts.slice(i, i + EMBED_BATCH);
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
       const res = (await inference.run(EMBED_MODEL, { text: batch })) as { data?: number[][] } | null;
       const data = res?.data;
       // Validate COUNT and DIMENSION: a self-host embedding endpoint can return a structurally-valid response
@@ -316,7 +328,7 @@ export async function upsertChunks(infra: RagInfra, project: string, repo: strin
   const { storage: db, vector: vec, inference } = infra;
   if (!vec || !inference || chunks.length === 0) return 0;
   const namespace = ragNamespace(project, repo);
-  const vectors = await embedTexts(inference, chunks.map((c) => c.text), infra.embeddingDimensions ?? RAG_DIMENSIONS);
+  const vectors = await embedTexts(inference, chunks.map((c) => c.text), infra.embeddingDimensions ?? RAG_DIMENSIONS, infra.embedBatch ?? EMBED_BATCH);
   if (!vectors) return 0;
   try {
     await vec.upsert(
@@ -420,7 +432,7 @@ export async function retrieveContextWithMetrics(
   // entirely — no point spending an inference call (and vector query budget) on an empty namespace. (#audit cost)
   if (!(await hasIndexedChunks(storage, opts.project, opts.repo, Date.now()))) return emptyRagRetrievalResult(configuredMinScore);
   try {
-    const embedded = await embedTexts(inference, [opts.queryText.slice(0, 16000)], infra.embeddingDimensions ?? RAG_DIMENSIONS);
+    const embedded = await embedTexts(inference, [opts.queryText.slice(0, 16000)], infra.embeddingDimensions ?? RAG_DIMENSIONS, infra.embedBatch ?? EMBED_BATCH);
     const vec = embedded?.[0];
     if (!vec) return emptyRagRetrievalResult(configuredMinScore);
     const res = await vectorAdapter.query(vec, {

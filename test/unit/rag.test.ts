@@ -16,6 +16,7 @@ import {
   type RagInfra,
   RAG_DIMENSIONS,
   ragDimensionsFromEnv,
+  ragEmbedBatchFromEnv,
   ragNamespace,
   readChunkTexts,
   retrieveContext,
@@ -154,6 +155,21 @@ describe("ragDimensionsFromEnv", () => {
     expect(ragDimensionsFromEnv("not-a-number")).toBe(RAG_DIMENSIONS);
     expect(ragDimensionsFromEnv("0")).toBe(RAG_DIMENSIONS);
     expect(ragDimensionsFromEnv("-5")).toBe(RAG_DIMENSIONS);
+  });
+});
+
+describe("ragEmbedBatchFromEnv", () => {
+  it("uses a positive integer batch size from configuration", () => {
+    expect(ragEmbedBatchFromEnv("32")).toBe(32);
+    expect(ragEmbedBatchFromEnv("256.9")).toBe(256);
+  });
+
+  it("falls back to the shipped EMBED_BATCH default (96) for unset, invalid, or non-positive values", () => {
+    expect(ragEmbedBatchFromEnv(undefined)).toBe(96);
+    expect(ragEmbedBatchFromEnv("")).toBe(96);
+    expect(ragEmbedBatchFromEnv("not-a-number")).toBe(96);
+    expect(ragEmbedBatchFromEnv("0")).toBe(96);
+    expect(ragEmbedBatchFromEnv("-5")).toBe(96);
   });
 });
 
@@ -344,6 +360,27 @@ describe("rag: fail-safe (never throws; degrades to no context)", () => {
     expect(out).not.toContain("src/changed.ts"); // the file under review is excluded → only RELATED code surfaces
   });
 
+  it("threads a configured infra.embedBatch into the query-embed call too (#4327)", async () => {
+    const matches = [{ id: "src/a.ts::0", score: 0.9, metadata: { path: "src/a.ts" } }];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    let queryEmbedBatch = 0;
+    const inference: InferenceAdapter = {
+      run: async (_model, options) => {
+        queryEmbedBatch = (options as { text: string[] }).text.length;
+        return { data: [Array(1024).fill(0.1)] };
+      },
+    };
+    const infra: RagInfra = {
+      storage: storageStub({ count: 1, rows: [{ id: "src/a.ts::0", text: "export const x = 1;" }] }),
+      vector,
+      inference,
+      embedBatch: 8, // arbitrary non-default value; only one query text is ever embedded, so this proves plumbing, not chunking
+    };
+    const out = await retrieveContext(infra, { project: "p", repo: "o/r", queryText: "refactor the auth token verification and add coverage" });
+    expect(out).toContain("src/a.ts");
+    expect(queryEmbedBatch).toBe(1); // a single query string, regardless of the configured batch size
+  });
+
   it("retrieveContextWithMetrics reports candidates, injected chars, and unique retrieved paths", async () => {
     const matches = [
       { id: "src/a.ts::0", score: 0.9, metadata: { path: "src/a.ts" } },
@@ -452,6 +489,27 @@ describe("rag: upsertChunks (embed + vector upsert + chunk-text store)", () => {
     const n = await upsertChunks({ storage, vector, inference: ai768, embeddingDimensions: 768 }, "gittensory", "o/r", chunks);
     expect(n).toBe(1);
     expect((upserted[0]?.[0]?.values ?? []).length).toBe(768);
+  });
+
+  it("threads a configured infra.embedBatch into the embed call (self-host GPU tuning, #4327)", async () => {
+    const upserted: VectorUpsert[][] = [];
+    const vector = { upsert: async (v: VectorUpsert[]) => { upserted.push(v); } } as unknown as VectorAdapter;
+    const storage = {
+      prepare: () => ({ bind: () => ({ run: async () => undefined }) as unknown as BoundStatement }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    const batchSizes: number[] = [];
+    const inference: InferenceAdapter = {
+      run: async (_model, options) => {
+        const batch = (options as { text: string[] }).text;
+        batchSizes.push(batch.length);
+        return { data: batch.map(() => Array(1024).fill(0.1)) };
+      },
+    };
+    const manyChunks: RagChunk[] = Array.from({ length: 10 }, (_, i) => ({ id: `ns|src/a.ts::${i}`, path: "src/a.ts", chunkIndex: i, kind: "code", text: `chunk ${i}` }));
+    const n = await upsertChunks({ storage, vector, inference, embedBatch: 4 }, "gittensory", "o/r", manyChunks);
+    expect(n).toBe(10);
+    expect(batchSizes).toEqual([4, 4, 2]); // proves infra.embedBatch (4) drove the batching, not the 96 default
   });
 
   it("returns 0 with no vector / no inference / empty chunks (the fail-safe guard)", async () => {
@@ -673,6 +731,21 @@ describe("rag: embedTexts validation branches", () => {
     expect(out).not.toBeNull();
     expect(out?.length).toBe(150);
     expect(calls).toEqual([96, 54]); // proves the batching loop ran twice
+  });
+
+  it("honors a configured batchSize override instead of the EMBED_BATCH=96 default (self-host GPU tuning)", async () => {
+    const calls: number[] = [];
+    const inference: InferenceAdapter = {
+      run: async (_model, options) => {
+        const batch = (options as { text: string[] }).text;
+        calls.push(batch.length);
+        return { data: batch.map(() => Array(1024).fill(0.1)) };
+      },
+    };
+    const texts = Array.from({ length: 150 }, (_, i) => `t${i}`);
+    const out = await embedTexts(inference, texts, RAG_DIMENSIONS, 50);
+    expect(out?.length).toBe(150);
+    expect(calls).toEqual([50, 50, 50]); // three batches of 50, not the default 96/54 split
   });
 
   it("fails the WHOLE embed when a LATER batch is malformed (early-return mid-loop)", async () => {

@@ -17,6 +17,10 @@ declare global {
     VECTORIZE?: Vectorize;
     /** Self-host RAG vector width. Must match the configured embedding model and vector backend. */
     QDRANT_DIM?: string;
+    /** Self-host RAG embed batch size (items per embed-provider call). Defaults to the shipped
+     *  Workers-AI-safe constant (96) when unset — this override exists for self-host operators tuning
+     *  throughput on their own hardware (e.g. GPU-accelerated Ollama), not to change the hosted default. */
+    AI_EMBED_BATCH?: string;
     /** Optional self-host review audit + visual-capture blob store. The Node runtime injects a filesystem-backed
      *  store when REVIEW_AUDIT_DIR is set, or an S3-compatible-bucket-backed store (an operator's own Cloudflare
      *  R2 bucket, or any other S3-compatible provider) when REVIEW_AUDIT_S3_BUCKET + _ENDPOINT +

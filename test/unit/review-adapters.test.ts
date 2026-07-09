@@ -68,6 +68,12 @@ describe("createReviewAdapters: bundle assembly + graceful degradation", () => {
     expect(infra.embeddingDimensions).toBe(768);
   });
 
+  it("carries the configured embed batch size into the infra bundle (self-host GPU tuning, #4327)", () => {
+    const { DB } = dbStub();
+    const infra = createReviewAdapters({ DB, VECTORIZE: vectorizeStub(), AI: aiStub(), AI_EMBED_BATCH: "32" } as unknown as Env);
+    expect(infra.embedBatch).toBe(32);
+  });
+
   it("prefers the dedicated AI_EMBED provider for inference, keeping the review chain frontier-only", async () => {
     const { DB } = dbStub();
     const reviewAi = { run: vi.fn(async () => ({ response: "review text" })) }; // would NOT return embed data
@@ -112,6 +118,7 @@ describe("createReviewAdapters: bundle assembly + graceful degradation", () => {
     expect("vector" in infra).toBe(false);
     expect("inference" in infra).toBe(false);
     expect("embeddingDimensions" in infra).toBe(false);
+    expect("embedBatch" in infra).toBe(false);
   });
 });
 
