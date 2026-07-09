@@ -2457,8 +2457,11 @@ async function fetchPullRequestChecks(
 // NOTE: "action_required" is deliberately NOT here. A fork PR awaiting maintainer "Approve and run" surfaces its
 // required checks with conclusion="action_required" — that is NOT a failure, it is awaiting-approval. Treating it
 // as failing made ciState="failed" → the agent one-shot CLOSED the fork ("CI is failing") even though no check
-// ever ran. Excluded here, an action_required check falls through to anyPending → ciState="pending" → the PR is
-// DEFERRED/held (never closed) until its runs are approved (manually, or auto-approved by fork CI auto-approval). (#fork-action-required)
+// ever ran. Excluded here, a github-actions action_required check falls through to anyPending → ciState="pending"
+// → the PR is DEFERRED/held (never closed) until its runs are approved (manually, or auto-approved by fork CI
+// auto-approval). (#fork-action-required) — a THIRD-PARTY app's own COMPLETED action_required verdict (e.g. a
+// security/trust-scan tool) is handled separately below (isSettledThirdPartyActionRequired) and does NOT fall
+// through to pending: it is a settled result, not an in-progress workflow awaiting approval to run.
 const CI_FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "startup_failure"]);
 const CI_PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 // The bot's OWN check-runs — it posts these (in_progress, then concluded) as PART OF reviewing. They are NOT
@@ -2775,15 +2778,28 @@ async function reduceLiveCiAggregate(
   // current one, without collapsing unrelated checks that merely share a display name.
   for (const run of dedupeLatestCheckRunsByIdentity(checkRuns)) {
     seenContextNames.add(run.name); // mark BEFORE bot-check skip: a bot-owned required context is "seen"
-    if ((run.app?.slug ?? "").toLowerCase() === "github-actions") sawFirstPartyCheckRun = true;
+    const appSlug = (run.app?.slug ?? "").toLowerCase();
+    if (appSlug === "github-actions") sawFirstPartyCheckRun = true;
     if (isOwnGitHubAppCheckRun(env, run)) continue; // never wait on the bot's own Gate/Context check-runs
     total += 1;
     const conclusion = (run.conclusion ?? "").toLowerCase();
     const status = (run.status ?? "").toLowerCase();
+    // A THIRD-PARTY app's OWN action_required verdict on an already-COMPLETED check-run (e.g. Superagent
+    // Security's "Contributor trust") is a settled, terminal result -- it ran, and its own business logic
+    // says "a human should look at this", which is informational, not "still executing". This is NOT the
+    // github-actions "awaiting maintainer Approve and run" case the action_required exclusion above exists
+    // for (that one is scoped to appSlug === "github-actions" specifically) -- a non-Actions app's completed
+    // action_required check can never transition to any other state via a CI event gittensory observes, so
+    // treating it as pending made prReadyForReview defer the review FOREVER (#superagent-action-required-stuck:
+    // confirmed live, JSONbored/awesome-claude#4728 stuck 30+ minutes across 8 outage-repair attempts before
+    // exhausting REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA and falling back to slow passive sweep cadence, never
+    // actually reviewed). Conservative: an unknown/absent app slug is NOT treated as settled here, only a
+    // confirmed non-Actions app.
+    const isSettledThirdPartyActionRequired = conclusion === "action_required" && status === "completed" && appSlug !== "" && appSlug !== "github-actions";
     if (conclusion ? CI_FAILING_CONCLUSIONS.has(conclusion) : false) {
       const summary = [run.output?.title, run.output?.summary].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim().slice(0, 200);
       failingDetails.push({ name: run.name, ...(summary ? { summary } : {}), ...(run.details_url ? { detailsUrl: run.details_url } : {}) });
-    } else if (conclusion ? CI_PASSING_CONCLUSIONS.has(conclusion) : status === "completed") {
+    } else if (isSettledThirdPartyActionRequired || (conclusion ? CI_PASSING_CONCLUSIONS.has(conclusion) : status === "completed")) {
       // concluded and not failing → passing
     } else {
       anyVisiblePending = true;
