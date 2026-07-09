@@ -47,6 +47,13 @@ The package also includes an append-only prediction ledger: `initPredictionLedge
 codes, plus the producing `ENGINE_VERSION`) in local SQLite, so a later self-improve pass can score predictions
 against realized outcomes. Insert-only. (#4263)
 
+`gittensory-miner manage status` now also folds each tracked repo's current discover/plan/prepare run state
+(`run-state.js`) alongside its managed PR rows into a "run portfolio" view — `collectRunPortfolio` /
+`renderRunPortfolioTable` — so a repo actively being discovered or planned shows up even with zero PRs yet.
+Additive only: the existing `rows` JSON key and PR table are unchanged; `runPortfolio` is a new key printed
+after the existing table. A real GUI dashboard surface is out of scope here — `apps/gittensory-miner-ui/` is
+Phase 6 of the same roadmap tracker and hasn't been scaffolded yet. (#4279)
+
 ## Install
 
 See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.
@@ -88,6 +95,8 @@ gittensory-miner version
 gittensory-miner init [--json]
 gittensory-miner status [--json]
 gittensory-miner doctor [--json]
+gittensory-miner manage status [--json]
+gittensory-miner manage poll <owner/repo> <pr#> [--branch <name>] [--json]
 ```
 
 ## Version check

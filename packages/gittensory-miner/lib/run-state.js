@@ -72,6 +72,9 @@ export function initRunStateStore(dbPath = resolveRunStateDbPath()) {
       state = excluded.state,
       updated_at = excluded.updated_at
   `);
+  const listStatement = db.prepare(
+    "SELECT repo_full_name, state, updated_at FROM miner_run_state ORDER BY repo_full_name",
+  );
 
   return {
     dbPath: resolvedPath,
@@ -85,6 +88,13 @@ export function initRunStateStore(dbPath = resolveRunStateDbPath()) {
       const updatedAt = new Date().toISOString();
       setStatement.run(normalizedRepo, normalizedState, updatedAt);
       return { repoFullName: normalizedRepo, state: normalizedState, updatedAt };
+    },
+    /** Every repo with a recorded run state, across the whole store — the per-repo discover/plan/prepare
+     *  signal a "run portfolio" view folds alongside managed PR rows (#4279). */
+    listRunStates() {
+      return listStatement.all()
+        .filter((row) => runStateSet.has(row.state))
+        .map((row) => ({ repoFullName: row.repo_full_name, state: row.state, updatedAt: row.updated_at }));
     },
     close() {
       db.close();
@@ -103,6 +113,10 @@ export function getRunState(repoFullName) {
 
 export function setRunState(repoFullName, state) {
   return getDefaultRunStateStore().setRunState(repoFullName, state);
+}
+
+export function listRunStates() {
+  return getDefaultRunStateStore().listRunStates();
 }
 
 export function closeDefaultRunStateStore() {
