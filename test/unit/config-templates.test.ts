@@ -5,6 +5,7 @@ import {
   gateConfigToJson,
   parseFocusManifest,
   parseFocusManifestContent,
+  resolveEnrichmentAnalyzerToggles,
   resolveReviewPathInstructions,
   resolveReviewPromptOverrides,
   reviewConfigToJson,
@@ -216,5 +217,18 @@ describe("config/examples review templates (#1682)", () => {
     // A path instruction applies only to changed files matching its glob (empty string otherwise).
     expect(resolveReviewPathInstructions(on.review.pathInstructions, ["src/index.ts"])).toContain("be strict");
     expect(resolveReviewPathInstructions(on.review.pathInstructions, ["docs/readme.md"])).toBe("");
+  });
+
+  it("resolves the REES analyzer selection field group via parse + round-trip + toggle resolution (#2207)", () => {
+    const full = readConfigExample("gittensory.full.yml");
+    expect(full).toMatch(/enrichment:/);
+    // Default: no per-analyzer toggles ⇒ the operator's default analyzer set runs unchanged.
+    expect(resolveEnrichmentAnalyzerToggles(parseFocusManifest({}))).toEqual({});
+    // Explicit per-analyzer enable/disable toggles parse, resolve, and round-trip byte-for-byte — the parity
+    // the config-generator's per-analyzer toggle group emits into.
+    const on = parseFocusManifest({ review: { enrichment: { redos: true, dependency: false } } });
+    expect(on.review.enrichmentAnalyzers).toEqual({ redos: true, dependency: false });
+    expect(resolveEnrichmentAnalyzerToggles(on)).toEqual({ redos: true, dependency: false });
+    expect(reviewConfigToJson(on.review)).toEqual({ enrichment: { redos: true, dependency: false } });
   });
 });
