@@ -152,6 +152,20 @@ describe("config/examples review templates (#1682)", () => {
     expect(reviewConfigToJson(on.review)).toEqual({ max_findings: { blockers: 5, nits: 8 } });
   });
 
+  it("resolves review.inline_comments via manifest parse + boolean helper (#2206)", () => {
+    const full = readConfigExample("gittensory.full.yml");
+    expect(full).toMatch(/# inline_comments:/);
+    expect(parseFocusManifest({}).review.inlineComments).toBeNull();
+    expect(resolveReviewPromptOverrides(parseFocusManifest({})).inlineComments).toBe(false);
+    const on = parseFocusManifest({ review: { inline_comments: true } });
+    expect(on.review.inlineComments).toBe(true);
+    expect(resolveReviewPromptOverrides(on).inlineComments).toBe(true);
+    expect(reviewConfigToJson(on.review)).toEqual({ inline_comments: true });
+    const off = parseFocusManifest({ review: { inline_comments: false } });
+    expect(off.review.inlineComments).toBe(false);
+    expect(resolveReviewPromptOverrides(off).inlineComments).toBe(false);
+  });
+
   it("parses gittensory.minimal.yml with zero warnings and enables no agent actions", () => {
     const manifest = parseFocusManifestContent(readConfigExample("gittensory.minimal.yml"), "repo_file");
     expect(manifest.warnings).toEqual([]);
