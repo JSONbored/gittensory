@@ -72,6 +72,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          trusted_sync_script="${RUNNER_TEMP}/sync-release-lockfile-versions.mjs"
+          cp scripts/sync-release-lockfile-versions.mjs "$trusted_sync_script"
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           gh auth setup-git
           for component in mcp engine; do
@@ -82,7 +84,7 @@ jobs:
             fi
             git fetch origin "$branch"
             git checkout -B "sync-check-${component}" "origin/$branch"
-            node scripts/sync-release-lockfile-versions.mjs packages/gittensory-mcp packages/gittensory-engine
+            node "$trusted_sync_script" packages/gittensory-mcp packages/gittensory-engine
             if git diff --quiet package-lock.json; then
               echo "package-lock.json already in sync on $branch."
             else
