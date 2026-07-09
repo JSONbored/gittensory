@@ -29,7 +29,7 @@ function openAllocator(
     dbPath: paths.dbPath,
     worktreeBaseDir: paths.worktreeBaseDir,
     maxConcurrency: options.maxConcurrency ?? 4,
-    processPid: options.processPid,
+    ...(options.processPid === undefined ? {} : { processPid: options.processPid }),
   });
   allocators.push(allocator);
   return allocator;

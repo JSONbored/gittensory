@@ -20,7 +20,7 @@ function tempAllocator(options: { maxConcurrency?: number; processPid?: number }
     dbPath: join(root, "worktree-allocator.sqlite3"),
     worktreeBaseDir: join(root, "worktrees"),
     maxConcurrency: options.maxConcurrency ?? 2,
-    processPid: options.processPid,
+    ...(options.processPid === undefined ? {} : { processPid: options.processPid }),
   });
   allocators.push(allocator);
   return allocator;

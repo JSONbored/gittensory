@@ -19,9 +19,9 @@ export type WorktreeAllocator = {
   close(): void;
 };
 
-export function resolveWorktreeAllocatorDbPath(env?: NodeJS.ProcessEnv): string;
+export function resolveWorktreeAllocatorDbPath(env?: Record<string, string | undefined>): string;
 
-export function resolveWorktreeBaseDir(env?: NodeJS.ProcessEnv): string;
+export function resolveWorktreeBaseDir(env?: Record<string, string | undefined>): string;
 
 export function isProcessAlive(pid: number): boolean;
 
