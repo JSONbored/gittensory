@@ -100,8 +100,16 @@ export const RAG_DIMENSIONS = 1024;
 
 const CHUNK_CHARS = 16000; // per-file chunk budget; only files larger than this are split
 const CHUNK_OVERLAP = 1500;
-/** Hard per-repo stored-vector cap — the free-tier guard. Source is prioritized so it survives the cap. */
-export const MAX_CHUNKS_PER_REPO = 1500;
+/** Hard per-repo stored-vector cap — bounds a repo-controlled, unboundedly-growable store. Source is
+ *  prioritized so it survives the cap. Raised from 1500 (2026-07-09): all 3 currently-gated repos were
+ *  sitting AT the old cap (confirmed live), and gittensory's own indexable tree alone is within range of
+ *  it before accounting for large files splitting into multiple chunks -- meaning real code was silently
+ *  never indexed. Storage/search cost at this scale is trivial for Qdrant regardless of cap size (the
+ *  bound exists to protect against a pathological future repo, not because 4000 vectors is expensive);
+ *  the real cost of a higher cap is embedding COMPUTE, which is now a one-time cost per file instead of a
+ *  recurring one per cron cycle (#4365's blob-SHA skip-cache). Self-host only: this is not a Cloudflare
+ *  free-tier constraint on this deployment, but the name/comment history predates self-host. */
+export const MAX_CHUNKS_PER_REPO = 4000;
 const EMBED_BATCH = 96; // Workers AI caps embedding input at 100 items/call; kept as a conservative general
 // bound — other embed providers (Ollama/vLLM/etc via the self-host adapter) may not share this exact cap.
 const MAX_CONTEXT_CHARS = 14000; // bound the injected block (mirrors diff/knowledge budgets)
