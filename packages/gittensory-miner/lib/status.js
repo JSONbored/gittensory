@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkDockerPresent, checkLaptopStateSqlite } from "./laptop-init.js";
+import { resolveMinerVersion } from "./version.js";
 
 // Slim laptop-mode CLI commands (#2288): `status` (what's installed + where local state lives) and `doctor` (is
 // this laptop set up correctly). Both are read-only and 100% local — no repo-scanning, no coding-agent invocation,
@@ -31,14 +32,6 @@ export function resolveMinerStateDir(env = process.env) {
     ? env.XDG_CONFIG_HOME.trim()
     : join(homedir(), ".config");
   return join(configHome, "gittensory-miner");
-}
-
-function readOwnVersion() {
-  try {
-    return require("../package.json").version ?? null;
-  } catch {
-    return null;
-  }
 }
 
 // The pinned @jsonbored/gittensory-engine version this miner is built against, read from the miner's own declared
@@ -71,7 +64,7 @@ function discoverConfigFile(cwd) {
 export function collectStatus(env = process.env, cwd = process.cwd()) {
   const stateDir = resolveMinerStateDir(env);
   return {
-    package: { name: PACKAGE_NAME, version: readOwnVersion() },
+    package: { name: PACKAGE_NAME, version: resolveMinerVersion(env) },
     engine: { name: ENGINE_PACKAGE, version: readEngineVersion() },
     node: process.version,
     stateDir,

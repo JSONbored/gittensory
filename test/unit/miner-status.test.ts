@@ -43,6 +43,17 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     expect(status.configFile).toBe(join(root, ".gittensory-miner.yml")); // discovered
   });
 
+  it("collectStatus prefers GITTENSORY_MINER_VERSION over package.json (#4310)", () => {
+    const status = collectStatus(
+      {
+        GITTENSORY_MINER_CONFIG_DIR: "/s",
+        GITTENSORY_MINER_VERSION: "gittensory-miner-fleet@deadbeef",
+      },
+      tempRoot(),
+    );
+    expect(status.package.version).toBe("gittensory-miner-fleet@deadbeef");
+  });
+
   it("runStatus prints human-readable text (0) and machine JSON with --json", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(runStatus([], { GITTENSORY_MINER_CONFIG_DIR: "/s" }, tempRoot())).toBe(0);

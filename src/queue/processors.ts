@@ -8203,6 +8203,11 @@ async function runSelfHostVisualVision(env: Env, system: string, user: string, i
         { role: "user", content: [{ type: "text", text: user }, ...images] },
       ],
       max_tokens: 600,
+      // Bounds per-request KV cache on a concurrency-constrained GPU (#4327/#4335 concurrency tuning docs
+      // this exact figure) -- without a cap, vision's larger-than-text context can exhaust VRAM under
+      // concurrent load faster than the embed model does, degrading to latency collapse rather than a clean
+      // OOM. Ignored by every non-Ollama provider (embeddings, subscription CLIs, Anthropic).
+      providerOptions: { num_ctx: 4096 },
     })) as { response?: string } | null;
     return result?.response?.trim() || null;
   } catch {
@@ -11634,8 +11639,9 @@ async function runE2eTestGenerationAndDeliver(
   // test onto the PR's own head branch, UNLESS the PR author is a confirmed Gittensor miner (#4201's
   // scoring-integrity safeguard) — that check runs regardless of this repo's own delivery config, since the
   // external, upstream-computed score must never be able to include a maintainer-authored line a miner didn't
-  // write themselves.
-  const deliveryMode = resolveReviewPromptOverrides(args.manifest).e2eTestDelivery ?? "comment";
+  // write themselves. The automated #4196 trigger has no maintainer invoker to authorize, so it is always
+  // comment-only even for repositories that opt explicit maintainer commands into commit delivery.
+  const deliveryMode = args.trigger === "auto" ? "comment" : resolveReviewPromptOverrides(args.manifest).e2eTestDelivery ?? "comment";
   let commitOutcome: E2eTestGenCommitOutcome | undefined;
   if (testSource && deliveryMode === "commit") {
     const minerDetection = args.pr.authorLogin
