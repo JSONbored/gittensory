@@ -166,6 +166,17 @@ describe("config/examples review templates (#1682)", () => {
     expect(resolveReviewPromptOverrides(off).inlineComments).toBe(false);
   });
 
+  it("resolves review.comment_verbosity via manifest parse + helper (#2212)", () => {
+    const full = readConfigExample("gittensory.full.yml");
+    expect(full).toMatch(/# comment_verbosity:/);
+    expect(parseFocusManifest({}).review.commentVerbosity).toBeNull();
+    expect(resolveReviewPromptOverrides(parseFocusManifest({})).commentVerbosity).toBeNull();
+    const detailed = parseFocusManifest({ review: { comment_verbosity: "detailed" } });
+    expect(detailed.review.commentVerbosity).toBe("detailed");
+    expect(resolveReviewPromptOverrides(detailed).commentVerbosity).toBe("detailed");
+    expect(reviewConfigToJson(detailed.review)).toEqual({ comment_verbosity: "detailed" });
+  });
+
   it("parses gittensory.minimal.yml with zero warnings and enables no agent actions", () => {
     const manifest = parseFocusManifestContent(readConfigExample("gittensory.minimal.yml"), "repo_file");
     expect(manifest.warnings).toEqual([]);
