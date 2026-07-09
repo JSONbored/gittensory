@@ -129,10 +129,21 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
     args.installationId,
   );
   const prAuthorLogin = args.prAuthorLogin?.toLowerCase();
+  const mappingsByIssueLabel = new Map<string, readonly LinkedIssueLabelPropagationMapping[]>();
+  for (const mapping of args.mappings ?? []) {
+    const issueLabel = mapping.issueLabel.toLowerCase();
+    mappingsByIssueLabel.set(issueLabel, [...(mappingsByIssueLabel.get(issueLabel) ?? []), mapping]);
+  }
   const relaxableLabels = new Set(
-    (args.mappings ?? [])
-      .filter((mapping) => mapping.trustMaintainerAuthoredIssue === true || mapping.trustMaintainerAuthoredIssueForReward === true)
-      .map((mapping) => mapping.issueLabel.toLowerCase()),
+    [...mappingsByIssueLabel.entries()]
+      .filter(([, mappings]) =>
+        mappings.every(
+          (mapping) =>
+            mapping.trustMaintainerAuthoredIssue === true ||
+            mapping.trustMaintainerAuthoredIssueForReward === true,
+        ),
+      )
+      .map(([issueLabel]) => issueLabel),
   );
   const results = await Promise.all(
     linkedIssues.map((issueNumber) =>

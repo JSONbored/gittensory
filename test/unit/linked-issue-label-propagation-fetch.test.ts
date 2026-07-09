@@ -477,6 +477,29 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
         expect(result).toEqual(["gittensor:bug"]);
       });
 
+      it("REGRESSION: mixed-trust duplicate issue labels do not relax strict mappings through a shared label name", async () => {
+        const mappings = [
+          { issueLabel: "shared:gate", prLabel: "safe:type", removeOtherTypeLabels: true, trustMaintainerAuthoredIssue: true },
+          { issueLabel: "shared:gate", prLabel: "sensitive:reward", removeOtherTypeLabels: false },
+        ];
+        stubFetch((url) => {
+          if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+          if (url.endsWith("/issues/3951"))
+            return Response.json({ number: 3951, state: "open", user: { login: "owner" }, assignees: [], labels: ["shared:gate"] });
+          return new Response("not found", { status: 404 });
+        });
+        const env = createTestEnv({});
+        const result = await fetchLinkedIssueLabelsForPropagation({
+          env,
+          repoFullName: "owner/repo",
+          linkedIssues: [3951],
+          installationId: 123,
+          prAuthorLogin: "contrib",
+          mappings,
+        });
+        expect(result).toEqual([]);
+      });
+
       it("still propagates the reward label via trustMaintainerAuthoredIssueForReward when the issue is authored by an ADMIN_GITHUB_LOGINS fleet-operator", async () => {
         const mappings = [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: false, trustMaintainerAuthoredIssueForReward: true }];
         stubFetch((url) => {
