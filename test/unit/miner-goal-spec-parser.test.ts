@@ -53,6 +53,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         blockedLabels: ["duplicate"],
         maxConcurrentClaims: 2,
         issueDiscoveryPolicy: "encouraged",
+        feasibilityGate: { suppressAvoidReasons: [], suppressRaiseReasons: [] },
       },
       warnings: ['MinerGoalSpec field "blockedPaths" truncated an over-long entry.'],
     });
@@ -143,6 +144,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         blockedLabels: ["wontfix"],
         maxConcurrentClaims: 1,
         issueDiscoveryPolicy: "neutral",
+        feasibilityGate: { suppressAvoidReasons: [], suppressRaiseReasons: [] },
       },
       warnings: expect.arrayContaining([
         expect.stringMatching(/minerEnabled/i),
@@ -278,6 +280,41 @@ describe("MinerGoalSpec parser (#2301)", () => {
       present: false,
       spec: DEFAULT_MINER_GOAL_SPEC,
       warnings: ["MinerGoalSpec content exceeded 32768 bytes; ignoring it and falling back to safe defaults."],
+    });
+  });
+
+  describe("feasibilityGate policy (#4275)", () => {
+    it("parses suppress lists, deduping and skipping invalid entries", () => {
+      const parsed = parseMinerGoalSpec({
+        feasibilityGate: {
+          suppressAvoidReasons: ["duplicate_cluster_high", "duplicate_cluster_high", "  ", 5],
+          suppressRaiseReasons: ["claim_status_claimed"],
+        },
+      });
+      expect(parsed.present).toBe(true);
+      expect(parsed.spec.feasibilityGate).toEqual({
+        suppressAvoidReasons: ["duplicate_cluster_high"],
+        suppressRaiseReasons: ["claim_status_claimed"],
+      });
+      expect(parsed.warnings.join(" ")).toMatch(/feasibilityGate\.suppressAvoidReasons.*skipped a non-string/i);
+    });
+
+    it("treats a feasibilityGate-only config as present", () => {
+      const parsed = parseMinerGoalSpec({ feasibilityGate: { suppressRaiseReasons: ["issue_quality_uncertain"] } });
+      expect(parsed.present).toBe(true);
+      expect(parsed.spec.feasibilityGate.suppressRaiseReasons).toEqual(["issue_quality_uncertain"]);
+      expect(parsed.spec.feasibilityGate.suppressAvoidReasons).toEqual([]);
+    });
+
+    it("falls a non-mapping feasibilityGate back to an empty policy with a warning", () => {
+      const parsed = parseMinerGoalSpec({ minerEnabled: false, feasibilityGate: "nope" });
+      expect(parsed.spec.feasibilityGate).toEqual({ suppressAvoidReasons: [], suppressRaiseReasons: [] });
+      expect(parsed.warnings.join(" ")).toMatch(/"feasibilityGate" must be a mapping/i);
+    });
+
+    it("leaves feasibilityGate at the empty-policy default when absent", () => {
+      const parsed = parseMinerGoalSpec({ wantedPaths: ["src/**"] });
+      expect(parsed.spec.feasibilityGate).toEqual({ suppressAvoidReasons: [], suppressRaiseReasons: [] });
     });
   });
 });

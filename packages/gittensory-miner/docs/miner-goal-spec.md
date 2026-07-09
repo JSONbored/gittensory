@@ -49,3 +49,23 @@ Maximum issues one miner may hold claimed on this repo at once.
 ### `issueDiscoveryPolicy` (`encouraged` | `neutral` | `discouraged`, default: `neutral`)
 
 How strongly this repo encourages a miner to open discovery issues.
+
+### `feasibilityGate` (mapping, default: `{}`)
+
+Per-repo tuning of the analyze-phase feasibility gate (`buildFeasibilityVerdict`). This block carries the
+maintainer's intent only; the gate consumer enforces it. It is scoped to reason suppression — a repo can opt out
+of specific avoid/raise reason codes while leaving every other reason in force.
+
+- **`suppressAvoidReasons`** — avoid-reason codes this repo opts out of. String list. Default: `[]`.
+- **`suppressRaiseReasons`** — raise-reason codes this repo opts out of. String list. Default: `[]`.
+
+Reason codes are the strings `buildFeasibilityVerdict` emits (e.g. `duplicate_cluster_medium`,
+`claim_status_claimed`, `issue_quality_uncertain`); an unknown code is kept verbatim and simply never matches.
+
+```yaml
+feasibilityGate:
+  suppressAvoidReasons:
+    - duplicate_cluster_high
+  suppressRaiseReasons:
+    - claim_status_claimed
+```

@@ -46,6 +46,25 @@
       "enum": ["encouraged", "neutral", "discouraged"],
       "default": "neutral",
       "description": "How strongly opening discovery issues is encouraged. Default: neutral."
+    },
+    "feasibilityGate": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "suppressAvoidReasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Avoid-reason codes this repo opts out of. Default: []."
+        },
+        "suppressRaiseReasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Raise-reason codes this repo opts out of. Default: []."
+        }
+      },
+      "description": "Per-repo tuning of the analyze-phase feasibility gate: reason codes to suppress. Default: {}."
     }
   }
 }

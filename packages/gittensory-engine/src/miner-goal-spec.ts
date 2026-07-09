@@ -10,6 +10,21 @@ import { parse as parseYaml } from "yaml";
 /** How strongly opening discovery issues is encouraged for this repo. Mirrors the review-side policy vocabulary. */
 export type MinerIssueDiscoveryPolicy = "encouraged" | "neutral" | "discouraged";
 
+/**
+ * Per-repo tuning of the analyze-phase feasibility gate (`buildFeasibilityVerdict`, feasibility.ts). This config
+ * block only carries the maintainer's *intent*; enforcing it against the composer is the gate consumer's job
+ * (#4270), not this parser's. Scoped to reason suppression: a repo can opt out of specific avoid/raise reason
+ * codes (e.g. a repo that genuinely wants attempts even on `duplicate_cluster_medium`), leaving every other reason
+ * in force. Reason codes are the strings `buildFeasibilityVerdict` emits (e.g. `claim_status_claimed`,
+ * `issue_quality_uncertain`); unknown codes are kept verbatim and simply never match.
+ */
+export type MinerFeasibilityGatePolicy = {
+  /** Avoid-reason codes this repo opts out of; the gate consumer downgrades/ignores them. Default: []. */
+  suppressAvoidReasons: readonly string[];
+  /** Raise-reason codes this repo opts out of; the gate consumer downgrades/ignores them. Default: []. */
+  suppressRaiseReasons: readonly string[];
+};
+
 /** Per-repo miner configuration parsed from `.gittensory-miner.yml`. See {@link DEFAULT_MINER_GOAL_SPEC}. */
 export type MinerGoalSpec = {
   /**
@@ -49,6 +64,11 @@ export type MinerGoalSpec = {
    * Default: neutral.
    */
   issueDiscoveryPolicy: MinerIssueDiscoveryPolicy;
+  /**
+   * Per-repo tuning of the analyze-phase feasibility gate — which avoid/raise reason codes this repo opts out of.
+   * Carries intent only; the gate consumer (#4270) enforces it. Default: empty policy (no reasons suppressed).
+   */
+  feasibilityGate: MinerFeasibilityGatePolicy;
 };
 
 /** The tolerant parser result for `.gittensory-miner.yml`: the normalized spec plus parse warnings and whether the
@@ -77,6 +97,10 @@ export const DEFAULT_MINER_GOAL_SPEC: Readonly<MinerGoalSpec> = Object.freeze({
   blockedLabels: Object.freeze([]),
   maxConcurrentClaims: 1,
   issueDiscoveryPolicy: "neutral",
+  feasibilityGate: Object.freeze({
+    suppressAvoidReasons: Object.freeze([]),
+    suppressRaiseReasons: Object.freeze([]),
+  }),
 });
 
 const MAX_MINER_GOAL_SPEC_BYTES = 32_768;
@@ -90,6 +114,10 @@ function cloneDefaultMinerGoalSpec(): MinerGoalSpec {
     blockedPaths: [...DEFAULT_MINER_GOAL_SPEC.blockedPaths],
     preferredLabels: [...DEFAULT_MINER_GOAL_SPEC.preferredLabels],
     blockedLabels: [...DEFAULT_MINER_GOAL_SPEC.blockedLabels],
+    feasibilityGate: {
+      suppressAvoidReasons: [...DEFAULT_MINER_GOAL_SPEC.feasibilityGate.suppressAvoidReasons],
+      suppressRaiseReasons: [...DEFAULT_MINER_GOAL_SPEC.feasibilityGate.suppressRaiseReasons],
+    },
   };
 }
 
@@ -149,6 +177,23 @@ function normalizeIssueDiscoveryPolicy(
   return fallback;
 }
 
+function emptyFeasibilityGatePolicy(): MinerFeasibilityGatePolicy {
+  return { suppressAvoidReasons: [], suppressRaiseReasons: [] };
+}
+
+function normalizeFeasibilityGatePolicy(value: unknown, field: string, warnings: string[]): MinerFeasibilityGatePolicy {
+  if (value === undefined || value === null) return emptyFeasibilityGatePolicy();
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`MinerGoalSpec field "${field}" must be a mapping; ignoring a ${typeof value} value.`);
+    return emptyFeasibilityGatePolicy();
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    suppressAvoidReasons: normalizeStringList(record.suppressAvoidReasons, `${field}.suppressAvoidReasons`, warnings),
+    suppressRaiseReasons: normalizeStringList(record.suppressRaiseReasons, `${field}.suppressRaiseReasons`, warnings),
+  };
+}
+
 function normalizePositiveInteger(value: unknown, field: string, fallback: number, warnings: string[]): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -181,7 +226,9 @@ function hasConfiguredGoalFields(spec: MinerGoalSpec): boolean {
     spec.preferredLabels.length > 0 ||
     spec.blockedLabels.length > 0 ||
     spec.maxConcurrentClaims !== DEFAULT_MINER_GOAL_SPEC.maxConcurrentClaims ||
-    spec.issueDiscoveryPolicy !== DEFAULT_MINER_GOAL_SPEC.issueDiscoveryPolicy
+    spec.issueDiscoveryPolicy !== DEFAULT_MINER_GOAL_SPEC.issueDiscoveryPolicy ||
+    spec.feasibilityGate.suppressAvoidReasons.length > 0 ||
+    spec.feasibilityGate.suppressRaiseReasons.length > 0
   );
 }
 
@@ -222,6 +269,7 @@ export function parseMinerGoalSpec(raw: unknown): ParsedMinerGoalSpec {
       DEFAULT_MINER_GOAL_SPEC.issueDiscoveryPolicy,
       warnings,
     ),
+    feasibilityGate: normalizeFeasibilityGatePolicy(record.feasibilityGate, "feasibilityGate", warnings),
   };
   if (!hasConfiguredGoalFields(spec)) {
     warnings.push("MinerGoalSpec contained no recognized non-default goal fields; falling back to safe defaults.");
