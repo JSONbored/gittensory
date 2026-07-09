@@ -77,6 +77,7 @@ export {
   type PrOutcomeCalibrationInput,
   type ReplayHarnessStatus,
 } from "./phase7-calibration-loop.js";
+export { renderCalibrationDashboard } from "./calibration-dashboard.js";
 export {
   computeFindingSeverityCompositeCalibrationScore,
   ingestFindingSeverityCalibrationSignals,
