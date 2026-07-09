@@ -18372,6 +18372,120 @@ describe("queue processors", () => {
     }
   });
 
+  it("INVARIANT (#4498): the disposition planner reuses the public surface's own live mergeable_state/CI read instead of re-fetching a third time", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled",
+      backfillEnabled: true,
+      autonomy: { update_branch: "auto" },
+    });
+    let mergeableStateReads = 0;
+    // No mockRejectedValueOnce here -- unlike the "renders the unified PR-review comment" test above, every call
+    // succeeds identically, isolating the "both refreshes succeed" case this fix targets (a prior-call failure
+    // legitimately forces a genuine second live read, which is a different, already-covered scenario).
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "passed",
+      hasPending: false,
+      hasVisiblePending: false,
+      hasMissingRequiredContext: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      // commentMode: "detected_contributors_only" requires the author to actually resolve as a detected
+      // Gittensor contributor for the unified-comment (and its live merge-state/CI refresh) code path to
+      // engage at all -- an empty miner match here would silently skip that whole block, same as the
+      // original "renders the unified PR-review comment" test's fixture this one is adapted from.
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          { uid: 7, githubUsername: "oktofeesh1", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1, hotkey: "must-not-leak" },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            { repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedPrs: "0", totalOpenIssues: "0", totalClosedIssues: "0", isEligible: true, credibility: "1.000000" },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+      if (url.includes("/pulls/3/files")) return Response.json([{ filename: "src/cache.ts", additions: 5, deletions: 1, status: "modified" }]);
+      if (/\/pulls\/3(?:\?|$)/.test(url) && method === "GET") {
+        mergeableStateReads += 1;
+        return Response.json({ number: 3, mergeable_state: "clean" });
+      }
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 901 }, { status: 201 });
+      if (url.includes("/check-runs/901") && method === "PATCH") return Response.json({ id: 901 });
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      return new Response("not found", { status: 404 });
+    });
+
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "pr-single-live-fetch",
+        eventName: "pull_request",
+        payload: {
+          action: "synchronize",
+          installation: {
+            id: 123,
+            account: { login: "JSONbored", id: 1, type: "User" },
+            repository_selection: "selected",
+            permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+            events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 3,
+            title: "Single live fetch per pass",
+            state: "open",
+            user: { login: "oktofeesh1" },
+            head: { sha: "singlefetch123" },
+            labels: [{ name: "bug" }],
+            body: "Fixes #1\n\nValidation: npm test",
+          },
+        },
+      });
+
+      // 2, not 3: readiness's own cachedLiveMergeState/cachedLiveCiAggregate check contributes ONE legitimate,
+      // unrelated live read each (a genuine durable-cache miss on this never-before-seen head, unaffected by
+      // this fix), and maybePublishPrPublicSurface's own forced refresh contributes the other -- reused
+      // directly by the disposition planner instead of re-fetched a third time. Verified empirically: reverting
+      // this fix on this exact fixture produces 3 of each, confirming the fix removes exactly the redundant
+      // third call, not readiness's separate, necessary one.
+      expect(mergeableStateReads).toBe(2);
+      const installationTokenCiReads = liveCiSpy.mock.calls.filter(([, , , token]) => token === "installation-token");
+      expect(installationTokenCiReads).toHaveLength(2);
+    } finally {
+      liveCiSpy.mockRestore();
+    }
+  });
+
   // #3609/#3610: same fixture as the unified-comment test above (screenshotsAllowed needs both the global flag
   // AND the repo cutover allowlist — createTestEnv already defaults GITTENSORY_REVIEW_REPOS to include this
   // repo), but the changed file is WEB-VISIBLE (isVisualPath) so the capture pipeline actually fires, proving
