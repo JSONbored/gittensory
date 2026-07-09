@@ -9,6 +9,8 @@ import {
   ProductUsageBreakdownPanel,
   WeeklyValueMetricsPanel,
 } from "@/components/site/usage-analytics-panels";
+import { FindingsBreakdownCard } from "@/components/site/app-panels/findings-breakdown-card";
+import type { FindingsBreakdownReport } from "@/components/site/app-panels/findings-breakdown-card-model";
 import { GatePrecisionCard } from "@/components/site/app-panels/gate-precision-card";
 import type { GateEvalReport } from "@/components/site/app-panels/gate-precision-card-model";
 import { useApiResource } from "@/lib/api/use-api-resource";
@@ -101,6 +103,7 @@ type OperatorDashboard = {
   };
   upstreamDrift?: { status?: string; openReportCount?: number } | null;
   gateEval?: GateEvalReport;
+  findingsBreakdown?: FindingsBreakdownReport;
 };
 
 function ProductAnalytics() {
@@ -182,6 +185,10 @@ function ProductAnalytics() {
           ) : null}
 
           {data.gateEval ? <GatePrecisionCard report={data.gateEval} /> : null}
+
+          {data.findingsBreakdown ? (
+            <FindingsBreakdownCard report={data.findingsBreakdown} />
+          ) : null}
 
           {data.usageSummary ? (
             <ProductUsageBreakdownPanel
