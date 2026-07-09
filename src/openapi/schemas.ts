@@ -691,6 +691,7 @@ export const RepositorySettingsSchema = z
             prLabel: z.string(),
             removeOtherTypeLabels: z.boolean(),
             trustMaintainerAuthoredIssue: z.boolean().optional(),
+            trustMaintainerAuthoredIssueForReward: z.boolean().optional(),
           }),
         ),
       })

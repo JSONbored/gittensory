@@ -42,12 +42,15 @@ async function isRepoMaintainerLogin(env: Env, installationId: number, repoFullN
 
 /** Per-issue label resolution for {@link fetchLinkedIssueLabelsForPropagation}: a direct PR-author-is-
  *  issue-author-or-assignee match unlocks EVERY label the issue carries (today's original behavior,
- *  unchanged). Failing that, a mapping explicitly opted into `trustMaintainerAuthoredIssue`
- *  (#priority-linked-issue-gate-ownership) unlocks JUST that mapping's `issueLabel` when the issue's
- *  author independently checks out as a repo maintainer/operator via {@link isRepoMaintainerLogin} --
- *  built so routine bug/feature mirroring doesn't require formal GitHub issue assignment (our own repos
- *  rarely assign issues), while a scarce, maintainer-hand-picked reward label like `gittensor:priority`
- *  (which should never set the flag) still requires the contributor to be the actual author/assignee.
+ *  unchanged). Failing that, a mapping explicitly opted into `trustMaintainerAuthoredIssue` OR
+ *  `trustMaintainerAuthoredIssueForReward` (#priority-linked-issue-gate-ownership, #priority-reward-
+ *  maintainer-trust) unlocks JUST that mapping's `issueLabel` when the issue's author independently
+ *  checks out as a repo maintainer/operator via {@link isRepoMaintainerLogin} -- built so routine
+ *  bug/feature mirroring doesn't require formal GitHub issue assignment (our own repos rarely assign
+ *  issues). A reward mapping (e.g. `gittensor:priority`) opting into the SAME relaxation via the
+ *  `...ForReward` flag is a deliberate, per-repo operator choice (see that flag's own doc comment in
+ *  types.ts for why the assignee-only bar is often unsatisfiable in practice); a reward mapping that has
+ *  NOT opted in still requires the contributor to be the actual author/assignee, unchanged.
  *  `relaxableLabels` is empty whenever the caller passed no mappings or none opted in, which skips the
  *  maintainer-permission check (and its GitHub API call) entirely -- byte-identical to the pre-fix
  *  behavior for any caller that hasn't opted in. Logs once per issue when the returned set is smaller
@@ -104,8 +107,8 @@ async function resolveIssueLabelsForPropagation(
  *
  *  `mappings` (optional, #priority-linked-issue-gate-ownership) is the propagation config's own mapping
  *  list, used ONLY to know which `issueLabel`s are allowed to unlock via `resolveIssueLabelsForPropagation`'s
- *  relaxed maintainer-authored-issue path -- omitting it (or a mapping never setting the flag) reproduces
- *  today's strict author-or-assignee-only behavior exactly. */
+ *  relaxed maintainer-authored-issue path (either trust flag) -- omitting it (or a mapping never setting
+ *  either flag) reproduces today's strict author-or-assignee-only behavior exactly. */
 export async function fetchLinkedIssueLabelsForPropagation(args: {
   env: Env;
   repoFullName: string;
@@ -128,7 +131,7 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
   const prAuthorLogin = args.prAuthorLogin?.toLowerCase();
   const relaxableLabels = new Set(
     (args.mappings ?? [])
-      .filter((mapping) => mapping.trustMaintainerAuthoredIssue === true)
+      .filter((mapping) => mapping.trustMaintainerAuthoredIssue === true || mapping.trustMaintainerAuthoredIssueForReward === true)
       .map((mapping) => mapping.issueLabel.toLowerCase()),
   );
   const results = await Promise.all(

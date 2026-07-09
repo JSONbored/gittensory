@@ -622,6 +622,13 @@ settings:
   # which is a reward tag that coexists WITH whichever type already applies, not a type of its own) applies
   # the mapped label ADDITIVELY alongside whichever exclusive match (or the normal title-based bug/feature
   # label) already won -- every additive match composes together rather than competing for a single slot.
+  # Each mapping normally requires the PR author to be the linked issue's own author or a GitHub assignee of
+  # it (`trustMaintainerAuthoredIssue: true` relaxes this for a routine, non-reward category like bug/feature
+  # -- see the field's own doc comment in `types.ts`). `trustMaintainerAuthoredIssueForReward: true` opts a
+  # REWARD mapping like `gittensor:priority` into that same relaxation: without it, a mapping like this can
+  # structurally never propagate to most external contributors, since GitHub silently refuses to assign
+  # anyone lacking push/triage access to the repo -- so if your issues are open-pickup (maintainer-authored,
+  # rarely formally assigned to a specific contributor), the reward label needs this flag to ever reach them.
   # Disabled by default (no mappings) -- a self-hoster opts in per repo. If your labels carry reward or
   # moderation weight, configure this in PRIVATE per-repo/global config (see `config/examples/README.md`)
   # rather than the public `.gittensory.yml`, so contributors cannot see the exact mapping rules. A per-repo
@@ -634,6 +641,7 @@ settings:
   #     - issueLabel: gittensor:priority
   #       prLabel: gittensor:priority
   #       removeOtherTypeLabels: false
+  #       trustMaintainerAuthoredIssueForReward: true
 
   # Create the label if it does not yet exist. Bool. Default: true.
   createMissingLabel: true

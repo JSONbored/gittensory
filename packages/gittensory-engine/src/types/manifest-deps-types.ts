@@ -50,6 +50,10 @@ export type LinkedIssueLabelPropagationMapping = {
    *  see `review/linked-issue-label-propagation-fetch.ts`'s `isRepoMaintainerLogin` (app-side only, not
    *  duplicated into this engine package since it needs GitHub/fetch/Env access). */
   trustMaintainerAuthoredIssue?: boolean | undefined;
+  /** Like `trustMaintainerAuthoredIssue`, but for a mapping that DOES carry real reward weight
+   *  (#priority-reward-maintainer-trust) -- e.g. `gittensor:priority`. Mirrors `src/types.ts`'s copy of
+   *  this type; see that copy's doc comment for the full rationale. */
+  trustMaintainerAuthoredIssueForReward?: boolean | undefined;
 };
 
 export type LinkedIssueLabelPropagationMode = "exclusive_type_label";

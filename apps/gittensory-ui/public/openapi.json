@@ -8949,6 +8949,9 @@
                     },
                     "trustMaintainerAuthoredIssue": {
                       "type": "boolean"
+                    },
+                    "trustMaintainerAuthoredIssueForReward": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
