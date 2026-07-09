@@ -348,12 +348,26 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 5
-    # Ollama can load multi-GB models into memory; default high enough for common 7-8B quantized models but
-    # cap it so a large model pull can't exhaust host RAM and take down the core review pipeline (#1828).
+    # Concurrency/residency tuning for a shared embed+vision GPU deployment (#4327/#4335). Defaults sized
+    # for a single 24GB-class card running bge-m3 (embeddings) alongside one vision model concurrently --
+    # NUM_PARALLEL=2 keeps worst-case VRAM (resident weights + per-slot KV cache) well under 24GB; raising
+    # it on the vision model without also raising MAX_LOADED_MODELS/testing risks per-slot KV cache
+    # exhausting VRAM under burst load (latency collapse, not a hard OOM crash -- Ollama backpressures via
+    # its request queue instead). MAX_LOADED_MODELS pins exactly {embed model, vision model} resident so a
+    # stray third pull mid-burst can't force an unload/reload cycle on either one you actually need.
+    environment:
+      OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-2}"
+      OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-2}"
+      # Reviews land in bursts, not constant load -- keep both models warm across typical gaps between
+      # bursts instead of Ollama's 5m default forcing a cold-start reload every time.
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-30m}"
+    # Ollama can load multi-GB models into memory; raised from the single-embedder-era default (8g) now that
+    # a vision model (#4335) shares this container's memory ceiling alongside bge-m3 -- still capped so a
+    # runaway pull can't exhaust host RAM and take down the core review pipeline (#1828).
     deploy:
       resources:
         limits:
-          memory: "${OLLAMA_MEM_LIMIT:-8g}"
+          memory: "${OLLAMA_MEM_LIMIT:-20g}"
 
   # ── Browserless / visual review (--profile visual-review) ──────────────────
   # Headless Chromium for automated before/after PR screenshot capture (src/review/visual/**).
