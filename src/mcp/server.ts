@@ -2262,6 +2262,15 @@ export class GittensoryMcp {
     throw new Error("Forbidden: session cannot access this repository.");
   }
 
+  // Onboarding-pack previews are maintainer/operator-scoped like the HTTP preview route: they can derive
+  // guidance from private policy, so the shared static MCP token must not satisfy this gate via the read allowlist.
+  private async requireRepoOnboardingPackAccess(repoFullName: string): Promise<void> {
+    if (this.identity.kind === "static" && this.identity.actor === "mcp") {
+      throw new Error("Forbidden: onboarding-pack previews require a maintainer, owner, or operator session.");
+    }
+    await this.requireRepoAccess(repoFullName);
+  }
+
   // Stricter than requireRepoAccess (read): a maintainer-MANAGE gate for write actions (#784 propose-action).
   // A session must own/maintain the repo (or be an operator); api/internal static identities are trusted (they
   // are operator-only Worker secrets, never handed to end users). The static `mcp` identity is NOT trusted here:
@@ -2401,7 +2410,7 @@ export class GittensoryMcp {
 
   private async getRepoOnboardingPack(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
-    await this.requireRepoAccess(fullName);
+    await this.requireRepoOnboardingPackAccess(fullName);
     const response = await buildRepoOnboardingPackPreviewForRepo(this.env, fullName);
     if ("error" in response) {
       return {

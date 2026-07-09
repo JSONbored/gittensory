@@ -80,6 +80,17 @@ describe("gittensory_get_repo_onboarding_pack MCP tool (#2223)", () => {
     expect(JSON.stringify(result.content)).toMatch(/cannot access this repository/i);
   });
 
+  it("forbids the shared static MCP token even when the repo is read-allowlisted", async () => {
+    const env = createTestEnv({ MCP_READ_REPO_ALLOWLIST: "repo-owner/owned-repo" });
+    await seedRegisteredInstalledRepo(env, 201, "repo-owner", "owned-repo");
+    const result = await (await connect(env)).callTool({
+      name: "gittensory_get_repo_onboarding_pack",
+      arguments: { owner: "repo-owner", repo: "owned-repo" },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/maintainer, owner, or operator session/i);
+  });
+
   it("returns repo_not_accepted when the repository is not registered", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, {
@@ -88,7 +99,7 @@ describe("gittensory_get_repo_onboarding_pack MCP tool (#2223)", () => {
       private: false,
       owner: { login: "octo" },
     });
-    const result = await (await connect(env)).callTool({
+    const result = await (await connect(env, { kind: "static", actor: "api" })).callTool({
       name: "gittensory_get_repo_onboarding_pack",
       arguments: { owner: "octo", repo: "unregistered" },
     });
