@@ -46,6 +46,10 @@
     "./signals/test-evidence": {
       "types": "./dist/signals/test-evidence.d.ts",
       "default": "./dist/signals/test-evidence.js"
+    },
+    "./signals/path-matchers": {
+      "types": "./dist/signals/path-matchers.d.ts",
+      "default": "./dist/signals/path-matchers.js"
     }
   },
   "files": [
