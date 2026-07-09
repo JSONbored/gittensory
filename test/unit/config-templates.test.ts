@@ -177,4 +177,19 @@ describe("config/examples review templates (#1682)", () => {
     expect(round.gate.enabled).toBe(false);
     expect(isAgentConfigured(round.settings.autonomy)).toBe(false);
   });
+
+  it("resolves the gate-policy field group (enabled + advisory/block modes) via parse + gateConfigToJson round-trip (#2205)", () => {
+    const full = readConfigExample("gittensory.full.yml");
+    expect(full).toMatch(/^gate:/m);
+    expect(full).toMatch(/linkedIssue:/);
+    // No gate block ⇒ no per-repo gate override (null), so an operator's absent gate policy stays inherited.
+    expect(gateConfigToJson(parseFocusManifest({}).gate)).toBeNull();
+    // Explicit gate policy: the on/off switch + the advisory-vs-block mode controls parse and round-trip
+    // byte-for-byte — the parity the config-generator's gate-policy field group depends on.
+    const on = parseFocusManifest({ gate: { enabled: true, linkedIssue: "block", duplicates: "advisory" } });
+    expect(on.gate.enabled).toBe(true);
+    expect(on.gate.linkedIssue).toBe("block");
+    expect(on.gate.duplicates).toBe("advisory");
+    expect(gateConfigToJson(on.gate)).toEqual({ enabled: true, linkedIssue: "block", duplicates: "advisory" });
+  });
 });
