@@ -4699,6 +4699,47 @@ export async function putCachedLinkedIssueSatisfaction(
     .run();
 }
 
+/** #4499 (grounding-file-content-cache): the stored file content for (repo, path, head SHA), or null on a
+ *  miss. Unlike linked_issue_satisfaction_cache, every stored row is durable with NO input-fingerprint
+ *  dimension -- file content at an immutable head SHA has exactly one correct value, so a hit is always safe
+ *  to reuse verbatim. A nullish head SHA is always a miss (mirrors the sibling caches' contract). */
+export async function getCachedGroundingFileContent(
+  env: Env,
+  repoFullName: string,
+  path: string,
+  headSha: string | null | undefined,
+): Promise<string | null> {
+  if (!headSha) return null;
+  const row = await env.DB
+    .prepare("SELECT content FROM grounding_file_content_cache WHERE repo_full_name = ? AND path = ? AND head_sha = ?")
+    .bind(repoFullName, path, headSha)
+    .first<{ content: string }>();
+  return row?.content ?? null;
+}
+
+/** #4499 (grounding-file-content-cache): upsert the fetched file content for (repo, path, head SHA). A
+ *  nullish head SHA is a no-op (mirrors the sibling caches). The caller is responsible for only calling this
+ *  with a genuinely fetched, non-null content string -- never a fetch failure/skip, which must stay retryable
+ *  rather than being cached as if it were a confirmed-permanent binary/oversized/inaccessible condition. */
+export async function putCachedGroundingFileContent(
+  env: Env,
+  repoFullName: string,
+  path: string,
+  headSha: string | null | undefined,
+  content: string,
+): Promise<void> {
+  if (!headSha) return;
+  await env.DB
+    .prepare(
+      `INSERT INTO grounding_file_content_cache (repo_full_name, path, head_sha, content, fetched_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(repo_full_name, path, head_sha) DO UPDATE SET
+         content = excluded.content, fetched_at = excluded.fetched_at`,
+    )
+    .bind(repoFullName, path, headSha, content, nowIso())
+    .run();
+}
+
 export async function replaceCollisionEdges(env: Env, repoFullName: string, edges: CollisionEdgeRecord[]): Promise<void> {
   const db = getDb(env.DB);
   await env.DB.prepare("DELETE FROM collision_edges WHERE repo_full_name = ?").bind(repoFullName).run();

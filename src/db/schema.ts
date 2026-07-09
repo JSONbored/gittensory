@@ -1449,3 +1449,22 @@ export const linkedIssueSatisfactionCache = sqliteTable(
     primary: primaryKey({ columns: [table.repoFullName, table.pullNumber, table.headSha, table.linkedIssueNumber] }),
   }),
 );
+
+// Grounding file-content cache (#4499): makeGithubFileFetcher re-fetches every changed file's full post-change
+// body from GitHub with zero caching; content for a given (repo, path, headSha) triple is a git blob at an
+// immutable commit, so it's safe to cache durably. NOT scoped to pullNumber (unlike linkedIssueSatisfactionCache
+// above) -- file content at a given head SHA is universal, not PR-specific. Only a successful fetch is ever
+// stored; a transient failure must never be cached as if it were a confirmed-permanent one.
+export const groundingFileContentCache = sqliteTable(
+  "grounding_file_content_cache",
+  {
+    repoFullName: text("repo_full_name").notNull(),
+    path: text("path").notNull(),
+    headSha: text("head_sha").notNull(),
+    content: text("content").notNull(),
+    fetchedAt: text("fetched_at").notNull().$defaultFn(() => nowIso()),
+  },
+  (table) => ({
+    primary: primaryKey({ columns: [table.repoFullName, table.path, table.headSha] }),
+  }),
+);
