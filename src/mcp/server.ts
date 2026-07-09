@@ -13,6 +13,7 @@ import {
   runFindOpportunities,
   validateFindOpportunitiesInput,
 } from "./find-opportunities";
+import { loadPrAiReviewFindings, assertContributorOwnsPullRequest } from "./pr-ai-review-findings";
 import {
   MAX_ISSUE_RAG_OWNER_LENGTH,
   MAX_ISSUE_RAG_REPO_LENGTH,
@@ -855,6 +856,33 @@ const prOutcomeOutputSchema = {
   outcomes: z.unknown().optional(),
 };
 
+const loginRepoPullShape = {
+  login: z.string().min(1),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  pullNumber: z.number().int().positive(),
+};
+
+const prAiReviewFindingsOutputSchema = {
+  status: z.enum(["ready", "not_found", "ai_review_off"]),
+  repoFullName: z.string().optional(),
+  pullNumber: z.number().optional(),
+  login: z.string().optional(),
+  headSha: z.string().nullable().optional(),
+  findings: z
+    .array(
+      z.object({
+        category: z.string(),
+        path: z.string(),
+        severity: z.enum(["blocker", "nit"]),
+        line: z.number(),
+        body: z.string(),
+      }),
+    )
+    .optional(),
+  categoryCounts: z.record(z.string(), z.number()).optional(),
+};
+
 const predictGateShape = {
   login: z.string().min(1),
   owner: z.string().min(1),
@@ -1636,6 +1664,17 @@ export class GittensoryMcp {
         outputSchema: prOutcomeOutputSchema,
       },
       async (input) => this.toolResult(await this.prOutcomes(input.login, input.limit)),
+    );
+
+    server.registerTool(
+      "gittensory_get_pr_ai_review_findings",
+      {
+        description:
+          "Return a submitted pull request's real AI-review inline findings as structured JSON (category, path, severity, line, body) — the same categorization the PR comment uses. Post-submission only; self-scoped to the authenticated login's own PRs on repos you can access.",
+        inputSchema: loginRepoPullShape,
+        outputSchema: prAiReviewFindingsOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getPrAiReviewFindings(input)),
     );
 
     server.registerTool(
@@ -2956,6 +2995,43 @@ export class GittensoryMcp {
     return {
       summary: `Gittensory post-merge outcomes for ${login}: ${outcomes.length} merged PR(s).`,
       data: { login: login.toLowerCase(), count: outcomes.length, outcomes } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getPrAiReviewFindings(input: z.infer<z.ZodObject<typeof loginRepoPullShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
+    const repoFullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(repoFullName);
+    const pullRequest = await getPullRequest(this.env, repoFullName, input.pullNumber);
+    if (!pullRequest) {
+      return {
+        summary: `No pull request ${repoFullName}#${input.pullNumber}.`,
+        data: {
+          status: "not_found",
+          repoFullName,
+          pullNumber: input.pullNumber,
+          login: input.login.toLowerCase(),
+          findings: [],
+          categoryCounts: {},
+        },
+      };
+    }
+    assertContributorOwnsPullRequest(pullRequest.authorLogin, input.login);
+    const payload = await loadPrAiReviewFindings(this.env, {
+      repoFullName,
+      pullNumber: input.pullNumber,
+      login: input.login,
+    });
+    const findingCount = payload.status === "ready" ? payload.findings.length : 0;
+    const summary =
+      payload.status === "ready"
+        ? `${findingCount} AI-review finding(s) on ${repoFullName}#${input.pullNumber}.`
+        : payload.status === "ai_review_off"
+          ? `AI review is off for ${repoFullName}; no findings to return for #${input.pullNumber}.`
+          : `No published AI review findings for ${repoFullName}#${input.pullNumber}.`;
+    return {
+      summary,
+      data: payload as unknown as Record<string, unknown>,
     };
   }
 

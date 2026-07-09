@@ -9941,6 +9941,12 @@ async function maybePublishPrPublicSurface(
                     /* v8 ignore next -- runAiReviewForAdvisory (the sole path reaching here) always sets metadata on its "ok" returns; the nullish fallback is a type-level (optional field) safeguard, not a reachable runtime path. */
                     ...(aiReview.metadata ?? {}),
                     inputFingerprint,
+                    // Persist line-anchored findings for post-submission MCP readback (#4519). Inline comments
+                    // themselves are still only posted on a fresh review (see inlineFindings hoisting above);
+                    // this metadata is read-only structured output, not a cache-replay trigger.
+                    ...(aiReview.inlineFindings && aiReview.inlineFindings.length > 0
+                      ? { inlineFindings: aiReview.inlineFindings }
+                      : {}),
                   },
                 },
               ).catch((error) => {
