@@ -57,7 +57,13 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
       expect(picked.map((p) => p.number)).toEqual([]); // stalest by re-gate, but a webhook just touched it → skip
     });
 
-    it("live case: when updatedAt and lastRegatedAt move together, the PR is eligible once outside the window (not double-excluded)", () => {
+    it("a never-regated PR is eligible once its updatedAt is outside the freshness window (not blocked by the guard alone)", () => {
+      const pulls = [pr({ number: 1, updatedAt: minutesAgo(120) })];
+      const picked = selectRegateCandidates({ pulls, now: NOW });
+      expect(picked.map((p) => p.number)).toEqual([1]); // old updatedAt, never regated → eligible
+    });
+
+    it("one-shot review (#never-endless-reregate): a PR already regated even once is excluded regardless of how old both timestamps are", () => {
       const pulls = [
         pr({
           number: 1,
@@ -66,7 +72,7 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
         }),
       ];
       const picked = selectRegateCandidates({ pulls, now: NOW });
-      expect(picked.map((p) => p.number)).toEqual([1]); // both old → freshness allows it, re-gate orders it
+      expect(picked.map((p) => p.number)).toEqual([]); // already regated once → never re-selected by the sweep
     });
 
     it("keeps every open non-draft PR when `now` is unparseable (no freshness cutoff possible)", () => {
@@ -85,9 +91,10 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
   });
 
   describe("convergence sort key (lastRegatedAt, NOT GitHub updatedAt)", () => {
-    it("INVARIANT arm (i): orders by lastRegatedAt ascending when present — the staler RE-GATE sorts first", () => {
-      // #1 was re-gated recently but created long ago; #2 was re-gated long ago but created recently. The re-gate
-      // marker — not createdAt — drives the order, so #2 (stalest re-gate) comes first.
+    it("INVARIANT arm (i): orders by lastRegatedAt ascending when present — the staler RE-GATE sorts first (among repair-eligible candidates; a plain already-regated PR is otherwise excluded, see #never-endless-reregate)", () => {
+      // Both PRs already have a regate stamp, so both need repairPriority to remain eligible at all post-#never-
+      // endless-reregate. #1 was re-gated recently but created long ago; #2 was re-gated long ago but created
+      // recently. The re-gate marker — not createdAt — drives the order, so #2 (stalest re-gate) comes first.
       const pulls = [
         pr({
           number: 1,
@@ -100,7 +107,11 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
           createdAt: minutesAgo(1),
         }),
       ];
-      const picked = selectRegateCandidates({ pulls, now: NOW });
+      const picked = selectRegateCandidates({
+        pulls,
+        now: NOW,
+        priorityPullNumbers: new Set([1, 2]),
+      });
       expect(picked.map((p) => p.number)).toEqual([2, 1]);
     });
 
@@ -119,39 +130,56 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
       expect(picked.map((p) => p.number)).toEqual([4, 7, 9]); // all epoch → deterministic number order
     });
 
-    it("a never-regated PR (lastRegatedAt absent) outranks a just-regated one — the property that makes the sweep converge", () => {
+    it("one-shot review (#never-endless-reregate): a just-regated PR is excluded outright, never merely outranked — only the never-regated PR remains", () => {
       const pulls = [
         pr({
           number: 1,
           lastRegatedAt: minutesAgo(1),
           createdAt: minutesAgo(1000),
-        }), // just re-gated → freshest
-        pr({ number: 2, createdAt: minutesAgo(50) }), // never re-gated → its createdAt (50m) is staler than #1's re-gate (1m)
+        }), // already regated once → permanently ineligible for the sweep, regardless of staleness
+        pr({ number: 2, createdAt: minutesAgo(50) }), // never regated → the only real candidate
       ];
       const picked = selectRegateCandidates({ pulls, now: NOW });
-      expect(picked.map((p) => p.number)).toEqual([2, 1]);
+      expect(picked.map((p) => p.number)).toEqual([2]);
     });
 
-    it("bounds the batch to max (rate-aware) after ordering by re-gate staleness", () => {
+    it("bounds the batch to max (rate-aware) after ordering by re-gate staleness among repair-eligible candidates", () => {
       const pulls = [
         pr({ number: 1, lastRegatedAt: minutesAgo(120) }),
         pr({ number: 2, lastRegatedAt: minutesAgo(600) }),
         pr({ number: 3, lastRegatedAt: minutesAgo(300) }),
       ];
-      const picked = selectRegateCandidates({ pulls, now: NOW, max: 2 });
+      const picked = selectRegateCandidates({
+        pulls,
+        now: NOW,
+        max: 2,
+        priorityPullNumbers: new Set([1, 2, 3]),
+      });
       expect(picked.map((p) => p.number)).toEqual([2, 3]); // stalest re-gate (600m), then 300m; 120m dropped by cap
     });
 
-    it("#selfhost-fifo-ordering: a repair-flagged PR does NOT jump ahead of staler ordinary PRs — same orderKey for everyone", () => {
-      // #2 has a missing public surface (surfaceRepairPriorityPullNumbers would flag it) but is also the LEAST
-      // stale of the three by lastRegatedAt. An earlier revision sorted repair candidates first regardless of
-      // staleness — this pinned #2 ahead of #1/#3 and was observed live as PRs dispatching out of their
-      // creation/staleness order ("spraying") whenever a repo had a mixed repair/ordinary backlog. Repair status
-      // must only affect eligibility (see the freshness-bypass + oldest-first-pool tests below), never order.
+    it("one-shot review (#never-endless-reregate): bounds the batch to max among never-regated candidates (the ordinary, non-repair case)", () => {
       const pulls = [
-        pr({ number: 1, lastRegatedAt: minutesAgo(900) }),
+        pr({ number: 1, createdAt: minutesAgo(120) }),
+        pr({ number: 2, createdAt: minutesAgo(600) }),
+        pr({ number: 3, createdAt: minutesAgo(300) }),
+      ];
+      const picked = selectRegateCandidates({ pulls, now: NOW, max: 2 });
+      expect(picked.map((p) => p.number)).toEqual([2, 3]); // none ever regated → falls back to createdAt; oldest-created first, 120m dropped by cap
+    });
+
+    it("#selfhost-fifo-ordering: a repair-flagged PR does NOT jump ahead of staler ordinary (never-regated) PRs — same orderKey for everyone", () => {
+      // #1 and #3 have never been regated (the ordinary, post-#never-endless-reregate candidate shape). #2 has a
+      // missing public surface (surfaceRepairPriorityPullNumbers would flag it) and already has its own regate
+      // stamp from 10m ago — repair priority keeps it eligible despite that stamp, but its OWN regateProgress
+      // (10m, very fresh) correctly sorts it LAST, not ahead of the staler ordinary backlog. An earlier revision
+      // sorted repair candidates first regardless of staleness — this pinned repair work ahead of the ordinary
+      // backlog and was observed live as PRs dispatching out of their creation/staleness order ("spraying")
+      // whenever a repo had a mixed repair/ordinary backlog. Repair status must only affect eligibility, never order.
+      const pulls = [
+        pr({ number: 1, createdAt: minutesAgo(900) }),
         pr({ number: 2, lastRegatedAt: minutesAgo(10) }),
-        pr({ number: 3, lastRegatedAt: minutesAgo(800) }),
+        pr({ number: 3, createdAt: minutesAgo(800) }),
       ];
       const picked = selectRegateCandidates({
         pulls,
@@ -159,7 +187,7 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
         max: 2,
         priorityPullNumbers: new Set([2]),
       });
-      expect(picked.map((p) => p.number)).toEqual([1, 3]); // stalest-by-regate first, same as with no priority set at all
+      expect(picked.map((p) => p.number)).toEqual([1, 3]); // oldest ordinary candidates first; repair-flagged #2 (freshly stamped) dropped by the cap
     });
 
     it("REGRESSION (repair priority): priority repairs can bypass webhook freshness when the current Gate check is missing", () => {
@@ -171,8 +199,10 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
         }),
         pr({
           number: 2,
-          updatedAt: minutesAgo(120),
-          lastRegatedAt: minutesAgo(800),
+          updatedAt: minutesAgo(120), // outside the freshness window on its own
+          createdAt: minutesAgo(50), // more recent than #1's 900m regate stamp, so it still sorts after #1
+          // never regated (the ordinary, post-#never-endless-reregate candidate shape) — #1's own regate
+          // stamp above only stays eligible because of the repair-priority bypass being tested here.
         }),
       ];
       const picked = selectRegateCandidates({
@@ -256,9 +286,10 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
       expect(picked.map((p) => p.number)).toEqual([1, 2]); // #1 (oldest-created) first, unlike staleness (which has no history here either, so both modes agree in this case)
     });
 
-    it("orders by re-gate staleness after the oldest-first initial drain is complete", () => {
-      // #1 was re-gated most recently (10m ago) despite being the OLDEST-created PR by far; #2 was re-gated
-      // longer ago (100m) despite being the NEWEST-created. Once every eligible PR has a lastRegatedAt stamp,
+    it("orders by re-gate staleness among repair-eligible candidates once every one of them has a stamp (an ordinary already-regated PR stays excluded, see #never-endless-reregate)", () => {
+      // Both PRs already have a regate stamp, so both need repairPriority to remain eligible at all. #1 was
+      // re-gated most recently (10m ago) despite being the OLDEST-created PR by far; #2 was re-gated longer ago
+      // (100m) despite being the NEWEST-created. Once every eligible (repair) PR has a lastRegatedAt stamp,
       // oldest-first uses re-gate staleness so ongoing sweeps keep converging instead of pinning old PRs.
       const pulls = [
         pr({
@@ -276,14 +307,16 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
         pulls,
         now: NOW,
         orderMode: "oldest-first",
+        priorityPullNumbers: new Set([1, 2]),
       });
       expect(picked.map((p) => p.number)).toEqual([2, 1]);
     });
 
-    it("does not starve the sweep when EVERY eligible PR ties on the same lastRegatedAt (a fully-covered small backlog)", () => {
+    it("does not starve the sweep when EVERY repair-eligible PR ties on the same lastRegatedAt (a fully-covered small backlog)", () => {
       // Both PRs were dispatched together in the exact same prior sweep (identical lastRegatedAt stamp — see
-      // markPullRequestsRegated, which stamps every candidate in one UPDATE). Since the initial drain is complete,
-      // oldest-first falls back to the full staleness pool rather than returning nothing.
+      // markPullRequestsRegated, which stamps every candidate in one UPDATE) and need repairPriority to remain
+      // eligible post-#never-endless-reregate. Since the initial drain is complete, oldest-first falls back to
+      // the full (repair) pool rather than returning nothing.
       const pulls = [
         pr({
           number: 1,
@@ -300,6 +333,7 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
         pulls,
         now: NOW,
         orderMode: "oldest-first",
+        priorityPullNumbers: new Set([1, 2]),
       });
       expect(picked.map((p) => p.number)).toEqual([1, 2]); // both tie → guard proceeds with the full pool, oldest first
     });
@@ -436,7 +470,7 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
       expect(covered.size).toBe(open);
     });
 
-    it("falls back to re-gate staleness once every eligible PR has been swept once", () => {
+    it("falls back to re-gate staleness among repair-eligible candidates once every one of them has been swept once", () => {
       const pulls = [
         pr({
           number: 1,
@@ -458,8 +492,22 @@ describe("selectRegateCandidates (#777 re-gate sweep selection)", () => {
         pulls,
         now: NOW,
         orderMode: "oldest-first",
+        priorityPullNumbers: new Set([1, 2, 3]),
       });
       expect(picked.map((p) => p.number)).toEqual([2, 3, 1]);
+    });
+
+    it("one-shot review (#never-endless-reregate): an ordinary (non-repair) already-regated PR is excluded outright under oldest-first too", () => {
+      const pulls = [
+        pr({ number: 1, createdAt: minutesAgo(1000), lastRegatedAt: minutesAgo(5) }),
+        pr({ number: 2, createdAt: minutesAgo(900) }), // never regated → the only real candidate
+      ];
+      const picked = selectRegateCandidates({
+        pulls,
+        now: NOW,
+        orderMode: "oldest-first",
+      });
+      expect(picked.map((p) => p.number)).toEqual([2]);
     });
   });
 });

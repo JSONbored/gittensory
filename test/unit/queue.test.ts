@@ -7311,15 +7311,13 @@ describe("queue processors", () => {
       }
     }
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 5, title: "Draft without a head", state: "open", draft: true, user: { login: "c" }, labels: [], body: "" } as never);
+    // Only PR2 gets a regate stamp (post-#never-endless-reregate, an ordinary already-regated PR is permanently
+    // excluded from the sweep -- see agent-sweep.test.ts -- so PR1/3/4 must stay never-regated to remain eligible
+    // ordinary candidates at all). PR2 is missing its current Gate check (surfaceRepairPriorityPullNumbers would
+    // flag it as a repair candidate), so its repair-priority bypass keeps it eligible DESPITE already having a
+    // stamp -- this is exactly the scenario the repair-priority bypass exists for.
     await env.DB.prepare(
-      `update pull_requests
-          set last_regated_at = case number
-            when 1 then '2026-05-27T01:00:00.000Z'
-            when 2 then '2026-05-28T01:50:00.000Z'
-            when 3 then '2026-05-27T02:00:00.000Z'
-            when 4 then '2026-05-27T03:00:00.000Z'
-          end
-        where repo_full_name = ?`,
+      `update pull_requests set last_regated_at = '2026-05-28T01:50:00.000Z' where repo_full_name = ? and number = 2`,
     )
       .bind("owner/agent-repo")
       .run();
@@ -7328,14 +7326,14 @@ describe("queue processors", () => {
     await processJob(env, { type: "agent-regate-sweep", requestedBy: "test", repoFullName: "owner/agent-repo" });
 
     const fanned = sent.filter((job) => job.type === "agent-regate-pr");
-    // PR2 is missing its current Gate check (surfaceRepairPriorityPullNumbers would flag it as a repair
-    // candidate) but is also the LEAST stale by lastRegatedAt (10 min ago vs. 23-25h for the others). An earlier
-    // revision sorted repair candidates first regardless of staleness, jumping PR2 to the front of this batch --
-    // that let a PR needing repair cut ahead of older PRs that merely went stale, observed live as PRs
-    // dispatching out of order ("spraying") whenever a repo had a mixed repair/ordinary backlog. Repair status
-    // now only affects ELIGIBILITY (staying in the pool, bypassing the freshness guard), never final order, so
-    // PR2 takes its rightful (last, since it's the freshest-regated) place and is dropped by the max:3 cap this
-    // round -- same as it would be with no repair flag at all.
+    // PR2 is missing its current Gate check and already has a regate stamp from 10 min ago (very fresh by
+    // lastRegatedAt), while PR1/3/4 have never been regated at all (the ordinary, post-#never-endless-reregate
+    // candidate shape). An earlier revision sorted repair candidates first regardless of staleness, jumping PR2
+    // to the front of this batch -- that let a PR needing repair cut ahead of older PRs that merely went stale,
+    // observed live as PRs dispatching out of order ("spraying") whenever a repo had a mixed repair/ordinary
+    // backlog. Repair status only affects ELIGIBILITY (staying in the pool despite already having a stamp),
+    // never final order, so PR2 takes its rightful (last, since it's the freshest-regated) place and is dropped
+    // by the max:3 cap this round -- same as it would be with no repair flag at all.
     expect(fanned.map((job) => (job as Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }>).prNumber)).toEqual([1, 3, 4]);
   });
 
