@@ -2239,6 +2239,112 @@ describe("GitHub backfill", () => {
     );
   });
 
+  it("INVARIANT (#4497): skips the scheduled per-repo backfill when the prior sync is a fresh success, without touching GitHub or writing any sync-state/segment jobs", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      GITHUB_PUBLIC_TOKEN: "public-token",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await seedRegisteredRepo(env);
+    await upsertRepoSyncState(env, {
+      repoFullName: "JSONbored/gittensory",
+      status: "success",
+      sourceKind: "github",
+      openIssuesCount: 5,
+      openPullRequestsCount: 3,
+      recentMergedPullRequestsCount: 10,
+      lastCompletedAt: new Date().toISOString(),
+      warnings: [],
+    });
+    vi.stubGlobal("fetch", async () => new Response("must not be called", { status: 500 }));
+
+    const result = await enqueueRepositoryOpenDataBackfill(env, { repoFullName: "JSONbored/gittensory", requestedBy: "schedule", mode: "light" });
+
+    expect(result).toMatchObject({ status: "skipped", warnings: [expect.stringContaining("Recent GitHub sync completed")] });
+    expect(sent).toEqual([]);
+    // Status stays "success" (unchanged) -- the scheduled path must not stamp "running" over a fresh state.
+    expect(await listRepoSyncStates(env)).toMatchObject([{ status: "success" }]);
+  });
+
+  it("INVARIANT (#4497): backs off the scheduled per-repo backfill when the prior sync errored recently, instead of retrying every tick", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      GITHUB_PUBLIC_TOKEN: "public-token",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await seedRegisteredRepo(env);
+    await upsertRepoSyncState(env, {
+      repoFullName: "JSONbored/gittensory",
+      status: "error",
+      sourceKind: "github",
+      openIssuesCount: 0,
+      openPullRequestsCount: 0,
+      recentMergedPullRequestsCount: 0,
+      lastCompletedAt: new Date().toISOString(),
+      errorSummary: "rate limited",
+      warnings: [],
+    });
+    vi.stubGlobal("fetch", async () => new Response("must not be called", { status: 500 }));
+
+    const result = await enqueueRepositoryOpenDataBackfill(env, { repoFullName: "JSONbored/gittensory", requestedBy: "schedule", mode: "light" });
+
+    expect(result).toMatchObject({ status: "skipped", warnings: [expect.stringContaining("backing off")] });
+    expect(sent).toEqual([]);
+  });
+
+  it("REGRESSION (#4497, endless-scheduled-resync incident): two scheduled dispatches within the freshness window only sync once -- previously every registered repo was re-synced every 30 min forever regardless of freshness or a permanent error state", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      GITHUB_PUBLIC_TOKEN: "public-token",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await seedRegisteredRepo(env);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (input.toString() === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 4, openPullRequests: 2, mergedPullRequests: 9, closedPullRequests: 1, labels: 1 });
+      return Response.json([]);
+    });
+
+    // First scheduled tick: no prior sync state -> a real sync proceeds and stamps a fresh success.
+    const first = await enqueueRepositoryOpenDataBackfill(env, { repoFullName: "JSONbored/gittensory", requestedBy: "schedule", mode: "light" });
+    expect(first.status).toBe("queued");
+    const segmentJobsAfterFirst = sent.filter((message) => message.type === "backfill-repo-segment").length;
+    expect(segmentJobsAfterFirst).toBeGreaterThan(0);
+    await upsertRepoSyncState(env, {
+      repoFullName: "JSONbored/gittensory",
+      status: "success",
+      sourceKind: "github",
+      openIssuesCount: 4,
+      openPullRequestsCount: 2,
+      recentMergedPullRequestsCount: 9,
+      lastCompletedAt: new Date().toISOString(),
+      warnings: [],
+    });
+
+    // Second scheduled tick, simulating the next ~30-min cron cadence while still fresh: must be skipped, not
+    // re-synced -- this is the exact incident shape (the scheduled path previously had no freshness check at
+    // all, so this second tick would have unconditionally re-fetched totals and re-enqueued all 4 segments).
+    const second = await enqueueRepositoryOpenDataBackfill(env, { repoFullName: "JSONbored/gittensory", requestedBy: "schedule", mode: "light" });
+    expect(second.status).toBe("skipped");
+    expect(sent.filter((message) => message.type === "backfill-repo-segment").length).toBe(segmentJobsAfterFirst);
+
+    // An explicit force still bypasses the freshness gate -- the override path is preserved.
+    const forced = await enqueueRepositoryOpenDataBackfill(env, { repoFullName: "JSONbored/gittensory", requestedBy: "schedule", mode: "light", force: true });
+    expect(forced.status).toBe("queued");
+    expect(sent.filter((message) => message.type === "backfill-repo-segment").length).toBeGreaterThan(segmentJobsAfterFirst);
+  });
+
   it("reuses a fresh repo totals snapshot when queueing segmented backfills", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:05:00.000Z"));
