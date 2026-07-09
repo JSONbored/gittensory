@@ -8255,10 +8255,11 @@ export async function runVisualVisionForAdvisory(
             model: args.settings.aiReviewModel ?? storedVisionKey.model,
           }
         : null;
-    // Self-host local vision (#4335): a dedicated ollama+VLM binding lets vision run WITHOUT a maintainer
-    // BYOK key -- see evaluateVisualVisionGate's header for why only an HTTP-capable provider (BYOK or this)
-    // can see the screenshots at all.
-    const selfHostVisionAvailable = Boolean(env.AI_VISION);
+    // Self-host local vision (#4335) still consumes operator resources, so mirror the AI-spend gate used by
+    // the other self-host review paths: confirmed contributors only unless the repo explicitly opts in to all
+    // authors. BYOK remains checked above because it also requires a confirmed contributor-owned repo key.
+    const selfHostVisionAllowed = args.confirmedContributor || args.settings.aiReviewAllAuthors;
+    const selfHostVisionAvailable = selfHostVisionAllowed && Boolean(env.AI_VISION);
     const visionGate = evaluateVisualVisionGate({
       routes: args.routes,
       reputationSignal: visionReputation.signal,
