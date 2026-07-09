@@ -169,6 +169,7 @@ describe("ragEmbedBatchFromEnv", () => {
     expect(ragEmbedBatchFromEnv("")).toBe(96);
     expect(ragEmbedBatchFromEnv("not-a-number")).toBe(96);
     expect(ragEmbedBatchFromEnv("0")).toBe(96);
+    expect(ragEmbedBatchFromEnv("0.5")).toBe(96);
     expect(ragEmbedBatchFromEnv("-5")).toBe(96);
   });
 });
@@ -731,6 +732,16 @@ describe("rag: embedTexts validation branches", () => {
     expect(out).not.toBeNull();
     expect(out?.length).toBe(150);
     expect(calls).toEqual([96, 54]); // proves the batching loop ran twice
+  });
+
+  it("rejects an invalid batchSize before embedding so a zero step cannot hang", async () => {
+    const inference: InferenceAdapter = {
+      run: async () => {
+        throw new Error("must not call embedding provider for an invalid batch size");
+      },
+    };
+    expect(await embedTexts(inference, ["hi"], RAG_DIMENSIONS, 0)).toBeNull();
+    expect(await embedTexts(inference, ["hi"], RAG_DIMENSIONS, Number.NaN)).toBeNull();
   });
 
   it("honors a configured batchSize override instead of the EMBED_BATCH=96 default (self-host GPU tuning)", async () => {

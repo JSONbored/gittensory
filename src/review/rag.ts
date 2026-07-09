@@ -122,8 +122,8 @@ export function ragDimensionsFromEnv(value: string | undefined): number {
 }
 
 export function ragEmbedBatchFromEnv(value: string | undefined): number {
-  const batch = Number(value);
-  return Number.isFinite(batch) && batch > 0 ? Math.floor(batch) : EMBED_BATCH;
+  const batch = Math.floor(Number(value));
+  return Number.isFinite(batch) && batch > 0 ? batch : EMBED_BATCH;
 }
 
 // ── Filtering: index CODE, not content/data corpora (the primary free-tier cost guard) ───────────
@@ -298,10 +298,12 @@ export async function embedTexts(
   batchSize = EMBED_BATCH,
 ): Promise<number[][] | null> {
   if (!inference || texts.length === 0) return null;
+  const effectiveBatchSize = Math.floor(batchSize);
+  if (!Number.isFinite(effectiveBatchSize) || effectiveBatchSize < 1) return null;
   try {
     const out: number[][] = [];
-    for (let i = 0; i < texts.length; i += batchSize) {
-      const batch = texts.slice(i, i + batchSize);
+    for (let i = 0; i < texts.length; i += effectiveBatchSize) {
+      const batch = texts.slice(i, i + effectiveBatchSize);
       const res = (await inference.run(EMBED_MODEL, { text: batch })) as { data?: number[][] } | null;
       const data = res?.data;
       // Validate COUNT and DIMENSION: a self-host embedding endpoint can return a structurally-valid response
