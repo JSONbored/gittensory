@@ -882,6 +882,18 @@ settings:
   #   action: close                          # close is the only supported value. Default: close.
   #   message: "Custom close reason..."      # Default: null (built-in message).
 
+  # Advisory-AI routing (#4364): per-capability opt-in to the local-inference AI_ADVISORY binding for these
+  # four capabilities, none of which are ever gate-blocking, so none need frontier-model accuracy. Set a
+  # global default here (or in the shared/root config) and override per-repo; a capability only actually
+  # routes through AI_ADVISORY when BOTH this is true AND the AI_ADVISORY_BASE_URL binding is configured --
+  # absent either one, it stays on the shared frontier env.AI chain (byte-identical to before). All off by
+  # default.
+  # advisoryAiRouting:
+  #   slop: false          # gate.slop.aiAdvisory's second opinion. Default: false.
+  #   e2eTestGen: false    # Auto-generated E2E test scaffolding. Default: false.
+  #   planner: false       # The @gittensory plan / issue-planner completion. Default: false.
+  #   summaries: false     # AI summaries/rewrite text. Default: false.
+
 # Maintainer AI review tuning (`.gittensory.yml` top-level `review:` block). These knobs shape the advisory AI
 # review prompt and file selection only — gate/slop/secret-scan are unaffected.
 # review:

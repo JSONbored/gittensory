@@ -82,6 +82,21 @@ export type UnlinkedIssueGuardrailConfig = {
   minConfidence: number;
 };
 
+/** Per-capability opt-in to the local-inference AI_ADVISORY binding (#4364): each of these four ADVISORY-ONLY
+ *  (never gate-blocking) capabilities independently decides whether it routes through env.AI_ADVISORY (when
+ *  configured) instead of the shared frontier env.AI chain. Config-as-code only -- no DB column, resolved
+ *  purely from `.gittensory.yml` `settings.advisoryAiRouting` (global default in the shared/root manifest,
+ *  per-repo override), the same "config-as-code only" shape as unlinkedIssueGuardrail above. Every field
+ *  defaults to false: an operator must deliberately opt EACH capability in, and even then a repo only
+ *  actually routes through AI_ADVISORY when the binding itself is configured (env.AI_ADVISORY unset ⇒ every
+ *  capability stays on env.AI regardless of this config, byte-identical to before this existed). */
+export type AdvisoryAiRoutingConfig = {
+  slop: boolean;
+  e2eTestGen: boolean;
+  planner: boolean;
+  summaries: boolean;
+};
+
 export type ContributorBlacklistEntry = {
   login: string;
   /** Why the account is blocked. Free-text maintainer metadata; not published in automated close comments. */
@@ -315,6 +330,11 @@ export type RepositorySettings = {
    *  `.gittensory.yml settings.unlinkedIssueGuardrail` in private/global or per-repo config. Defaults
    *  all-off so a self-hoster opts into their own credibility-gate-farming defense. */
   unlinkedIssueGuardrail?: UnlinkedIssueGuardrailConfig | undefined;
+  /** Per-capability local-inference routing (#4364). Config-as-code only; set with `.gittensory.yml
+   *  settings.advisoryAiRouting` in shared/global or per-repo config (global default + per-repo override,
+   *  the same deep-merge precedence every other settings field uses). Defaults all-false so every advisory
+   *  capability stays on the shared frontier env.AI chain until an operator opts each one in. */
+  advisoryAiRouting?: AdvisoryAiRoutingConfig | undefined;
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;

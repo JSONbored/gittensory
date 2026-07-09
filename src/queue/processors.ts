@@ -390,6 +390,7 @@ import {
   VISUAL_VISION_SYSTEM_PROMPT,
 } from "../review/visual/visual-findings";
 import { incr } from "../selfhost/metrics";
+import { withAdvisoryAiEnv } from "../selfhost/ai";
 import {
   renderReviewingPlaceholder,
   shouldPostReviewingPlaceholder,
@@ -7738,7 +7739,7 @@ export async function runAiSlopForAdvisory(
         /* v8 ignore next -- reached only past this function's own `!args.advisory.headSha` early return, so headSha is always truthy here; the `?? null` is a type-level fallback for an unreachable branch. */
         metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha ?? null },
       }).catch(() => undefined);
-      result = await runGittensoryAiSlopAdvisory(env, {
+      result = await runGittensoryAiSlopAdvisory(withAdvisoryAiEnv(env, args.settings.advisoryAiRouting?.slop === true), {
         repoFullName: args.repoFullName,
         prNumber: args.pr.number,
         title: args.pr.title,
@@ -11623,7 +11624,7 @@ async function runE2eTestGenerationAndDeliver(
     storedKey && (!args.settings.aiReviewProvider || args.settings.aiReviewProvider === storedKey.provider)
       ? { provider: storedKey.provider, key: storedKey.key, model: args.settings.aiReviewModel ?? storedKey.model }
       : null;
-  const result = await runGittensoryE2eTestGeneration(env, {
+  const result = await runGittensoryE2eTestGeneration(withAdvisoryAiEnv(env, args.settings.advisoryAiRouting?.e2eTestGen === true), {
     repoFullName: args.repoFullName,
     prNumber: args.pr.number,
     title: args.pr.title,
@@ -11915,7 +11916,7 @@ async function maybeProcessPlanCommand(
     return true;
   }
   const plan = await generateIssuePlan(
-    env,
+    withAdvisoryAiEnv(env, settings.advisoryAiRouting?.planner === true),
     { title: req.issue.title, body: req.issue.body },
     {
       actor: req.actor,

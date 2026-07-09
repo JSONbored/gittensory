@@ -888,6 +888,10 @@ export type RepositorySettings = {
    *  `.gittensory.yml settings.unlinkedIssueGuardrail` in private/global or per-repo config. Defaults
    *  all-off so a self-hoster opts into their own credibility-gate-farming defense. */
   unlinkedIssueGuardrail?: UnlinkedIssueGuardrailConfig | undefined;
+  /** Per-capability local-inference routing (#4364). Config-as-code only; set with `.gittensory.yml
+   *  settings.advisoryAiRouting` in shared/global or per-repo config. Defaults all-false so every advisory
+   *  capability stays on the shared frontier env.AI chain until an operator opts each one in. */
+  advisoryAiRouting?: AdvisoryAiRoutingConfig | undefined;
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;
@@ -1170,6 +1174,18 @@ export type UnlinkedIssueGuardrailMode = "hold" | "off";
 export type UnlinkedIssueGuardrailConfig = {
   mode: UnlinkedIssueGuardrailMode;
   minConfidence: number;
+};
+
+/** Per-capability opt-in to the local-inference AI_ADVISORY binding (#4364): each of these four ADVISORY-ONLY
+ *  (never gate-blocking) capabilities independently decides whether it routes through env.AI_ADVISORY (when
+ *  configured) instead of the shared frontier env.AI chain. Config-as-code only, `.gittensory.yml
+ *  settings.advisoryAiRouting` (global default in shared/root config, per-repo override); defaults all-false
+ *  so an operator must deliberately opt each capability in. */
+export type AdvisoryAiRoutingConfig = {
+  slop: boolean;
+  e2eTestGen: boolean;
+  planner: boolean;
+  summaries: boolean;
 };
 
 /** A blocked contributor (#1425, anti-abuse): a GitHub `login` plus optional maintainer metadata. The converged

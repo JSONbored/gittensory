@@ -714,6 +714,14 @@ export const RepositorySettingsSchema = z
         minConfidence: z.number().min(0).max(1),
       })
       .optional(),
+    advisoryAiRouting: z
+      .object({
+        slop: z.boolean(),
+        e2eTestGen: z.boolean(),
+        planner: z.boolean(),
+        summaries: z.boolean(),
+      })
+      .optional(),
     gittensorLabel: z.string(),
     blacklistLabel: z.string().nullable(),
     createMissingLabel: z.boolean(),
