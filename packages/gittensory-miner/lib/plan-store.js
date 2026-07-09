@@ -1,7 +1,4 @@
-import { chmodSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 
 // Local SQLite persistence for the stateless MCP plan DAG (#2318). `gittensory_build_plan`/`plan_status`/
 // `record_step_result` are stateless — the caller holds the plan and passes it back each call — so a miner running
@@ -20,20 +17,7 @@ const defaultDbFileName = "plan-store.sqlite3";
 let defaultPlanStore = null;
 
 export function resolvePlanStoreDbPath(env = process.env) {
-  const explicitPath = typeof env.GITTENSORY_MINER_PLAN_STORE_DB === "string"
-    ? env.GITTENSORY_MINER_PLAN_STORE_DB.trim()
-    : "";
-  if (explicitPath) return explicitPath;
-
-  const explicitConfigDir = typeof env.GITTENSORY_MINER_CONFIG_DIR === "string"
-    ? env.GITTENSORY_MINER_CONFIG_DIR.trim()
-    : "";
-  if (explicitConfigDir) return join(explicitConfigDir, defaultDbFileName);
-
-  const configHome = typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
-    ? env.XDG_CONFIG_HOME.trim()
-    : join(homedir(), ".config");
-  return join(configHome, "gittensory-miner", defaultDbFileName);
+  return resolveLocalStoreDbPath(env, "GITTENSORY_MINER_PLAN_STORE_DB", defaultDbFileName);
 }
 
 function normalizeDbPath(dbPath) {
@@ -149,13 +133,7 @@ function rowToRecord(row) {
  */
 export function openPlanStore(dbPath = resolvePlanStoreDbPath()) {
   const resolvedPath = normalizeDbPath(dbPath);
-  // The store is a persistent local file; the special in-memory path (':memory:') has no file to create or chmod.
-  if (resolvedPath !== ":memory:") {
-    mkdirSync(dirname(resolvedPath), { recursive: true, mode: 0o700 });
-  }
-  const db = new DatabaseSync(resolvedPath);
-  if (resolvedPath !== ":memory:") chmodSync(resolvedPath, 0o600);
-  db.exec("PRAGMA busy_timeout = 5000");
+  const db = openLocalStoreDb(resolvedPath);
   db.exec(`
     CREATE TABLE IF NOT EXISTS miner_plans (
       plan_id TEXT PRIMARY KEY,

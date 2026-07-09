@@ -1,8 +1,5 @@
-import { chmodSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { normalizeGovernorLedgerEvent } from "@jsonbored/gittensory-engine";
+import { openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 
 // Append-only governor decision ledger (#2328): every allowed/denied/throttled/kill-switch outcome lands in a
 // local SQLite table for contributor audit. IMMUTABILITY INVARIANT: INSERT + SELECT only — never UPDATE/DELETE.
@@ -12,20 +9,7 @@ const defaultDbFileName = "governor-ledger.sqlite3";
 let defaultGovernorLedger = null;
 
 export function resolveGovernorLedgerDbPath(env = process.env) {
-  const explicitPath = typeof env.GITTENSORY_MINER_GOVERNOR_LEDGER_DB === "string"
-    ? env.GITTENSORY_MINER_GOVERNOR_LEDGER_DB.trim()
-    : "";
-  if (explicitPath) return explicitPath;
-
-  const explicitConfigDir = typeof env.GITTENSORY_MINER_CONFIG_DIR === "string"
-    ? env.GITTENSORY_MINER_CONFIG_DIR.trim()
-    : "";
-  if (explicitConfigDir) return join(explicitConfigDir, defaultDbFileName);
-
-  const configHome = typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
-    ? env.XDG_CONFIG_HOME.trim()
-    : join(homedir(), ".config");
-  return join(configHome, "gittensory-miner", defaultDbFileName);
+  return resolveLocalStoreDbPath(env, "GITTENSORY_MINER_GOVERNOR_LEDGER_DB", defaultDbFileName);
 }
 
 function normalizeDbPath(dbPath) {
@@ -70,10 +54,7 @@ function rowToEntry(row) {
  */
 export function initGovernorLedger(dbPath = resolveGovernorLedgerDbPath()) {
   const resolvedPath = normalizeDbPath(dbPath);
-  mkdirSync(dirname(resolvedPath), { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(resolvedPath);
-  chmodSync(resolvedPath, 0o600);
-  db.exec("PRAGMA busy_timeout = 5000");
+  const db = openLocalStoreDb(resolvedPath);
   db.exec(`
     CREATE TABLE IF NOT EXISTS governor_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

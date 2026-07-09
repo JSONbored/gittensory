@@ -65,6 +65,35 @@ npm --workspace @jsonbored/gittensory-miner run build
 npm link --workspace @jsonbored/gittensory-miner
 ```
 
+## Local storage
+
+Every local, 100%-client-side SQLite store the miner writes lives under the same config directory
+(`GITTENSORY_MINER_CONFIG_DIR`, else `XDG_CONFIG_HOME`/`~/.config/gittensory-miner`) and never uploads,
+syncs, or phones home. Each store keeps its own file — this is a set of independent SQLite databases, not
+one shared database — but six of them resolve their path and open their file through the same shared
+helper (`lib/local-store.js`), so the override precedence (explicit path env var → config dir → XDG
+default) and file permissions (`0o700` dir, `0o600` file) are identical everywhere:
+
+| File | Table | Module | Path override env var |
+| --- | --- | --- | --- |
+| `run-state.sqlite3` | `miner_run_state` | `lib/run-state.js` | `GITTENSORY_MINER_RUN_STATE_DB` |
+| `claim-ledger.sqlite3` | `miner_claims` | `lib/claim-ledger.js` | `GITTENSORY_MINER_CLAIM_LEDGER_DB` |
+| `portfolio-queue.sqlite3` | `miner_portfolio_queue` | `lib/portfolio-queue.js` | `GITTENSORY_MINER_PORTFOLIO_QUEUE_DB` |
+| `event-ledger.sqlite3` | `miner_event_ledger` | `lib/event-ledger.js` | `GITTENSORY_MINER_EVENT_LEDGER_DB` |
+| `governor-ledger.sqlite3` | `governor_events` | `lib/governor-ledger.js` | `GITTENSORY_MINER_GOVERNOR_LEDGER_DB` |
+| `plan-store.sqlite3` | `miner_plans` | `lib/plan-store.js` | `GITTENSORY_MINER_PLAN_STORE_DB` |
+| `laptop-state.sqlite3` | `laptop_meta` | `lib/laptop-init.js` | none — created by `init`, not per-file overridable |
+
+`laptop-state.sqlite3` predates the shared helper and keeps its own inline path resolution in
+`laptop-init.js` deliberately (a `status.js` → `laptop-init.js` import already exists, so importing
+`local-store.js`'s resolver from `status.js` back into `laptop-init.js` would cycle).
+
+There is no dedicated "PR portfolio" table. `manage-status.js`'s `indexLatestManageUpdates` synthesizes
+PR-portfolio rows at read time by joining `portfolio-queue.js` rows (via the `pr:{number}` identifier
+convention) against `event-ledger.js`'s `manage_pr_update` events. That read-time join is the intended
+shape for this foundation phase — it stays until PR-portfolio reads get frequent enough (e.g. from a
+dashboard panel) to justify promoting it to a first-class indexed table.
+
 ## Commands
 
 ```sh
