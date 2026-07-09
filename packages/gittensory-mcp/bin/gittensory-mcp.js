@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { buildFeasibilityVerdict } from "@jsonbored/gittensory-engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -193,6 +194,13 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).optional(),
   plannedPaths: z.array(z.string()).optional(),
+};
+
+const feasibilityGateShape = {
+  claimStatus: z.enum(["unclaimed", "claimed", "solved", "unknown"]),
+  duplicateClusterRisk: z.enum(["none", "low", "medium", "high"]),
+  issueStatus: z.enum(["ready", "needs_proof", "hold", "do_not_use", "duplicate", "invalid", "missing"]),
+  found: z.boolean().optional(),
 };
 
 const findOpportunitiesShape = {
@@ -497,6 +505,10 @@ const STDIO_TOOL_DESCRIPTORS = [
   {
     name: "gittensory_local_status_structured",
     description: "Return local Gittensory MCP status with a validated structured output schema.",
+  },
+  {
+    name: "gittensory_feasibility_gate",
+    description: "Pure local go/raise/avoid feasibility verdict from claim status, duplicate-cluster risk, and issue quality/lifecycle status — the same discriminants the analyze-phase feasibility gate branches on. No API round-trip.",
   },
 ];
 
@@ -1142,6 +1154,19 @@ server.registerTool(
     };
     return { content: [{ type: "text", text: `Gittensory local MCP status.\n\n${JSON.stringify(data, null, 2)}` }], structuredContent: data };
   },
+);
+
+server.registerTool(
+  "gittensory_feasibility_gate",
+  {
+    description: stdioToolDescription("gittensory_feasibility_gate"),
+    inputSchema: feasibilityGateShape,
+  },
+  ({ claimStatus, duplicateClusterRisk, issueStatus, found }) =>
+    toolResult(
+      "Gittensory feasibility gate.",
+      buildFeasibilityVerdict({ claimStatus, duplicateClusterRisk, issueStatus, found }),
+    ),
 );
 
 // ── Resources: decision-pack, doctor, compatibility, changelog (#292) ─────────

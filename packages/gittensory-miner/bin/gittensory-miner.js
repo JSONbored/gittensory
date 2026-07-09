@@ -2,6 +2,7 @@
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import { runDenyCheck } from "../lib/deny-check.js";
 import { runDiscover } from "../lib/discover-cli.js";
+import { runFeasibilityCli } from "../lib/feasibility-cli.js";
 import { runGovernorCli } from "../lib/governor-ledger-cli.js";
 import { runLedgerCli } from "../lib/event-ledger-cli.js";
 import { runManagePoll } from "../lib/manage-poll.js";
@@ -58,6 +59,10 @@ if (cliArgs[0] === "plan") {
 
 if (cliArgs[0] === "governor") {
   process.exit(await runGovernorCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "feasibility") {
+  process.exit(runFeasibilityCli(cliArgs.slice(1)));
 }
 
 const packageName = "@jsonbored/gittensory-miner";
