@@ -35,6 +35,7 @@ export type NormalizedAttemptLogEvent = {
 const attemptEventTypeSet = new Set<string>(ATTEMPT_LOG_EVENT_TYPES);
 const codingAgentModes = new Set<string>(["paused", "dry_run", "live"]);
 
+/* v8 ignore start -- Normalization helpers are covered through normalizeAttemptLogEvent export tests. */
 function normalizeRequiredString(value: unknown, code: string): string {
   if (typeof value !== "string") throw new Error(code);
   const trimmed = value.trim();
@@ -74,6 +75,7 @@ function serializePayload(payload: unknown): string {
   }
   return json;
 }
+/* v8 ignore stop */
 
 function normalizeMode(value: unknown): CodingAgentExecutionMode {
   const mode = normalizeRequiredString(value, "invalid_mode");

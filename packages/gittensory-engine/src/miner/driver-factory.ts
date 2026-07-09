@@ -72,6 +72,7 @@ export function createCodingAgentDriver(options: CreateCodingAgentDriverOptions)
   switch (name) {
     case "noop":
       return createNoopCodingAgentDriver();
+    /* v8 ignore next -- isConfiguredCodingAgentDriver already rejects unknown names before this switch. */
     default:
       throw new Error(`unconfigured_coding_agent_driver:${name}`);
   }
