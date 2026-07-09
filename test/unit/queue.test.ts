@@ -25600,6 +25600,7 @@ describe("queue processors", () => {
           const method = init?.method ?? "GET";
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+          if (url.endsWith("/pulls/4207") && method === "GET") return Response.json({ head: { ref: "feature/checkout-retry", sha: "commit-ok-head-sha", repo: { full_name: repoFullName } } });
           if (url.endsWith("/git/commits/commit-ok-head-sha") && method === "GET") return Response.json({ tree: { sha: "base-tree-sha" } });
           if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
           if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "committed-sha-123" });
@@ -25667,7 +25668,7 @@ describe("queue processors", () => {
           const method = init?.method ?? "GET";
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
-          if (url.endsWith("/git/commits/declined-head-sha") && method === "GET") return new Response("forbidden", { status: 403 });
+          if (url.endsWith("/pulls/4209") && method === "GET") return new Response("forbidden", { status: 403 });
           if (url.includes("/issues/4209/comments") && method === "GET") return Response.json([]);
           if (url.includes("/issues/4209/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42090 }); }
           return new Response("not found", { status: 404 });
@@ -25733,7 +25734,7 @@ describe("queue processors", () => {
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
           // Neither a 403/404 (no write access) nor a 422/409 (branch moved) -- a genuinely unexpected 500,
           // which commitE2eTestToPrBranch maps to status: "error" rather than "declined".
-          if (url.endsWith("/git/commits/error-mapped-head-sha") && method === "GET") return new Response("server exploded", { status: 500 });
+          if (url.endsWith("/pulls/4213") && method === "GET") return new Response("server exploded", { status: 500 });
           if (url.includes("/issues/4213/comments") && method === "GET") return Response.json([]);
           if (url.includes("/issues/4213/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42130 }); }
           return new Response("not found", { status: 404 });
@@ -25771,6 +25772,7 @@ describe("queue processors", () => {
           const method = init?.method ?? "GET";
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+          if (url.endsWith("/pulls/4214") && method === "GET") return Response.json({ head: { ref: "feature/checkout-retry", sha: "no-author-head-sha", repo: { full_name: repoFullName } } });
           if (url.endsWith("/git/commits/no-author-head-sha") && method === "GET") return Response.json({ tree: { sha: "base-tree-sha" } });
           if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
           if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "no-author-commit-sha" });
