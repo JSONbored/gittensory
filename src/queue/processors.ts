@@ -1863,17 +1863,22 @@ async function sweepRepoRegate(
   }
   // With an active backlog (regateBacklog > 0), a priority repair PR earns an EXCEPTION to the "yield to
   // backlog" rule above, not a license for the whole sweep to also drag along a full SWEEP_MAX_PRS batch of
-  // ordinary stale PRs -- selectRegateCandidates sorts priority PRs first, so capping max to exactly
-  // priorityPullNumbers.length restricts the candidate set to repairs only. No backlog pressure ⇒ a normal,
-  // full-size sweep as before.
+  // ordinary stale PRs. Repair priority only affects selectRegateCandidates eligibility, not final ordering, so
+  // the backlog path must narrow the input pool to priority repairs before applying the normal stale ordering cap.
+  // No backlog pressure ⇒ a normal, full-size sweep as before.
+  const priorityPullNumberSet = new Set(priorityPullNumbers);
   const repairCandidateLimit =
     priorityPullNumbers.length > 0
       ? regateBacklog > 0
         ? priorityPullNumbers.length
         : Math.max(SWEEP_MAX_PRS, priorityPullNumbers.length)
       : null;
+  const candidatePullRequests =
+    regateBacklog > 0 && priorityPullNumbers.length > 0
+      ? openPullRequests.filter((pr) => priorityPullNumberSet.has(pr.number))
+      : openPullRequests;
   const candidates = selectRegateCandidates({
-    pulls: openPullRequests,
+    pulls: candidatePullRequests,
     now: nowIso(),
     priorityPullNumbers,
     priorityBypassesFreshness: priorityPullNumbers.length > 0,
@@ -1944,7 +1949,6 @@ async function sweepRepoRegate(
   // isScheduledRegateSweepJob (queue-common.ts) misclassifies it as background maintenance and it inherits the
   // exact starvation this priority mechanism exists to avoid. Ordinary stale candidates keep the sweep prefix
   // unchanged.
-  const priorityPullNumberSet = new Set(priorityPullNumbers);
   for (const [index, pr] of candidates.entries()) {
     const others = openPullRequests.filter(
       (other) => other.number !== pr.number,

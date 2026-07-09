@@ -7440,15 +7440,22 @@ describe("queue processors", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9403, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9403);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
-    // PR 1: missing its current Gate check -- the one priority repair.
+    // PR 1: missing its current Gate check -- the one priority repair. Make it newer-by-regate than the
+    // ordinary stale PRs below, reproducing the backlog bug where a max=1 staleness slice could drop the repair.
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Repair 1", state: "open", user: { login: "c" }, head: { sha: "repair-1" }, labels: [], body: "" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 1, "repair-1");
+    await env.DB.prepare("update pull_requests set last_regated_at = ? where repo_full_name = ? and number = ?")
+      .bind("2026-05-28T01:59:00.000Z", "owner/agent-repo", 1)
+      .run();
     // PRs 2-5: ordinary, already-current, stale-by-time PRs -- a normal (no-backlog) sweep would pick these up
     // too, but while the backlog is draining they must sit out so the sweep only carries the priority repair.
     for (const number of [2, 3, 4, 5]) {
       const headSha = `stale-${number}`;
       await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number, title: `Stale ${number}`, state: "open", user: { login: "c" }, head: { sha: headSha }, labels: [], body: "" });
       await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", number, headSha);
+      await env.DB.prepare("update pull_requests set last_regated_at = ? where repo_full_name = ? and number = ?")
+        .bind(`2026-05-28T01:0${number}:00.000Z`, "owner/agent-repo", number)
+        .run();
       await upsertCheckSummary(env, {
         id: `gate-current-${number}`,
         repoFullName: "owner/agent-repo",
