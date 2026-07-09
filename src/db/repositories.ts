@@ -2536,6 +2536,26 @@ export async function claimRegateFanoutSlot(env: Env, now: string, windowMs: num
   }
 }
 
+/** Atomic per-period dedup for the cross-repo maintainer recap digest (#2249): claim `periodKey` (the current
+ *  UTC date, "YYYY-MM-DD") as the singleton's last-sent period. Mirrors {@link claimRegateFanoutSlot}: the
+ *  conditional UPDATE matches only when the stored period is unset or DIFFERENT from `periodKey`, so a retried
+ *  cron tick or a redelivered (at-least-once) queue message for the SAME period gets 0 changes and skips
+ *  before any repo scan or Discord send. Fail-open on a driver error (return true → the digest still runs,
+ *  degrading to the pre-dedup behaviour rather than silently going dark). */
+export async function claimMaintainerRecapPeriod(env: Env, periodKey: string): Promise<boolean> {
+  try {
+    const result = await env.DB.prepare(
+      "UPDATE global_agent_controls SET last_recap_period_key = ?1 WHERE id = 'singleton' AND (last_recap_period_key IS NULL OR last_recap_period_key != ?1)",
+    )
+      .bind(periodKey)
+      .run();
+    /* v8 ignore next -- D1 update metadata normally includes changes; the ?? 0 fallback protects driver anomalies. */
+    return Number(result.meta.changes ?? 0) === 1;
+  } catch {
+    return true;
+  }
+}
+
 /** Flip the DB-backed global kill-switch (operator emergency brake; no redeploy required). */
 export async function setGlobalAgentFrozen(env: Env, frozen: boolean, updatedBy?: string | null): Promise<void> {
   await env.DB.prepare(

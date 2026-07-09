@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  claimMaintainerRecapPeriod,
   claimRegateFanoutSlot,
   countRecentDeadLetters,
   countRecentDeadLettersByType,
@@ -391,6 +392,20 @@ describe("database row parser hardening", () => {
     const env = createTestEnv();
     const broken = { ...env, DB: null } as unknown as typeof env;
     expect(await claimRegateFanoutSlot(broken, "2026-06-25T01:00:00.000Z", 90 * 1000)).toBe(true);
+  });
+
+  it("claimMaintainerRecapPeriod: first claim for a period wins, a retry for the SAME period loses, a DIFFERENT period wins again (#2249)", async () => {
+    const env = createTestEnv();
+    expect(await claimMaintainerRecapPeriod(env, "2026-07-09")).toBe(true); // first claim (marker NULL)
+    expect(await claimMaintainerRecapPeriod(env, "2026-07-09")).toBe(false); // retried tick, same period → loses
+    expect(await claimMaintainerRecapPeriod(env, "2026-07-10")).toBe(true); // a new day → wins again
+    expect(await claimMaintainerRecapPeriod(env, "2026-07-10")).toBe(false); // retried again → loses
+  });
+
+  it("claimMaintainerRecapPeriod fails open (returns true) on a DB error so the digest never silently stalls", async () => {
+    const env = createTestEnv();
+    const broken = { ...env, DB: null } as unknown as typeof env;
+    expect(await claimMaintainerRecapPeriod(broken, "2026-07-09")).toBe(true);
   });
 
   it("REGRESSION: a later GitHub sync does NOT clobber last_regated_at (omitted from the upsert SET clause)", async () => {

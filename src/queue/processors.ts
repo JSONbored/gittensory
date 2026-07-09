@@ -1116,7 +1116,7 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // override #2250). Defense-in-depth: the cron only ENQUEUES this when enabled, but a stale in-flight job
       // that lands after a flag-flip (env OR manifest) must still no-op, so disabled does zero work here too.
       const maintainerRecapOverride = await resolveMaintainerRecapManifestOverride(env);
-      if (isRecapEnabled(env, maintainerRecapOverride)) await runMaintainerRecapJob(env, message.windowDays);
+      if (isRecapEnabled(env, maintainerRecapOverride)) await runMaintainerRecapJob(env, message.windowDays, maintainerRecapOverride);
       return;
     }
     case "agent-regate-sweep":
