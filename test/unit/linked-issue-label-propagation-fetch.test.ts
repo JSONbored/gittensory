@@ -430,6 +430,95 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
       expect(fetchSpy.mock.calls.some(([input]) => input.toString().includes("/collaborators/"))).toBe(false);
     });
 
+    describe("reward-label maintainer trust (#priority-reward-maintainer-trust)", () => {
+      it("REGRESSION (metagraphed PR #4554 / issue #3947 shape): a reward mapping with trustMaintainerAuthoredIssueForReward propagates alongside a routine trusted label from the SAME maintainer-authored issue, for a contributor who is neither its author nor assignee", async () => {
+        const mappings = [
+          { issueLabel: "gittensor:bug", prLabel: "gittensor:bug", removeOtherTypeLabels: true, trustMaintainerAuthoredIssue: true },
+          { issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: false, trustMaintainerAuthoredIssueForReward: true },
+        ];
+        stubFetch((url) => {
+          if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+          if (url.endsWith("/issues/3947"))
+            return Response.json({ number: 3947, state: "open", user: { login: "owner" }, assignees: [], labels: ["gittensor:bug", "gittensor:priority"] });
+          return new Response("not found", { status: 404 });
+        });
+        const env = createTestEnv({});
+        const result = await fetchLinkedIssueLabelsForPropagation({
+          env,
+          repoFullName: "owner/repo",
+          linkedIssues: [3947],
+          installationId: 123,
+          prAuthorLogin: "contrib",
+          mappings,
+        });
+        expect(result.sort()).toEqual(["gittensor:bug", "gittensor:priority"]);
+      });
+
+      it("does NOT propagate the reward label from a maintainer-authored issue when its mapping has not opted into trustMaintainerAuthoredIssueForReward (unchanged strict default)", async () => {
+        const mappings = [
+          { issueLabel: "gittensor:bug", prLabel: "gittensor:bug", removeOtherTypeLabels: true, trustMaintainerAuthoredIssue: true },
+          { issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: false },
+        ];
+        stubFetch((url) => {
+          if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+          if (url.endsWith("/issues/3948"))
+            return Response.json({ number: 3948, state: "open", user: { login: "owner" }, assignees: [], labels: ["gittensor:bug", "gittensor:priority"] });
+          return new Response("not found", { status: 404 });
+        });
+        const env = createTestEnv({});
+        const result = await fetchLinkedIssueLabelsForPropagation({
+          env,
+          repoFullName: "owner/repo",
+          linkedIssues: [3948],
+          installationId: 123,
+          prAuthorLogin: "contrib",
+          mappings,
+        });
+        expect(result).toEqual(["gittensor:bug"]);
+      });
+
+      it("still propagates the reward label via trustMaintainerAuthoredIssueForReward when the issue is authored by an ADMIN_GITHUB_LOGINS fleet-operator", async () => {
+        const mappings = [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: false, trustMaintainerAuthoredIssueForReward: true }];
+        stubFetch((url) => {
+          if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+          if (url.endsWith("/issues/3949"))
+            return Response.json({ number: 3949, state: "open", user: { login: "fleetop" }, assignees: [], labels: ["gittensor:priority"] });
+          return new Response("not found", { status: 404 });
+        });
+        const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "fleetop" });
+        const result = await fetchLinkedIssueLabelsForPropagation({
+          env,
+          repoFullName: "owner/repo",
+          linkedIssues: [3949],
+          installationId: 123,
+          prAuthorLogin: "contrib",
+          mappings,
+        });
+        expect(result).toEqual(["gittensor:priority"]);
+      });
+
+      it("does not propagate the reward label when the issue author is only a read-access collaborator (fails closed, same as trustMaintainerAuthoredIssue)", async () => {
+        const mappings = [{ issueLabel: "gittensor:priority", prLabel: "gittensor:priority", removeOtherTypeLabels: false, trustMaintainerAuthoredIssueForReward: true }];
+        stubFetch((url) => {
+          if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+          if (url.endsWith("/issues/3950"))
+            return Response.json({ number: 3950, state: "open", user: { login: "rando" }, assignees: [], labels: ["gittensor:priority"] });
+          if (url.includes("/collaborators/rando/permission")) return Response.json({ permission: "read" });
+          return new Response("not found", { status: 404 });
+        });
+        const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+        const result = await fetchLinkedIssueLabelsForPropagation({
+          env,
+          repoFullName: "owner/repo",
+          linkedIssues: [3950],
+          installationId: 123,
+          prAuthorLogin: "contrib",
+          mappings,
+        });
+        expect(result).toEqual([]);
+      });
+    });
+
     it("does not propagate anything when mappings are configured but none set trustMaintainerAuthoredIssue, even for the literal repo owner's own issue", async () => {
       stubFetch((url) => {
         if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });

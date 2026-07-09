@@ -1137,6 +1137,20 @@ export type LinkedIssueLabelPropagationMapping = {
    *  scarce, hand-picked label a contributor could otherwise farm by citing an unrelated issue they had no
    *  part in. See `review/linked-issue-label-propagation-fetch.ts`'s `isRepoMaintainerLogin`. */
   trustMaintainerAuthoredIssue?: boolean | undefined;
+  /** Like `trustMaintainerAuthoredIssue`, but for a mapping that DOES carry real reward weight (#priority-
+   *  linked-issue-gate-ownership, #priority-reward-maintainer-trust) -- e.g. `gittensor:priority`. Deliberately
+   *  a SEPARATE, distinctly-named flag rather than reusing `trustMaintainerAuthoredIssue`, so a repo that wants
+   *  the strict author-or-assignee bar preserved for its reward label keeps that behavior by default; this must
+   *  be explicitly opted into. GitHub silently refuses to assign a contributor lacking push/triage access to the
+   *  repo (`ensurePullRequestAssignee`'s own doc comment) -- so for a repo whose issues are opened for open
+   *  pickup and rarely formally assigned, requiring a literal GitHub assignee relationship means the reward
+   *  label can structurally never propagate to most real external contributors, no matter how the assign action
+   *  is timed. This flag accepts the SAME evidence bug/feature already trust (a maintainer authored the linked
+   *  issue) as sufficient for the reward label too, when a repo's operator has decided that's the intended
+   *  workflow (e.g. a maintainer hand-labels an issue `gittensor:priority` specifically to attract ANY
+   *  contributor to pick it up, per the label's own "reserved for outstanding work" framing -- the hand-picking
+   *  already happened at issue-labeling time, not gated on which contributor later closes it). */
+  trustMaintainerAuthoredIssueForReward?: boolean | undefined;
 };
 
 export type LinkedIssueLabelPropagationMode = "exclusive_type_label";

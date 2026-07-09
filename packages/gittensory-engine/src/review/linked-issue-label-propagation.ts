@@ -60,7 +60,17 @@ function normalizeMapping(input: unknown, index: number, warnings: string[]): Li
       warnings.push(`settings.linkedIssueLabelPropagation.mappings[${index}].trustMaintainerAuthoredIssue must be a boolean; ignoring it.`);
     }
   }
-  return { issueLabel, prLabel, removeOtherTypeLabels: record.removeOtherTypeLabels === true, trustMaintainerAuthoredIssue };
+  // Same parse contract as trustMaintainerAuthoredIssue just above (#priority-reward-maintainer-trust).
+  // Mirrors `src/review/linked-issue-label-propagation.ts`'s copy of this normalizer.
+  let trustMaintainerAuthoredIssueForReward: boolean | undefined;
+  if (record.trustMaintainerAuthoredIssueForReward !== undefined) {
+    if (typeof record.trustMaintainerAuthoredIssueForReward === "boolean") {
+      trustMaintainerAuthoredIssueForReward = record.trustMaintainerAuthoredIssueForReward;
+    } else {
+      warnings.push(`settings.linkedIssueLabelPropagation.mappings[${index}].trustMaintainerAuthoredIssueForReward must be a boolean; ignoring it.`);
+    }
+  }
+  return { issueLabel, prLabel, removeOtherTypeLabels: record.removeOtherTypeLabels === true, trustMaintainerAuthoredIssue, trustMaintainerAuthoredIssueForReward };
 }
 
 /** Defaults-fill a per-repo `linkedIssueLabelPropagation` override into an always-complete, safe config —
