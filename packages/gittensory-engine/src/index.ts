@@ -198,6 +198,15 @@ export {
   type ParsedMinerGoalSpec,
 } from "./miner-goal-spec.js";
 export {
+  ACCEPTANCE_CRITERIA_FILENAME,
+  ACCEPTANCE_CRITERIA_VERSION,
+  buildAcceptanceCriteria,
+  serializeAcceptanceCriteria,
+  shouldWriteAcceptanceCriteria,
+  type AcceptanceCriteria,
+  type AcceptanceCriteriaInput,
+} from "./miner/acceptance-criteria.js";
+export {
   computeMetadataLaneFit,
   computeMinerGoalLaneFit,
   isMinerRepoTargetable,
