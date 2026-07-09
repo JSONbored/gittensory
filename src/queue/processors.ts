@@ -11597,8 +11597,9 @@ async function runE2eTestGenerationAndDeliver(
   // test onto the PR's own head branch, UNLESS the PR author is a confirmed Gittensor miner (#4201's
   // scoring-integrity safeguard) — that check runs regardless of this repo's own delivery config, since the
   // external, upstream-computed score must never be able to include a maintainer-authored line a miner didn't
-  // write themselves.
-  const deliveryMode = resolveReviewPromptOverrides(args.manifest).e2eTestDelivery ?? "comment";
+  // write themselves. The automated #4196 trigger has no maintainer invoker to authorize, so it is always
+  // comment-only even for repositories that opt explicit maintainer commands into commit delivery.
+  const deliveryMode = args.trigger === "auto" ? "comment" : resolveReviewPromptOverrides(args.manifest).e2eTestDelivery ?? "comment";
   let commitOutcome: E2eTestGenCommitOutcome | undefined;
   if (testSource && deliveryMode === "commit") {
     const minerDetection = args.pr.authorLogin

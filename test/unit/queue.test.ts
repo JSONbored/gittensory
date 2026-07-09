@@ -25525,7 +25525,7 @@ describe("queue processors", () => {
       repoFullName: string,
       prNumber: number,
       headSha: string,
-      opts: { e2eTests?: boolean; hasTestFile?: boolean; validationNote?: boolean; manifestPolicyGateMode?: "advisory" | "block" } = {},
+      opts: { e2eTests?: boolean; hasTestFile?: boolean; validationNote?: boolean; manifestPolicyGateMode?: "advisory" | "block"; e2eTestDelivery?: "comment" | "commit" } = {},
     ) {
       const slash = repoFullName.indexOf("/");
       const owner = repoFullName.slice(0, slash);
@@ -25574,6 +25574,7 @@ describe("queue processors", () => {
       await upsertRepoFocusManifest(env, repoFullName, {
         testExpectations: ["Run npm run test:ci."],
         features: { e2eTests: opts.e2eTests ?? true },
+        ...(opts.e2eTestDelivery ? { review: { e2e_test_delivery: opts.e2eTestDelivery } } : {}),
       });
     }
 
@@ -25641,6 +25642,48 @@ describe("queue processors", () => {
       const audited = await env.DB.prepare("select outcome, metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ outcome: string; metadata_json: string }>();
       expect(audited?.outcome).toBe("completed");
       expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ trigger: "auto", headSha: "auto-4196-ok-sha" });
+    });
+
+    it("keeps the automated manifest_missing_tests trigger comment-only even when the manifest opts explicit commands into commit delivery", async () => {
+      const repoFullName = "JSONbored/auto-e2e-4196-commit-forced-comment";
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: "```typescript\n" + AUTO_TEST_SOURCE + "\n```" }) } as unknown as Ai,
+        GITTENSORY_REVIEW_E2E_TESTS: "true",
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+      });
+      await seedAutoTriggerPr(env, repoFullName, 5011, "auto-4196-commit-forced-comment-sha", { e2eTestDelivery: "commit" });
+      const posted = { count: 0, body: "" };
+      const gitWrites: string[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 501100 }, { status: 201 });
+        if (url.includes("/check-runs") && method === "PATCH") return Response.json({ id: 501100, html_url: "https://github.com/checks/501100" });
+        if (url.includes("/git/trees") || url.includes("/git/commits") || url.includes("/git/refs/")) {
+          gitWrites.push(`${method} ${url}`);
+          return new Response("unexpected git write", { status: 500 });
+        }
+        if (url.includes("/issues/5011/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/5011/comments") && method === "POST") {
+          posted.count += 1;
+          posted.body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          return Response.json({ id: 50110 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, autoTriggerWebhook(repoFullName, 5011, "auto-4196-commit-forced-comment-sha"));
+
+      expect(gitWrites).toEqual([]);
+      expect(posted.count).toBe(1);
+      expect(posted.body).toContain("test('auto-generated coverage'");
+      const audited = await env.DB.prepare("select metadata_json from audit_events where event_type = ?").bind("github_app.e2e_tests_generation").first<{ metadata_json: string }>();
+      expect(JSON.parse(audited?.metadata_json ?? "{}")).toMatchObject({ deliveryMode: "comment", trigger: "auto" });
     });
 
     it("does not auto-trigger when manifest_missing_tests fires but features.e2eTests is disabled for the repo", async () => {
