@@ -20,6 +20,7 @@ const DEFAULT_ITEMS: PaletteItem[] = [
   { label: "Overview", to: "/app", group: "App" },
   { label: "Miner command center", to: "/app/miner", group: "App" },
   { label: "Maintainer console", to: "/app/maintainer", group: "App" },
+  { label: "Config generator", to: "/app/config-generator", group: "App" },
   { label: "Repo owner workspace", to: "/app/owner", group: "App" },
   { label: "Agent runs", to: "/app/runs", group: "App" },
   { label: "Agent playground", to: "/app/playground", group: "App" },

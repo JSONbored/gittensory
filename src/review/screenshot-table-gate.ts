@@ -186,7 +186,7 @@ const IMAGE_CELL_PATTERN = /!\[[^\]]*\]\([^)]+\)|<img\b[^>]*>/i;
  *  one needs actual cell contents (not just "does some cell have an image"), so duplicating its short
  *  header+separator detection loop keeps both independently simple instead of risking a regression in either
  *  from a shared-code change. */
-function extractTableRows(body: string | null | undefined): string[][] {
+export function extractTableRows(body: string | null | undefined): string[][] {
   if (!body) return [];
   const lines = body.split(/\r?\n/);
   const tableRowPattern = /^\s*\|.*\|\s*$/;
@@ -213,6 +213,31 @@ function extractTableRows(body: string | null | undefined): string[][] {
     }
   }
   return rows;
+}
+
+// Matches EITHER markdown image syntax (`![alt](url)`, optionally with a trailing `"title"`) OR an `<img
+// src="...">` tag, capturing the URL from whichever alternative matched -- covers a bare `![]()` cell and the
+// PR template's own clickable-thumbnail convention (`[![before](url)](url)`, where the OUTER `[...](...)` is
+// the click-through link and this pattern correctly targets the INNER `!`-prefixed image markup instead).
+const CELL_IMAGE_URL_PATTERN = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)|<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/i;
+
+function extractCellImageUrl(cell: string): string | null {
+  const match = cell.match(CELL_IMAGE_URL_PATTERN);
+  if (!match) return null;
+  /* v8 ignore next -- defensive: whichever alternative of CELL_IMAGE_URL_PATTERN matched always captures a
+   * non-empty group (both require at least one non-`)`/non-`"` character), so this fallback is unreachable. */
+  return match[1] ?? match[2] ?? null;
+}
+
+/** The image URLs found in each detected table row (source order), for rows with at least two — a real
+ *  before/after pair worth comparing, not a single decorative image or caption-only row. Reuses
+ *  {@link extractTableRows}'s own header+separator detection rather than re-scanning the body. A row with
+ *  MORE than two images (e.g. a desktop+mobile matrix row) keeps every image; callers that only want a pair
+ *  slice it themselves. */
+export function extractTableRowImageUrls(body: string | null | undefined): string[][] {
+  return extractTableRows(body)
+    .map((row) => row.map(extractCellImageUrl).filter((url): url is string => url !== null))
+    .filter((urls) => urls.length >= 2);
 }
 
 /** One (viewport, theme) combination the matrix must cover. `theme: null` means the theme dimension isn't

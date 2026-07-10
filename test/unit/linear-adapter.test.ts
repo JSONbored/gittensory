@@ -98,9 +98,105 @@ describe("LinearAdapter (#3186)", () => {
     await expect(adapter.listOpenProjects({ env, installationId: 123, repoFullName: "acme/widgets" })).rejects.toThrow(/Linear API returned no data/);
   });
 
-  it("listOpenMilestones, attachToProject, and attachToMilestone are inert placeholders", async () => {
+  it("listOpenMilestones returns an empty list when no Linear key is configured, without making a network call", async () => {
+    let called = false;
+    vi.stubGlobal("fetch", async () => {
+      called = true;
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
     const adapter = new LinearAdapter();
-    await expect(adapter.listOpenMilestones()).resolves.toEqual([]);
+    await expect(adapter.listOpenMilestones({ env, installationId: 123, repoFullName: "acme/widgets" })).resolves.toEqual([]);
+    expect(called).toBe(false);
+  });
+
+  it("listOpenMilestones maps non-archived project-milestones (includeArchived: false)", async () => {
+    let requestBody: unknown;
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositoryLinearKey(env, { repoFullName: "acme/widgets", key: "lin_api_test_key" });
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body ?? "{}"));
+      return Response.json({
+        data: {
+          projectMilestones: {
+            nodes: [{ id: "mile-1", name: "Stealth Launch M3" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    });
+    const adapter = new LinearAdapter();
+    const result = await adapter.listOpenMilestones({ env, installationId: 123, repoFullName: "acme/widgets" });
+    expect(String((requestBody as { query?: string }).query ?? "")).toContain("includeArchived: false");
+    expect(result).toEqual([{ id: "mile-1", title: "Stealth Launch M3" }]);
+  });
+
+  it("listOpenMilestones follows cursor pagination across multiple pages", async () => {
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositoryLinearKey(env, { repoFullName: "acme/widgets", key: "lin_api_test_key" });
+    let requestCount = 0;
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestCount += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { variables?: { after?: string | null } };
+      if (!body.variables?.after) {
+        return Response.json({
+          data: {
+            projectMilestones: {
+              nodes: [{ id: "mile-1", name: "Page one" }],
+              pageInfo: { hasNextPage: true, endCursor: "cursor-2" },
+            },
+          },
+        });
+      }
+      return Response.json({
+        data: {
+          projectMilestones: {
+            nodes: [{ id: "mile-2", name: "Page two" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    });
+    const adapter = new LinearAdapter();
+    const result = await adapter.listOpenMilestones({ env, installationId: 123, repoFullName: "acme/widgets" });
+    expect(requestCount).toBe(2);
+    expect(result).toEqual([
+      { id: "mile-1", title: "Page one" },
+      { id: "mile-2", title: "Page two" },
+    ]);
+  });
+
+  it("listOpenMilestones stops at LINEAR_LIST_PAGE_LIMIT even when hasNextPage stays true", async () => {
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositoryLinearKey(env, { repoFullName: "acme/widgets", key: "lin_api_test_key" });
+    let requestCount = 0;
+    vi.stubGlobal("fetch", async () => {
+      requestCount += 1;
+      return Response.json({
+        data: {
+          projectMilestones: {
+            nodes: [{ id: `mile-${requestCount}`, name: `Page ${requestCount}` }],
+            pageInfo: { hasNextPage: true, endCursor: `cursor-${requestCount + 1}` },
+          },
+        },
+      });
+    });
+    const adapter = new LinearAdapter();
+    const result = await adapter.listOpenMilestones({ env, installationId: 123, repoFullName: "acme/widgets" });
+    expect(requestCount).toBe(3);
+    expect(result).toHaveLength(3);
+  });
+
+  it("listOpenMilestones throws on a Linear API error (propagated for the caller's best-effort handling)", async () => {
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositoryLinearKey(env, { repoFullName: "acme/widgets", key: "lin_api_test_key" });
+    vi.stubGlobal("fetch", async () => Response.json({ errors: [{ message: "invalid API key" }] }));
+    const adapter = new LinearAdapter();
+    await expect(adapter.listOpenMilestones({ env, installationId: 123, repoFullName: "acme/widgets" })).rejects.toThrow(/invalid API key/);
+  });
+
+  it("attachToProject and attachToMilestone stay inert placeholders", async () => {
+    const adapter = new LinearAdapter();
     await expect(adapter.attachToProject()).resolves.toEqual({ attached: false });
     await expect(adapter.attachToMilestone()).resolves.toEqual({ attached: false });
   });
@@ -169,10 +265,11 @@ describe("maybeSuggestProjectOrMilestoneMatch with backend: linear (#3186)", () 
     vi.unstubAllGlobals();
   });
 
-  it("native-link-present path: prefers the confirmed Linear link and never calls listOpenProjects at all", async () => {
+  it("native-link-present path: prefers the confirmed Linear link and never lists projects or milestones", async () => {
     const env = suggestTestEnv();
     await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
     let projectsListed = false;
+    let milestonesListed = false;
     const posted: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -182,6 +279,10 @@ describe("maybeSuggestProjectOrMilestoneMatch with backend: linear (#3186)", () 
         const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
         if (body.query.includes("attachmentsForURL")) {
           return Response.json({ data: { attachmentsForURL: { nodes: [{ issue: { project: { id: "proj-1", name: "Self-host reliability roadmap" }, projectMilestone: { id: "mile-1", name: "Stealth Launch M3" } } }] } } });
+        }
+        if (body.query.includes("projectMilestones")) {
+          milestonesListed = true;
+          return Response.json({ data: { projectMilestones: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
         }
         projectsListed = true;
         return Response.json({ data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
@@ -204,6 +305,7 @@ describe("maybeSuggestProjectOrMilestoneMatch with backend: linear (#3186)", () 
     );
     expect(result).toEqual({ suggested: true });
     expect(projectsListed).toBe(false);
+    expect(milestonesListed).toBe(false);
     expect(posted[0]).toContain("linked to the project");
     expect(posted[0]).toContain("linked to the milestone");
     expect(posted[0]).not.toContain("Self-host reliability roadmap");
@@ -222,6 +324,9 @@ describe("maybeSuggestProjectOrMilestoneMatch with backend: linear (#3186)", () 
       if (url === "https://api.linear.app/graphql") {
         const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
         if (body.query.includes("attachmentsForURL")) return Response.json({ data: { attachmentsForURL: { nodes: [] } } });
+        if (body.query.includes("projectMilestones")) {
+          return Response.json({ data: { projectMilestones: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+        }
         return Response.json({ data: { projects: { nodes: [{ id: "proj-1", name: "Self-host reliability roadmap" }], pageInfo: { hasNextPage: false, endCursor: null } } } });
       }
       if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
@@ -246,15 +351,142 @@ describe("maybeSuggestProjectOrMilestoneMatch with backend: linear (#3186)", () 
     expect(posted[0]).not.toContain("Self-host reliability roadmap");
   });
 
-  it("API-error best-effort path: a Linear outage propagates to the caller instead of silently mismatching", async () => {
+  it("fallback-matching path: fuzzy-matches Linear project-milestones when no native link exists", async () => {
+    const env = suggestTestEnv();
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) return Response.json({ data: { attachmentsForURL: { nodes: [] } } });
+        if (body.query.includes("projectMilestones")) {
+          return Response.json({
+            data: {
+              projectMilestones: {
+                nodes: [{ id: "mile-1", name: "Self-host reliability roadmap" }],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        return Response.json({ data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await maybeSuggestProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "linear",
+      PR_URL,
+    );
+    expect(result).toEqual({ suggested: true });
+    expect(posted[0]).toContain("matching milestone");
+    expect(posted[0]).not.toContain("Self-host reliability roadmap");
+  });
+
+  it("fail-open: a projects list outage still allows a milestone fuzzy match", async () => {
+    const env = suggestTestEnv();
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) return Response.json({ data: { attachmentsForURL: { nodes: [] } } });
+        if (body.query.includes("projectMilestones")) {
+          return Response.json({
+            data: {
+              projectMilestones: {
+                nodes: [{ id: "mile-1", name: "Self-host reliability roadmap" }],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        return new Response("Service Unavailable", { status: 503 });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await maybeSuggestProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "linear",
+      PR_URL,
+    );
+    expect(result).toEqual({ suggested: true });
+    expect(posted[0]).toContain("matching milestone");
+  });
+
+  it("fail-open: a milestones list outage still allows a project fuzzy match", async () => {
+    const env = suggestTestEnv();
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) return Response.json({ data: { attachmentsForURL: { nodes: [] } } });
+        if (body.query.includes("projectMilestones")) return new Response("Service Unavailable", { status: 503 });
+        return Response.json({
+          data: {
+            projects: {
+              nodes: [{ id: "proj-1", name: "Self-host reliability roadmap" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await maybeSuggestProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "linear",
+      PR_URL,
+    );
+    expect(result).toEqual({ suggested: true });
+    expect(posted[0]).toContain("matching project");
+  });
+
+  it("fail-open: a full Linear list outage degrades to no suggestion instead of throwing", async () => {
     const env = suggestTestEnv();
     await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      // attachmentsForURL degrades gracefully (findLinearNativeLink's own .catch), but the FALLBACK
-      // listOpenProjects call has no such guard -- it throws, and the caller (maybeSuggestMilestoneMatchForPr)
-      // is responsible for the outer best-effort catch, exactly like a GitHub API outage would.
+      // attachmentsForURL degrades via findLinearNativeLink's .catch; listOpenProjects/listOpenMilestones
+      // now also fail-open (mirrors the GitHub path) so a Linear outage is a missed suggestion, not a throw.
       return new Response("Service Unavailable", { status: 503 });
     });
     await expect(
@@ -266,6 +498,6 @@ describe("maybeSuggestProjectOrMilestoneMatch with backend: linear (#3186)", () 
         "linear",
         PR_URL,
       ),
-    ).rejects.toThrow(/Linear API HTTP 503/);
+    ).resolves.toEqual({ suggested: false });
   });
 });

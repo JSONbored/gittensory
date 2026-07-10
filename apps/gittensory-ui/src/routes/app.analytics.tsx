@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Download } from "lucide-react";
 
 import { BoundaryBadge, Stat, StatusPill } from "@/components/site/control-primitives";
 import { RefreshMeta } from "@/components/site/refresh-meta";
-import { StateBoundary } from "@/components/site/state-views";
+import { StateActionButton, StateBoundary } from "@/components/site/state-views";
 import { TrendChart } from "@/components/site/trend-chart";
 import {
   AdoptionRetentionPanel,
@@ -16,7 +17,9 @@ import { CycleTimeCard } from "@/components/site/app-panels/cycle-time-card";
 import type { CycleTimeAggregate } from "@/components/site/app-panels/cycle-time-card-model";
 import { SlopBandCalibrationCard } from "@/components/site/app-panels/slop-band-calibration-card";
 import type { SlopBandCalibration } from "@/components/site/app-panels/slop-band-calibration-card-model";
+import { AnalyticsCardShell } from "@/components/site/app-panels/analytics-card-shell";
 import { useApiResource } from "@/lib/api/use-api-resource";
+import { exportOperatorDashboardCsv } from "@/lib/csv-export";
 
 export const Route = createFileRoute("/app/analytics")({
   component: ProductAnalytics,
@@ -167,6 +170,13 @@ function ProductAnalytics() {
                 </StatusPill>
               ) : null}
               <BoundaryBadge boundary="private-api" />
+              <StateActionButton
+                onClick={() => exportOperatorDashboardCsv(data)}
+                disabled={data.metrics.length === 0}
+                icon={<Download className="size-3 shrink-0" aria-hidden />}
+              >
+                Export CSV
+              </StateActionButton>
               <RefreshMeta loadedAt={dashboard.loadedAt} onRefresh={dashboard.reload} />
             </div>
           </header>
@@ -191,7 +201,16 @@ function ProductAnalytics() {
 
           {data.gateEval ? <GatePrecisionCard report={data.gateEval} /> : null}
 
-          {data.cycleTime ? <CycleTimeCard cycleTime={data.cycleTime} /> : null}
+          {data.cycleTime ? (
+            <CycleTimeCard cycleTime={data.cycleTime} />
+          ) : (
+            <AnalyticsCardShell
+              title="Review cycle time"
+              description="Gate decision → PR outcome duration percentiles."
+              state="empty"
+              emptyHint="Percentiles appear once the gate has resolved paired PRs in the analytics window."
+            />
+          )}
 
           {data.slopBandCalibration ? (
             <SlopBandCalibrationCard calibration={data.slopBandCalibration} />

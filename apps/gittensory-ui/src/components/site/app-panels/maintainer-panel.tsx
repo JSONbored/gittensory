@@ -19,7 +19,10 @@ import {
 } from "@/components/site/control-primitives";
 import { ActivationPreview } from "@/components/site/app-panels/activation-preview";
 import { AiReviewSettings } from "@/components/site/app-panels/ai-review-settings";
+import { ContributorQualityTable } from "@/components/site/app-panels/contributor-quality-table";
+import type { MaintainerTopContributor } from "@/components/site/app-panels/contributor-quality-table-model";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
+import { OnboardingPreviewCard } from "@/components/site/app-panels/onboarding-preview-card";
 import { CheckRunReadinessTable } from "@/components/site/check-run-readiness-table";
 import type { CheckRunReadinessTableData } from "@/components/site/check-run-readiness-model";
 import { StatCard } from "@/components/site/primitives";
@@ -79,6 +82,7 @@ type MaintainerDashboard = {
     slop?: { risk: number; band: string } | null;
   }>;
   settingsPreview: { removed: string[]; added: string[] };
+  qualityDashboard: { topContributors: MaintainerTopContributor[] };
 };
 
 type TrustChecklistStatus = "ready" | "needs_attention" | "blocked";
@@ -119,7 +123,7 @@ type InstallPreview = {
   }>;
 };
 
-type SettingsPreviewResponse = {
+export type SettingsPreviewResponse = {
   repoFullName: string;
   generatedAt: string;
   installation: {
@@ -224,6 +228,9 @@ function MaintainerDashboardView({
           <div className="flex items-center justify-end">
             <RefreshMeta loadedAt={dashboard.loadedAt} onRefresh={dashboard.reload} />
           </div>
+
+          <OnboardingPreviewCard reviewability={data.reviewability} />
+
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {data.metrics.map((metric) => (
               <StatCard
@@ -366,6 +373,8 @@ function MaintainerDashboardView({
               </tbody>
             </table>
           </section>
+
+          <ContributorQualityTable topContributors={data.qualityDashboard.topContributors} />
 
           <ActivationPreview reviewability={data.reviewability} />
 
@@ -610,7 +619,7 @@ function SurfacePreview({
   );
 }
 
-function PreviewResult({
+export function PreviewResult({
   preview,
   error,
   busy,

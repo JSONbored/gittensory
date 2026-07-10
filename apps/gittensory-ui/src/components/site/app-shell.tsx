@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart3,
   ExternalLink,
+  FileCog,
   FolderGit2,
   LayoutGrid,
   Loader2,
@@ -61,6 +62,12 @@ const GROUPS: NavGroup[] = [
         to: "/app/repos",
         label: "Repositories",
         icon: FolderGit2,
+        roles: ["maintainer", "owner", "operator"],
+      },
+      {
+        to: "/app/config-generator",
+        label: "Config generator",
+        icon: FileCog,
         roles: ["maintainer", "owner", "operator"],
       },
       {
