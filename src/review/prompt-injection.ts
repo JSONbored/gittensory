@@ -22,8 +22,12 @@
 // keep catching -- see the "no false positives" and "documented limitation" fixtures in the test file.
 const INJECTION_SOURCE = [
   // 1a) ignore/disregard/forget keep the full, broad noun list -- these verbs are not how benign docs describe
-  //     a config override (nobody writes "the flag lets you ignore the retry policy" to mean "override").
-  "\\b(?:ignore|disregard|forget)\\b[^.]{0,40}\\b(?:previous|prior|above|earlier|all|the|any)\\b[^.]{0,24}\\b(?:instructions?|prompts?|rules?|rubric|policy|guidelines?|directions?)\\b",
+  //     a config override (nobody writes "the flag lets you ignore the retry policy" to mean "override"). The
+  //     connector list includes the possessive determiners your/my: "ignore your instructions" / "disregard my
+  //     rules" is the single most common phrasing of this exact attack, and pattern 6 already treats "your
+  //     <instruction-noun>" as hostile -- omitting it here let the canonical attack through (the instruction-noun
+  //     list still gates it, so "ignore your build output" stays benign).
+  "\\b(?:ignore|disregard|forget)\\b[^.]{0,40}\\b(?:previous|prior|above|earlier|all|the|any|your|my)\\b[^.]{0,24}\\b(?:instructions?|prompts?|rules?|rubric|policy|guidelines?|directions?)\\b",
   // 1b) override/bypass stay narrow for ordinary config language ("override the synthesis merge rule",
   //     "override the default retry policy", "bypass the strict validation guideline"), but direct reviewer
   //     manipulation against review criteria is still an attack shape: "bypass the rules and merge this" must
