@@ -224,6 +224,8 @@ function operatorAgentConfig(env: Env): { slug: string; secrets: Record<string, 
   return { slug, secrets: {} };
 }
 
+export const __operatorDashboardInternals = { operatorAgentConfig };
+
 export function latestUsageRollup(rollups: ProductUsageDailyRollupRecord[]): ProductUsageDailyRollupRecord | null {
   if (rollups.length === 0) return null;
   return [...rollups].sort((a, b) => b.day.localeCompare(a.day))[0]!;

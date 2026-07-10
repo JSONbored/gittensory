@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildOperatorDashboardPayload, latestUsageRollup } from "../../src/services/operator-dashboard";
+import { buildOperatorDashboardPayload, latestUsageRollup, __operatorDashboardInternals } from "../../src/services/operator-dashboard";
 import type { ProductUsageDailyRollupRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -48,6 +48,49 @@ describe("operator dashboard payload", () => {
         expect.objectContaining({ label: "Fleet merge precision", value: "—" }),
       ]),
     );
+  });
+
+  it("falls back to the default agent slug when GITHUB_APP_SLUG is unset or blank", async () => {
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "operator-dashboard-test-salt" });
+    delete (env as Partial<Env>).GITHUB_APP_SLUG;
+    const missingSlug = await buildOperatorDashboardPayload(env);
+    expect(missingSlug.agentHealth).toMatchObject({
+      reversals: 0,
+      reversalRate: 0,
+      manualRate: 0,
+      recentAutoActions: 0,
+      reversedTargets: [],
+    });
+
+    const blankSlug = await buildOperatorDashboardPayload(
+      createTestEnv({ PRODUCT_USAGE_HASH_SALT: "operator-dashboard-test-salt", GITHUB_APP_SLUG: "   " }),
+    );
+    expect(blankSlug.agentHealth).toMatchObject({
+      reversals: 0,
+      reversalRate: 0,
+      manualRate: 0,
+      recentAutoActions: 0,
+      reversedTargets: [],
+    });
+  });
+
+  it("operatorAgentConfig trims a configured slug and falls back when absent", () => {
+    const { operatorAgentConfig } = __operatorDashboardInternals;
+    expect(operatorAgentConfig(createTestEnv({ GITHUB_APP_SLUG: "  custom-app  " }))).toEqual({
+      slug: "custom-app",
+      secrets: {},
+    });
+    expect(operatorAgentConfig(createTestEnv({ GITHUB_APP_SLUG: "gittensory" }))).toEqual({
+      slug: "gittensory",
+      secrets: {},
+    });
+    const unset = createTestEnv();
+    delete (unset as Partial<Env>).GITHUB_APP_SLUG;
+    expect(operatorAgentConfig(unset)).toEqual({ slug: "gittensory", secrets: {} });
+    expect(operatorAgentConfig(createTestEnv({ GITHUB_APP_SLUG: "" }))).toEqual({
+      slug: "gittensory",
+      secrets: {},
+    });
   });
 
   it("surfaces populated fleet metrics + outliers from orb_signals", async () => {
