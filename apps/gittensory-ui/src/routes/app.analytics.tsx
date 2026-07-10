@@ -14,7 +14,15 @@ import { GatePrecisionCard } from "@/components/site/app-panels/gate-precision-c
 import type { GateEvalReport } from "@/components/site/app-panels/gate-precision-card-model";
 import { CycleTimeCard } from "@/components/site/app-panels/cycle-time-card";
 import type { CycleTimeAggregate } from "@/components/site/app-panels/cycle-time-card-model";
+import { AnalyticsWindowToggle } from "@/components/site/analytics-window-toggle";
+import {
+  DEFAULT_ANALYTICS_WINDOW,
+  isAnalyticsWindow,
+  withWindowParam,
+  type AnalyticsWindow,
+} from "@/lib/analytics-window";
 import { useApiResource } from "@/lib/api/use-api-resource";
+import { useLocalStorage } from "@/lib/use-local-storage";
 
 export const Route = createFileRoute("/app/analytics")({
   component: ProductAnalytics,
@@ -108,8 +116,14 @@ type OperatorDashboard = {
 };
 
 function ProductAnalytics() {
+  const [storedWindow, setWindow] = useLocalStorage<AnalyticsWindow>(
+    "analytics:window",
+    DEFAULT_ANALYTICS_WINDOW,
+  );
+  // Guard against a corrupt/legacy persisted value before it reaches the query key.
+  const analyticsWindow = isAnalyticsWindow(storedWindow) ? storedWindow : DEFAULT_ANALYTICS_WINDOW;
   const dashboard = useApiResource<OperatorDashboard>(
-    "/v1/app/operator-dashboard",
+    withWindowParam("/v1/app/operator-dashboard", analyticsWindow),
     "Product analytics",
   );
   const data = dashboard.status === "ready" ? dashboard.data : null;
@@ -146,6 +160,7 @@ function ProductAnalytics() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <AnalyticsWindowToggle value={analyticsWindow} onChange={setWindow} />
               <StatusPill
                 status={
                   data.usageRollupStatus?.status === "ready" ||
