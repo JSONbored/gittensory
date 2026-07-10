@@ -6054,6 +6054,46 @@ describe("queue processors", () => {
         expect(skipAudit?.n).toBe(0); // never skipped -- issue #2 genuinely had no prior pass
       });
 
+      it("default (one_shot): a repeat trigger does not spend a fresh linked-issue-satisfaction call once the SAME primary issue already has one", async () => {
+        let aiCalls = 0;
+        const env = createTestEnv({
+          GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+          AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ status: "addressed", rationale: "looks done" }) }; } } as unknown as Ai,
+          AI_SUMMARIES_ENABLED: "true",
+          AI_PUBLIC_COMMENTS_ENABLED: "true",
+          AI_DAILY_NEURON_BUDGET: "100000",
+        });
+        await seedRegateChurnRepo(env, { publicSurface: "comment_only", aiReviewMode: "off", linkedIssueSatisfactionGateMode: "advisory" });
+        // The PR's primary linked issue is #1 -- SAME issue the prior pass already assessed (at an earlier head).
+        await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 97, title: "Same-issue PR", state: "open", user: { login: "contributor" }, head: { sha: "a97-v1" }, labels: [], body: "Closes #1" });
+        await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 97, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+        await putCachedLinkedIssueSatisfaction(env, "JSONbored/gittensory", 97, "a97-v1", 1, "seed-fp", { status: "ok", result: { status: "addressed", rationale: "already done", confidence: 0.9 }, estimatedNeurons: 4 });
+
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          const method = init?.method ?? "GET";
+          if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+          // A genuinely NEW push -- a new head SHA, but the SAME primary linked issue (#1).
+          if (url.includes("/pulls/97/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+export const ok = true;\n+export const also = 1;" }]);
+          if (url.endsWith("/pulls/97")) return Response.json({ number: 97, title: "Same-issue PR", state: "open", user: { login: "contributor" }, head: { sha: "a97-v2" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+          if (url.includes("/commits/a97-v2/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+          if (url.includes("/commits/a97-v2/status")) return Response.json({ state: "success", statuses: [] });
+          if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+          if (url.includes("/issues/97/comments")) return method === "GET" ? Response.json([]) : Response.json({ id: 1 }, { status: 201 });
+          if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+          return Response.json({});
+        });
+
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "one-shot-same-issue-push", repoFullName: "JSONbored/gittensory", prNumber: 97, installationId: 123 });
+
+        expect(aiCalls).toBe(0); // no fresh linked-issue-satisfaction call on the new head -- same issue already assessed
+        const skipAudit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ? and target_key = ?")
+          .bind("github_app.linked_issue_satisfaction_one_shot_skip", "JSONbored/gittensory#97")
+          .first<{ outcome: string; detail: string }>();
+        expect(skipAudit?.outcome).toBe("completed");
+        expect(skipAudit?.detail).toContain("one-shot review cadence");
+      });
+
       it("per-repo override (continuous via .gittensory.yml): a new push DOES spend a fresh main-review AI call, unlike the one_shot default", async () => {
         let aiCalls = 0;
         const env = createTestEnv({

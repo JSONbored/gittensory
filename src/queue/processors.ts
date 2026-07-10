@@ -9598,6 +9598,8 @@ async function maybePublishPrPublicSurface(
             targetKey: `${repoFullName}#${pr.number}`,
             outcome: "completed",
             detail: "one-shot review cadence: this PR already had its slop advisory pass; not spending a fresh call",
+            /* v8 ignore next -- reached only when a PRIOR slop pass already published, and an open PR does not
+             * lose its head SHA once set; the `?? null` is a type-level fallback for an unreachable branch. */
             metadata: { repoFullName, headSha: advisory.headSha ?? null },
           }).catch(() => undefined);
         } else {
@@ -9642,6 +9644,9 @@ async function maybePublishPrPublicSurface(
           targetKey: `${repoFullName}#${pr.number}`,
           outcome: "completed",
           detail: "one-shot review cadence: this PR's linked issue already had its satisfaction pass; not spending a fresh call",
+          /* v8 ignore next -- reached only when a PRIOR satisfaction pass already published for this issue
+           * number, and an open PR does not lose its head SHA once set; the `?? null` is a type-level
+           * fallback for an unreachable branch. */
           metadata: { repoFullName, headSha: advisory.headSha ?? null },
         }).catch(() => undefined);
       } else {
@@ -9982,6 +9987,10 @@ async function maybePublishPrPublicSurface(
         targetKey: `${repoFullName}#${pr.number}`,
         outcome: "completed",
         detail: "one-shot review cadence: reused the last published AI review instead of spending a fresh call",
+        /* v8 ignore next -- a truthy `oneShotPriorReview` means markAiReviewPublished previously stamped a row
+         * for a non-null head SHA, and an open PR does not lose its head SHA once set; the `?? null` is a
+         * type-level fallback for a practically-unreachable branch, mirroring the identical fallback on the
+         * frozen-reuse and paused-reuse audit events just above. */
         metadata: { deliveryId: webhook.deliveryId, repoFullName, headSha: advisory.headSha ?? null },
       }).catch(() => undefined);
     }
