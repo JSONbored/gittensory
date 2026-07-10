@@ -150,7 +150,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
   it("the public-safe collapsible bodies are byte-identical to the legacy panel's <details> bodies", () => {
     const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
     const aiReview = { notes: "Looks reasonable. Add a regression test for reconnect.", reviewerCount: 2 };
-    const legacy = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, aiReview });
+    const legacy = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, aiReview });
     const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth });
 
     // Each shared collapsible body's individual lines must appear verbatim in the legacy panel so the two
@@ -168,7 +168,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
 
   it("the legacy panel still renders 'Maintainer notes' inline (private section is unchanged, just not shared)", () => {
     const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
-    const legacy = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
+    const legacy = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
     expect(legacy).toContain("Maintainer notes");
   });
 

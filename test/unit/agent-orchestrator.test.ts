@@ -263,6 +263,7 @@ describe("agent orchestrator", () => {
       pullRequest: null,
       actorKind: "maintainer",
       bundle: publicPlan,
+      env,
     });
 
     expect(publicPlan.actions).toHaveLength(0);

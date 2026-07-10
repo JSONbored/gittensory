@@ -20,7 +20,7 @@ import type {
   ScoringModelSnapshotRecord,
 } from "../types";
 import type { PublicContributorProfile } from "../github/public";
-import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
+import { gittensoryFooter, gittensorRepoEarnUrl, type GittensoryFooterEnv } from "../github/footer";
 import type { FocusManifestReviewConfig, ReviewFieldKey } from "./focus-manifest";
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
@@ -4294,6 +4294,9 @@ export function buildPublicPrIntelligenceComment(args: {
    *  claimant among `linkedDuplicatePrs`, the hard-duplicate panel block is suppressed so the winner's panel
    *  does not show a blocking duplicate. Default/false ⇒ byte-identical to today. */
   duplicateWinnerEnabled?: boolean | undefined;
+  /** Resolved by the caller from `env.PUBLIC_SITE_ORIGIN` so a self-hoster's own domain reaches the
+   *  always-on footer's attribution link instead of `GITTENSORY_SITE_URL` (#4613). */
+  env: GittensoryFooterEnv;
 }): string {
   const publicFindings = publicSafePreflightFindings(args.preflight, args.settings);
   const relatedWork = buildDuplicateWinnerRelatedWorkView({
@@ -4424,7 +4427,7 @@ export function buildPublicPrIntelligenceComment(args: {
   // path to register); for an unregistered repo it falls back to the general Gittensor home URL.
   // The earn CTA stays a permanent marketing surface; `.gittensory.yml review.footer.text` can replace
   // the lead copy (already public-safe-validated) but the Gittensor register link + attribution remain.
-  const footer = gittensoryFooter({ earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined });
+  const footer = gittensoryFooter(args.env, { earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined });
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
@@ -4509,7 +4512,7 @@ export function buildPublicPrIntelligenceComment(args: {
  *  analysis is for registered Gittensor contributors, so we skip the panel and post a brief welcome
  *  + earn invite; the always-on footer CTA does the conversion. Carries the same panel marker so it
  *  updates in place if the author later registers (the full panel then replaces it). */
-function buildMinimalInviteComment(args: { repo: RepositoryRecord | null; pr: PullRequestRecord; review?: FocusManifestReviewConfig | undefined }): string {
+function buildMinimalInviteComment(args: { repo: RepositoryRecord | null; pr: PullRequestRecord; review?: FocusManifestReviewConfig | undefined; env: GittensoryFooterEnv }): string {
   return [
     "<!-- gittensory-pr-panel:v1 -->",
     "",
@@ -4520,7 +4523,7 @@ function buildMinimalInviteComment(args: { repo: RepositoryRecord | null; pr: Pu
     ]),
     "",
     "---",
-    gittensoryFooter({ earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined }),
+    gittensoryFooter(args.env, { earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined }),
   ].join("\n");
 }
 

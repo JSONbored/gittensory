@@ -121,6 +121,7 @@ import {
   refreshInstallationHealthForInstallation,
 } from "../github/backfill";
 import { getRepositoryCollaboratorPermission } from "../github/app";
+import type { GittensoryFooterEnv } from "../github/footer";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile, fetchPublicRepoStats } from "../github/public";
 import {
@@ -1701,7 +1702,7 @@ export function createApp() {
     if (repoForbidden) return repoForbidden;
     const installationId = repo?.installationId ?? null;
     const installation = installationId !== null ? await getInstallationHealth(c.env, installationId) : null;
-    const preview = buildCommandPreview(command, parsed.data, { repo, installation, pullRequest });
+    const preview = buildCommandPreview(command, parsed.data, { repo, installation, pullRequest, env: c.env });
     await recordRouteProductUsage(c, {
       surface: "control_panel",
       eventName: "command_previewed",
@@ -2690,6 +2691,7 @@ export function createApp() {
         issues,
         pullRequests,
         sample: parsed.data.sample ?? {},
+        env: c.env,
       }),
     );
   });
@@ -4262,7 +4264,7 @@ type CommandPreviewDecision = {
 function buildCommandPreview(
   command: (typeof APP_COMMANDS)[number],
   request: z.infer<typeof commandPreviewSchema>,
-  context: { repo: RepositoryRecord | null; installation: InstallationHealthRecord | null; pullRequest: PullRequestRecord | null },
+  context: { repo: RepositoryRecord | null; installation: InstallationHealthRecord | null; pullRequest: PullRequestRecord | null; env: GittensoryFooterEnv },
 ) {
   const target = request.repoFullName ? `${request.repoFullName}${request.pullNumber ? `#${request.pullNumber}` : ""}` : "selected target";
   const mentionCommandName = previewableMentionCommandName(command.id);
@@ -4380,6 +4382,7 @@ function buildCommandPreview(
                 confirmedMinerLogins: sample.minerStatus === "confirmed" ? [sample.authorLogin] : [],
               })
             : null,
+          env: context.env,
         });
 
   return {

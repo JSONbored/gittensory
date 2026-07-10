@@ -524,7 +524,7 @@ describe("label guidance sanitizer", () => {
   it("does not expose private terms in settings-preview label decisions", () => {
     const repo = registeredRepo("octo/label-test", configFor({ repo: "octo/label-test" }));
     const settings = settingsFor(repo.fullName, { gittensorLabel: "gittensor", autoLabelEnabled: true, publicSurface: "label_only" });
-    const preview = buildRepoSettingsPreview({ repoFullName: repo.fullName, repo, settings, installation: previewHealthyInstall, issues: [], pullRequests: [], sample: { authorLogin: "miner", minerStatus: "confirmed" } });
+    const preview = buildRepoSettingsPreview({env: {}, repoFullName: repo.fullName, repo, settings, installation: previewHealthyInstall, issues: [], pullRequests: [], sample: { authorLogin: "miner", minerStatus: "confirmed" } });
 
     expect(preview.appliedLabel).toBe("gittensor");
     expect(JSON.stringify(preview)).not.toMatch(PRIVATE_TERMS_PATTERN);
@@ -541,7 +541,7 @@ describe("label guidance sanitizer", () => {
 
   it("sanitizes preview warnings that reference label permissions without leaking private context", () => {
     const repo = registeredRepo("octo/perms", configFor({ repo: "octo/perms" }));
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       repoFullName: repo.fullName,
       repo,
       settings: settingsFor(repo.fullName),
@@ -560,7 +560,7 @@ describe("label guidance sanitizer", () => {
 describe("validation guidance sanitizer", () => {
   it("keeps check-run decisions free of private terms", () => {
     const repo = registeredRepo("octo/checks", configFor({ repo: "octo/checks" }));
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       repoFullName: repo.fullName,
       repo,
       settings: settingsFor(repo.fullName, { checkRunMode: "enabled", checkRunDetailLevel: "deep" }),

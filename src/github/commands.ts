@@ -4,7 +4,7 @@ import {
   suggestCommand as suggestCommandFromCatalog,
   type CommandSuggestCatalog,
 } from "./command-suggest";
-import { gittensoryFooter, GITTENSORY_SITE_URL } from "./footer";
+import { gittensoryFooter, GITTENSORY_SITE_URL, type GittensoryFooterEnv } from "./footer";
 import type { AgentRunBundle } from "../services/agent-orchestrator";
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
 import type { AgentActionRecord, RepositoryCommandAuthorizationPolicy } from "../types";
@@ -362,6 +362,8 @@ export function buildPublicAgentCommandComment(args: {
   officialMiner?: GittensorContributorSnapshot | null | undefined;
   bundle?: AgentRunBundle | null | undefined;
   maintainerDigest?: MaintainerQueueDigest | null | undefined;
+  /** Resolved by the caller from `env.PUBLIC_SITE_ORIGIN` -- see `gittensoryFooter` (#4613). */
+  env: GittensoryFooterEnv;
 }): string {
   const repoFullName = args.repo?.fullName ?? args.pullRequest?.repoFullName ?? "this repository";
   // Action commands (e.g. gate-override) never reach this Q&A renderer — they are handled and short-circuited
@@ -407,7 +409,7 @@ export function buildPublicAgentCommandComment(args: {
     ...feedbackPromptSections(args.answerId),
     "",
     "---",
-    gittensoryFooter(),
+    gittensoryFooter(args.env),
   ].join("\n");
   return sanitizePublicComment(body);
 }

@@ -27,6 +27,7 @@
 // the skill from this run rather than blocking the AGENTS.md refresh it rode in with.
 import { githubErrorStatus, withInstallationTokenRetry } from "./app";
 import { githubRateLimitAdmissionKeyForInstallation, makeInstallationOctokit } from "./client";
+import { GITTENSORY_SITE_URL } from "./footer";
 import { getRepository } from "../db/repositories";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { extractRepoProfile } from "../review/repo-profile";
@@ -148,7 +149,10 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
 
     const profile = await extractRepoProfile(env, repoFullName);
     if (!profile.present) return { opened: false, reason: profile.reason };
-    const generatedSection = renderRepoDocContent(profile);
+    // #4613: a self-hoster's own domain (env.PUBLIC_SITE_ORIGIN) reaches the generated AGENTS.md's
+    // attribution link instead of gittensory.aethereal.dev -- same fallback `maintainerControlPanelUrl`/
+    // `gittensoryFooter` already use.
+    const generatedSection = renderRepoDocContent(profile, env.PUBLIC_SITE_ORIGIN ?? GITTENSORY_SITE_URL);
     if (!generatedSection) return { opened: false, reason: "no content rendered from profile" };
 
     if (mode !== "live") return { opened: false, reason: `repo-doc pull request not opened: action mode is "${mode}"` };

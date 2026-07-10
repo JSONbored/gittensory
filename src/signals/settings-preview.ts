@@ -14,6 +14,7 @@ import {
   type ContributorDetection,
 } from "./engine";
 import { REQUIRED_INSTALLATION_PERMISSIONS } from "../github/backfill";
+import type { GittensoryFooterEnv } from "../github/footer";
 import { GITTENSORY_GATE_CHECK_NAME, shouldPublishReviewCheck } from "../review/check-names";
 import { decideReviewEligibility } from "../review/review-eligibility";
 import { requiredAgentActionPermissions } from "../settings/agent-execution";
@@ -259,6 +260,8 @@ export function buildRepoSettingsPreview(args: {
   issues: IssueRecord[];
   pullRequests: PullRequestRecord[];
   sample: PublicSurfaceSample;
+  /** Resolved by the caller from `env.PUBLIC_SITE_ORIGIN` -- see `gittensoryFooter` (#4613). */
+  env: GittensoryFooterEnv;
 }): RepoSettingsPreview {
   const { settings, repo, repoFullName } = args;
   const sample = {
@@ -280,7 +283,7 @@ export function buildRepoSettingsPreview(args: {
   });
 
   const previewComment = decision.willComment
-    ? buildSamplePreviewComment({ repoFullName, repo, settings, issues: args.issues, pullRequests: args.pullRequests, sample, body: args.sample.body ?? null })
+    ? buildSamplePreviewComment({ repoFullName, repo, settings, issues: args.issues, pullRequests: args.pullRequests, sample, body: args.sample.body ?? null, env: args.env })
     : null;
 
   const warnings = buildWarnings(settings, decision, args.installation);
@@ -591,6 +594,7 @@ function buildSamplePreviewComment(args: {
   pullRequests: PullRequestRecord[];
   sample: { authorLogin: string; authorAssociation: string; minerStatus: "confirmed" | "not_found" | "unavailable"; title: string; labels: string[]; linkedIssues: number[] };
   body: string | null;
+  env: GittensoryFooterEnv;
 }): string {
   const samplePr: PullRequestRecord = {
     repoFullName: args.repoFullName,
@@ -621,5 +625,5 @@ function buildSamplePreviewComment(args: {
     args.issues,
     args.pullRequests,
   );
-  return buildPublicPrIntelligenceComment({ repo: args.repo, pr: samplePr, profile, detection, queueHealth, collisions, preflight, settings: args.settings });
+  return buildPublicPrIntelligenceComment({ repo: args.repo, pr: samplePr, profile, detection, queueHealth, collisions, preflight, settings: args.settings, env: args.env });
 }

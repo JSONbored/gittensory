@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildE2eTestGenCommentBody } from "../../src/review/e2e-test-gen-render";
 import { PR_PANEL_COMMENT_MARKER } from "../../src/github/comments";
+import { GITTENSORY_SITE_URL } from "../../src/github/footer";
 
 describe("buildE2eTestGenCommentBody", () => {
   it("renders the generated test source in a fenced code block, defaulting the framework to Playwright", () => {
-    const body = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: "test('x', () => {});" });
+    const body = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: "test('x', () => {});" });
     expect(body).toContain(PR_PANEL_COMMENT_MARKER);
     expect(body).toContain("AI-generated Playwright test for @maintainer");
     expect(body).toContain("```typescript\ntest('x', () => {});\n```");
@@ -24,7 +25,7 @@ describe("buildE2eTestGenCommentBody", () => {
       "});",
     ].join("\n");
 
-    const body = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: source });
+    const body = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: source });
 
     expect(body).toContain("````typescript\n");
     expect(body).toContain(source + "\n````");
@@ -32,24 +33,24 @@ describe("buildE2eTestGenCommentBody", () => {
   });
 
   it("uses a custom framework name when provided", () => {
-    const body = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: "it('x', () => {});", framework: "Cypress" });
+    const body = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: "it('x', () => {});", framework: "Cypress" });
     expect(body).toContain("AI-generated Cypress test for @maintainer");
   });
 
   it("renders a not-usable note (no code fence) when testSource is null", () => {
-    const body = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: null });
+    const body = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: null });
     expect(body).toContain(PR_PANEL_COMMENT_MARKER);
     expect(body).toContain("did not produce a usable result");
     expect(body).not.toContain("```");
   });
 
   it("names the configured framework in the not-usable note too", () => {
-    const body = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: null, framework: "Cypress" });
+    const body = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: null, framework: "Cypress" });
     expect(body).toContain("didn't parse as valid Cypress source");
   });
 
   it("links to the commit instead of repeating the code when commit delivery succeeded", () => {
-    const body = buildE2eTestGenCommentBody({
+    const body = buildE2eTestGenCommentBody({ env: {},
       actor: "maintainer",
       testSource: "test('x', () => {});",
       commit: { status: "committed", commitSha: "abcdef1234567890", htmlUrl: "https://github.com/o/r/commit/abcdef1234567890" },
@@ -61,7 +62,7 @@ describe("buildE2eTestGenCommentBody", () => {
   });
 
   it("still renders the suggestion, with a reason, when commit delivery was declined", () => {
-    const body = buildE2eTestGenCommentBody({
+    const body = buildE2eTestGenCommentBody({ env: {},
       actor: "maintainer",
       testSource: "test('x', () => {});",
       commit: { status: "declined", reason: "no write access to the PR branch" },
@@ -71,7 +72,7 @@ describe("buildE2eTestGenCommentBody", () => {
   });
 
   it("still renders the suggestion, with the scoring-integrity reason, when commit delivery was blocked for a confirmed miner", () => {
-    const body = buildE2eTestGenCommentBody({
+    const body = buildE2eTestGenCommentBody({ env: {},
       actor: "maintainer",
       testSource: "test('x', () => {});",
       commit: { status: "blocked" },
@@ -81,8 +82,21 @@ describe("buildE2eTestGenCommentBody", () => {
   });
 
   it("renders exactly like comment-only mode when commit is omitted entirely", () => {
-    const withoutCommit = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: "test('x', () => {});" });
-    const withUndefinedCommit = buildE2eTestGenCommentBody({ actor: "maintainer", testSource: "test('x', () => {});", commit: undefined });
+    const withoutCommit = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: "test('x', () => {});" });
+    const withUndefinedCommit = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: "test('x', () => {});", commit: undefined });
     expect(withUndefinedCommit).toBe(withoutCommit);
+  });
+
+  // #4613: the footer's attribution link honors a self-hoster's PUBLIC_SITE_ORIGIN instead of always
+  // pointing at GITTENSORY_SITE_URL.
+  it("#4613: honors env.PUBLIC_SITE_ORIGIN in the footer attribution link", () => {
+    const selfHosted = buildE2eTestGenCommentBody({ env: { PUBLIC_SITE_ORIGIN: "https://gittensory.example.org" }, actor: "maintainer", testSource: "test('x', () => {});" });
+    expect(selfHosted).toContain("Checked by [Gittensory](https://gittensory.example.org)");
+    expect(selfHosted).not.toContain(GITTENSORY_SITE_URL);
+  });
+
+  it("#4613: falls back to GITTENSORY_SITE_URL when PUBLIC_SITE_ORIGIN is unset", () => {
+    const defaultHosted = buildE2eTestGenCommentBody({ env: {}, actor: "maintainer", testSource: "test('x', () => {});" });
+    expect(defaultHosted).toContain(`Checked by [Gittensory](${GITTENSORY_SITE_URL})`);
   });
 });

@@ -746,7 +746,7 @@ describe("signal coverage edge cases", () => {
       [],
       [],
     );
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: prRecord,
       profile,
@@ -769,7 +769,7 @@ describe("signal coverage edge cases", () => {
     expect(comment).toMatch(/Readiness score: \d+\/100/);
     expect(comment).not.toMatch(/reward|wallet|hotkey|trust score|farming|critical private/i);
 
-    const maintainerComment = buildPublicPrIntelligenceComment({
+    const maintainerComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...prRecord, authorLogin: "owner", authorAssociation: "OWNER", linkedIssues: [1], body: "Fixes #1" },
       profile: buildContributorProfile("owner", { login: "owner", topLanguages: ["TypeScript"], source: "github" }, [], []),
@@ -850,6 +850,7 @@ describe("signal coverage edge cases", () => {
     const directRepo = repo("owner/disabled-autonomy");
     const collisions = buildCollisionReport(directRepo.fullName, [], []);
     const baseArgs = {
+      env: {},
       repo: directRepo,
       pr: pr(directRepo.fullName, 90, "Fix cache", { authorLogin: "miner", linkedIssues: [42], body: "Fixes #42" }),
       profile: buildContributorProfile("miner", { login: "miner", topLanguages: ["TypeScript"], source: "github" }, [], []),
@@ -904,6 +905,7 @@ describe("signal coverage edge cases", () => {
     const preflightFor = (target: PullRequestRecord) =>
       buildPreflightResult({ repoFullName: directRepo.fullName, title: target.title, body: target.body ?? undefined, linkedIssues: target.linkedIssues }, directRepo, [dupIssue], [winnerPr, loserPr]);
     const baseFor = (target: PullRequestRecord) => ({
+      env: {},
       repo: directRepo,
       pr: target,
       profile,
@@ -981,6 +983,7 @@ describe("signal coverage edge cases", () => {
       ],
     };
     const baseArgs = {
+      env: {},
       repo: directRepo,
       pr: winnerPr,
       profile: buildContributorProfile("miner", { login: "miner", topLanguages: ["TypeScript"], source: "github" }, [], []),
@@ -1045,7 +1048,7 @@ describe("signal coverage edge cases", () => {
     const detection = { detected: true, source: "github_cache" as const, reason: "cached contributor", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
     const gateSettings = { ...repoSettings(directRepo.fullName), gateCheckMode: "enabled" as const, reviewCheckMode: "required" as const, duplicatePrGateMode: "block" as const };
 
-    const collisionComment = buildPublicPrIntelligenceComment({
+    const collisionComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1067,7 +1070,7 @@ describe("signal coverage edge cases", () => {
     // The always-on earn CTA footer is a permanent marketing surface on every PR.
     expect(collisionComment).toContain("register to start earning");
 
-    const repoBlockedComment = buildPublicPrIntelligenceComment({
+    const repoBlockedComment = buildPublicPrIntelligenceComment({env: {},
       repo: null,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1088,7 +1091,7 @@ describe("signal coverage edge cases", () => {
     expect(repoBlockedComment).toContain("> | Gate result | ⚠️ Not blocking | Advisory; not blocking this PR. | No action. |");
     expect(repoBlockedComment).not.toContain("App action required");
 
-    const missingIssueComment = buildPublicPrIntelligenceComment({
+    const missingIssueComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [], body: "No linked issue yet." },
       profile,
@@ -1108,7 +1111,7 @@ describe("signal coverage edge cases", () => {
     expect(missingIssueComment).toContain("> | Linked issue | ⚠️ Missing | No linked issue or no-issue rationale found. | Explain no-issue PR. |");
     expect(missingIssueComment).toContain("Explain no-issue PR.");
 
-    const passingGateComment = buildPublicPrIntelligenceComment({
+    const passingGateComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1129,7 +1132,7 @@ describe("signal coverage edge cases", () => {
     expect(passingGateComment).toContain("Public GitHub metadata was checked");
 
     // .gittensory.yml review overrides: custom footer lead, an intro note, and a hidden row.
-    const customizedComment = buildPublicPrIntelligenceComment({
+    const customizedComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1157,7 +1160,7 @@ describe("signal coverage edge cases", () => {
     expect(nitsIndex).toBeGreaterThan(summaryIndex);
     expect(readinessIndex).toBeGreaterThan(nitsIndex);
 
-    const aiBlockedComment = buildPublicPrIntelligenceComment({
+    const aiBlockedComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1173,7 +1176,7 @@ describe("signal coverage edge cases", () => {
     expect(aiBlockedComment).toContain("`src/a.ts` has a syntax error.");
     expect(aiBlockedComment.indexOf("**Review summary**")).toBeLessThan(aiBlockedComment.indexOf("**Readiness score:"));
 
-    const aiExplicitNoBlockersComment = buildPublicPrIntelligenceComment({
+    const aiExplicitNoBlockersComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1189,7 +1192,7 @@ describe("signal coverage edge cases", () => {
       "Gittensory review found blockers",
     );
 
-    const advisoryOnlyComment = buildPublicPrIntelligenceComment({
+    const advisoryOnlyComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1213,7 +1216,7 @@ describe("signal coverage edge cases", () => {
     expect(advisoryOnlyComment).toContain("Validation note missing");
     expect(advisoryOnlyComment).toContain("> | Gate result | ⚠️ Advisory only | Advisory only. | No action. |");
 
-    const actionRequiredComment = buildPublicPrIntelligenceComment({
+    const actionRequiredComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1233,7 +1236,7 @@ describe("signal coverage edge cases", () => {
     expect(actionRequiredComment).toContain("Gittensory cannot evaluate this PR until installation state is repaired.");
     expect(actionRequiredComment).toContain("> | Gate result | ⚠️ App action required | Install/config needs attention. | Fix app config. |");
 
-    const duplicateAdvisoryComment = buildPublicPrIntelligenceComment({
+    const duplicateAdvisoryComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1252,7 +1255,7 @@ describe("signal coverage edge cases", () => {
       reason: "Titles share 2 meaningful terms.",
       items: [{ type: "issue", number: index + 100, title: `Related issue ${index}`, authorLogin: "reporter", labels: [], linkedIssues: [] }],
     }));
-    const scopedComment = buildPublicPrIntelligenceComment({
+    const scopedComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1304,7 +1307,7 @@ describe("signal coverage edge cases", () => {
     }));
     const profile = buildContributorProfile("dev", { login: "dev", topLanguages: [], source: "github" }, [currentPr], []);
     const detection = { detected: true, source: "github_cache" as const, reason: "cached contributor", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1343,7 +1346,7 @@ describe("signal coverage edge cases", () => {
     expect(collisions.summary.clusterCount).toBeGreaterThan(0);
     expect(preflight.collisions).toHaveLength(0);
 
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile: buildContributorProfile("dev", { login: "dev", topLanguages: ["Markdown"], source: "github" }, [], []),
@@ -1372,7 +1375,7 @@ describe("signal coverage edge cases", () => {
       [currentPr],
     );
 
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile: buildContributorProfile("newcomer", { login: "newcomer", topLanguages: [], source: "github" }, [], []),
@@ -1402,7 +1405,7 @@ describe("signal coverage edge cases", () => {
       [],
       [currentPr],
     );
-    const officialComment = buildPublicPrIntelligenceComment({
+    const officialComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1426,7 +1429,7 @@ describe("signal coverage edge cases", () => {
         { id: "recent-merged", risk: "medium", reason: "Recent merged work is related.", items: [selfItem, { type: "recent_merged_pull_request" as const, number: 11, title: "Merged edge fix" }] },
       ],
     };
-    const edgeComment = buildPublicPrIntelligenceComment({
+    const edgeComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1489,7 +1492,7 @@ describe("signal coverage edge cases", () => {
       buildCollisionReport(directRepo.fullName, [], []),
     );
     const settings = { ...repoSettings(directRepo.fullName), gateCheckMode: "enabled" as const, reviewCheckMode: "required" as const, qualityGateMode: "block" as const, qualityGateMinScore: 95 };
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1850,7 +1853,7 @@ describe("signal coverage edge cases", () => {
         { code: "private_reward", severity: "warning" as const, title: "Reward wallet", detail: "wallet reward", action: "secret" },
       ],
     };
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
       profile,

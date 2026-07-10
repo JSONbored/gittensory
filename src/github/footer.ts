@@ -8,8 +8,16 @@
 // scoreability out of public output). This footer uses ONLY "earn" — a factual, public invitation,
 // not a payout guarantee or a private-score disclosure.
 
-/** The Gittensory product site (marketing on-ramp / attribution target). */
+/** The Gittensory product site (marketing on-ramp / attribution target) -- the DEFAULT only. A
+ *  self-hoster with `PUBLIC_SITE_ORIGIN` set gets their own domain instead, both here and in
+ *  `gittensoryFooter` below (#4613). */
 export const GITTENSORY_SITE_URL = "https://gittensory.aethereal.dev";
+
+/** Minimal env slice `gittensoryFooter` needs, narrowed from the full `Env` the same way this file's
+ *  `maintainerControlPanelUrl` already narrows its own `env` param inline -- so every file that renders
+ *  the footer only has to thread this one field down from wherever the real `Env` is in scope, not the
+ *  whole worker binding type. */
+export type GittensoryFooterEnv = { PUBLIC_SITE_ORIGIN?: string | undefined };
 
 /** The maintainer control panel for a repo on the Gittensory site (`/app?view=maintainer&repo=…`). Used as the
  *  check-run `details_url` so the merge-box "Details" link lands on the repo's review panel instead of GitHub's
@@ -39,8 +47,12 @@ export function gittensorRepoEarnUrl(repoFullName: string): string {
  *  appears on EVERY reviewed PR (the link persists forever), so non-registered authors see the
  *  invite and anyone viewing a registered contributor's PR sees it too. The registered/non-registered
  *  distinction lives in the review BODY (full panel vs. minimal), not here.
- *  Uses only "earn" wording — never reward/payout/score (forbidden in public comments). */
-export function gittensoryFooter(opts: { earnUrl?: string | undefined; customText?: string | undefined } = {}): string {
+ *  Uses only "earn" wording — never reward/payout/score (forbidden in public comments).
+ *  `env.PUBLIC_SITE_ORIGIN` (same resolution as `maintainerControlPanelUrl` above) lets a self-hoster's
+ *  own domain replace `GITTENSORY_SITE_URL` in the "Checked by Gittensory" attribution link (#4613) --
+ *  the Gittensor register link (`GITTENSOR_HOME_URL`) is a separate, shared network and is never rebranded. */
+export function gittensoryFooter(env: GittensoryFooterEnv, opts: { earnUrl?: string | undefined; customText?: string | undefined } = {}): string {
+  const siteUrl = env.PUBLIC_SITE_ORIGIN ?? GITTENSORY_SITE_URL;
   const earnUrl = opts.earnUrl ?? GITTENSOR_HOME_URL;
   // Maintainer-customized footer (via `.gittensory.yml review.footer.text`): the maintainer's public-safe
   // lead replaces the default CTA copy, but the Gittensor register link + Gittensory attribution are
@@ -49,12 +61,12 @@ export function gittensoryFooter(opts: { earnUrl?: string | undefined; customTex
     return [
       opts.customText,
       "",
-      `[Gittensor](${GITTENSOR_HOME_URL}) lets GitHub contributors earn for the work they already do — [register to start earning →](${earnUrl}). Checked by [Gittensory](${GITTENSORY_SITE_URL}).`,
+      `[Gittensor](${GITTENSOR_HOME_URL}) lets GitHub contributors earn for the work they already do — [register to start earning →](${earnUrl}). Checked by [Gittensory](${siteUrl}).`,
     ].join("\n");
   }
   return [
     `💰 **Earn for open-source contributions like this.** [Gittensor](${GITTENSOR_HOME_URL}) lets GitHub contributors earn for the work they already do — [register to start earning →](${earnUrl}).`,
     "",
-    `Checked by [Gittensory](${GITTENSORY_SITE_URL}), a quiet PR intelligence layer for OSS maintainers.`,
+    `Checked by [Gittensory](${siteUrl}), a quiet PR intelligence layer for OSS maintainers.`,
   ].join("\n");
 }

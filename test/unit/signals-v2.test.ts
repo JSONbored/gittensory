@@ -2086,7 +2086,7 @@ describe("v2 signal builders", () => {
     );
     expect(activeBounty).toMatchObject({ lifecycle: "active", fundingStatus: "funded", consensusRisk: "medium" });
 
-    const comment = buildPublicPrIntelligenceComment({
+    const comment = buildPublicPrIntelligenceComment({env: {},
       repo,
       pr: { ...pullRequests[0]!, authorLogin: undefined, linkedIssues: [] },
       profile: noLanguageProfile,

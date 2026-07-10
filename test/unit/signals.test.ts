@@ -540,7 +540,7 @@ describe("world-class backend signals", () => {
       currentPr,
       priorPr,
     ], []);
-    const comment = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
+    const comment = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
 
     expect(detection.detected).toBe(true);
     expect(shouldPublishPrIntelligenceComment(settings, detection)).toBe(true);
@@ -596,11 +596,11 @@ describe("world-class backend signals", () => {
     const detectedProfile = buildContributorProfile("oktofeesh1", { login: "oktofeesh1", topLanguages: ["TypeScript"], source: "github" }, [currentPr, priorPr], []);
     expect(detected.detected).toBe(true);
 
-    const registeredComment = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
+    const registeredComment = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
     expect(registeredComment).toContain(repoEarnPage);
 
     const unregisteredRepo = { ...repo, isRegistered: false, registryConfig: null };
-    const unregisteredComment = buildPublicPrIntelligenceComment({ repo: unregisteredRepo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
+    const unregisteredComment = buildPublicPrIntelligenceComment({env: {}, repo: unregisteredRepo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
     expect(unregisteredComment).not.toContain("/miners/repository");
     expect(unregisteredComment).toContain(homeCta);
 
@@ -609,10 +609,10 @@ describe("world-class backend signals", () => {
     const undetectedProfile = buildContributorProfile("brand-new-outsider", { login: "brand-new-outsider", topLanguages: [], source: "github" }, [], []);
     expect(undetected.detected).toBe(false);
 
-    const minimalRegistered = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
+    const minimalRegistered = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
     expect(minimalRegistered).toContain(repoEarnPage);
 
-    const minimalUnregistered = buildPublicPrIntelligenceComment({ repo: unregisteredRepo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
+    const minimalUnregistered = buildPublicPrIntelligenceComment({env: {}, repo: unregisteredRepo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
     expect(minimalUnregistered).not.toContain("/miners/repository");
     expect(minimalUnregistered).toContain(homeCta);
   });
@@ -931,7 +931,7 @@ describe("world-class backend signals", () => {
       aiReviewAllAuthors: false, closeOwnerAuthors: false,
     };
 
-    const comment = buildPublicPrIntelligenceComment({ repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
+    const comment = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
 
     expect(comment).toContain("| Linked issue | ⚠️ Missing | No linked issue or no-issue rationale found. | Explain no-issue PR. |");
     expect(comment).toContain("Public profile languages: not available");
@@ -1004,7 +1004,7 @@ describe("world-class backend signals", () => {
 
     const currentPr: PullRequestRecord = { ...pullRequests[0]!, body: "Fixes #7", linkedIssues: [7] };
     const publicPreflight = buildPreflightResult({ repoFullName: repo.fullName, title: currentPr.title, body: currentPr.body ?? undefined, linkedIssues: [7] }, repo, [openIssue], [], [completed]);
-    const publicComment = buildPublicPrIntelligenceComment({
+    const publicComment = buildPublicPrIntelligenceComment({env: {},
       repo,
       pr: currentPr,
       profile: buildContributorProfile("oktofeesh1", { login: "oktofeesh1", topLanguages: ["TypeScript"], source: "github" }, [currentPr], []),

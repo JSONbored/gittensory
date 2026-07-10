@@ -113,7 +113,7 @@ describe("classifyPlanCommandRequest (#issue-coding-plan)", () => {
 
 describe("buildIssuePlanComment (#issue-coding-plan)", () => {
   it("renders the plan with the marker, actor, scope, and footer", () => {
-    const body = buildIssuePlanComment("## Summary\nShip it.", { actor: "maintainer1", repoFullName: "acme/widgets", issueNumber: 42 });
+    const body = buildIssuePlanComment("## Summary\nShip it.", { actor: "maintainer1", repoFullName: "acme/widgets", issueNumber: 42, env: {} });
     expect(body).toContain("Gittensory implementation plan");
     expect(body).toContain("@maintainer1");
     expect(body).toContain("acme/widgets#42");

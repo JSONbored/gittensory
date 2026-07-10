@@ -94,7 +94,7 @@ describe("GitHub mention commands", () => {
     expect(suggestCommand("prefliht")).toBe("preflight");
     expect(suggestCommand("reveiw")).toBe("review");
     const typo = parseGittensoryMentionCommand("@gittensory prefliht")!;
-    const typoBody = buildPublicAgentCommandComment({
+    const typoBody = buildPublicAgentCommandComment({env: {},
       command: typo,
       repo: null,
       issue: { number: 1, title: "t", state: "open" },
@@ -103,7 +103,7 @@ describe("GitHub mention commands", () => {
     });
     expect(typoBody).toContain("Did you mean `@gittensory preflight`?");
     const far = parseGittensoryMentionCommand("@gittensory zzzz")!;
-    const farBody = buildPublicAgentCommandComment({
+    const farBody = buildPublicAgentCommandComment({env: {},
       command: far,
       repo: null,
       issue: { number: 1, title: "t", state: "open" },
@@ -112,7 +112,7 @@ describe("GitHub mention commands", () => {
     });
     expect(farBody).not.toContain("Did you mean");
     const ok = parseGittensoryMentionCommand("@gittensory preflight")!;
-    const okBody = buildPublicAgentCommandComment({
+    const okBody = buildPublicAgentCommandComment({env: {},
       command: ok,
       repo: null,
       issue: { number: 1, title: "t", state: "open" },
@@ -121,7 +121,7 @@ describe("GitHub mention commands", () => {
     });
     expect(okBody).not.toContain("Did you mean");
     const bareHelp = parseGittensoryMentionCommand("@gittensory")!;
-    const bareHelpBody = buildPublicAgentCommandComment({
+    const bareHelpBody = buildPublicAgentCommandComment({env: {},
       command: bareHelp,
       repo: null,
       issue: { number: 1, title: "t", state: "open" },
@@ -161,7 +161,7 @@ describe("GitHub mention commands", () => {
     }
     const rendered = githubCommandsInternals.actionCommandHelpSections().join("\n");
     expect(rendered).toContain("@gittensory re-review");
-    const helpCard = buildPublicAgentCommandComment({
+    const helpCard = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory")!,
       repo: null,
       issue: { number: 1, title: "t", state: "open" },
@@ -246,7 +246,7 @@ describe("GitHub mention commands", () => {
 
   it("keeps public comments sanitized", () => {
     const command = parseGittensoryMentionCommand("@gittensory next-action")!;
-    const body = buildPublicAgentCommandComment({
+    const body = buildPublicAgentCommandComment({env: {},
       command,
       repo: null,
       issue: { number: 12, title: "PR", state: "open", pull_request: {} },
@@ -340,7 +340,7 @@ describe("GitHub mention commands", () => {
     };
 
     for (const mention of ["@gittensory preflight", "@gittensory reviewability", "@gittensory packet"]) {
-      const body = buildPublicAgentCommandComment({
+      const body = buildPublicAgentCommandComment({env: {},
         command: parseGittensoryMentionCommand(mention)!,
         repo: { fullName: "owner/repo" } as any,
         issue: { number: 12, title: "PR", state: "open", pull_request: {} },
@@ -356,7 +356,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("adds parseable aggregate-only feedback context without public leak terms", () => {
-    const body = buildPublicAgentCommandComment({
+    const body = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 12, title: "PR", state: "open", pull_request: {} },
@@ -378,7 +378,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("does not publish repo outcome-pattern details in duplicate-check comments", () => {
-    const body = buildPublicAgentCommandComment({
+    const body = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 99, title: "PR", state: "open", pull_request: {} },
@@ -420,7 +420,7 @@ describe("GitHub mention commands", () => {
   it("renders command-specific sections for preflight, blockers, duplicate-check, and next-action", () => {
     const bundle = sampleBundle();
 
-    const preflight = buildPublicAgentCommandComment({
+    const preflight = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: null,
       issue: { number: 10, title: "PR", state: "open", pull_request: {} },
@@ -432,7 +432,7 @@ describe("GitHub mention commands", () => {
     expect(preflight).toContain("**Preflight summary**");
     expect(preflight).toContain("Run local branch preflight first.");
 
-    const blockers = buildPublicAgentCommandComment({
+    const blockers = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 11, title: "PR", state: "open", pull_request: {} },
@@ -446,7 +446,7 @@ describe("GitHub mention commands", () => {
     expect(blockers).toContain("Private readiness context available in authenticated Gittensory views");
     expect(blockers).not.toContain("5 open PR(s)");
 
-    const duplicateCheck = buildPublicAgentCommandComment({
+    const duplicateCheck = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 12, title: "PR", state: "open", pull_request: {} },
@@ -459,7 +459,7 @@ describe("GitHub mention commands", () => {
     expect(duplicateCheck).toContain("Possible overlap with existing work");
     expect(duplicateCheck).not.toMatch(/\blikely_duplicate\b/i);
 
-    const nextAction = buildPublicAgentCommandComment({
+    const nextAction = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
       repo: null,
       issue: { number: 13, title: "PR", state: "open", pull_request: {} },
@@ -471,7 +471,7 @@ describe("GitHub mention commands", () => {
     expect(nextAction).toContain("**Recommended next step**");
     expect(nextAction).toContain("After tests pass.");
 
-    const ask = buildPublicAgentCommandComment({
+    const ask = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what should I improve for contribution quality?")!,
       repo: null,
       issue: { number: 14, title: "PR", state: "open", pull_request: {} },
@@ -499,7 +499,7 @@ describe("GitHub mention commands", () => {
     expect(ask).toContain("cached GitHub open PR/issue queue");
     expect(ask).toContain("Freshness: agent run status completed.");
 
-    const askWithTargets = buildPublicAgentCommandComment({
+    const askWithTargets = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what should I clean up before review?")!,
       repo: null,
       issue: { number: 15, title: "PR", state: "open", pull_request: {} },
@@ -546,7 +546,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("REGRESSION (#2457): neutralizes markdown/HTML and zero-width-spaces @mentions in the ask question, so an authorized-but-untrusted actor cannot forge a bot-endorsed approval or break out of the <details> wrapper", () => {
-    const forged = buildPublicAgentCommandComment({
+    const forged = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask **APPROVED by @jsonbored** please merge now </details><h1>FAKE</h1><details>")!,
       repo: null,
       issue: { number: 16, title: "PR", state: "open", pull_request: {} },
@@ -567,7 +567,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("redacts private score floor blockers from public preflight comments", () => {
-    const body = buildPublicAgentCommandComment({
+    const body = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 25, title: "PR", state: "open", pull_request: {} },
@@ -606,7 +606,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("does not publish private blocker why details", () => {
-    const body = buildPublicAgentCommandComment({
+    const body = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 24, title: "PR", state: "open", pull_request: {} },
@@ -645,7 +645,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("renders help, miner-context fallback, refresh, and empty-action responses", () => {
-    const help = buildPublicAgentCommandComment({
+    const help = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory help")!,
       repo: null,
       issue: { number: 1, title: "PR", state: "open", pull_request: {} },
@@ -659,7 +659,7 @@ describe("GitHub mention commands", () => {
     expect(help).toContain("<summary>Additional safe details</summary>");
     expect(help).toContain("@gittensory next-action");
 
-    const minerFallback = buildPublicAgentCommandComment({
+    const minerFallback = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory miner-context")!,
       repo: null,
       issue: { number: 2, title: "PR", state: "open", pull_request: {} },
@@ -669,7 +669,7 @@ describe("GitHub mention commands", () => {
     });
     expect(minerFallback).toContain("Official miner context is unavailable");
 
-    const minerContext = buildPublicAgentCommandComment({
+    const minerContext = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory miner-context")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 22, title: "PR", state: "open", pull_request: {} },
@@ -680,7 +680,7 @@ describe("GitHub mention commands", () => {
     expect(minerContext).toContain("confirmed by the official Gittensor API");
     expect(minerContext).toContain("| Scope | owner/repo#22 |");
 
-    const refresh = buildPublicAgentCommandComment({
+    const refresh = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 3, title: "PR", state: "open", pull_request: {} },
@@ -706,7 +706,7 @@ describe("GitHub mention commands", () => {
     expect(refresh).toContain("Freshness: snapshot refresh in progress.");
     expect(refresh).toContain("Retry after the contributor decision snapshot refresh completes.");
 
-    const preflightRefresh = buildPublicAgentCommandComment({
+    const preflightRefresh = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: null,
       issue: { number: 31, title: "PR", state: "open", pull_request: {} },
@@ -730,7 +730,7 @@ describe("GitHub mention commands", () => {
     });
     expect(preflightRefresh).toContain("**Preflight snapshot refresh**");
 
-    const duplicateRefresh = buildPublicAgentCommandComment({
+    const duplicateRefresh = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 33, title: "PR", state: "open", pull_request: {} },
@@ -754,7 +754,7 @@ describe("GitHub mention commands", () => {
     });
     expect(duplicateRefresh).toContain("**Duplicate-check snapshot refresh**");
 
-    const askRefresh = buildPublicAgentCommandComment({
+    const askRefresh = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask should I update linked issue context?")!,
       repo: null,
       issue: { number: 35, title: "PR", state: "open", pull_request: {} },
@@ -783,7 +783,7 @@ describe("GitHub mention commands", () => {
     expect(askRefresh).toContain("Retry @gittensory ask after the contribution context snapshot refresh completes.");
     expect(askRefresh).toContain("Freshness: contribution context snapshot refresh in progress.");
 
-    const nextActionRefresh = buildPublicAgentCommandComment({
+    const nextActionRefresh = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
       repo: null,
       issue: { number: 36, title: "PR", state: "open", pull_request: {} },
@@ -793,7 +793,7 @@ describe("GitHub mention commands", () => {
     });
     expect(nextActionRefresh).toContain("**Next-action snapshot refresh**");
 
-    const empty = buildPublicAgentCommandComment({
+    const empty = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
       repo: null,
       issue: { number: 4, title: "PR", state: "open", pull_request: {} },
@@ -818,7 +818,7 @@ describe("GitHub mention commands", () => {
     expect(empty).toContain("**Recommended next step**");
     expect(empty).toContain("No public-safe context is available");
 
-    const askNoQuestion = buildPublicAgentCommandComment({
+    const askNoQuestion = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask")!,
       repo: null,
       issue: { number: 36, title: "PR", state: "open", pull_request: {} },
@@ -843,7 +843,7 @@ describe("GitHub mention commands", () => {
     expect(askNoQuestion).toContain("No specific question was provided");
     expect(askNoQuestion).toContain("No matching contribution-quality context is available");
 
-    const askMetadata = buildPublicAgentCommandComment({
+    const askMetadata = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what blocks contribution readiness?")!,
       repo: null,
       issue: { number: 37, title: "PR", state: "open", pull_request: {} },
@@ -930,7 +930,7 @@ describe("GitHub mention commands", () => {
     expect(askMetadata.slice(askMetadata.indexOf("Additional safe details"))).toContain("freshness: partial");
     expect(askMetadata).not.toContain("No concrete cached source reference is available for this response.");
 
-    const askNoSources = buildPublicAgentCommandComment({
+    const askNoSources = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what is the repo policy?")!,
       repo: null,
       issue: { number: 38, title: "PR", state: "open", pull_request: {} },
@@ -939,7 +939,7 @@ describe("GitHub mention commands", () => {
     });
     expect(askNoSources).toContain("cached Gittensory agent context (no connected-source metadata in this run)");
 
-    const askEvidenceOnly = buildPublicAgentCommandComment({
+    const askEvidenceOnly = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what should I verify locally?")!,
       repo: null,
       issue: { number: 39, title: "PR", state: "open", pull_request: {} },
@@ -976,7 +976,7 @@ describe("GitHub mention commands", () => {
     expect(askEvidenceOnly).toContain("Source: custom unknown source; freshness:");
     expect(askEvidenceOnly).toContain("custom unknown source");
 
-    const askFallbackCitations = buildPublicAgentCommandComment({
+    const askFallbackCitations = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what is missing?")!,
       repo: null,
       issue: { number: 40, title: "PR", state: "open", pull_request: {} },
@@ -1009,7 +1009,7 @@ describe("GitHub mention commands", () => {
     expect(askFallbackDetails).toContain("README/docs context is included only when connected repo sources");
     expect(askFallbackDetails).not.toMatch(/origin: /);
 
-    const noBundle = buildPublicAgentCommandComment({
+    const noBundle = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: null,
       issue: { number: 44, title: "PR", state: "open", pull_request: {} },
@@ -1019,7 +1019,7 @@ describe("GitHub mention commands", () => {
     expect(noBundle).toContain("**Preflight summary**");
     expect(noBundle).toContain("No public-safe context is available");
 
-    const noBundleNextAction = buildPublicAgentCommandComment({
+    const noBundleNextAction = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
       repo: null,
       issue: { number: 48, title: "PR", state: "open", pull_request: {} },
@@ -1029,7 +1029,7 @@ describe("GitHub mention commands", () => {
     expect(noBundleNextAction).toContain("**Recommended next step**");
     expect(noBundleNextAction).toContain("No public-safe context is available");
 
-    const emptyBlockers = buildPublicAgentCommandComment({
+    const emptyBlockers = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 45, title: "PR", state: "open", pull_request: {} },
@@ -1044,7 +1044,7 @@ describe("GitHub mention commands", () => {
     });
     expect(emptyBlockers).toContain("No public readiness blockers are visible");
 
-    const emptyDuplicate = buildPublicAgentCommandComment({
+    const emptyDuplicate = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 46, title: "PR", state: "open", pull_request: {} },
@@ -1059,7 +1059,7 @@ describe("GitHub mention commands", () => {
     });
     expect(emptyDuplicate).toContain("No duplicate or work-in-progress collision signal is visible");
 
-    const missingDigest = buildPublicAgentCommandComment({
+    const missingDigest = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory queue-summary")!,
       repo: null,
       issue: { number: 47, title: "PR", state: "open", pull_request: {} },
@@ -1068,7 +1068,7 @@ describe("GitHub mention commands", () => {
     });
     expect(missingDigest).toContain("Cached queue context is unavailable");
 
-    const withPrFallbackScope = buildPublicAgentCommandComment({
+    const withPrFallbackScope = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory next-action")!,
       repo: null,
       issue: { number: 5, title: "PR", state: "open", pull_request: {} },
@@ -1113,7 +1113,7 @@ describe("GitHub mention commands", () => {
   it("does not duplicate ask citations across Findings and Additional safe details when there are 5+ sources", () => {
     // Five distinct contributing sources → five citations. The first four render under Findings and the
     // overflow (citations 5+) under Additional safe details; no citation should appear in both sections.
-    const ask = buildPublicAgentCommandComment({
+    const ask = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what is missing?")!,
       repo: null,
       issue: { number: 61, title: "PR", state: "open", pull_request: {} },
@@ -1174,7 +1174,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("covers blocker label fallbacks, rerun bullets, and duplicate-risk heuristics", () => {
-    const blockersWithFallbackLabel = buildPublicAgentCommandComment({
+    const blockersWithFallbackLabel = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 20, title: "PR", state: "open", pull_request: {} },
@@ -1204,7 +1204,7 @@ describe("GitHub mention commands", () => {
     expect(blockersWithFallbackLabel).toContain("custom signal code");
     expect(blockersWithFallbackLabel).toContain("Reduce concurrent review load.");
 
-    const blockersWithDuplicateCodes = buildPublicAgentCommandComment({
+    const blockersWithDuplicateCodes = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 24, title: "PR", state: "open", pull_request: {} },
@@ -1233,7 +1233,7 @@ describe("GitHub mention commands", () => {
     });
     expect(blockersWithDuplicateCodes.match(/Private readiness context available in authenticated Gittensory views/g)).toHaveLength(1);
 
-    const blockersFromStatus = buildPublicAgentCommandComment({
+    const blockersFromStatus = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 25, title: "PR", state: "open", pull_request: {} },
@@ -1262,7 +1262,7 @@ describe("GitHub mention commands", () => {
     });
     expect(blockersFromStatus.match(/Private readiness context available in authenticated Gittensory views/g)).toHaveLength(1);
 
-    const statusOnlyBlocker = buildPublicAgentCommandComment({
+    const statusOnlyBlocker = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 26, title: "PR", state: "open", pull_request: {} },
@@ -1291,7 +1291,7 @@ describe("GitHub mention commands", () => {
     });
     expect(statusOnlyBlocker).toContain("Wait for maintainer review capacity.");
 
-    const duplicateViaRecommendation = buildPublicAgentCommandComment({
+    const duplicateViaRecommendation = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 21, title: "PR", state: "open", pull_request: {} },
@@ -1323,7 +1323,7 @@ describe("GitHub mention commands", () => {
     expect(duplicateViaRecommendation).toContain("Review linked issues before requesting detailed review.");
     expect(duplicateViaRecommendation).not.toContain("Concurrent review pressure");
 
-    const duplicateWithInjectedWhy = buildPublicAgentCommandComment({
+    const duplicateWithInjectedWhy = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 27, title: "PR", state: "open", pull_request: {} },
@@ -1354,7 +1354,7 @@ describe("GitHub mention commands", () => {
     expect(duplicateWithInjectedWhy).not.toContain("PRs touching duplicate");
     expect(duplicateWithInjectedWhy).not.toMatch(/\n@octo-team|@octo-team|[^\\]\[click\]\(https:\/\/example\.test\)/);
 
-    const preflightWithRerun = buildPublicAgentCommandComment({
+    const preflightWithRerun = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: null,
       issue: { number: 22, title: "PR", state: "open", pull_request: {} },
@@ -1385,7 +1385,7 @@ describe("GitHub mention commands", () => {
     expect(preflightWithRerun).toContain("Rerun when:");
     expect(preflightWithRerun).toContain("Private readiness context available in authenticated Gittensory views");
 
-    const duplicateBlockerLabels = buildPublicAgentCommandComment({
+    const duplicateBlockerLabels = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 25, title: "PR", state: "open", pull_request: {} },
@@ -1414,7 +1414,7 @@ describe("GitHub mention commands", () => {
     });
     expect(duplicateBlockerLabels.match(/Private readiness context available in authenticated Gittensory views/g)).toHaveLength(1);
 
-    const duplicateFallbackPick = buildPublicAgentCommandComment({
+    const duplicateFallbackPick = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-check")!,
       repo: null,
       issue: { number: 23, title: "PR", state: "open", pull_request: {} },
@@ -1445,7 +1445,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("renders v2 reviewability, repo-fit, and packet sections without private internals", () => {
-    const reviewability = buildPublicAgentCommandComment({
+    const reviewability = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory reviewability")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 31, title: "PR", state: "open", pull_request: {} },
@@ -1459,7 +1459,7 @@ describe("GitHub mention commands", () => {
     expect(reviewability).toContain("Run local branch preflight first.");
     expect(reviewability).not.toMatch(/private reviewability|reviewability internals|scoreability|public score estimate|wallet|hotkey|payout|farming/i);
 
-    const repoFit = buildPublicAgentCommandComment({
+    const repoFit = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory repo-fit")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 32, title: "PR", state: "open", pull_request: {} },
@@ -1473,7 +1473,7 @@ describe("GitHub mention commands", () => {
     expect(repoFit).toContain("Use local branch preflight before posting.");
     expect(repoFit).not.toMatch(/private reviewability|scoreability|public score estimate|wallet|hotkey|payout|farming/i);
 
-    const packet = buildPublicAgentCommandComment({
+    const packet = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory packet")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 33, title: "PR", state: "open", pull_request: {} },
@@ -1489,7 +1489,7 @@ describe("GitHub mention commands", () => {
   });
 
   it("covers v2 refresh, empty, rerun, and duplicate-line fallbacks", () => {
-    const preflightRefresh = buildPublicAgentCommandComment({
+    const preflightRefresh = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory preflight")!,
       repo: null,
       issue: { number: 40, title: "PR", state: "open", pull_request: {} },
@@ -1503,7 +1503,7 @@ describe("GitHub mention commands", () => {
       ["@gittensory blockers", "Readiness blockers", "No public readiness blockers are visible"],
       ["@gittensory duplicate-check", "Duplicate & WIP caution", "No duplicate or work-in-progress collision signal is visible"],
     ] as const) {
-      const body = buildPublicAgentCommandComment({
+      const body = buildPublicAgentCommandComment({env: {},
         command: parseGittensoryMentionCommand(commandText)!,
         repo: null,
         issue: { number: 40, title: "PR", state: "open", pull_request: {} },
@@ -1520,7 +1520,7 @@ describe("GitHub mention commands", () => {
       ["@gittensory repo-fit", "Repository fit snapshot refresh"],
       ["@gittensory packet", "Public packet snapshot refresh"],
     ] as const) {
-      const body = buildPublicAgentCommandComment({
+      const body = buildPublicAgentCommandComment({env: {},
         command: parseGittensoryMentionCommand(commandText)!,
         repo: null,
         issue: { number: 41, title: "PR", state: "open", pull_request: {} },
@@ -1536,7 +1536,7 @@ describe("GitHub mention commands", () => {
       ["@gittensory repo-fit", "Repository fit"],
       ["@gittensory packet", "Public packet"],
     ] as const) {
-      const body = buildPublicAgentCommandComment({
+      const body = buildPublicAgentCommandComment({env: {},
         command: parseGittensoryMentionCommand(commandText)!,
         repo: null,
         issue: { number: 42, title: "PR", state: "open", pull_request: {} },
@@ -1548,7 +1548,7 @@ describe("GitHub mention commands", () => {
       expect(body).toContain("No public-safe context is available");
     }
 
-    const repoFitWithRerun = buildPublicAgentCommandComment({
+    const repoFitWithRerun = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory repo-fit")!,
       repo: null,
       issue: { number: 43, title: "PR", state: "open", pull_request: {} },
@@ -1579,7 +1579,7 @@ describe("GitHub mention commands", () => {
     expect(repoFitWithRerun).toContain("Rerun when: After queue changes.");
     expect(repoFitWithRerun).not.toContain("Target:");
 
-    const repoFitFromSummary = buildPublicAgentCommandComment({
+    const repoFitFromSummary = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory repo-fit")!,
       repo: null,
       issue: { number: 43, title: "PR", state: "open", pull_request: {} },
@@ -1608,7 +1608,7 @@ describe("GitHub mention commands", () => {
     });
     expect(repoFitFromSummary).toContain("Repository fit looks clean");
 
-    const packetFromSafetyClass = buildPublicAgentCommandComment({
+    const packetFromSafetyClass = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory packet")!,
       repo: null,
       issue: { number: 43, title: "PR", state: "open", pull_request: {} },
@@ -1637,7 +1637,7 @@ describe("GitHub mention commands", () => {
     });
     expect(packetFromSafetyClass).toContain("Post the public-safe PR packet");
 
-    const duplicateBlockers = buildPublicAgentCommandComment({
+    const duplicateBlockers = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory blockers")!,
       repo: null,
       issue: { number: 44, title: "PR", state: "open", pull_request: {} },
@@ -1676,7 +1676,7 @@ describe("GitHub mention commands", () => {
 
     const FORBIDDEN = /wallet|hotkey|coldkey|mnemonic|raw trust score|trust score|payout|reward estimate|farming|private reviewability|scoreability/i;
     const render = (mention: string) =>
-      buildPublicAgentCommandComment({
+      buildPublicAgentCommandComment({env: {},
         command: parseGittensoryMentionCommand(mention)!,
         repo: { fullName: "owner/repo" } as any,
         issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1713,7 +1713,7 @@ describe("GitHub mention commands", () => {
   it("renders populated and empty outcome/noise report variants", () => {
     const base = sampleMaintainerDigest();
     const render = (mention: string, digest: typeof base) =>
-      buildPublicAgentCommandComment({
+      buildPublicAgentCommandComment({env: {},
         command: parseGittensoryMentionCommand(mention)!,
         repo: { fullName: "owner/repo" } as any,
         issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1796,7 +1796,7 @@ describe("GitHub mention commands", () => {
     expect(reversedDigest.reviewNowPullRequests.map((pr) => pr.number)).toEqual(digest.reviewNowPullRequests.map((pr) => pr.number));
     expect(reversedDigest.needsAuthorPullRequests.map((pr) => pr.number)).toEqual(digest.needsAuthorPullRequests.map((pr) => pr.number));
 
-    const queueSummary = buildPublicAgentCommandComment({
+    const queueSummary = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory queue-summary")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1810,7 +1810,7 @@ describe("GitHub mention commands", () => {
     expect(queueSummary).toContain("Feedback on this response is tracked separately");
     expect(queueSummary).not.toMatch(/wallet|hotkey|raw trust score|payout|reward estimate|farming|private reviewability|public score estimate/i);
 
-    const confirmed = buildPublicAgentCommandComment({
+    const confirmed = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory confirmed-miners")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1822,7 +1822,7 @@ describe("GitHub mention commands", () => {
     expect(confirmed).toContain("#10: Ready linked fix");
     expect(confirmed).toContain("#13: Cache overlap first");
 
-    const reviewNow = buildPublicAgentCommandComment({
+    const reviewNow = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory review-now")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1834,7 +1834,7 @@ describe("GitHub mention commands", () => {
     expect(reviewNow).toContain("#10: Ready linked fix");
     expect(reviewNow).not.toContain("#12: Needs issue context");
 
-    const needsAuthor = buildPublicAgentCommandComment({
+    const needsAuthor = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory needs-author")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1847,7 +1847,7 @@ describe("GitHub mention commands", () => {
     expect(needsAuthor).toContain("1 cached check(s) need attention.");
     expect(needsAuthor).toContain("Possible duplicate or WIP overlap");
 
-    const duplicateClusters = buildPublicAgentCommandComment({
+    const duplicateClusters = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1878,7 +1878,7 @@ describe("GitHub mention commands", () => {
         },
       ],
     });
-    const defensiveClusters = buildPublicAgentCommandComment({
+    const defensiveClusters = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
       repo: null,
       issue: { number: 100, title: "Digest", state: "open", pull_request: {} },
@@ -1888,7 +1888,7 @@ describe("GitHub mention commands", () => {
     });
     expect(defensiveClusters).toContain("medium risk:");
     expect(defensiveClusters).toContain("...");
-    const defensiveSummary = buildPublicAgentCommandComment({
+    const defensiveSummary = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory queue-summary")!,
       repo: null,
       issue: { number: 101, title: "Digest", state: "open", pull_request: {} },
@@ -1899,7 +1899,7 @@ describe("GitHub mention commands", () => {
     expect(defensiveSummary).toContain("Use the authenticated maintainer dashboard and private API");
     expect(defensiveDigest.needsAuthorPullRequests.find((pr) => pr.number === 18)?.reasons).toContain("Maintainer-authored PR; review as repo stewardship.");
 
-    const unavailableDigest = buildPublicAgentCommandComment({
+    const unavailableDigest = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory review-now")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 102, title: "Digest", state: "open", pull_request: {} },
@@ -1909,7 +1909,7 @@ describe("GitHub mention commands", () => {
     });
     expect(unavailableDigest).toContain("Cached queue context is unavailable for this command.");
 
-    const emptyReviewNow = buildPublicAgentCommandComment({
+    const emptyReviewNow = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory review-now")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 103, title: "Digest", state: "open", pull_request: {} },
@@ -1919,7 +1919,7 @@ describe("GitHub mention commands", () => {
     });
     expect(emptyReviewNow).toContain("No cached PR currently looks ready for detailed review.");
 
-    const emptyDuplicateClusters = buildPublicAgentCommandComment({
+    const emptyDuplicateClusters = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 104, title: "Digest", state: "open", pull_request: {} },
@@ -1929,7 +1929,7 @@ describe("GitHub mention commands", () => {
     });
     expect(emptyDuplicateClusters).toContain("No duplicate or WIP cluster is visible from cached metadata.");
 
-    const emptyConfirmed = buildPublicAgentCommandComment({
+    const emptyConfirmed = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory confirmed-miners")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 105, title: "Digest", state: "open", pull_request: {} },
@@ -1939,7 +1939,7 @@ describe("GitHub mention commands", () => {
     });
     expect(emptyConfirmed).toContain("No cached confirmed-miner PRs are visible in this queue.");
 
-    const emptyNeedsAuthor = buildPublicAgentCommandComment({
+    const emptyNeedsAuthor = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory needs-author")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 106, title: "Digest", state: "open", pull_request: {} },
@@ -1977,7 +1977,7 @@ describe("GitHub mention commands", () => {
       ],
     } satisfies ReturnType<typeof sampleMaintainerDigest>;
 
-    const reviewNow = buildPublicAgentCommandComment({
+    const reviewNow = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory review-now")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -1985,7 +1985,7 @@ describe("GitHub mention commands", () => {
       actorKind: "maintainer",
       maintainerDigest: digest,
     });
-    const duplicateClusters = buildPublicAgentCommandComment({
+    const duplicateClusters = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -2037,7 +2037,7 @@ describe("GitHub mention commands", () => {
       ],
     } satisfies ReturnType<typeof sampleMaintainerDigest>;
 
-    const reviewNow = buildPublicAgentCommandComment({
+    const reviewNow = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory review-now")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -2045,7 +2045,7 @@ describe("GitHub mention commands", () => {
       actorKind: "maintainer",
       maintainerDigest: digest,
     });
-    const duplicateClusters = buildPublicAgentCommandComment({
+    const duplicateClusters = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory duplicate-clusters")!,
       repo: { fullName: "owner/repo" } as any,
       issue: { number: 99, title: "Digest", state: "open", pull_request: {} },
@@ -2153,7 +2153,7 @@ describe("ask citation helpers", () => {
       "Cached open PR and issue queue metadata was available for this cached agent run.",
     );
 
-    const comment = buildPublicAgentCommandComment({
+    const comment = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what should I do next?")!,
       repo: null,
       issue: { number: 44, title: "PR", state: "open", pull_request: {} },
@@ -2269,7 +2269,7 @@ describe("ask citation helpers", () => {
     expect(extended.some((source) => source.key === "contributor_decision_pack" && source.detail.includes("Contributor decision-pack metadata"))).toBe(true);
     expect(extended.find((source) => source.key === "open_pr_monitor")?.freshness).toBe("unknown");
 
-    const askOverflow = buildPublicAgentCommandComment({
+    const askOverflow = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask list every connected source?")!,
       repo: null,
       issue: { number: 41, title: "PR", state: "open", pull_request: {} },
@@ -2280,7 +2280,7 @@ describe("ask citation helpers", () => {
     expect(askOverflow).toContain("<summary>Additional safe details</summary>");
     expect(askOverflow).toContain("Source: cached GitHub open PR/issue queue; freshness:");
 
-    const askWithoutTimestamps = buildPublicAgentCommandComment({
+    const askWithoutTimestamps = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what is synced?")!,
       repo: null,
       issue: { number: 42, title: "PR", state: "open", pull_request: {} },
@@ -2304,7 +2304,7 @@ describe("ask citation helpers", () => {
     expect(askWithoutTimestamps).toContain("Connected source repo sync freshness metadata: freshness unknown.");
     expect(askWithoutTimestamps).not.toContain("freshness unknown as of");
 
-    const askFourSources = buildPublicAgentCommandComment({
+    const askFourSources = buildPublicAgentCommandComment({env: {},
       command: parseGittensoryMentionCommand("@gittensory ask what sources apply?")!,
       repo: null,
       issue: { number: 43, title: "PR", state: "open", pull_request: {} },

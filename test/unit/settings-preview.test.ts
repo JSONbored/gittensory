@@ -140,7 +140,7 @@ describe("buildRepoSettingsPreview", () => {
   const base = { repoFullName: repo.fullName, repo, issues, pullRequests };
 
   it("previews a confirmed-miner PR on a healthy install with no warnings", () => {
-    const preview = buildRepoSettingsPreview({ ...base, settings: settings(), installation: healthyInstall, sample: { authorLogin: "miner", minerStatus: "confirmed" } });
+    const preview = buildRepoSettingsPreview({env: {}, ...base, settings: settings(), installation: healthyInstall, sample: { authorLogin: "miner", minerStatus: "confirmed" } });
     expect(preview.decision.willComment).toBe(true);
     expect(preview.appliedLabel).toBe("gittensor");
     expect(preview.settings.blacklistLabel).toBe("slop");
@@ -180,7 +180,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("includes the configured blacklist label required by the OpenAPI contract", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ blacklistLabel: "abuse" }),
       installation: healthyInstall,
@@ -192,13 +192,13 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("uses safe defaults for an empty sample preview", () => {
-    const preview = buildRepoSettingsPreview({ ...base, settings: settings(), installation: healthyInstall, sample: {} });
+    const preview = buildRepoSettingsPreview({env: {}, ...base, settings: settings(), installation: healthyInstall, sample: {} });
     expect(preview.sample).toMatchObject({ authorLogin: "sample-contributor", authorType: "User", authorAssociation: "NONE", minerStatus: "confirmed", title: "Sample pull request" });
     expect(preview.decision.skipped).toBe(false);
   });
 
   it("explains a missing Issues: write permission", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings(),
       installation: { ...healthyInstall, status: "needs_attention", missingPermissions: ["issues"] },
@@ -217,7 +217,7 @@ describe("buildRepoSettingsPreview", () => {
     // Installation grants issues:write (everything comment/label output actually writes with) but is missing
     // pull_requests:read, which the app still requires to read PRs. This must be reported without
     // regressing to the previous overbroad pull_requests:write requirement.
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings(),
       installation: { ...healthyInstall, missingPermissions: ["pull_requests"] },
@@ -235,7 +235,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("explains a missing optional Checks: write permission only when check runs are enabled", () => {
-    const withChecks = buildRepoSettingsPreview({
+    const withChecks = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ checkRunMode: "enabled" }),
       installation: { ...healthyInstall, status: "needs_attention", missingPermissions: ["checks"] },
@@ -244,7 +244,7 @@ describe("buildRepoSettingsPreview", () => {
     expect(withChecks.checkRun).toMatchObject({ willCreate: true });
     expect(withChecks.warnings.some((warning) => /Checks: write/.test(warning))).toBe(true);
 
-    const withoutChecks = buildRepoSettingsPreview({
+    const withoutChecks = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ checkRunMode: "off" }),
       installation: { ...healthyInstall, missingPermissions: ["checks"] },
@@ -258,7 +258,7 @@ describe("buildRepoSettingsPreview", () => {
     // detected_contributors_only + comment_only comments for confirmed miners, so the repo needs
     // issues:write regardless of the previewed sample's miner status. Previewing a non-confirmed
     // author must not drop the required (and missing) issues permission.
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ publicSurface: "comment_only", commentMode: "detected_contributors_only", autoLabelEnabled: false, publicAudienceMode: "oss_maintainer" }),
       installation: { ...healthyInstall, status: "needs_attention", missingPermissions: ["issues"] },
@@ -270,7 +270,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("explains a missing Checks: write permission when the opt-in gate is enabled", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ publicSurface: "off", commentMode: "off", autoLabelEnabled: false, gateCheckMode: "enabled", reviewCheckMode: "required" }),
       installation: { ...healthyInstall, status: "needs_attention", missingPermissions: ["checks"] },
@@ -284,14 +284,14 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("shows a quiet skip for a non-miner author with no rendered comment", () => {
-    const preview = buildRepoSettingsPreview({ ...base, settings: settings({ publicAudienceMode: "gittensor_only" }), installation: healthyInstall, sample: { authorLogin: "drive-by", minerStatus: "not_found" } });
+    const preview = buildRepoSettingsPreview({env: {}, ...base, settings: settings({ publicAudienceMode: "gittensor_only" }), installation: healthyInstall, sample: { authorLogin: "drive-by", minerStatus: "not_found" } });
     expect(preview.decision).toMatchObject({ skipped: true, skipReason: "not_official_gittensor_miner" });
     expect(preview.previewComment).toBeNull();
     expect(preview.appliedLabel).toBeNull();
   });
 
   it("warns that label-only mode still needs Issues: write", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ publicSurface: "label_only", autoLabelEnabled: true, commentMode: "off" }),
       installation: { ...healthyInstall, status: "needs_attention", missingPermissions: ["issues"] },
@@ -304,13 +304,13 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("shows the default maintainer-author skip", () => {
-    const preview = buildRepoSettingsPreview({ ...base, settings: settings(), installation: healthyInstall, sample: { authorLogin: "owner", authorAssociation: "OWNER", minerStatus: "confirmed" } });
+    const preview = buildRepoSettingsPreview({env: {}, ...base, settings: settings(), installation: healthyInstall, sample: { authorLogin: "owner", authorAssociation: "OWNER", minerStatus: "confirmed" } });
     expect(preview.decision.skipReason).toBe("maintainer_author");
     expect(preview.previewComment).toBeNull();
   });
 
   it("warns when installation health is unknown", () => {
-    const preview = buildRepoSettingsPreview({ ...base, settings: settings(), installation: null, sample: { authorLogin: "miner", minerStatus: "confirmed" } });
+    const preview = buildRepoSettingsPreview({env: {}, ...base, settings: settings(), installation: null, sample: { authorLogin: "miner", minerStatus: "confirmed" } });
     expect(preview.warnings.some((warning) => /Installation health is unknown/.test(warning))).toBe(true);
     expect(preview.installPreview).toMatchObject({
       status: "blocked",
@@ -320,7 +320,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("explains missing webhook event subscriptions", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings(),
       installation: { ...healthyInstall, status: "needs_attention", missingEvents: ["pull_request"] },
@@ -331,7 +331,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("falls back to the installation status warning when no specific remediation is available", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings(),
       installation: { ...healthyInstall, status: "broken" },
@@ -343,7 +343,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("marks broad all-PR output as needing maintainer attention before enablement", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ commentMode: "all_prs" }),
       installation: healthyInstall,
@@ -361,7 +361,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("never leaks private scoring/trust terms into the preview comment (sanitizer regression)", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings(),
       installation: healthyInstall,
@@ -373,7 +373,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("reports a generic needs-attention summary when health is degraded but no permission or event is missing", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings(),
       installation: { ...healthyInstall, status: "needs_attention", missingPermissions: [], missingEvents: [] },
@@ -385,7 +385,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("requires no issues/checks write scope and lists a no-output sample when every public action is disabled", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ publicSurface: "label_only", autoLabelEnabled: false, commentMode: "off", checkRunMode: "off" }),
       installation: healthyInstall,
@@ -405,7 +405,7 @@ describe("buildRepoSettingsPreview", () => {
     const readEntries = Object.entries(REQUIRED_INSTALLATION_PERMISSIONS).filter(([, v]) => v === "read");
     const expectedReadPerms = readEntries.map(([k, v]) => `${k}: ${v}`).sort();
 
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ publicSurface: "label_only", autoLabelEnabled: false, commentMode: "off", checkRunMode: "off" }),
       installation: healthyInstall,
@@ -417,7 +417,7 @@ describe("buildRepoSettingsPreview", () => {
   });
 
   it("REGRESSION: merge autonomy requires contents: write in the install preview", () => {
-    const preview = buildRepoSettingsPreview({
+    const preview = buildRepoSettingsPreview({env: {},
       ...base,
       settings: settings({ publicSurface: "label_only", autoLabelEnabled: false, commentMode: "off", checkRunMode: "off", autonomy: { merge: "auto" } }),
       installation: { ...healthyInstall, missingPermissions: ["contents"] },

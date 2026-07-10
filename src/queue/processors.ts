@@ -11058,6 +11058,7 @@ async function maybePublishPrPublicSurface(
       review: reviewConfig,
       aiReview,
       duplicateWinnerEnabled,
+      env,
     };
     let deterministicBody: string;
     // Convergence (Stage D): when the unified-review-comment flag is ON, render the single converged comment
@@ -11375,7 +11376,7 @@ async function maybePublishPrPublicSurface(
           ...(missingTestsFinding !== undefined ? { missingTestsFinding } : {}),
           e2eTestGenAvailable,
         }),
-        footerMarkdown: gittensoryFooter({
+        footerMarkdown: gittensoryFooter(env, {
           earnUrl: repo?.isRegistered
             ? gittensorRepoEarnUrl(repoFullName)
             : undefined,
@@ -11794,7 +11795,7 @@ async function maybeProcessGateOverrideCommand(
       `- Reason: ${safeReason}`,
       "",
       "---",
-      gittensoryFooter(),
+      gittensoryFooter(env),
     ].join("\n"),
   );
   await createOrUpdateAgentCommandComment(
@@ -11922,7 +11923,7 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   let recordedSuppressionCount = 0;
   if (reviewMemoryEnabled && selection.findings.length > 0) { const { fingerprint } = await import("../review/review-memory-match"); const { recordReviewSuppression } = await import("../db/repositories"); const suppressionWrites = selection.findings.map((finding) => ({ category: finding.code, pathGlob: "", patternHash: fingerprint({ category: finding.code, message: `${finding.title} ${finding.detail}` }) })); await Promise.all(suppressionWrites.map((write) => recordReviewSuppression(env, { repoFullName: req.repoFullName, category: write.category, pathGlob: write.pathGlob, patternHash: write.patternHash, createdBy: req.actor }))); recordedSuppressionCount = suppressionWrites.length; invalidateReviewSuppressionCache(req.repoFullName); /* #4508: this repo's cached suppression list is stale as of this write -- the very next render must see it, not wait out the TTL. */ await recordAuditEvent(env, { eventType: "github_app.review_memory_recorded", actor: req.actor, targetKey, outcome: "completed", detail: `Recorded ${recordedSuppressionCount} review-memory suppression signal(s).`, metadata: { deliveryId, repoFullName: req.repoFullName, recordedSuppressionCount, scope: findingRef.scope, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); await recordGithubProductUsage(env, "review_memory_recorded", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { recordedSuppressionCount, scope: findingRef.scope, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); }
   const resolvedLabel = findingRef.scope === "whole_pr" ? "all current advisory findings" : `\`${findingRef.findingCode}\``;
-  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Review finding resolved by @${req.actor}**`, `> Marked ${resolvedLabel} as resolved for this PR. The Gate check-run is unchanged.`, ...(recordedSuppressionCount > 0 ? ["", `Recorded ${recordedSuppressionCount} review-memory suppression signal(s) for future reviews.`] : []), "", "---", gittensoryFooter()].join("\n"));
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Review finding resolved by @${req.actor}**`, `> Marked ${resolvedLabel} as resolved for this PR. The Gate check-run is unchanged.`, ...(recordedSuppressionCount > 0 ? ["", `Recorded ${recordedSuppressionCount} review-memory suppression signal(s) for future reviews.`] : []), "", "---", gittensoryFooter(env)].join("\n"));
   await createOrUpdateAgentCommandComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation, mode);
   await recordAuditEvent(env, { eventType: "github_app.finding_resolved", actor: req.actor, targetKey, outcome: "completed", detail: `Marked ${resolvedLabel} as resolved.`, metadata: { deliveryId, repoFullName: req.repoFullName, scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } });
   await recordGithubProductUsage(env, "finding_resolved", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { scope: findingRef.scope, resolvedWarningCount: selection.findings.length, recordedSuppressionCount, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); return true; }
@@ -11972,7 +11973,7 @@ async function maybeProcessReviewCommand(env: Env, deliveryId: string, payload: 
     await recordReviewCommandSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, mode === "dry_run" ? "dry_run" : "agent_paused");
     return true;
   }
-  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Re-review triggered by @${req.actor}**`, "> Re-running auto-review for this PR. The Gate check-run and one-shot disposition are produced the same way a scheduled pass would.", "", "---", gittensoryFooter()].join("\n"));
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Re-review triggered by @${req.actor}**`, "> Re-running auto-review for this PR. The Gate check-run and one-shot disposition are produced the same way a scheduled pass would.", "", "---", gittensoryFooter(env)].join("\n"));
   await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation);
   const forceFreshReview = authorization.actorKind === "maintainer";
   await reReviewStoredPullRequest(env, deliveryId, req.installationId, req.repoFullName, req.pr.number, undefined, forceFreshReview ? { force: true } : undefined);
@@ -12022,7 +12023,7 @@ async function maybeProcessPauseCommand(env: Env, deliveryId: string, payload: G
     return true;
   }
   const safeReason = sanitizePublicComment((command.reason ?? "").trim() || "No reason provided.");
-  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Auto-review paused by @${req.actor}**`, "> Auto-review is paused for this PR only. Gate enforcement and the one-shot disposition are unchanged; use `@gittensory resume` to re-enable auto-review.", "", `- Reason: ${safeReason}`, "", "---", gittensoryFooter()].join("\n"));
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Auto-review paused by @${req.actor}**`, "> Auto-review is paused for this PR only. Gate enforcement and the one-shot disposition are unchanged; use `@gittensory resume` to re-enable auto-review.", "", `- Reason: ${safeReason}`, "", "---", gittensoryFooter(env)].join("\n"));
   await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation);
   await recordAuditEvent(env, { eventType: "github_app.autoreview_paused", actor: req.actor, targetKey, outcome: "completed", detail: safeReason, metadata: { deliveryId, repoFullName: req.repoFullName } });
   await recordGithubProductUsage(env, "autoreview_paused", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { actorKind: authorization.actorKind } });
@@ -12064,7 +12065,7 @@ async function maybeProcessResumeCommand(env: Env, deliveryId: string, payload: 
     await recordGithubProductUsage(env, "autoreview_resumed_denied", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "denied", metadata: { reason: authorization.reason, actorKind: authorization.actorKind, allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "resume") } });
     return true;
   }
-  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Auto-review resumed by @${req.actor}**`, "> Auto-review is resumed for this PR. Gate enforcement and the one-shot disposition were never affected by pause.", "", "---", gittensoryFooter()].join("\n"));
+  const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Auto-review resumed by @${req.actor}**`, "> Auto-review is resumed for this PR. Gate enforcement and the one-shot disposition were never affected by pause.", "", "---", gittensoryFooter(env)].join("\n"));
   await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation);
   await recordAuditEvent(env, { eventType: "github_app.autoreview_resumed", actor: req.actor, targetKey, outcome: "completed", detail: "Auto-review resumed.", metadata: { deliveryId, repoFullName: req.repoFullName } });
   await recordGithubProductUsage(env, "autoreview_resumed", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { actorKind: authorization.actorKind } });
@@ -12146,7 +12147,7 @@ async function maybeProcessExplainCommand(env: Env, deliveryId: string, payload:
   const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null));
   const selection = selectWarningsForResolve(gate.warnings, findingRef);
   if (selection.reason === "finding_not_found") {
-    const notFound = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **No review finding \`${findingRef.findingCode}\` on this PR**`, "> That id is not among this PR's current review findings — re-run `@gittensory explain <finding-id>` with an id from the review summary.", "", "---", gittensoryFooter()].join("\n"));
+    const notFound = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **No review finding \`${findingRef.findingCode}\` on this PR**`, "> That id is not among this PR's current review findings — re-run `@gittensory explain <finding-id>` with an id from the review summary.", "", "---", gittensoryFooter(env)].join("\n"));
     await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, notFound);
     await recordFindingExplainedSkip(env, deliveryId, req.repoFullName, targetKey, req.actor, "finding_not_found");
     return true;
@@ -12166,7 +12167,7 @@ async function maybeProcessExplainCommand(env: Env, deliveryId: string, payload:
         "",
       ]),
       "---",
-      gittensoryFooter(),
+      gittensoryFooter(env),
     ].join("\n"),
   );
   await createIssueComment(env, req.installationId, req.repoFullName, req.pr.number, body);
@@ -12324,7 +12325,7 @@ async function runE2eTestGenerationAndDeliver(
     }
   }
 
-  const body = buildE2eTestGenCommentBody({ actor: args.actor, testSource, commit: commitOutcome });
+  const body = buildE2eTestGenCommentBody({ actor: args.actor, testSource, commit: commitOutcome, env });
   try {
     await createIssueComment(env, args.installationId, args.repoFullName, args.pr.number, sanitizePublicComment(body));
   } catch (error) {
@@ -12337,7 +12338,7 @@ async function runE2eTestGenerationAndDeliver(
       args.installationId,
       args.repoFullName,
       args.pr.number,
-      sanitizePublicComment(buildE2eTestGenCommentBody({ actor: args.actor, testSource: null })),
+      sanitizePublicComment(buildE2eTestGenCommentBody({ actor: args.actor, testSource: null, env })),
     );
     console.log(JSON.stringify({ event: "e2e_test_gen_comment_withheld", repoFullName: args.repoFullName, pr: args.pr.number, error: errorMessage(error) }));
   }
@@ -12365,7 +12366,7 @@ async function postGenerateTestsNotEnabledComment(env: Env, installationId: numb
       "> Ask a maintainer to enable `features.e2eTests` in `.gittensory.yml` (the operator's global flag must also be on).",
       "",
       "---",
-      gittensoryFooter(),
+      gittensoryFooter(env),
     ].join("\n"),
   );
   await createIssueComment(env, installationId, repoFullName, prNumber, body);
@@ -12436,7 +12437,7 @@ async function maybeProcessConfigurationCommand(
     agentDryRun: settings.agentDryRun,
   });
   const body = sanitizePublicComment(
-    [AGENT_COMMAND_COMMENT_MARKER, "", summarizeEffectiveConfig(settings, mode), "", "---", gittensoryFooter()].join("\n"),
+    [AGENT_COMMAND_COMMENT_MARKER, "", summarizeEffectiveConfig(settings, mode), "", "---", gittensoryFooter(env)].join("\n"),
   );
   await createOrUpdateAgentCommandComment(env, req.installationId, req.repoFullName, req.issueNumber, body, mode);
   await recordAuditEvent(env, {
@@ -12598,6 +12599,7 @@ async function maybeProcessPlanCommand(
       actor: req.actor,
       repoFullName: req.repoFullName,
       issueNumber: req.issue.number,
+      env,
     }),
   );
   await recordAuditEvent(env, {
@@ -14908,6 +14910,7 @@ async function maybeProcessGittensoryMentionCommand(
     officialMiner: official?.status === "confirmed" ? official.snapshot : null,
     bundle,
     maintainerDigest,
+    env,
   });
   const responseComment = await createOrUpdateAgentCommandComment(
     env,
