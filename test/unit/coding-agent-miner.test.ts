@@ -110,6 +110,7 @@ describe("attempt log normalization (#4294)", () => {
   it("exposes a frozen event vocabulary", () => {
     expect([...ATTEMPT_LOG_EVENT_TYPES]).toEqual([
       "attempt_started",
+      "attempt_tool_edit",
       "attempt_shadow",
       "attempt_succeeded",
       "attempt_failed",
