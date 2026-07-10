@@ -220,6 +220,19 @@ export {
   type RunCodingAgentAttemptOptions,
 } from "./miner/driver-factory.js";
 export * from "./miner/attempt-metering.js";
+export {
+  buildRepoMap,
+  extractRepoMapSymbols,
+  renderRepoMap,
+  resolveRepoMapLanguage,
+  type BuildRepoMapOptions,
+  type LoadRepoMapLanguageFn,
+  type RepoMapFileEntry,
+  type RepoMapSkipReason,
+  type RepoMapSourceFile,
+  type RepoMapSymbol,
+  type RepoMapSymbolKind,
+} from "./miner/repo-map.js";
 export * from "./plan-export.js";
 export { countPlanStepsByStatus } from "./plan-step-stats.js";
 export { countPlanSteps } from "./plan-step-count.js";
