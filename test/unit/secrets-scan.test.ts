@@ -203,13 +203,12 @@ describe("scanForSecrets — deterministic secret-pattern scanner", () => {
   });
 
   // #4579-followup: confirmed live false positives (metagraphed/gittensory#4524, #4224) closed PRs for
-  // "missing before/after screenshot table"-unrelated reasons -- a leaked secret that never existed. Both
-  // values are test FIXTURES (a session-token mock) whose own last segment self-names as "token".
+  // "missing before/after screenshot table"-unrelated reasons -- a leaked secret that never existed. These
+  // exact session-token literals are known test fixtures.
   it.each([
     ["default-session-token", 'token: "default-session-token"'],
     ["beta-session-token", 'token: "beta-session-token"'],
-    ["three-segment self-naming secret", 'client_secret = "some-embedded-secret"'],
-  ])("does NOT flag a self-naming multi-segment fixture value: %s (#4579-followup)", (_name, snippet) => {
+  ])("does NOT flag a known multi-segment fixture value: %s (#4579-followup)", (_name, snippet) => {
     expect(scanForSecrets(snippet).kinds).not.toContain("generic_secret_assignment");
   });
 
@@ -226,9 +225,12 @@ describe("scanForSecrets — deterministic secret-pattern scanner", () => {
     expect(scanForSecrets('token = "alpha-bravo-charlie-delta"').kinds).toContain("generic_secret_assignment");
   });
 
-  it("still flags a self-naming-suffix-shaped value that also has mixed case or digits (the exclusion requires ALL-lowercase)", () => {
-    // Ends in "-token" like the excluded fixtures, but the earlier segment has a digit -- not a plausible
-    // human-authored fixture name, so it must still be reported.
-    expect(scanForSecrets('token = "session2024-token"').kinds).toContain("generic_secret_assignment");
+  it.each([
+    ["client_secret", 'client_secret = "correct-horse-battery-secret"'],
+    ["password", 'password = "legacy-system-passwd"'],
+    ["api_key", 'api_key = "internal-service-key"'],
+    ["token with digit", 'token = "session2024-token"'],
+  ])("still flags a self-naming-suffix-shaped credential assigned to %s", (_name, snippet) => {
+    expect(scanForSecrets(snippet).kinds).toContain("generic_secret_assignment");
   });
 });

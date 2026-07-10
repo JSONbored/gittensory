@@ -142,10 +142,13 @@ test("scanPatch does NOT flag an underscore-separated self-naming enum label (#4
   );
 });
 
+test("scanPatch still flags lowercase segmented credentials even when their suffix names a secret kind (#4579-followup regression)", () => {
+  const findings = scanPatch("src/config.ts", hunk([`const client_secret = "correct-horse-battery-secret";`]));
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, "generic_secret_assignment");
+});
+
 test("scanPatch still flags a generic multi-segment lowercase passphrase that does NOT self-name as a secret kind (regression guard for #4579-followup)", () => {
-  // Same shape as the excluded fixtures above (all-lowercase, hyphen-separated, no digits) but the value's
-  // own last segment is "delta", not token/secret/key/password/passwd -- a real Diceware-style passphrase
-  // must not be swept in by the new self-naming-suffix exclusion.
   const findings = scanPatch("src/config.ts", hunk([`const token = "alpha-bravo-charlie-delta";`]));
   assert.equal(findings.length, 1);
   assert.equal(findings[0].kind, "generic_secret_assignment");
