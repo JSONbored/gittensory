@@ -339,6 +339,7 @@ export async function getSubmitterReputationAcrossInstall(
       )
       .bind(installationId, submitter, `-${cfg.windowDays} days`, REPUTATION_WINDOW_ROW_CAP)
       .all<{ status: string; reasonCode: string | null }>();
+    /* v8 ignore next -- D1's .all() always populates results; the fallback only protects a driver anomaly. */
     const rows = result?.results ?? [];
     signal = signalFromCounts(countOutcomes(rows), cfg);
   } catch {

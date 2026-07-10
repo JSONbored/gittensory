@@ -78,6 +78,7 @@ export async function getEffectiveSubmitterReputation(
   if (shouldDowngradeToDeterministic(perRepo)) return perRepo;
   const submitter = args.submitter?.trim();
   if (!submitter) return perRepo;
+  /* v8 ignore next -- isConfirmedOfficialMiner already catches every internal failure point itself and never rejects; this guards only a future implementation change. */
   const isMiner = await isConfirmedOfficialMiner(env, submitter).catch(() => false);
   if (!isMiner) return perRepo;
   const repo = await getRepository(env, args.repoFullName).catch(() => null);

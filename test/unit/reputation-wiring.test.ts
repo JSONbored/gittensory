@@ -352,6 +352,23 @@ describe("getEffectiveSubmitterReputation (#4513, install-wide for a confirmed m
       vi.unstubAllGlobals();
     }
   });
+
+  it("fails safe to the per-repo result, without throwing, when the getRepository read itself errors", async () => {
+    const env = createTestEnv();
+    await seedReviewTarget(env, { project: "org/repo-a", repo: "org/repo-a", number: 1, installationId: 999, submitter: "farmer99", status: "closed", reasonCode: "dual_review_declined" });
+    vi.stubGlobal("fetch", stubMinerFetch("farmer99"));
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = ((sql: string) => {
+      if (/FROM.*"?repositories"?/i.test(sql)) throw new Error("d1 down");
+      return realPrepare(sql);
+    }) as typeof env.DB.prepare;
+    try {
+      const rep = await getEffectiveSubmitterReputation(env, { repoFullName: "org/repo-a", submitter: "farmer99" });
+      expect(rep.signal).toBe("neutral");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("processGitHubWebhook records the reputation outcome on a terminal PR (flag-ON call site)", () => {
