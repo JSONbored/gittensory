@@ -48,6 +48,23 @@ describe("self-host git-deploy hygiene (#1660)", () => {
     expect(shadowed).toEqual([]);
   });
 
+  it("catches a docker-compose.local-*.yml host override even though bare *.local does not match it (#4664)", () => {
+    // Regression: *.local only matches a filename literally ENDING in .local (e.g. the documented
+    // alertmanager.local convention) -- it does NOT match docker-compose.local-gpu.yml, where
+    // .local- sits mid-name before a -gpu.yml suffix. Found live on a self-host box: a genuine
+    // local-only GPU compose override showed up as untracked, blocking selfhost-update.sh's
+    // clean-tree check. Assert the broader pattern exists, matches that exact real-world shape, and
+    // -- mirroring the shadow check above -- doesn't hide any file this repo actually tracks.
+    expect(gitignore).toContain("docker-compose.local-*.yml");
+    const result = spawnSync("git", ["check-ignore", "--quiet", "docker-compose.local-gpu.yml"]);
+    expect(result.status).toBe(0); // exit 0 = git confirms this path would be ignored
+    const tracked = spawnSync("git", ["ls-files"], { encoding: "utf8" });
+    expect(tracked.status).toBe(0);
+    const localComposeGlob = /(^|\/)docker-compose\.local-[^/]*\.yml$/;
+    const shadowed = tracked.stdout.split("\n").filter(Boolean).filter((path) => localComposeGlob.test(path));
+    expect(shadowed).toEqual([]);
+  });
+
   it("wraps fetch, fast-forward-only merge, rebuild, and the post-update check", () => {
     expect(updateScript).toContain("#!/usr/bin/env bash");
     expect(updateScript).toContain("set -euo pipefail");
@@ -89,5 +106,6 @@ describe("self-host git-deploy hygiene (#1660)", () => {
     expect(operations).toContain("gittensory-config/");
     expect(operations).toContain(".deploy-backups/");
     expect(operations).toContain("*.local");
+    expect(operations).toContain("docker-compose.local-*.yml");
   });
 });

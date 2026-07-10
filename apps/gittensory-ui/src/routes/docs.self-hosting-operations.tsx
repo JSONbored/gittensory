@@ -963,11 +963,11 @@ GITTENSORY_IMAGE=ghcr.io/jsonbored/gittensory-selfhost@sha256:... ./scripts/depl
       <p>
         None of this touches operator-owned state: <code>.env</code>, the{" "}
         <code>gittensory-config/</code> mount, <code>.deploy-backups/</code>, any{" "}
-        <code>*.local</code> compose override or Alertmanager file, and every named data volume are
-        already gitignored or outside the source tree entirely, so a fetch-and-rebuild never touches
-        them. See the <Link to="/docs/self-hosting-quickstart">Quickstart</Link> for the initial
-        clone; this script assumes that checkout already exists and already tracks{" "}
-        <code>origin/main</code>.
+        <code>*.local</code> or <code>docker-compose.local-*.yml</code> compose override, or
+        Alertmanager file, and every named data volume are already gitignored or outside the source
+        tree entirely, so a fetch-and-rebuild never touches them. See the{" "}
+        <Link to="/docs/self-hosting-quickstart">Quickstart</Link> for the initial clone; this
+        script assumes that checkout already exists and already tracks <code>origin/main</code>.
       </p>
       <CodeBlock
         lang="bash"

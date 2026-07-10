@@ -13,7 +13,7 @@
 #   - .env and any *_FILE secret mounts
 #   - gittensory-config/ (private per-repo .gittensory.yml policy)
 #   - .deploy-backups/ (operator deploy-backup snapshots)
-#   - any *.local compose override or alertmanager config files
+#   - any *.local or docker-compose.local-*.yml compose override, or alertmanager config files
 #   - named data volumes (gittensory-data, gittensory-pg, qdrant-data, gittensory-backups,
 #     grafana-data) -- untouched because this script only fetches source and rebuilds the
 #     gittensory app image; it never runs `docker volume` commands or touches compose profiles.

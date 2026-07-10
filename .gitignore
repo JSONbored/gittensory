@@ -16,6 +16,11 @@ output/
 docker-compose.override.yml
 !docker-compose.override.yml.example
 *.local
+# A second local-override naming shape beyond bare `*.local` (e.g. alertmanager.local): a host-specific
+# compose override named docker-compose.local-<label>.yml (label distinguishes multiple such overrides
+# on one operator, e.g. local-gpu) -- *.local alone does not match this since `.local` sits mid-name,
+# not as the literal filename suffix. #4664
+docker-compose.local-*.yml
 # Alertmanager receiver webhook files used by self-host local configs.
 alertmanager/*_url
 alertmanager/*_url_file
