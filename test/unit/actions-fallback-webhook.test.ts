@@ -38,6 +38,13 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
+// #4178: extracted .png entries are now validated against the real PNG magic-byte signature before being
+// accepted, so a plain-text fixture ("desktop-bytes" etc.) no longer round-trips -- mirrors
+// test/unit/actions-fallback.test.ts's own pngBytes() helper.
+function pngBytes(label: string): Uint8Array {
+  return concatBytes([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), new TextEncoder().encode(label)]);
+}
+
 /** Minimal single-entry-per-file ZIP builder (mirrors test/unit/actions-fallback.test.ts's own fixture, kept
  *  file-local rather than shared since it's a small, self-contained test fixture, not production code). */
 function buildZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
@@ -154,8 +161,8 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
     await seedRepoAndPr(env, "cafebabecafebabecafebabecafebabecafebabe");
 
     const zip = buildZip([
-      { name: "root--desktop.png", data: new TextEncoder().encode("desktop-bytes") },
-      { name: "root--mobile.png", data: new TextEncoder().encode("mobile-bytes") },
+      { name: "root--desktop.png", data: pngBytes("desktop-bytes") },
+      { name: "root--mobile.png", data: pngBytes("mobile-bytes") },
     ]);
 
     vi.stubGlobal(
@@ -191,7 +198,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
     const mobileObj = await env.REVIEW_AUDIT!.get(mobileKey);
     expect(desktopObj).not.toBeNull();
     expect(mobileObj).not.toBeNull();
-    expect(new TextDecoder().decode(await new Response(desktopObj!.body).arrayBuffer())).toBe("desktop-bytes");
+    expect(new Uint8Array(await new Response(desktopObj!.body).arrayBuffer())).toEqual(pngBytes("desktop-bytes"));
 
     // The PR row still exists + is untouched in state -- the re-review ran without throwing.
     expect(await getPullRequest(env, "owner/fallback-repo", 55)).toMatchObject({ state: "open" });
@@ -203,7 +210,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
 
     // Only the desktop shot is present in the artifact -- the mobile one for the same route must be silently
     // skipped (no crash), while desktop still lands in R2.
-    const zip = buildZip([{ name: "root--desktop.png", data: new TextEncoder().encode("desktop-only") }]);
+    const zip = buildZip([{ name: "root--desktop.png", data: pngBytes("desktop-only") }]);
     vi.stubGlobal(
       "fetch",
       baseFetchStub({
@@ -245,7 +252,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
       payload: { patch: "@@\n+export default function App() { return null; }" },
     });
 
-    const zip = buildZip([{ name: "app--desktop.png", data: new TextEncoder().encode("app-desktop") }]);
+    const zip = buildZip([{ name: "app--desktop.png", data: pngBytes("app-desktop") }]);
     vi.stubGlobal(
       "fetch",
       baseFetchStub({
@@ -372,7 +379,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
     } as unknown as R2Bucket;
     env.REVIEW_AUDIT = failingAudit;
     await seedRepoAndPr(env, "cafebabecafebabecafebabecafebabecafebabe");
-    const zip = buildZip([{ name: "root--desktop.png", data: new TextEncoder().encode("x") }]);
+    const zip = buildZip([{ name: "root--desktop.png", data: pngBytes("x") }]);
     vi.stubGlobal(
       "fetch",
       baseFetchStub({
