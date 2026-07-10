@@ -18,6 +18,7 @@ import {
   type Status,
 } from "@/components/site/control-primitives";
 import { ActivationPreview } from "@/components/site/app-panels/activation-preview";
+import { GateRampControl } from "@/components/site/app-panels/gate-ramp-control";
 import { AiReviewSettings } from "@/components/site/app-panels/ai-review-settings";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
 import { StatCard } from "@/components/site/primitives";
@@ -353,6 +354,8 @@ function MaintainerDashboardView() {
           </section>
 
           <ActivationPreview reviewability={data.reviewability} />
+
+          <GateRampControl reviewability={data.reviewability} />
 
           <SurfacePreview reviewability={data.reviewability} />
 

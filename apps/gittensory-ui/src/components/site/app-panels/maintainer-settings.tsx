@@ -5,8 +5,11 @@ import { StatusPill } from "@/components/site/control-primitives";
 import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
 import { extractPreviewRepoOptions, splitRepoFullName } from "@/lib/maintainer-settings-preview";
-
-type GateMode = "off" | "advisory" | "block";
+import {
+  buildMaintainerSettingsSavePayload,
+  type MaintainerSettingsEditable,
+} from "@/lib/maintainer-settings-editable";
+import type { GateMode } from "@/lib/gate-ramp";
 type CommandRole = "maintainer" | "collaborator" | "pr_author" | "confirmed_miner";
 
 type CommandAuthorization = {
@@ -14,38 +17,7 @@ type CommandAuthorization = {
   commands?: Record<string, CommandRole[]>;
 };
 
-type MaintainerSettings = {
-  commentMode: "off" | "detected_contributors_only" | "all_prs";
-  publicAudienceMode: "oss_maintainer" | "gittensor_only";
-  publicSignalLevel: "minimal" | "standard";
-  publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
-  checkRunMode: "off" | "enabled";
-  checkRunDetailLevel: "minimal" | "standard" | "deep";
-  gateCheckMode: "off" | "enabled";
-  gatePack: "gittensor" | "oss-anti-slop";
-  linkedIssueGateMode: GateMode;
-  duplicatePrGateMode: GateMode;
-  qualityGateMode: GateMode;
-  qualityGateMinScore: number | null;
-  mergeReadinessGateMode: GateMode;
-  manifestPolicyGateMode: GateMode;
-  firstTimeContributorGrace: boolean;
-  slopGateMode: GateMode;
-  slopGateMinScore: number | null;
-  slopAiAdvisory: boolean;
-  autoLabelEnabled: boolean;
-  gittensorLabel: string;
-  createMissingLabel: boolean;
-  includeMaintainerAuthors: boolean;
-  requireLinkedIssue: boolean;
-  badgeEnabled: boolean;
-  publicQualityMetrics: boolean;
-  commandAuthorization: CommandAuthorization;
-  autonomy: Partial<Record<AgentActionClass, AutonomyLevel>>;
-  autoMaintain: { requireApprovals: number; mergeMethod: AutoMergeMethod };
-  agentPaused: boolean;
-  agentDryRun: boolean;
-};
+type MaintainerSettings = MaintainerSettingsEditable;
 
 type AutonomyLevel = "observe" | "suggest" | "propose" | "auto_with_approval" | "auto";
 type AgentActionClass = "review" | "request_changes" | "approve" | "merge" | "close" | "label";
@@ -82,39 +54,7 @@ const COMMAND_ROLES: Array<[CommandRole, string]> = [
   ["confirmed_miner", "confirmed miner"],
 ];
 
-// The maintainer-editable subset, sent verbatim to PUT /settings (which merges onto current settings).
-const EDITABLE_KEYS: Array<keyof MaintainerSettings> = [
-  "commentMode",
-  "publicAudienceMode",
-  "publicSignalLevel",
-  "publicSurface",
-  "checkRunMode",
-  "checkRunDetailLevel",
-  "gateCheckMode",
-  "gatePack",
-  "linkedIssueGateMode",
-  "duplicatePrGateMode",
-  "qualityGateMode",
-  "qualityGateMinScore",
-  "mergeReadinessGateMode",
-  "manifestPolicyGateMode",
-  "firstTimeContributorGrace",
-  "slopGateMode",
-  "slopGateMinScore",
-  "slopAiAdvisory",
-  "autoLabelEnabled",
-  "gittensorLabel",
-  "createMissingLabel",
-  "includeMaintainerAuthors",
-  "requireLinkedIssue",
-  "badgeEnabled",
-  "publicQualityMetrics",
-  "commandAuthorization",
-  "autonomy",
-  "autoMaintain",
-  "agentPaused",
-  "agentDryRun",
-];
+// The maintainer-editable subset is centralized in maintainer-settings-editable.ts (#2218).
 
 type SelectFieldDef = {
   key: keyof MaintainerSettings;
@@ -337,7 +277,7 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
   async function save() {
     if (!base || !settings) return;
     setBusy(true);
-    const payload = Object.fromEntries(EDITABLE_KEYS.map((key) => [key, settings[key]]));
+    const payload = buildMaintainerSettingsSavePayload(settings);
     const result = await apiFetch<MaintainerSettings>(`${base}/settings`, {
       method: "PUT",
       label: "Save repository settings",
