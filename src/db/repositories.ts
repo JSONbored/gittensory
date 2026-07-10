@@ -180,7 +180,16 @@ import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { errorMessage, jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN } from "../signals/redaction";
 
-const MAX_STORED_BODY_CHARS = 4000;
+// GitHub's own documented issue/PR body character limit -- this is a defensive backstop, never an
+// intended-to-fire cap. (2026-07-10 incident: the prior 4000-char value silently truncated any body over
+// that length before every body-content-dependent check ever saw it -- screenshotTableGate's viewport/theme
+// matrix parser, linked-issue-satisfaction, slop keyword matching, etc. -- with zero indication anything was
+// cut. Confirmed live on metagraphed#4682: a genuinely complete 12-image Phase C2 table (5160 real chars) got
+// closed for "missing before/after screenshot table" because only the first ~4000 chars (one row) were ever
+// stored. A cap this repo's own contributor-facing evidence format was never sized against is not a safety
+// margin, it's a landmine -- 65536 matches what GitHub itself would already reject, so this can now only ever
+// bind on content GitHub was never going to accept in the first place.)
+const MAX_STORED_BODY_CHARS = 65536;
 const SIGNAL_FRESHNESS_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_SIGNAL_FRESHNESS_TARGETS = 200;
 const MAX_SIGNAL_FRESHNESS_TARGET_KEY_CHARS = 256;

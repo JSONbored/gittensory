@@ -21,6 +21,7 @@ import {
   upsertInstallationHealth,
   upsertRepoSyncSegment,
   upsertRepoSyncState,
+  getPullRequest,
   upsertPullRequestFile,
   upsertPullRequestFromGitHub,
   upsertIssueFromGitHub,
@@ -62,6 +63,64 @@ import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createTestEnv } from "../helpers/d1";
+
+// #4682 incident (2026-07-10): the stored-body cap used to be 4000 chars -- well under what a compliant
+// screenshot-evidence table (or any sufficiently detailed PR/issue) actually needs -- and every body-content
+// check (screenshotTableGate's matrix parser included) reads the STORED copy, not a live GitHub fetch, so a
+// silently truncated body produced a false "missing evidence" close for a PR that had genuinely complete
+// evidence. The cap now matches GitHub's own issue/PR body limit (65536) so it can only ever bind on content
+// GitHub itself was never going to accept.
+describe("pull request / issue body storage cap (#4682 regression)", () => {
+  it("stores a body well past the OLD 4000-char cap in full, unmangled", async () => {
+    const env = createTestEnv();
+    const longBody = "x".repeat(5160); // matches the real metagraphed#4682 body length that got truncated
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 4682,
+      title: "Long body PR",
+      state: "open",
+      user: { login: "nickmopen" },
+      head: { sha: "abc4682" },
+      labels: [],
+      body: longBody,
+    });
+    const stored = await getPullRequest(env, "JSONbored/gittensory", 4682);
+    expect(stored?.body).toBe(longBody);
+    expect(stored?.body?.length).toBe(5160);
+  });
+
+  it("still caps a body at GitHub's own 65536-char issue/PR body limit, not unboundedly", async () => {
+    const env = createTestEnv();
+    const oversizedBody = "y".repeat(70000);
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 4683,
+      title: "Oversized body PR",
+      state: "open",
+      user: { login: "nickmopen" },
+      head: { sha: "abc4683" },
+      labels: [],
+      body: oversizedBody,
+    });
+    const stored = await getPullRequest(env, "JSONbored/gittensory", 4683);
+    expect(stored?.body?.length).toBe(65536);
+    expect(stored?.body).toBe(oversizedBody.slice(0, 65536));
+  });
+
+  it("stores an issue body well past the OLD 4000-char cap in full too (compactGitHubPayload is shared)", async () => {
+    const env = createTestEnv();
+    const longBody = "z".repeat(4500);
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", {
+      number: 9001,
+      title: "Long issue body",
+      state: "open",
+      user: { login: "nickmopen" },
+      labels: [],
+      body: longBody,
+    });
+    const stored = await listIssues(env, "JSONbored/gittensory");
+    const issue = stored.find((i) => i.number === 9001);
+    expect(issue?.body).toBe(longBody);
+  });
+});
 
 describe("GitHub backfill", () => {
   afterEach(() => {
