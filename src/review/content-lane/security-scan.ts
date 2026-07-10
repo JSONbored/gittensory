@@ -154,7 +154,11 @@ const PIPED_INSTALL_RE = /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zs
 function firstLineMatching(text: string, re: RegExp): { n: number; text: string } | null {
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
-    if (re.test(lines[i] ?? "")) return { n: i + 1, text: (lines[i] ?? "").trim().slice(0, 160) };
+    // `?? ""` only exists to satisfy noUncheckedIndexedAccess -- the loop bound above guarantees lines[i] is
+    // always defined here (`.split()` never produces holes), so the fallback branch is unreachable in practice.
+    /* v8 ignore next */
+    const line = lines[i] ?? "";
+    if (re.test(line)) return { n: i + 1, text: line.trim().slice(0, 160) };
   }
   return null;
 }
