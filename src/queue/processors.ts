@@ -385,7 +385,6 @@ import {
 // unchanged -- those tests are deeply interspersed with unrelated ones in that file, not in a cleanly
 // extractable describe block, so relocating them is deliberately deferred rather than forced into this PR.
 export { claimPrActuationLock, releasePrActuationLock } from "./transient-locks";
-import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, fetchShotContentBlock, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureRoute } from "../review/visual/capture";
 import {
@@ -515,7 +514,7 @@ import { resolveE2eTestGenInstructions, runGittensoryE2eTestGeneration } from ".
 import { commitE2eTestToPrBranch } from "../github/e2e-test-commit";
 import {
   buildRepoCultureProfileContext,
-  isRepoCultureProfileEnabled,
+  shouldApplyRepoCultureProfile,
 } from "../review/repo-culture-profile-wire";
 import { applyReviewMemorySuppression, getCachedReviewSuppressions, invalidateReviewSuppressionCache, shouldApplyReviewMemory } from "../review/review-memory-wire";
 import {
@@ -7837,10 +7836,9 @@ export async function runAiReviewForAdvisory(
     // (typical PR size, common accepted labels) and appends it as additive grounding — exactly like RAG. Both
     // gates OFF (default) → NO new branch: no D1 read, and `cultureProfileContext` is left undefined so the
     // prompt is byte-identical to today. Fully fail-safe (any error/insufficient-history degrades to "").
-    const cultureProfileContext =
-      isRepoCultureProfileEnabled(env) && args.reviewCultureProfile === true
-        ? await buildRepoCultureProfileContext(env, args.repoFullName)
-        : undefined;
+    const cultureProfileContext = shouldApplyRepoCultureProfile(env, args.reviewCultureProfile === true)
+      ? await buildRepoCultureProfileContext(env, args.repoFullName)
+      : undefined;
     // Review-enrichment (#1472, flag-gated by GITTENSORY_REVIEW_ENRICHMENT + REES_URL). POST the PR to the external
     // REES for the heavy/external analysis the reviewer can't run (dependency CVEs, secrets, license/EOL/supply-chain);
     // its public-safe brief splices into the prompt next to grounding + RAG. Flag-OFF (default) → no call, no branch,
@@ -10668,7 +10666,7 @@ async function maybePublishPrPublicSurface(
             // invalidation) can refresh independently of this PR's head SHA, exactly like RAG's vector index —
             // so a repo with it active also bypasses the AI-review result cache rather than fingerprinting a
             // value that can't prove freshness.
-            cultureProfile: isRepoCultureProfileEnabled(env) && reviewCultureProfile === true,
+            cultureProfile: shouldApplyRepoCultureProfile(env, reviewCultureProfile === true),
             // Impact map (#2182-#2186): queries the SAME live vector index RAG does (computeImpactMap issues
             // its own retrieveContextWithMetrics calls), so it can go stale for the SAME head SHA exactly like
             // RAG — a repo with it active also bypasses the AI-review result cache.
@@ -11652,9 +11650,11 @@ async function maybePublishPrPublicSurface(
         gate: commentGate,
         duplicateWinnerEnabled,
       });
-      // Visual before/after capture (visual-capture port). Fires ONLY when (1) the global flag + per-repo
-      // cutover gate both allow it (screenshotsAllowed) AND (2) the PR touches WEB-VISIBLE files (isVisualPath
-      // — frontend pages / public OG images; backend .ts/.md/.json PRs never qualify). Fully wrapped in
+      // Visual before/after capture (visual-capture port). Fires ONLY when (1) the "screenshots" converged
+      // feature resolves active for this repo (resolveConvergedFeature — the global flag AND (a per-repo
+      // `features.screenshots` override OR the cutover allowlist default), #4616; reuses the manifest this
+      // pass already loaded above, no extra fetch) AND (2) the PR touches WEB-VISIBLE files (isVisualPath —
+      // frontend pages / public OG images; backend .ts/.md/.json PRs never qualify). Fully wrapped in
       // try/catch + defaults to [] so a capture failure (render timeout, missing binding, GitHub hiccup) can
       // NEVER sink the review — it just omits the "Visual preview" section. Flag-OFF (default) ⇒ this block is
       // skipped entirely and the unified comment is byte-identical.
@@ -11662,7 +11662,7 @@ async function maybePublishPrPublicSurface(
       const visualFiles = unifiedFiles
         .map((file) => file.path)
         .filter(isVisualPath);
-      if (screenshotsAllowed(env, repoFullName) && visualFiles.length > 0) {
+      if (resolveConvergedFeature(env, repoFocusManifestForComment, "screenshots", repoFullName) && visualFiles.length > 0) {
         try {
           const token = await createInstallationToken(env, installationId);
           // review.visual (#3609 / #3610): an explicit per-repo preview-URL template / route list. Absent config

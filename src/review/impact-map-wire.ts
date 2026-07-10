@@ -4,12 +4,16 @@
 // repo can only ever NARROW what the operator has already turned on, never widen it. Both OFF by default:
 // with the env flag unset, impact-map computation is never invoked from the review path at all (the caller
 // guards on this flag before doing any RAG query or rendering), so the review stays byte-identical to today.
+// `shouldComputeImpactMap` is the "manifestOnly" precedence shape (#4616) — see
+// `resolveManifestOnlyFeature`/`FeatureActivationMode` in `./feature-activation` for the shared core this, and
+// four sibling `review:`-block features, now delegate to.
 //
 // Also hosts the AI-review grounding formatter (#2186): `formatImpactMapPromptSection` turns
 // `computeImpactMap`'s output into the bounded "IMPACT MAP" block spliced into the reviewer's user prompt via
 // `GittensoryAiReviewInput.impactMapContext` (src/services/ai-review.ts), exactly like `formatRetrievedContext`
 // does for RAG's own retrieval block.
 
+import { resolveManifestOnlyFeature } from "./feature-activation";
 import type { ImpactMapEntry } from "./impact-map";
 
 /** True when impact-map computation is enabled at the operator level. Flag-OFF (default) → the caller takes
@@ -27,7 +31,7 @@ export function shouldComputeImpactMap(
   env: { GITTENSORY_REVIEW_IMPACT_MAP?: string | undefined },
   manifestImpactMapEnabled: boolean,
 ): boolean {
-  return isImpactMapEnabled(env) && manifestImpactMapEnabled;
+  return resolveManifestOnlyFeature(isImpactMapEnabled(env), manifestImpactMapEnabled);
 }
 
 /** Hard cap on entries actually formatted into the AI-review prompt section — bounds prompt-token cost

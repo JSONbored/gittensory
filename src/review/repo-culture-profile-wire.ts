@@ -10,11 +10,14 @@
 // default OFF) gates whether the capability exists AT ALL, and the per-repo `.gittensory.yml`
 // `review.culture_profile` boolean (see signals/focus-manifest.ts) opts a specific repo in once the global
 // switch is on. Both default OFF/absent ⇒ this module is never invoked, no D1 read happens, and the reviewer
-// prompt is byte-identical to today.
+// prompt is byte-identical to today. `shouldApplyRepoCultureProfile` is the "manifestOnly" precedence shape
+// (#4616) — see `resolveManifestOnlyFeature`/`FeatureActivationMode` in `./feature-activation` for the shared
+// core this, and four sibling `review:`-block features, now delegate to.
 //
 // ADVISORY GROUNDING ONLY (house rule + #2995 requirement): this NEVER becomes a gate/scoring input. It only
 // ever appends a reference-only block to the AI reviewer's USER prompt, exactly like the RAG/grounding/
 // enrichment sections it sits alongside in `services/ai-review.ts`'s buildUserPrompt.
+import { resolveManifestOnlyFeature } from "./feature-activation";
 import { extractRepoCultureProfile, type RepoCultureProfile } from "./repo-culture-profile";
 import { neutralizePromptInjection } from "./prompt-injection";
 
@@ -22,6 +25,18 @@ import { neutralizePromptInjection } from "./prompt-injection";
  *  override below is never even consulted (mirrors isRagEnabled / isGroundingEnabled / isReputationEnabled). */
 export function isRepoCultureProfileEnabled(env: { GITTENSORY_REVIEW_CULTURE_PROFILE?: string | undefined }): boolean {
   return /^(1|true|yes|on)$/i.test(env.GITTENSORY_REVIEW_CULTURE_PROFILE ?? "");
+}
+
+/** Resolve whether culture-profile grounding should apply for THIS repo/PR: the operator's global env
+ *  kill-switch AND the per-repo manifest opt-in. Neither alone is sufficient — mirrors
+ *  `shouldComputeImpactMap` / `shouldApplyReviewMemory` (#4616), the same "manifestOnly" shape. Previously
+ *  inlined at each of its two call sites in src/queue/processors.ts as `isRepoCultureProfileEnabled(env) &&
+ *  x === true`; centralized here so the precedence lives in exactly one place, like every sibling feature. */
+export function shouldApplyRepoCultureProfile(
+  env: { GITTENSORY_REVIEW_CULTURE_PROFILE?: string | undefined },
+  manifestCultureProfileEnabled: boolean,
+): boolean {
+  return resolveManifestOnlyFeature(isRepoCultureProfileEnabled(env), manifestCultureProfileEnabled);
 }
 
 /** Format a present profile into the reviewer-prompt block. Mirrors `formatRetrievedContext`'s

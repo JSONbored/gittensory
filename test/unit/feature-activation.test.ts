@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convergedFeatureActive, resolveConvergedFeature } from "../../src/review/feature-activation";
+import { convergedFeatureActive, resolveConvergedFeature, resolveFeatureActivation, resolveManifestOnlyFeature, type FeatureActivationMode } from "../../src/review/feature-activation";
 import { CONVERGED_FEATURE_KEYS, type ConvergedFeatureKey, type FocusManifest } from "../../src/signals/focus-manifest";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
@@ -14,6 +14,7 @@ const FLAG: Record<ConvergedFeatureKey, string> = {
   safety: "GITTENSORY_REVIEW_SAFETY",
   grounding: "GITTENSORY_REVIEW_GROUNDING",
   e2eTests: "GITTENSORY_REVIEW_E2E_TESTS",
+  screenshots: "GITTENSORY_REVIEW_SCREENSHOTS",
   improvementSignal: "GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL",
 };
 
@@ -29,10 +30,92 @@ function manifestWith(features: Partial<Record<ConvergedFeatureKey, boolean>>): 
     safety: null,
     grounding: null,
     e2eTests: null,
+    screenshots: null,
     improvementSignal: null,
   } as FocusManifest["features"];
   return { features: { ...base, ...features, present: Object.keys(features).length > 0 } };
 }
+
+// ── resolveFeatureActivation (#4616) — the single pure core every mode below reduces to ──────────────────────
+
+describe("resolveFeatureActivation — the shared pure core (#4616)", () => {
+  it("the master kill-switch wins outright regardless of mode, override, or allowlist", () => {
+    const modes: FeatureActivationMode[] = ["standard", "forceOnOnly", "allowlistRequired", "manifestOnly"];
+    for (const mode of modes) {
+      expect(resolveFeatureActivation(false, true, true, mode)).toBe(false);
+      expect(resolveFeatureActivation(false, null, true, mode)).toBe(false);
+      expect(resolveFeatureActivation(false, false, false, mode)).toBe(false);
+    }
+  });
+
+  describe('mode "standard"', () => {
+    it("an explicit override fully controls in both directions", () => {
+      expect(resolveFeatureActivation(true, true, false, "standard")).toBe(true); // override bypasses a non-allowlisted repo
+      expect(resolveFeatureActivation(true, false, true, "standard")).toBe(false); // override forces off an allowlisted repo
+    });
+    it("falls back to the allowlist when override is unset (null)", () => {
+      expect(resolveFeatureActivation(true, null, true, "standard")).toBe(true);
+      expect(resolveFeatureActivation(true, null, false, "standard")).toBe(false);
+    });
+  });
+
+  describe('mode "forceOnOnly" (safety\'s shape, #2269)', () => {
+    it("override can force ON even when NOT allowlisted", () => {
+      expect(resolveFeatureActivation(true, true, false, "forceOnOnly")).toBe(true);
+    });
+    it("override=false is downgraded to \"no opinion\" — falls through to the allowlist instead of forcing off", () => {
+      expect(resolveFeatureActivation(true, false, true, "forceOnOnly")).toBe(true); // allowlisted wins despite override=false
+      expect(resolveFeatureActivation(true, false, false, "forceOnOnly")).toBe(false); // not allowlisted either ⇒ off
+    });
+    it("unset override falls back to the allowlist, same as standard", () => {
+      expect(resolveFeatureActivation(true, null, true, "forceOnOnly")).toBe(true);
+      expect(resolveFeatureActivation(true, null, false, "forceOnOnly")).toBe(false);
+    });
+  });
+
+  describe('mode "allowlistRequired" (grounding\'s shape)', () => {
+    it("the allowlist is a hard requirement — override=true can NEVER bypass it", () => {
+      expect(resolveFeatureActivation(true, true, false, "allowlistRequired")).toBe(false);
+    });
+    it("within an allowlisted repo, override may additionally force OFF", () => {
+      expect(resolveFeatureActivation(true, false, true, "allowlistRequired")).toBe(false);
+      expect(resolveFeatureActivation(true, null, true, "allowlistRequired")).toBe(true);
+      expect(resolveFeatureActivation(true, true, true, "allowlistRequired")).toBe(true);
+    });
+  });
+
+  describe('mode "manifestOnly" (the five review:-block features, #4616)', () => {
+    it("there is no allowlist role at all — an allowlisted repo with no override still stays off", () => {
+      expect(resolveFeatureActivation(true, null, true, "manifestOnly")).toBe(false);
+    });
+    it("an explicit override===true is the only way to activate, allowlist status notwithstanding", () => {
+      expect(resolveFeatureActivation(true, true, false, "manifestOnly")).toBe(true);
+      expect(resolveFeatureActivation(true, true, true, "manifestOnly")).toBe(true);
+    });
+    it("override===false stays off exactly like unset (both are \"not explicitly true\")", () => {
+      expect(resolveFeatureActivation(true, false, true, "manifestOnly")).toBe(false);
+      expect(resolveFeatureActivation(true, false, false, "manifestOnly")).toBe(false);
+    });
+  });
+});
+
+// ── resolveManifestOnlyFeature (#4616) — the thin review:-block adapter over the core above ──────────────────
+
+describe("resolveManifestOnlyFeature — env kill-switch AND an explicit manifest opt-in, no allowlist role", () => {
+  it("requires BOTH the global flag and an explicit override===true", () => {
+    expect(resolveManifestOnlyFeature(true, true)).toBe(true);
+  });
+  it("is OFF when the flag is on but the override is unset (undefined) or absent (null)", () => {
+    expect(resolveManifestOnlyFeature(true, undefined)).toBe(false);
+    expect(resolveManifestOnlyFeature(true, null)).toBe(false);
+  });
+  it("is OFF when the override is explicitly true but the global flag is off (a repo cannot self-enable)", () => {
+    expect(resolveManifestOnlyFeature(false, true)).toBe(false);
+  });
+  it("is OFF when the override is explicitly false", () => {
+    expect(resolveManifestOnlyFeature(true, false)).toBe(false);
+  });
+});
 
 describe("resolveConvergedFeature — env kill-switch → per-repo override → allowlist default", () => {
   it("returns false when the global env flag is off, regardless of a per-repo override or the allowlist", () => {

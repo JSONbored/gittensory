@@ -7,9 +7,12 @@
 // applies to this feature (an unset manifest toggle preserves the ORIGINAL always-off default; it was never
 // sufficient to be allowlisted alone). Fully FAIL-SAFE: a finding whose line is not a commentable line in the PR
 // diff is dropped (GitHub 422s otherwise), and any API error degrades to "no inline comments" — it NEVER throws
-// and NEVER touches the gate.
+// and NEVER touches the gate. `shouldRequestInlineFindings` is the "manifestOnly" precedence shape (#4616) —
+// see `resolveManifestOnlyFeature`/`FeatureActivationMode` in `./feature-activation` for the shared core this,
+// and four sibling `review:`-block features, now delegate to.
 
 import { createPullRequestReviewComments } from "../github/pr-actions";
+import { resolveManifestOnlyFeature } from "./feature-activation";
 import { formatInlineCommentSeverityLabel } from "./inline-comment-label";
 import { resolveInlineCommentAnchor, rightLinesByPath } from "./inline-comment-range";
 import { addedLinesByPath, anchoredSuggestionBlock } from "./inline-suggestion-anchor";
@@ -38,8 +41,9 @@ export function isInlineCommentsEnabled(env: { GITTENSORY_REVIEW_INLINE_COMMENTS
  *  rag/reputation/safety/unifiedComment/grounding (which already fall back to the cutover allowlist when their
  *  manifest field is unset), inline comments have always required an EXPLICIT per-repo opt-in — being on the
  *  allowlist alone was never sufficient, so this stays `false` regardless of the allowlist, byte-identical to
- *  every repo's behavior before this change. `repoFullName` is kept for a stable call signature even though it's
- *  unused now that the allowlist no longer applies here. */
+ *  every repo's behavior before this change (now expressed as `resolveManifestOnlyFeature`'s `"manifestOnly"`
+ *  mode, #4616 — see `feature-activation.ts`). `repoFullName` is kept for a stable call signature even though
+ *  it's unused now that the allowlist no longer applies here. */
 export function shouldRequestInlineFindings(
   // GITTENSORY_REVIEW_REPOS is accepted (not just GITTENSORY_REVIEW_INLINE_COMMENTS) purely for call-site
   // signature stability with existing callers/tests that pass a wider env object -- it's no longer read, see
@@ -49,8 +53,7 @@ export function shouldRequestInlineFindings(
   manifestToggle: boolean | undefined,
 ): boolean {
   void repoFullName; // kept for call-site signature stability, see doc comment above
-  if (!isInlineCommentsEnabled(env)) return false;
-  return manifestToggle === true;
+  return resolveManifestOnlyFeature(isInlineCommentsEnabled(env), manifestToggle);
 }
 
 /** PURE (#1956): should a `suggestion` be rendered as a GitHub-native ` ```suggestion ` block? This is an

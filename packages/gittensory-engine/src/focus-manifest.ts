@@ -208,22 +208,34 @@ export type CopycatGateMode = "off" | "warn" | "label" | "block";
 // (#4100) is now migrated too — its original "coupled to the merge/close DISPOSITION path" blocker was the
 // removed AI CI-refutation path (grounding-wire.ts's aiCiRefutationActive is now a vestigial historical-
 // compatibility helper with zero real callers); grounding today only shapes reviewer PROMPT content, same
-// shape as rag/reputation. `screenshots` has its own richer `visual:` block instead (review.visual.enabled,
-// #4083) since it carries more than a single boolean. contentLane got its own richer `contentLane:` block below
-// (#2435) instead of a boolean here, since it resolves to a whole RegistryLaneSpec, not an on/off toggle — see
-// resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts. `selftune` (#4104) ALSO deliberately lives
-// outside this block, as its own top-level `review.selftune` field below — it has no `GITTENSORY_REVIEW_REPOS`
-// allowlist to fall back to (its own repo scoping is `isAgentConfigured`, a different consent boundary), so it
-// doesn't fit this resolver's env-kill-switch → override → allowlist-default shape; see `selfTuneRepos` in
-// `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189 E2E-test-generation epic) fits this shape
-// exactly as a plain symmetric override — unlike `safety`/`grounding` it has no force-on-only or force-off-only
-// floor/ceiling, since AI-generated test content carries no security-hardening or full-file-fetch rationale to
-// protect from a repo-controlled override. `improvementSignal` (#4738, foundation phase of the #4737 PR-
-// improvement-signal epic) is likewise a plain symmetric override: it is a READ-ONLY advisory quality-delta
-// signal, not a security control, so a repo-level `false` behaves like any other plain override with no
-// floor/ceiling. This is activation wiring only -- no tier reads the resolved value yet (sibling sub-issues
-// #4739-#4746 build the deterministic/LLM/panel behavior that will gate on it).
-export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests", "improvementSignal"] as const;
+// shape as rag/reputation. contentLane got its own richer `contentLane:` block below (#2435) instead of a
+// boolean here, since it resolves to a whole RegistryLaneSpec, not an on/off toggle — see
+// resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts (its own precedence already matches this
+// block's env-kill-switch → override → allowlist-default shape one-for-one; it just isn't literally routed
+// through resolveConvergedFeature yet — a disclosed, low-priority fast-follow, #4616). `selftune` (#4104)
+// ALSO deliberately lives outside this block, as its own top-level `review.selftune` field below — it has no
+// `GITTENSORY_REVIEW_REPOS` allowlist to fall back to (its own repo scoping is `isAgentConfigured`, a
+// different consent boundary), so it doesn't fit this resolver's env-kill-switch → override → allowlist-
+// default shape; see `selfTuneRepos` in `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189
+// E2E-test-generation epic) fits this shape exactly as a plain symmetric override — unlike `safety`/
+// `grounding` it has no force-on-only or force-off-only floor/ceiling, since AI-generated test content
+// carries no security-hardening or full-file-fetch rationale to protect from a repo-controlled override.
+// `screenshots` (#4616) joined this block for the SAME reason `e2eTests` fits it plainly: capturing a
+// before/after render of the PR's own web-visible files carries no security-hardening or full-file-fetch
+// rationale either, so it gets the standard override, not an asymmetric one. Before #4616 it had NO
+// `features:` override at all (env flag AND allowlist only) despite being documented right next to its six
+// siblings in `.gittensory.yml.example` — a self-hoster who guessed `features.screenshots: true` (a natural
+// guess given the sibling keys) found it silently did nothing. `features.screenshots` is layered UNDER the
+// separate, richer `review.visual.*` block (route/preview-URL config, #3609/#3610, and `review.visual.enabled:
+// false` as an always-available additional force-off, #4083) — that block still narrows/disables capture
+// AFTER this key decides whether capture is even attempted for the repo at all; the two are independent and
+// `review.visual.enabled` keeps its own existing force-off-only semantics untouched by this change.
+// `improvementSignal` (#4738, foundation phase of the #4737 PR-improvement-signal epic) is likewise a plain
+// symmetric override: it is a READ-ONLY advisory quality-delta signal, not a security control, so a repo-
+// level `false` behaves like any other plain override with no floor/ceiling. This is activation wiring only
+// -- no tier reads the resolved value yet (sibling sub-issues #4739-#4746 build the deterministic/LLM/panel
+// behavior that will gate on it).
+export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests", "screenshots", "improvementSignal"] as const;
 export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
 
 /** Per-repo activation overrides for the converged review features (`features:` block). `true`/`false` force the
@@ -967,6 +979,7 @@ const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
   safety: null,
   grounding: null,
   e2eTests: null,
+  screenshots: null,
   improvementSignal: null,
 };
 

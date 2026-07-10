@@ -8,6 +8,7 @@ import {
   buildRepoCultureProfileContext,
   formatRepoCultureProfileSection,
   isRepoCultureProfileEnabled,
+  shouldApplyRepoCultureProfile,
 } from "../../src/review/repo-culture-profile-wire";
 import { createTestEnv } from "../helpers/d1";
 import type { Advisory, RecentMergedPullRequestRecord, RepositorySettings } from "../../src/types";
@@ -62,6 +63,26 @@ describe("isRepoCultureProfileEnabled", () => {
     expect(isRepoCultureProfileEnabled({ GITTENSORY_REVIEW_CULTURE_PROFILE: "1" })).toBe(true);
     expect(isRepoCultureProfileEnabled({ GITTENSORY_REVIEW_CULTURE_PROFILE: "on" })).toBe(true);
     expect(isRepoCultureProfileEnabled({ GITTENSORY_REVIEW_CULTURE_PROFILE: "yes" })).toBe(true);
+  });
+});
+
+// ── shouldApplyRepoCultureProfile (#4616) ───────────────────────────────────────────────────────
+
+describe("shouldApplyRepoCultureProfile", () => {
+  it("requires BOTH the operator env flag AND the per-repo manifest opt-in", () => {
+    expect(shouldApplyRepoCultureProfile({ GITTENSORY_REVIEW_CULTURE_PROFILE: "true" }, true)).toBe(true);
+  });
+
+  it("is OFF when the operator flag is on but the manifest didn't opt in", () => {
+    expect(shouldApplyRepoCultureProfile({ GITTENSORY_REVIEW_CULTURE_PROFILE: "true" }, false)).toBe(false);
+  });
+
+  it("is OFF when the manifest opted in but the operator flag is off (repo cannot self-enable)", () => {
+    expect(shouldApplyRepoCultureProfile({ GITTENSORY_REVIEW_CULTURE_PROFILE: "false" }, true)).toBe(false);
+  });
+
+  it("is OFF when both are off", () => {
+    expect(shouldApplyRepoCultureProfile({}, false)).toBe(false);
   });
 });
 
