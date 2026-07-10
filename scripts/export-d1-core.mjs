@@ -4,9 +4,10 @@
 // so this stays unit-testable. See [[gittensory-selfhost-migration-plan]].
 import { createHash } from "node:crypto";
 
-// Tables NEVER exported: SQLite/Drizzle internals + the cloud's own migration ledger (the self-host applies its
-// own forward migrations). Keep this conservative — excluding a real table loses data; the importer also skips it.
-export const EXCLUDED_TABLES = new Set(["sqlite_sequence", "sqlite_stat1", "d1_migrations", "_cf_KV", "__drizzle_migrations"]);
+// Tables NEVER exported: SQLite/Drizzle internals, the cloud's own migration ledger (the self-host applies its
+// own forward migrations), plus private cloud-only calibration signals that must not cross instance boundaries.
+// Keep this conservative — excluding a real table loses data; the importer also skips it.
+export const EXCLUDED_TABLES = new Set(["sqlite_sequence", "sqlite_stat1", "d1_migrations", "_cf_KV", "__drizzle_migrations", "predicted_gate_calibration_ledger"]);
 
 // Columns dropped per table on export — cloud-specific secrets/hashes that are dead or unsafe on self-host. A
 // committed credential never crosses the boundary (#selfhost-migration DO-NOT-MIGRATE list):
