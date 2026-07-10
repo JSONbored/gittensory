@@ -42,7 +42,7 @@ describe("extractRepoProfile (#2999)", () => {
         scripts: { test: "vitest run", "test:coverage": "vitest run --coverage", lint: "eslint .", build: "tsc" },
       }),
     );
-    await upsertRepositorySettings(env, { repoFullName: REPO, gateCheckMode: "enabled", requireLinkedIssue: true });
+    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", requireLinkedIssue: true });
     await upsertRepoFocusManifest(env, REPO, { linkedIssuePolicy: "required" });
 
     const profile = await extractRepoProfile(env, REPO, { now: "2026-07-05T00:00:00.000Z" });

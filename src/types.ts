@@ -705,6 +705,10 @@ export type RepositorySettings = {
   publicSignalLevel: "minimal" | "standard";
   checkRunMode: "off" | "enabled";
   checkRunDetailLevel: "minimal" | "standard" | "deep";
+  /** Legacy shadow of {@link reviewCheckMode} (#2852), deprecated (#4618): a computed read-back value only,
+   *  for API/dashboard back-compat display. `"enabled"` when `reviewCheckMode !== "disabled"`, else `"off"`
+   *  -- see getRepositorySettings/upsertRepositorySettings in db/repositories.ts. No write path accepts this
+   *  field anymore; set {@link reviewCheckMode} directly instead. */
   gateCheckMode: "off" | "enabled";
   /** Scheduled re-gate sweep candidate ordering (#3815). `staleness` (default) picks whichever open PR the
    *  sweep has gone longest WITHOUT re-gating (see selectRegateCandidates), which is what gives the sweep its
@@ -715,8 +719,7 @@ export type RepositorySettings = {
    *  any time regardless of the chosen order. */
   regateSweepOrderMode: "staleness" | "oldest-first";
   /** The actual runtime authority for whether the "Gittensory Orb Review Agent" check-run publishes (#2852).
-   *  See {@link ReviewCheckMode}. `gateCheckMode` above stays wired for API/back-compat display but no longer
-   *  drives the publish decision on its own. */
+   *  See {@link ReviewCheckMode}. */
   reviewCheckMode: ReviewCheckMode;
   /** Auto-project/milestone matching (#3183). See {@link ProjectMilestoneMatchMode}. Always populated by the DB
    *  layer (default `"off"`); optional so existing settings fixtures/callers need not be touched. */

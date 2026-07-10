@@ -166,13 +166,14 @@ GET /v1/installations/:id/repair`}
       <h2>Gate modes</h2>
       <p>
         The deterministic gate is the heart of the gittensory review. Its master switch is{" "}
-        <code>gateCheckMode</code> (<code>off</code> / <code>enabled</code>); each dimension then
-        refines an already-enabled gate with a tri-state mode — <code>off</code> (not evaluated),{" "}
-        <code>advisory</code> (surfaced, never blocks), or <code>block</code> (can become a hard{" "}
-        <strong>Gittensory Orb Review Agent</strong> blocker). A configured blocker fails the gate
-        for any author identically — confirmed-Gittensor-contributor status does not change{" "}
-        <em>who</em> can be blocked; it's carried through only for on-chain scoring, a separate
-        concern from the gate's own merge/close decision.
+        <code>reviewCheckMode</code> (<code>required</code> / <code>visible</code> /{" "}
+        <code>disabled</code>); each dimension then refines an already-enabled gate with a tri-state
+        mode — <code>off</code> (not evaluated), <code>advisory</code> (surfaced, never blocks), or{" "}
+        <code>block</code> (can become a hard <strong>Gittensory Orb Review Agent</strong> blocker).
+        A configured blocker fails the gate for any author identically —
+        confirmed-Gittensor-contributor status does not change <em>who</em> can be blocked; it's
+        carried through only for on-chain scoring, a separate concern from the gate's own
+        merge/close decision.
       </p>
       <ul>
         <li>
@@ -259,7 +260,7 @@ GET /v1/installations/:id/repair`}
         lang="yaml"
         code={`# Repository settings as code — any dashboard toggle:
 settings:
-  gateCheckMode: enabled        # review-agent check on/off
+  reviewCheckMode: required     # review-agent check on/off (required|visible|disabled)
   checkRunMode: enabled         # the advisory Context check on/off
   commentMode: detected_contributors_only
   publicSurface: comment_only

@@ -239,7 +239,6 @@ describe("buildMaintainerActivationPreview", () => {
 describe("recommendedAdvisoryActivationSettings", () => {
   it("enables the gate + deterministic rules in advisory (non-blocking) mode", () => {
     expect(recommendedAdvisoryActivationSettings()).toEqual({
-      gateCheckMode: "enabled",
       reviewCheckMode: "required",
       checkRunMode: "enabled",
       linkedIssueGateMode: "advisory",

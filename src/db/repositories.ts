@@ -589,7 +589,10 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     publicSignalLevel: row.publicSignalLevel === "minimal" ? "minimal" : "standard",
     checkRunMode: parseCheckRunMode(row.checkRunMode),
     checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
-    gateCheckMode: parseGateCheckMode(row.gateCheckMode),
+    // #4618: gateCheckMode is a computed read-back value, never its own stored source of truth -- derive it
+    // from the real authority (reviewCheckMode) on every read instead of trusting the DB column, so a row
+    // whose gate_check_mode column has drifted (e.g. pre-#4618 data) self-heals on the very next read.
+    gateCheckMode: parseReviewCheckMode(row.reviewCheckMode) === "disabled" ? "off" : "enabled",
     regateSweepOrderMode: parseRegateSweepOrderMode(row.regateSweepOrderMode),
     reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
     autoProjectMilestoneMatch: parseProjectMilestoneMatchMode(row.projectMilestoneMatchMode),
@@ -706,16 +709,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     publicSignalLevel: settings.publicSignalLevel ?? "standard",
     checkRunMode: settings.checkRunMode ?? "off",
     checkRunDetailLevel: settings.checkRunDetailLevel ?? "minimal",
-    gateCheckMode: settings.gateCheckMode ?? "off",
+    // #4618: gateCheckMode is no longer an independent write input (dropped from every write schema) --
+    // derive it from reviewCheckMode below so the DB column stays a self-consistent read-back value.
+    gateCheckMode: (settings.reviewCheckMode ?? "disabled") === "disabled" ? "off" : "enabled",
     regateSweepOrderMode: settings.regateSweepOrderMode ?? "staleness",
-    // Legacy-write compatibility (#2852): a caller that sets ONLY gateCheckMode (never touching the newer,
-    // more expressive reviewCheckMode) must keep its historical effect -- "enabled" still means the check
-    // publishes. This is safe under this function's existing "no field is preserved from the DB, an absent
-    // field always gets a fresh default" contract (see the route-handler comment above): a true partial-update
-    // caller already read-merges the full current settings (including its persisted reviewCheckMode) before
-    // calling this, so `settings.reviewCheckMode` is never actually undefined for that path -- this fallback
-    // only fires for callers that never cared about reviewCheckMode at all.
-    reviewCheckMode: settings.reviewCheckMode ?? (settings.gateCheckMode === "enabled" ? "required" : "disabled"),
+    reviewCheckMode: settings.reviewCheckMode ?? "disabled",
     autoProjectMilestoneMatch: settings.autoProjectMilestoneMatch ?? "off",
     autoProjectMilestoneMatchBackend: settings.autoProjectMilestoneMatchBackend ?? "github",
     gatePack: parseGatePack(settings.gatePack),
@@ -7348,10 +7346,6 @@ function parseCheckRunMode(value: string): RepositorySettings["checkRunMode"] {
 function parseCheckRunDetailLevel(value: string): RepositorySettings["checkRunDetailLevel"] {
   if (value === "minimal" || value === "deep") return value;
   return "standard";
-}
-
-function parseGateCheckMode(value: string): RepositorySettings["gateCheckMode"] {
-  return value === "enabled" ? "enabled" : "off";
 }
 
 function parseRegateSweepOrderMode(value: string): RepositorySettings["regateSweepOrderMode"] {

@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { getRepositorySettings, upsertRepositorySettings } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
-// #2852: reviewCheckMode is the new, more expressive axis for the "Gittensory Orb Review Agent" check-run
-// publish decision (required/visible/disabled), replacing gateCheckMode (off/enabled) as the runtime authority
-// while gateCheckMode itself stays wired for API/back-compat display. These tests pin the default + the
-// same-call legacy-write derivation that lets a caller who only ever sets gateCheckMode keep its historical
-// effect without touching reviewCheckMode at all.
-describe("repository_settings: reviewCheckMode default + legacy gateCheckMode derivation (#2852)", () => {
+// #2852/#4618: reviewCheckMode is the sole runtime authority for the "Gittensory Orb Review Agent" check-run
+// publish decision (required/visible/disabled). gateCheckMode (off/enabled) is deprecated: a computed
+// read-back value only, derived from reviewCheckMode on every read, and it has NO effect as a write input to
+// upsertRepositorySettings -- the legacy dual-write sync now lives only at the yml settings.gateCheckMode
+// parse step (packages/gittensory-engine/src/focus-manifest.ts), not in the DB/API layer.
+describe("repository_settings: reviewCheckMode default + gateCheckMode read-only derivation (#2852, #4618)", () => {
   it("getRepositorySettings returns disabled for a repo with no DB row at all (conservative, opt-in default)", async () => {
     const env = createTestEnv();
     const settings = await getRepositorySettings(env, "acme/brand-new-repo");
@@ -22,12 +22,12 @@ describe("repository_settings: reviewCheckMode default + legacy gateCheckMode de
     expect(settings.reviewCheckMode).toBe("disabled");
   });
 
-  it("a caller that sets ONLY gateCheckMode: enabled (never touching reviewCheckMode) still gets the check published (legacy-write compatibility)", async () => {
+  it("a caller that sets ONLY gateCheckMode: enabled (never touching reviewCheckMode) is ignored -- gateCheckMode is not a write input", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "acme/legacy-enable", gateCheckMode: "enabled" });
     const settings = await getRepositorySettings(env, "acme/legacy-enable");
-    expect(settings.reviewCheckMode).toBe("required");
-    expect(settings.gateCheckMode).toBe("enabled");
+    expect(settings.reviewCheckMode).toBe("disabled");
+    expect(settings.gateCheckMode).toBe("off"); // re-derived from reviewCheckMode, not the caller's stale input
   });
 
   it("a caller that sets ONLY gateCheckMode: off (never touching reviewCheckMode) stays disabled", async () => {
@@ -37,11 +37,20 @@ describe("repository_settings: reviewCheckMode default + legacy gateCheckMode de
     expect(settings.reviewCheckMode).toBe("disabled");
   });
 
-  it("an explicit reviewCheckMode wins over gateCheckMode when both are set in the same call", async () => {
+  it("reviewCheckMode is honored regardless of a gateCheckMode also passed in the same call (gateCheckMode is a no-op input)", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "acme/explicit-wins", gateCheckMode: "off", reviewCheckMode: "visible" });
     const settings = await getRepositorySettings(env, "acme/explicit-wins");
     expect(settings.reviewCheckMode).toBe("visible");
+    expect(settings.gateCheckMode).toBe("enabled"); // derived from reviewCheckMode ("visible" !== "disabled"), not the "off" input
+  });
+
+  it("gateCheckMode self-heals on read even if a pre-#4618 row has a stale/divergent gate_check_mode column", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "acme/stale-column", reviewCheckMode: "required" });
+    await env.DB.prepare("UPDATE repository_settings SET gate_check_mode = ? WHERE repo_full_name = ?").bind("off", "acme/stale-column").run();
+    const settings = await getRepositorySettings(env, "acme/stale-column");
+    expect(settings.gateCheckMode).toBe("enabled"); // ignores the stale DB column, derives from reviewCheckMode
   });
 
   it("an explicit required/visible/disabled opt-in round-trips through a re-upsert that carries it forward explicitly", async () => {

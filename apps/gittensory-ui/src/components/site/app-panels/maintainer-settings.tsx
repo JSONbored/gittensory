@@ -21,7 +21,9 @@ type MaintainerSettings = {
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   checkRunMode: "off" | "enabled";
   checkRunDetailLevel: "minimal" | "standard" | "deep";
-  gateCheckMode: "off" | "enabled";
+  // #4618: gateCheckMode is deprecated (a computed read-back value only) -- reviewCheckMode is the real,
+  // writable authority for whether the review-agent check-run publishes.
+  reviewCheckMode: "required" | "visible" | "disabled";
   gatePack: "gittensor" | "oss-anti-slop";
   linkedIssueGateMode: GateMode;
   duplicatePrGateMode: GateMode;
@@ -90,7 +92,7 @@ const EDITABLE_KEYS: Array<keyof MaintainerSettings> = [
   "publicSurface",
   "checkRunMode",
   "checkRunDetailLevel",
-  "gateCheckMode",
+  "reviewCheckMode",
   "gatePack",
   "linkedIssueGateMode",
   "duplicatePrGateMode",
@@ -138,12 +140,15 @@ type FieldDef = SelectFieldDef | ToggleFieldDef | NumberFieldDef;
 
 const GATE_FIELDS: FieldDef[] = [
   {
-    key: "gateCheckMode",
+    key: "reviewCheckMode",
     label: "Review agent check",
     kind: "select",
+    // "visible" (publishes but never required in branch protection) is deliberately not offered here --
+    // this toggle keeps its historical off/enabled shape; set .gittensory.yml gate.checkMode: visible directly
+    // for that finer-grained mode.
     options: [
-      ["off", "off"],
-      ["enabled", "enabled"],
+      ["disabled", "off"],
+      ["required", "enabled"],
     ],
   },
   {
@@ -373,8 +378,8 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
           </p>
         </div>
         {settings ? (
-          <StatusPill status={settings.gateCheckMode === "enabled" ? "ready" : "info"}>
-            gate {settings.gateCheckMode}
+          <StatusPill status={settings.reviewCheckMode === "disabled" ? "info" : "ready"}>
+            gate {settings.reviewCheckMode === "disabled" ? "off" : "enabled"}
           </StatusPill>
         ) : null}
       </div>

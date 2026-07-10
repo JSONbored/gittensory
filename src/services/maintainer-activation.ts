@@ -113,10 +113,9 @@ function buildSummary(evaluated: number, withFindings: number, currentlyActive: 
  */
 export function recommendedAdvisoryActivationSettings(): Pick<
   RepositorySettings,
-  "gateCheckMode" | "reviewCheckMode" | "checkRunMode" | "linkedIssueGateMode" | "duplicatePrGateMode" | "qualityGateMode"
+  "reviewCheckMode" | "checkRunMode" | "linkedIssueGateMode" | "duplicatePrGateMode" | "qualityGateMode"
 > {
   return {
-    gateCheckMode: "enabled",
     reviewCheckMode: "required",
     checkRunMode: "enabled",
     linkedIssueGateMode: "advisory",

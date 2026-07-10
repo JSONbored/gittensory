@@ -767,6 +767,7 @@ describe("linked-issue satisfaction wired end-to-end through the real webhook pi
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+      reviewCheckMode: "required",
       gatePack: "oss-anti-slop",
       linkedIssueGateMode: "off",
       // The gate under test: off by default, opted into "block" here so an above-floor "unaddressed" verdict
@@ -858,6 +859,7 @@ describe("linked-issue satisfaction wired end-to-end through the real webhook pi
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+      reviewCheckMode: "required",
       gatePack: "oss-anti-slop",
       linkedIssueGateMode: "off",
       // No override -- linkedIssueSatisfactionGateMode is omitted, so upsertRepositorySettings persists its
@@ -924,6 +926,7 @@ describe("linked-issue satisfaction wired end-to-end through the real webhook pi
       autoLabelEnabled: false,
       checkRunMode: "off",
       gateCheckMode: "enabled",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       linkedIssueSatisfactionGateMode: "advisory",
     });

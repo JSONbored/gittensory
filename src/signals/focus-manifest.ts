@@ -440,14 +440,17 @@ export function filterReviewFilesForAi<T extends { path: string }>(
  * repo with no `gate:` block resolves byte-identically to before this was split out.
  */
 function applyGateConfigOverrides(effective: RepositorySettings, gate: FocusManifestGateConfig): void {
-  if (gate.enabled !== null) effective.gateCheckMode = gate.enabled ? "enabled" : "off";
   // reviewCheckMode (#2852) resolution: explicit `gate.checkMode` is the most-specific signal and always wins
   // when set. Otherwise fall back to the legacy `gate.enabled` boolean alias, mapped symmetrically so it keeps
-  // its historical effect (true -> the check publishes and may be required; false -> it never publishes) even
-  // though it no longer drives `gateCheckMode` alone. When NEITHER is set, `effective.reviewCheckMode` already
-  // holds `settings.reviewCheckMode` (yml `settings:` override, else the DB value) from the caller's spread.
+  // its historical effect (true -> the check publishes and may be required; false -> it never publishes). When
+  // NEITHER is set, `effective.reviewCheckMode` already holds `settings.reviewCheckMode` (yml `settings:`
+  // override, else the DB value) from the caller's spread.
   if (gate.checkMode !== null) effective.reviewCheckMode = gate.checkMode;
   else if (gate.enabled !== null) effective.reviewCheckMode = gate.enabled ? "required" : "disabled";
+  // #4618: gateCheckMode is a computed read-back value only -- always re-derive it from the reviewCheckMode
+  // just resolved above (not from gate.enabled alone), so it stays correct even when only gate.checkMode was
+  // the field actually set in the manifest.
+  effective.gateCheckMode = effective.reviewCheckMode === "disabled" ? "off" : "enabled";
   if (gate.pack !== null) effective.gatePack = gate.pack;
   if (gate.linkedIssue !== null) effective.linkedIssueGateMode = gate.linkedIssue;
   if (gate.duplicates !== null) effective.duplicatePrGateMode = gate.duplicates;

@@ -68,6 +68,7 @@ async function seedGateEnabledRepo(env: Env): Promise<void> {
     autoLabelEnabled: false,
     checkRunMode: "off",
     gateCheckMode: "enabled",
+    reviewCheckMode: "required",
     slopGateMode: "advisory", // turns the shared gateFiles load on so the reuse branch is hit
   });
   await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: safetyMinerSnapshot("contributor") }, 60_000);

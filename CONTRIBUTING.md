@@ -279,7 +279,7 @@ Config as code (`.gittensory.yml`) — every repository setting is controllable 
 
 - **`settings:`** is a partial of the repository settings: any behaviour a maintainer can toggle in the
   dashboard can be set here as code — `commentMode`, `publicAudienceMode`, `publicSurface`, `checkRunMode`,
-  `gateCheckMode`, the gate-blocker modes, `autoLabelEnabled`, `gittensorLabel`, `requireLinkedIssue`,
+  `reviewCheckMode`, the gate-blocker modes, `autoLabelEnabled`, `gittensorLabel`, `requireLinkedIssue`,
   `backfillEnabled`, etc.
 - **`gate:`** is a friendly typed alias for the gate subset — `enabled` (on/off), `linkedIssue`,
   `duplicates`, `readiness: { mode, minScore }` (each `off | advisory | block`).

@@ -63,8 +63,9 @@ function HowReviewsWork() {
       <h2>1. The gate: advisory vs. block</h2>
       <p>
         The gate is deterministic — same inputs, same verdict, no model in the loop. Its master
-        switch is <code>gateCheckMode</code> (<code>off</code> / <code>enabled</code>). Once
-        enabled, each <em>dimension</em> is independently set to one of three modes:
+        switch is <code>reviewCheckMode</code> (<code>required</code> / <code>visible</code> /{" "}
+        <code>disabled</code>). Once enabled, each <em>dimension</em> is independently set to one of
+        three modes:
       </p>
       <ul>
         <li>

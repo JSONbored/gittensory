@@ -1714,6 +1714,10 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[],
   if (checkRunMode !== null) out.checkRunMode = checkRunMode;
   const checkRunDetailLevel = normalizeOptionalEnum(r.checkRunDetailLevel, "settings.checkRunDetailLevel", ["minimal", "standard", "deep"] as const, warnings);
   if (checkRunDetailLevel !== null) out.checkRunDetailLevel = checkRunDetailLevel;
+  // #4618: gateCheckMode is deprecated (a computed read-back value everywhere else) but this yml key still
+  // parses for back-compat with existing `.gittensory.yml` files. A manifest setting ONLY gateCheckMode
+  // (never the more expressive reviewCheckMode) must keep its historical effect on the actual publish
+  // authority -- derive reviewCheckMode from it below when reviewCheckMode itself is unset.
   const gateCheckMode = normalizeOptionalEnum(r.gateCheckMode, "settings.gateCheckMode", ["off", "enabled"] as const, warnings);
   if (gateCheckMode !== null) out.gateCheckMode = gateCheckMode;
   const regateSweepOrderMode = normalizeOptionalEnum(r.regateSweepOrderMode, "settings.regateSweepOrderMode", ["staleness", "oldest-first"] as const, warnings);
@@ -1722,6 +1726,7 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[],
   // resolveEffectiveSettings, and wins when both are set).
   const reviewCheckMode = normalizeOptionalEnum(r.reviewCheckMode, "settings.reviewCheckMode", ["required", "visible", "disabled"] as const, warnings);
   if (reviewCheckMode !== null) out.reviewCheckMode = reviewCheckMode;
+  else if (gateCheckMode !== null) out.reviewCheckMode = gateCheckMode === "enabled" ? "required" : "disabled";
   const autoProjectMilestoneMatch = normalizeOptionalEnum(r.autoProjectMilestoneMatch, "settings.autoProjectMilestoneMatch", ["off", "suggest", "auto"] as const, warnings);
   if (autoProjectMilestoneMatch !== null) out.autoProjectMilestoneMatch = autoProjectMilestoneMatch;
   const autoProjectMilestoneMatchBackend = normalizeOptionalEnum(r.autoProjectMilestoneMatchBackend, "settings.autoProjectMilestoneMatchBackend", ["github", "linear"] as const, warnings);
