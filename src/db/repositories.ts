@@ -575,6 +575,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       moderationRules: undefined,
       moderationWarningLabel: undefined,
       moderationBannedLabel: undefined,
+      skipAutomationBotAuthors: "inherit",
       reviewEvasionProtection: "close", // #4011: default-ON -- see normalizeReviewEvasionProtection's doc comment
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
@@ -659,6 +660,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     moderationRules: parseModerationRulesColumn(row.moderationRulesJson),
     moderationWarningLabel: normalizeModerationLabel(row.moderationWarningLabel),
     moderationBannedLabel: normalizeModerationLabel(row.moderationBannedLabel),
+    skipAutomationBotAuthors: normalizeSkipAutomationBotAuthors(row.skipAutomationBotAuthors),
     reviewEvasionProtection: normalizeReviewEvasionProtection(row.reviewEvasionProtection),
     reviewEvasionLabel: row.reviewEvasionLabel,
     reviewEvasionComment: row.reviewEvasionComment,
@@ -777,6 +779,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     moderationRules: settings.moderationRules,
     moderationWarningLabel: normalizeModerationLabel(settings.moderationWarningLabel),
     moderationBannedLabel: normalizeModerationLabel(settings.moderationBannedLabel),
+    skipAutomationBotAuthors: normalizeSkipAutomationBotAuthors(settings.skipAutomationBotAuthors),
     reviewEvasionProtection: normalizeReviewEvasionProtection(settings.reviewEvasionProtection),
     reviewEvasionLabel: settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL,
     reviewEvasionComment: settings.reviewEvasionComment ?? true,
@@ -859,6 +862,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       moderationRulesJson: resolved.moderationRules === undefined ? null : jsonString(resolved.moderationRules),
       moderationWarningLabel: resolved.moderationWarningLabel ?? null,
       moderationBannedLabel: resolved.moderationBannedLabel ?? null,
+      skipAutomationBotAuthors: resolved.skipAutomationBotAuthors,
       reviewEvasionProtection: resolved.reviewEvasionProtection,
       reviewEvasionLabel: resolved.reviewEvasionLabel,
       reviewEvasionComment: resolved.reviewEvasionComment,
@@ -949,6 +953,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         moderationRulesJson: resolved.moderationRules === undefined ? null : jsonString(resolved.moderationRules),
         moderationWarningLabel: resolved.moderationWarningLabel ?? null,
         moderationBannedLabel: resolved.moderationBannedLabel ?? null,
+        skipAutomationBotAuthors: resolved.skipAutomationBotAuthors,
         reviewEvasionProtection: resolved.reviewEvasionProtection,
         reviewEvasionLabel: resolved.reviewEvasionLabel,
         reviewEvasionComment: resolved.reviewEvasionComment,
@@ -7494,6 +7499,10 @@ function normalizeCommandRateLimitPolicy(value: string | null | undefined): "off
 }
 
 function normalizeModerationGateMode(value: string | null | undefined): "inherit" | "off" | "enabled" {
+  return value === "off" || value === "enabled" ? value : "inherit";
+}
+
+function normalizeSkipAutomationBotAuthors(value: string | null | undefined): "inherit" | "off" | "enabled" {
   return value === "off" || value === "enabled" ? value : "inherit";
 }
 

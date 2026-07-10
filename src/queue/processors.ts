@@ -307,6 +307,12 @@ import {
   type PlannedAgentAction,
 } from "../settings/agent-actions";
 import { isAutoCloseExempt } from "../settings/auto-close-exempt";
+import {
+  isSkipAutomationBotPullRequestsEnabledGlobally,
+  isTrustedAutomationBotAuthor,
+  isTrustedAutomationBotWebhookActor,
+  resolveSkipAutomationBotPullRequests,
+} from "../settings/automation-bot-skip";
 import { resolveGlobalContributorOpenItemCap, resolveGlobalContributorOpenItemCapForMiner } from "../settings/global-contributor-cap";
 import { detectMigrationCollisions, extractMigrationNumber, KNOWN_MIGRATION_DUPLICATES } from "../db/migration-collisions";
 import { listMigrationFilenamesAtRef } from "../github/migration-tree";
@@ -3669,6 +3675,17 @@ async function reReviewStoredPullRequest(
   ]);
   let pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
+  // Waste elimination for known automation authors (settings/automation-bot-skip.ts): every re-entry path
+  // that can reach a PR without a fresh webhook (a scheduled sweep, CI-completion, or linked-issue-change
+  // re-review -- all funnel through this function via regatePullRequest) funnels through here, so this one
+  // check closes all of them. Uses the STORED author (isTrustedAutomationBotAuthor), not a live webhook
+  // sender -- see that function's own doc comment for why that's still safe: authorLogin is immutable,
+  // GitHub-attested metadata already verified against the actor at the original `opened` webhook.
+  if (
+    resolveSkipAutomationBotPullRequests(isSkipAutomationBotPullRequestsEnabledGlobally(env), settings.skipAutomationBotAuthors) &&
+    isTrustedAutomationBotAuthor(pr.authorLogin)
+  )
+    return;
   const autoreviewPaused = await hasAutoreviewPausedMarker(env, repoFullName, prNumber);
   const liveFacts = createLiveGithubFacts();
   // #sweep-resync: RESYNC the stored PR to its LIVE head before reviewing. The self-host relay can drop the
@@ -6321,6 +6338,47 @@ async function handlePullRequestWebhookEvent(
     // Resolve settings first so the self-authored + open-reference live-fetch fallbacks only fire when their
     // respective gates are in block mode.
     const settings = await resolveRepositorySettings(env, repoFullName);
+    // Waste elimination for known automation authors (settings/automation-bot-skip.ts): a PR/event genuinely
+    // triggered by release-please's github-actions[bot], Renovate, or Dependabot never needs AI review, gate
+    // evaluation, or a public-surface publish. Checked here (not earlier) because it needs `settings` for the
+    // per-repo override, but BEFORE the expensive Promise.all/refreshPullRequestDetails/AI/gate work below --
+    // isTrustedAutomationBotWebhookActor is the security-critical check (see its own doc comment): it verifies
+    // the ACTOR WHO TRIGGERED THIS EVENT, not just the PR's stored author, so a human pushing to an existing
+    // bot PR's branch still gets full review of their own commits.
+    if (
+      resolveSkipAutomationBotPullRequests(isSkipAutomationBotPullRequestsEnabledGlobally(env), settings.skipAutomationBotAuthors) &&
+      isTrustedAutomationBotWebhookActor(payload.sender, pr.authorLogin)
+    ) {
+      await recordAuditEvent(env, {
+        eventType: "github_app.automation_bot_pr_skipped",
+        actor: payload.sender?.login ?? pr.authorLogin,
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "completed",
+        detail: "skipped: known automation-bot author (release-please/Renovate/Dependabot)",
+        metadata: { deliveryId, repoFullName, eventName, action: payload.action ?? null },
+      }).catch((error) => {
+        /* v8 ignore next -- best-effort: audit recording never blocks (or un-skips) the webhook. */
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            event: "automation_bot_pr_skip_audit_failed",
+            deliveryId,
+            repository: repoFullName,
+            error: errorMessage(error),
+          }),
+        );
+      });
+      await recordWebhookEvent(env, {
+        deliveryId,
+        eventName,
+        action: payload.action,
+        installationId: payload.installation?.id,
+        repositoryFullName: payload.repository?.full_name,
+        payloadHash: "processed",
+        status: "processed",
+      });
+      return true;
+    }
     const [repo, cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
       await Promise.all([
         getRepository(env, repoFullName),

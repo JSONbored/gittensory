@@ -462,6 +462,12 @@ declare global {
      *  flagged (see the same-author guard in buildCollisionReport). Default OFF — unset/false leaves every
      *  PullRequestRecord's changedFiles unset, byte-identical to today. See src/signals/engine.ts prItem. */
     GITTENSORY_OPEN_PR_FILE_COLLISION?: string;
+    /** Waste elimination for known automation authors (settings/automation-bot-skip.ts): skip AI review, gate
+     *  evaluation, and public-surface publish entirely for a PR/event genuinely triggered by release-please's
+     *  github-actions[bot], Renovate, or Dependabot. Default-ON, unlike most flags above — see that module's
+     *  own doc comment for why. A repo can override via its own repository_settings.skip_automation_bot_authors
+     *  column ("off"/"enabled"), independent of this global default. */
+    GITTENSORY_SKIP_AUTOMATION_BOT_PRS?: string;
     /** D1 size/row-count observability probe (#3810): the Cloudflare account id that owns the D1 database to
      *  monitor. Presence of this AND the two vars below IS the enablement switch (see isD1SizeProbeEnabled,
      *  src/selfhost/d1-size-probe.ts) -- unset/blank ⇒ the probe never runs, byte-identical to today. Most

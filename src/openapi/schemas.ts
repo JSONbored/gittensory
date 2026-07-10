@@ -817,6 +817,7 @@ export const RepositorySettingsSchema = z
     moderationRules: z.array(z.enum(["contributor_cap", "blacklist", "review_nag", "review_evasion"])).optional(),
     moderationWarningLabel: z.string().optional(),
     moderationBannedLabel: z.string().optional(),
+    skipAutomationBotAuthors: z.enum(["inherit", "off", "enabled"]).optional(),
     reviewEvasionProtection: z.enum(["off", "close"]).optional(),
     reviewEvasionLabel: z.string().nullable().optional(),
     reviewEvasionComment: z.boolean().optional(),

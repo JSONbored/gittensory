@@ -45,6 +45,7 @@ interface __BaseEnv_Env {
 	GITTENSORY_PUBLIC_STATS_REPOS: "JSONbored/gittensory,JSONbored/awesome-claude,JSONbored/metagraphed";
 	GITTENSORY_DUPLICATE_WINNER: "true";
 	GITTENSORY_OPEN_PR_FILE_COLLISION: "true";
+	GITTENSORY_SKIP_AUTOMATION_BOT_PRS: "true";
 	RATE_LIMITER: DurableObjectNamespace<import("./src/index").RateLimiter>;
 }
 declare namespace Cloudflare {
@@ -97,6 +98,7 @@ declare namespace NodeJS {
 		| "GITTENSORY_REVIEW_SCREENSHOTS"
 		| "GITTENSORY_REVIEW_SELFTUNE"
 		| "GITTENSORY_REVIEW_UNIFIED_COMMENT"
+		| "GITTENSORY_SKIP_AUTOMATION_BOT_PRS"
 		| "GITTENSORY_SWEEP_WATCHDOG"
 		| "PUBLIC_API_ORIGIN"
 		| "PUBLIC_SITE_ORIGIN"

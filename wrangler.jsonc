@@ -201,6 +201,12 @@
     // sharesMeaningfulFile guard in buildCollisionReport). Re-validated post-fix: every remaining flagged pair is
     // backed by a real shared file.
     "GITTENSORY_OPEN_PR_FILE_COLLISION": "true",
+    // Waste elimination for known automation authors (settings/automation-bot-skip.ts): skip AI review, gate
+    // evaluation, and public-surface publish entirely for a PR/event genuinely triggered by github-actions[bot]
+    // (release-please), Renovate, or Dependabot. Default-ON, unlike most flags above -- see that module's own
+    // doc comment for why. A repo can override via its own repository_settings.skip_automation_bot_authors
+    // column ("off"/"enabled"), independent of this global default.
+    "GITTENSORY_SKIP_AUTOMATION_BOT_PRS": "true",
   },
   "routes": [
     {

@@ -1104,6 +1104,15 @@ export type RepositorySettings = {
   /** Moderation-rules engine: per-repo override of the label applied at >= the ban threshold. `undefined` ⇒
    *  the global config's `bannedLabel` (itself defaulting to `"mod:banned"`). */
   moderationBannedLabel?: string | undefined;
+  /** Waste elimination for known automation authors (release-please's github-actions[bot], Renovate,
+   *  Dependabot -- settings/agent-actions.ts's PROTECTED_AUTOCLOSE_AUTHORS): skip AI review, gate evaluation,
+   *  and public-surface publish entirely for a PR/event genuinely triggered by one of these -- not just
+   *  suppress output like {@link "./review-eligibility".ignoreAuthors}. `"inherit"` (the DB default) defers
+   *  to the `GITTENSORY_SKIP_AUTOMATION_BOT_PRS` global default (itself default-ON, unlike most feature
+   *  flags -- see settings/automation-bot-skip.ts's own doc comment for why); `"off"`/`"enabled"` fully
+   *  override the global default in either direction for this repo. Always populated by the DB layer;
+   *  optional so existing settings fixtures/callers need not be touched. */
+  skipAutomationBotAuthors?: "inherit" | "off" | "enabled" | undefined;
   /** Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN
    *  PR to draft while gittensory has an ACTIVE review pass running against it is dodging the one-shot
    *  review process. `"off"` (the default) disables detection entirely; `"close"` reopens (if needed) and

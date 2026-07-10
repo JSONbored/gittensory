@@ -128,6 +128,9 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     // Per-repo review allowlist: default to the test repos so flag-ON wiring tests activate the
     // gated review features. Override to "" to assert the dormant (no-repo) default.
     GITTENSORY_REVIEW_REPOS: "JSONbored/gittensory,acme/widgets",
+    // Default-ON in production (settings/automation-bot-skip.ts); most tests don't involve a bot actor at
+    // all, so this default doesn't change their behavior. Tests exercising this feature override it directly.
+    GITTENSORY_SKIP_AUTOMATION_BOT_PRS: "true",
     ...overrides,
   };
 }
