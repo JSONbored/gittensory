@@ -64,6 +64,7 @@ import { Route as AppOperatorRouteImport } from './routes/app.operator'
 import { Route as AppMinerRouteImport } from './routes/app.miner'
 import { Route as AppMaintainerRouteImport } from './routes/app.maintainer'
 import { Route as AppDigestRouteImport } from './routes/app.digest'
+import { Route as AppConfigGeneratorRouteImport } from './routes/app.config-generator'
 import { Route as AppCommandsRouteImport } from './routes/app.commands'
 import { Route as AppAuditRouteImport } from './routes/app.audit'
 import { Route as AppAnalyticsRouteImport } from './routes/app.analytics'
@@ -357,6 +358,11 @@ const AppDigestRoute = AppDigestRouteImport.update({
   path: '/digest',
   getParentRoute: () => AppRoute,
 } as any)
+const AppConfigGeneratorRoute = AppConfigGeneratorRouteImport.update({
+  id: '/config-generator',
+  path: '/config-generator',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppCommandsRoute = AppCommandsRouteImport.update({
   id: '/commands',
   path: '/commands',
@@ -398,6 +404,7 @@ export interface FileRoutesByFullPath {
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/audit': typeof AppAuditRoute
   '/app/commands': typeof AppCommandsRoute
+  '/app/config-generator': typeof AppConfigGeneratorRoute
   '/app/digest': typeof AppDigestRoute
   '/app/maintainer': typeof AppMaintainerRoute
   '/app/miner': typeof AppMinerRoute
@@ -457,6 +464,7 @@ export interface FileRoutesByTo {
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/audit': typeof AppAuditRoute
   '/app/commands': typeof AppCommandsRoute
+  '/app/config-generator': typeof AppConfigGeneratorRoute
   '/app/digest': typeof AppDigestRoute
   '/app/maintainer': typeof AppMaintainerRoute
   '/app/miner': typeof AppMinerRoute
@@ -520,6 +528,7 @@ export interface FileRoutesById {
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/audit': typeof AppAuditRoute
   '/app/commands': typeof AppCommandsRoute
+  '/app/config-generator': typeof AppConfigGeneratorRoute
   '/app/digest': typeof AppDigestRoute
   '/app/maintainer': typeof AppMaintainerRoute
   '/app/miner': typeof AppMinerRoute
@@ -584,6 +593,7 @@ export interface FileRouteTypes {
     | '/app/analytics'
     | '/app/audit'
     | '/app/commands'
+    | '/app/config-generator'
     | '/app/digest'
     | '/app/maintainer'
     | '/app/miner'
@@ -643,6 +653,7 @@ export interface FileRouteTypes {
     | '/app/analytics'
     | '/app/audit'
     | '/app/commands'
+    | '/app/config-generator'
     | '/app/digest'
     | '/app/maintainer'
     | '/app/miner'
@@ -705,6 +716,7 @@ export interface FileRouteTypes {
     | '/app/analytics'
     | '/app/audit'
     | '/app/commands'
+    | '/app/config-generator'
     | '/app/digest'
     | '/app/maintainer'
     | '/app/miner'
@@ -1154,6 +1166,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDigestRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/config-generator': {
+      id: '/app/config-generator'
+      path: '/config-generator'
+      fullPath: '/app/config-generator'
+      preLoaderRoute: typeof AppConfigGeneratorRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/commands': {
       id: '/app/commands'
       path: '/commands'
@@ -1208,6 +1227,7 @@ interface AppRouteChildren {
   AppAnalyticsRoute: typeof AppAnalyticsRoute
   AppAuditRoute: typeof AppAuditRoute
   AppCommandsRoute: typeof AppCommandsRoute
+  AppConfigGeneratorRoute: typeof AppConfigGeneratorRoute
   AppDigestRoute: typeof AppDigestRoute
   AppMaintainerRoute: typeof AppMaintainerRoute
   AppMinerRoute: typeof AppMinerRoute
@@ -1224,6 +1244,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAnalyticsRoute: AppAnalyticsRoute,
   AppAuditRoute: AppAuditRoute,
   AppCommandsRoute: AppCommandsRoute,
+  AppConfigGeneratorRoute: AppConfigGeneratorRoute,
   AppDigestRoute: AppDigestRoute,
   AppMaintainerRoute: AppMaintainerRoute,
   AppMinerRoute: AppMinerRoute,
