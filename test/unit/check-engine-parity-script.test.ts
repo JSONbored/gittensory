@@ -13,6 +13,8 @@ import {
   defaultReadExpectedEngineVersion,
   defaultResolveInstalledEngineVersion,
   describeEngineVersionSkew,
+  DIFF_FILE_PRIORITY_MARKERS,
+  DIFF_FILE_PRIORITY_TWIN_PAIR,
   discoverEngineParityPairs,
   discoverGateDecisionTwinPair,
   enginePackageVersionIncreased,
@@ -20,12 +22,17 @@ import {
   type EngineParityPair,
   isEngineStubPair,
   isThinEngineReExportShim,
+  NAMED_TWIN_PAIRS,
   normalizeChangedPath,
   normalizeEngineParityText,
   normalizeImportSpec,
   parseEnginePackageVersion,
   runEngineParityChecks,
   runEngineParityMain,
+  SAFE_URL_MARKERS,
+  SAFE_URL_TWIN_PAIR,
+  SHARES_MEANINGFUL_FILE_MARKERS,
+  SHARES_MEANINGFUL_FILE_TWIN_PAIR,
 } from "../../scripts/check-engine-parity";
 
 const TSX_BIN = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -175,6 +182,81 @@ describe("check-engine-parity script", () => {
           throw new Error(`unexpected read: ${relativePath}`);
         },
       }).failures).toEqual([]);
+    });
+  });
+
+  describe("named twin-pair coverage (#4605)", () => {
+    it("registers the gate-decision, safe-url, diff-file-priority, and shares-meaningful-file pairs", () => {
+      const areas = NAMED_TWIN_PAIRS.map(({ pair }) => pair.area);
+      expect(areas).toEqual([
+        "gate-decision",
+        "content-lane",
+        "diff-file-priority",
+        "shares-meaningful-file",
+      ]);
+    });
+
+    it("discovers the content-lane/safe-url.ts pair invisible to the top-level directory scan", () => {
+      const pair = discoverGateDecisionTwinPair({ root: process.cwd(), pair: SAFE_URL_TWIN_PAIR });
+      expect(pair.hostRelative).toBe("src/review/content-lane/safe-url.ts");
+      expect(pair.engineRelative).toBe("packages/gittensory-engine/src/review/safe-url.ts");
+      // Confirms the directory scan really would miss it: "safe-url.ts" is nested under content-lane/ on
+      // the host, so a top-level readdirSync("src/review") pairing by filename never lists it.
+      const scanned = discoverEngineParityPairs({ root: process.cwd() });
+      expect(scanned.some((discovered) => discovered.fileName === "safe-url.ts")).toBe(false);
+    });
+
+    it("passes marker presence for all four named pairs against the real repo (regression guard)", () => {
+      for (const { pair, markers } of NAMED_TWIN_PAIRS) {
+        const result = checkGateDecisionTwinPresence({ root: process.cwd(), pair, markers });
+        expect(result.failures).toEqual([]);
+      }
+    });
+
+    it("diffFilePriority markers cover the exact Cartfile.resolved regression (#4605 Finding 1)", () => {
+      // Reproduces the actual bug: the engine copy's regex previously matched `cartfile\.lock` (not a
+      // real Carthage filename) instead of `cartfile\.resolved`. A body missing the resolved-lockfile
+      // marker fails presence — exactly what the old, un-checked engine copy would have done.
+      const buggyEngineBody =
+        "export function diffFilePriority(path: string): number {\n" +
+        "  if (/cartfile\\.lock$/i.test(path)) return 4;\n" +
+        "  return 0;\n" +
+        "}\n";
+      const fixedHostBody =
+        "export function diffFilePriority(path: string): number {\n" +
+        "  if (/cartfile\\.resolved$/i.test(path)) return 4;\n" +
+        "  return 0;\n" +
+        "}\n";
+      const result = checkGateDecisionTwinPresence({
+        root: "/fake",
+        readFile: (_root, relativePath) => {
+          if (relativePath === DIFF_FILE_PRIORITY_TWIN_PAIR.hostRelative) return fixedHostBody;
+          if (relativePath === DIFF_FILE_PRIORITY_TWIN_PAIR.engineRelative) return buggyEngineBody;
+          throw new Error(`unexpected read: ${relativePath}`);
+        },
+        pair: DIFF_FILE_PRIORITY_TWIN_PAIR,
+        markers: DIFF_FILE_PRIORITY_MARKERS,
+      });
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toContain(DIFF_FILE_PRIORITY_TWIN_PAIR.engineRelative);
+      expect(result.failures[0]).toContain(JSON.stringify(DIFF_FILE_PRIORITY_MARKERS[1]));
+    });
+
+    it("safe-url and shares-meaningful-file marker sets are non-empty and pair-specific", () => {
+      expect(SAFE_URL_MARKERS.length).toBeGreaterThan(0);
+      expect(SHARES_MEANINGFUL_FILE_MARKERS.length).toBeGreaterThan(0);
+      expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.hostRelative).toBe("src/signals/engine.ts");
+      expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.engineRelative).toBe(
+        "packages/gittensory-engine/src/signals/predicted-gate-engine.ts",
+      );
+    });
+
+    it("includes all four named pairs in runEngineParityChecks pairsChecked", () => {
+      const result = runEngineParityChecks({ root: process.cwd() });
+      const checkedAreas = result.pairsChecked.map((pair) => pair.area);
+      for (const { pair } of NAMED_TWIN_PAIRS) {
+        expect(checkedAreas).toContain(pair.area);
+      }
     });
   });
 

@@ -11,14 +11,26 @@ import { fileURLToPath } from "node:url";
 
 export const ENGINE_PARITY_AREAS = Object.freeze(["review", "settings", "signals"] as const);
 
+/** Shared shape for an explicitly named (non-directory-discovered) host/engine twin pair. The directory
+ *  scan below only pairs identical top-level filenames within src/{review,settings,signals}, so anything
+ *  nested one directory deeper, differently named, or duplicated by FUNCTION rather than by whole file is
+ *  invisible to it by construction — this is the escape hatch (#4518, generalized #4605). */
+export type NamedTwinPair = Readonly<{
+  area: string;
+  hostRelative: string;
+  engineRelative: string;
+  hostFileName: string;
+  engineFileName: string;
+}>;
+
 /** Hand-duplicated gate-decision twins live outside src/{review,settings,signals} (#4518). */
-export const GATE_DECISION_TWIN_PAIR = Object.freeze({
+export const GATE_DECISION_TWIN_PAIR: NamedTwinPair = Object.freeze({
   area: "gate-decision",
   hostRelative: "src/rules/advisory.ts",
   engineRelative: "packages/gittensory-engine/src/advisory/gate-advisory.ts",
   hostFileName: "advisory.ts",
   engineFileName: "gate-advisory.ts",
-} as const);
+});
 
 export const GATE_DECISION_CORE_MARKERS = Object.freeze([
   "function evaluateGateCheckCore",
@@ -26,6 +38,70 @@ export const GATE_DECISION_CORE_MARKERS = Object.freeze([
   "export function buildPullRequestAdvisory",
   "export function evaluateGateCheck",
 ] as const);
+
+/** `safe-url.ts` lives nested under src/review/content-lane/ on the host but flat under the engine's
+ *  review/ dir, so the directory scan's identical-top-level-filename match never sees it — currently
+ *  byte-identical, but that is luck, not enforcement (#4605 Finding 2). */
+export const SAFE_URL_TWIN_PAIR: NamedTwinPair = Object.freeze({
+  area: "content-lane",
+  hostRelative: "src/review/content-lane/safe-url.ts",
+  engineRelative: "packages/gittensory-engine/src/review/safe-url.ts",
+  hostFileName: "safe-url.ts",
+  engineFileName: "safe-url.ts",
+});
+
+export const SAFE_URL_MARKERS = Object.freeze([
+  "export function isSafeHttpUrl",
+  "export function isSafeEndpointUrl",
+] as const);
+
+/** `diffFilePriority` is duplicated by FUNCTION, not by file: two byte-identical host copies
+ *  (review-diff.ts, review-grounding.ts) and a differently-named engine copy (diff-file-priority.ts) —
+ *  none share a filename, so the directory scan never pairs them. The `cartfile\.resolved` marker directly
+ *  regression-guards #4605 Finding 1: the engine copy's Carthage-lockfile regex had silently drifted to
+ *  `cartfile\.lock`, which is not a real filename (Carthage's lockfile is `Cartfile.resolved`). */
+export const DIFF_FILE_PRIORITY_TWIN_PAIR: NamedTwinPair = Object.freeze({
+  area: "diff-file-priority",
+  hostRelative: "src/review/review-diff.ts",
+  engineRelative: "packages/gittensory-engine/src/review/diff-file-priority.ts",
+  hostFileName: "review-diff.ts",
+  engineFileName: "diff-file-priority.ts",
+});
+
+export const DIFF_FILE_PRIORITY_MARKERS = Object.freeze([
+  "export function diffFilePriority(path: string): number {",
+  "cartfile\\.resolved",
+] as const);
+
+/** `sharesMeaningfulFile` is a near-duplicate helper (the host folds its guard clause into one `if`; the
+ *  engine splits it into two) that both gate collision-detection on the same `diffFilePriority` threshold.
+ *  It lives inside much larger files on both sides, so it's invisible to the file-level scan too. */
+export const SHARES_MEANINGFUL_FILE_TWIN_PAIR: NamedTwinPair = Object.freeze({
+  area: "shares-meaningful-file",
+  hostRelative: "src/signals/engine.ts",
+  engineRelative: "packages/gittensory-engine/src/signals/predicted-gate-engine.ts",
+  hostFileName: "engine.ts",
+  engineFileName: "predicted-gate-engine.ts",
+});
+
+export const SHARES_MEANINGFUL_FILE_MARKERS = Object.freeze([
+  "function sharesMeaningfulFile(left: string[] | undefined, right: string[] | undefined): boolean {",
+  "diffFilePriority(path) < 4",
+] as const);
+
+/** Every explicitly named twin pair, checked for core-marker presence in `runEngineParityChecks` — the
+ *  same escape hatch #4518 built for `GATE_DECISION_TWIN_PAIR`, generalized (#4605) so a function-level or
+ *  nested-directory duplicate can be added here without inventing a new mechanism. `GATE_DECISION_TWIN_PAIR`
+ *  additionally gets the co-edit-or-version-bump enforcement (`checkGateDecisionVersionBump`) since its two
+ *  sides are deliberately maintained as structurally divergent implementations; the other pairs here are
+ *  meant to stay much closer to byte-identical, so presence-check plus a content marker on the specific
+ *  historically-drifted value (see `DIFF_FILE_PRIORITY_MARKERS`) is the proportionate guard for now. */
+export const NAMED_TWIN_PAIRS: ReadonlyArray<{ pair: NamedTwinPair; markers: readonly string[] }> = Object.freeze([
+  { pair: GATE_DECISION_TWIN_PAIR, markers: GATE_DECISION_CORE_MARKERS },
+  { pair: SAFE_URL_TWIN_PAIR, markers: SAFE_URL_MARKERS },
+  { pair: DIFF_FILE_PRIORITY_TWIN_PAIR, markers: DIFF_FILE_PRIORITY_MARKERS },
+  { pair: SHARES_MEANINGFUL_FILE_TWIN_PAIR, markers: SHARES_MEANINGFUL_FILE_MARKERS },
+]);
 const ENGINE_SRC_ROOT = "packages/gittensory-engine/src";
 const HOST_SRC_ROOT = "src";
 const ENGINE_PACKAGE_JSON = "packages/gittensory-engine/package.json";
@@ -138,7 +214,8 @@ export function normalizeChangedPath(path: string): string {
     .replace(/^\.\//, "");
 }
 
-/** Load the explicit gate-decision twin pair for monitoring and PR version-bump enforcement. */
+/** Load an explicitly named twin pair (default: the gate-decision pair) for monitoring and, for
+ *  gate-decision specifically, PR version-bump enforcement. */
 export function discoverGateDecisionTwinPair({
   root,
   readFile = defaultReadFile,
@@ -146,7 +223,7 @@ export function discoverGateDecisionTwinPair({
 }: {
   root: string;
   readFile?: EngineParityReadFile;
-  pair?: typeof GATE_DECISION_TWIN_PAIR;
+  pair?: NamedTwinPair;
 }): EngineParityPair {
   return {
     area: pair.area,
@@ -158,7 +235,9 @@ export function discoverGateDecisionTwinPair({
   };
 }
 
-/** Structural guard: both gate-decision twins still expose the core gate entrypoints (#4518). */
+/** Structural guard: both sides of a named twin pair still expose its core markers — e.g. the
+ *  gate-decision twins' core entrypoints (#4518), or a hand-duplicated function's signature and any
+ *  historically-drifted literal it must keep matching (#4605). */
 export function checkGateDecisionTwinPresence({
   root,
   readFile = defaultReadFile,
@@ -167,7 +246,7 @@ export function checkGateDecisionTwinPresence({
 }: {
   root: string;
   readFile?: EngineParityReadFile;
-  pair?: typeof GATE_DECISION_TWIN_PAIR;
+  pair?: NamedTwinPair;
   markers?: readonly string[];
 }): { failures: string[]; pairChecked: EngineParityPair } {
   let twin: EngineParityPair;
@@ -176,7 +255,7 @@ export function checkGateDecisionTwinPresence({
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      failures: [`Could not load gate-decision twin files: ${message}`],
+      failures: [`Could not load ${pair.area} twin pair files: ${message}`],
       pairChecked: {
         area: pair.area,
         fileName: `${pair.hostFileName}<->${pair.engineFileName}`,
@@ -190,10 +269,10 @@ export function checkGateDecisionTwinPresence({
   const failures: string[] = [];
   for (const marker of markers) {
     if (!twin.hostText.includes(marker)) {
-      failures.push(`${pair.hostRelative} is missing gate-decision marker ${JSON.stringify(marker)}.`);
+      failures.push(`${pair.hostRelative} is missing expected twin-pair marker ${JSON.stringify(marker)}.`);
     }
     if (!twin.engineText.includes(marker)) {
-      failures.push(`${pair.engineRelative} is missing gate-decision marker ${JSON.stringify(marker)}.`);
+      failures.push(`${pair.engineRelative} is missing expected twin-pair marker ${JSON.stringify(marker)}.`);
     }
   }
   return { failures, pairChecked: twin };
@@ -226,7 +305,7 @@ export function checkGateDecisionVersionBump({
   headEngineVersion,
 }: {
   changedFiles: readonly string[];
-  pair?: typeof GATE_DECISION_TWIN_PAIR;
+  pair?: NamedTwinPair;
   enginePackageJson?: string;
   baseEngineVersion: string | null;
   headEngineVersion: string | null;
@@ -456,7 +535,7 @@ export function checkMinerEngineVersionPinSync({
   return { failures, expected, pin };
 }
 
-/** Run drift, gate-decision, version-skew, and optional PR version-bump checks. */
+/** Run drift, named-twin-pair marker-presence, version-skew, and optional PR version-bump checks. */
 export function runEngineParityChecks(options: {
   root: string;
   readFile?: EngineParityReadFile;
@@ -472,10 +551,17 @@ export function runEngineParityChecks(options: {
   versionSkew: EngineVersionSkewResult;
 } {
   const drift = checkEngineParityDrift(options);
-  const gateDecision = checkGateDecisionTwinPresence(options);
+  const readFile = options.readFile ?? defaultReadFile;
+  // Every named pair (gate-decision + #4605's safe-url/diff-file-priority/shares-meaningful-file) gets a
+  // marker-presence check. Only gate-decision additionally gets the co-edit-or-version-bump enforcement
+  // below — its two sides are deliberately maintained as structurally divergent implementations, while the
+  // other pairs are meant to stay close to byte-identical and already carry a content-level marker on the
+  // specific value that drifted (see e.g. `DIFF_FILE_PRIORITY_MARKERS`).
+  const namedTwinPresence = NAMED_TWIN_PAIRS.map(({ pair, markers }) =>
+    checkGateDecisionTwinPresence({ root: options.root, readFile, pair, markers }),
+  );
   const skew = checkEngineVersionSkew(options);
   const pinSync = checkMinerEngineVersionPinSync(options);
-  const readFile = options.readFile ?? defaultReadFile;
   let headEngineVersion = options.headEngineVersion;
   if (headEngineVersion === undefined) {
     try {
@@ -497,12 +583,12 @@ export function runEngineParityChecks(options: {
   return {
     failures: [
       ...drift.failures,
-      ...gateDecision.failures,
+      ...namedTwinPresence.flatMap((result) => result.failures),
       ...versionBump.failures,
       ...skew.failures,
       ...pinSync.failures,
     ],
-    pairsChecked: [...drift.pairsChecked, gateDecision.pairChecked],
+    pairsChecked: [...drift.pairsChecked, ...namedTwinPresence.map((result) => result.pairChecked)],
     versionSkew: skew,
   };
 }
