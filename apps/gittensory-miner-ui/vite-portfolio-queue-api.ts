@@ -4,21 +4,16 @@ import type { Plugin } from "vite";
 // Local read-only portfolio-queue API (#4306) — the sibling of `vite-run-state-api.ts` (#4305), same shape for
 // the same reason: the dashboard is a browser app while the queue store is a `node:sqlite` file on disk, so the
 // dev server bridges the two by calling into `packages/gittensory-miner/lib/portfolio-queue.js`'s EXISTING
-// exports (`resolvePortfolioQueueDbPath`/`listQueue`) — no SQL and no aggregation duplicated at this layer.
+// exports (`resolvePortfolioQueueDbPath`/`listQueue`). It aggregates server-side so the HTTP surface never
+// republishes raw queue identifiers or rank-derived priorities.
 //
 // Same read-only fresh-install rule as the run-state endpoint: `listQueue()` lazily initializes the default
-// store, which would CREATE the SQLite file — so the handler probes the resolved DB path first and serves
-// `{ rows: [] }` without ever touching the store when no DB exists yet.
+// store, which would CREATE the SQLite file — so the handler probes the resolved DB path first and serves an
+// empty summary without ever touching the store when no DB exists yet.
 
 type PortfolioQueueModule = {
   resolvePortfolioQueueDbPath: () => string;
-  listQueue: () => Array<{
-    repoFullName: string;
-    identifier: string;
-    priority: number;
-    status: string;
-    enqueuedAt: string;
-  }>;
+  listQueue: () => Array<{ status: string }>;
 };
 
 export type PortfolioQueueApiDeps = {
@@ -27,6 +22,30 @@ export type PortfolioQueueApiDeps = {
   /** File-existence probe for the fresh-install fast path. */
   fileExists: (path: string) => boolean;
 };
+
+type QueueStatus = "queued" | "in_progress" | "done";
+type QueueStatusCounts = Record<QueueStatus, number>;
+type PortfolioQueueSummary = { total: number; counts: QueueStatusCounts };
+
+const QUEUE_STATUSES = ["queued", "in_progress", "done"] as const;
+
+function emptyPortfolioQueueSummary(): PortfolioQueueSummary {
+  return { total: 0, counts: { queued: 0, in_progress: 0, done: 0 } };
+}
+
+function isQueueStatus(value: string): value is QueueStatus {
+  return (QUEUE_STATUSES as readonly string[]).includes(value);
+}
+
+function summarizePortfolioQueueRows(rows: Array<{ status: string }>): PortfolioQueueSummary {
+  const summary = emptyPortfolioQueueSummary();
+  for (const row of rows) {
+    if (!isQueueStatus(row.status)) continue;
+    summary.total += 1;
+    summary.counts[row.status] += 1;
+  }
+  return summary;
+}
 
 const defaultDeps: PortfolioQueueApiDeps = {
   loadPortfolioQueueModule: () =>
@@ -44,9 +63,9 @@ export async function handlePortfolioQueueRequest(
   try {
     const queue = await deps.loadPortfolioQueueModule();
     if (!deps.fileExists(queue.resolvePortfolioQueueDbPath())) {
-      return { status: 200, body: JSON.stringify({ rows: [] }) };
+      return { status: 200, body: JSON.stringify({ summary: emptyPortfolioQueueSummary() }) };
     }
-    return { status: 200, body: JSON.stringify({ rows: queue.listQueue() }) };
+    return { status: 200, body: JSON.stringify({ summary: summarizePortfolioQueueRows(queue.listQueue()) }) };
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to read local portfolio queue";
     return { status: 500, body: JSON.stringify({ error: message }) };

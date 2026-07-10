@@ -2,39 +2,44 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import {
+  emptyPortfolioQueueSummary,
   fetchPortfolioQueue,
   PORTFOLIO_QUEUE_API_PATH,
-  summarizePortfolioQueue,
+  summarizePortfolioQueueStatuses,
   type PortfolioQueueResult,
-  type PortfolioQueueRow,
 } from "./lib/portfolio-queue";
 import { PortfolioPage, PortfolioQueueView } from "./routes/portfolio";
 import { handlePortfolioQueueRequest, type PortfolioQueueApiDeps } from "../vite-portfolio-queue-api";
 
-const fixtureRows: PortfolioQueueRow[] = [
+const fixtureSummary = {
+  total: 4,
+  counts: { queued: 2, in_progress: 1, done: 1 },
+};
+
+const rawQueueRows = [
   {
-    repoFullName: "acme/widgets",
+    repoFullName: "private-org/secret-repo",
     identifier: "issue:12",
     priority: 5,
     status: "queued",
     enqueuedAt: "2026-07-10T06:00:00.000Z",
   },
   {
-    repoFullName: "acme/widgets",
+    repoFullName: "private-org/secret-repo",
     identifier: "issue:13",
     priority: 3,
     status: "in_progress",
     enqueuedAt: "2026-07-10T06:05:00.000Z",
   },
   {
-    repoFullName: "acme/gadgets",
+    repoFullName: "private-org/another-repo",
     identifier: "issue:7",
     priority: 8,
     status: "done",
     enqueuedAt: "2026-07-10T05:00:00.000Z",
   },
   {
-    repoFullName: "acme/gadgets",
+    repoFullName: "private-org/another-repo",
     identifier: "issue:8",
     priority: 1,
     status: "queued",
@@ -42,50 +47,29 @@ const fixtureRows: PortfolioQueueRow[] = [
   },
 ];
 
-describe("summarizePortfolioQueue (#4306)", () => {
-  it("counts rows by status and per repo, sorted by repo name", () => {
-    const summary = summarizePortfolioQueue(fixtureRows);
-    expect(summary.total).toBe(4);
-    expect(summary.counts).toEqual({ queued: 2, in_progress: 1, done: 1 });
-    expect(summary.byRepo).toEqual([
-      { repoFullName: "acme/gadgets", counts: { queued: 1, in_progress: 0, done: 1 }, total: 2 },
-      { repoFullName: "acme/widgets", counts: { queued: 1, in_progress: 1, done: 0 }, total: 2 },
-    ]);
+describe("summarizePortfolioQueueStatuses (#4306)", () => {
+  it("counts queue statuses without retaining row identifiers", () => {
+    expect(summarizePortfolioQueueStatuses(["queued", "in_progress", "done", "queued"])).toEqual(fixtureSummary);
   });
 
-  it("summarizes an empty queue to zeros with no repo rows", () => {
-    expect(summarizePortfolioQueue([])).toEqual({
+  it("summarizes an empty queue to zeros", () => {
+    expect(emptyPortfolioQueueSummary()).toEqual({
       total: 0,
       counts: { queued: 0, in_progress: 0, done: 0 },
-      byRepo: [],
     });
   });
 });
 
 describe("PortfolioQueueView (#4306)", () => {
   it("renders one card per status with the aggregated counts", () => {
-    render(<PortfolioQueueView result={{ ok: true, rows: fixtureRows }} />);
-    // The status words also appear as per-repo column headers, so target the card <dt> elements (first match).
-    expect(screen.getAllByText("Queued")[0]!.nextSibling?.textContent).toBe("2");
-    expect(screen.getAllByText("In progress")[0]!.nextSibling?.textContent).toBe("1");
-    expect(screen.getAllByText("Done")[0]!.nextSibling?.textContent).toBe("1");
-  });
-
-  it("renders the per-repo breakdown when the queue spans multiple repos", () => {
-    render(<PortfolioQueueView result={{ ok: true, rows: fixtureRows }} />);
-    expect(screen.getByRole("columnheader", { name: "Repository" })).toBeTruthy();
-    expect(screen.getByText("acme/widgets")).toBeTruthy();
-    expect(screen.getByText("acme/gadgets")).toBeTruthy();
-  });
-
-  it("omits the per-repo table for a single-repo queue (cards only)", () => {
-    render(<PortfolioQueueView result={{ ok: true, rows: fixtureRows.slice(0, 2) }} />);
-    expect(screen.queryByRole("table")).toBeNull();
-    expect(screen.getByText("Queued").nextSibling?.textContent).toBe("1");
+    render(<PortfolioQueueView result={{ ok: true, summary: fixtureSummary }} />);
+    expect(screen.getByText("Queued").nextSibling?.textContent).toBe("2");
+    expect(screen.getByText("In progress").nextSibling?.textContent).toBe("1");
+    expect(screen.getByText("Done").nextSibling?.textContent).toBe("1");
   });
 
   it("renders the fresh-install empty state without erroring", () => {
-    render(<PortfolioQueueView result={{ ok: true, rows: [] }} />);
+    render(<PortfolioQueueView result={{ ok: true, summary: emptyPortfolioQueueSummary() }} />);
     expect(screen.getByText(/No queued work yet/i)).toBeTruthy();
   });
 
@@ -101,11 +85,11 @@ describe("PortfolioQueueView (#4306)", () => {
 });
 
 describe("PortfolioPage (#4306)", () => {
-  it("loads rows through the injected loader and renders the cards", async () => {
-    const loadPortfolioQueue = async (): Promise<PortfolioQueueResult> => ({ ok: true, rows: fixtureRows });
+  it("loads the summary through the injected loader and renders the cards", async () => {
+    const loadPortfolioQueue = async (): Promise<PortfolioQueueResult> => ({ ok: true, summary: fixtureSummary });
     render(<PortfolioPage loadPortfolioQueue={loadPortfolioQueue} />);
     expect(screen.getByRole("heading", { name: "Portfolio queue" })).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("acme/widgets")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Queued").nextSibling?.textContent).toBe("2"));
   });
 });
 
@@ -113,14 +97,14 @@ describe("fetchPortfolioQueue (#4306)", () => {
   const jsonResponse = (status: number, payload: unknown) =>
     ({ ok: status >= 200 && status < 300, status, json: async () => payload }) as unknown as Response;
 
-  it("returns typed rows from a well-formed payload, requesting the local API path", async () => {
+  it("returns a typed summary from a well-formed payload, requesting the local API path", async () => {
     let requested: string | undefined;
     const result = await fetchPortfolioQueue(async (input) => {
       requested = String(input);
-      return jsonResponse(200, { rows: fixtureRows });
+      return jsonResponse(200, { summary: fixtureSummary });
     });
     expect(requested).toBe(PORTFOLIO_QUEUE_API_PATH);
-    expect(result).toEqual({ ok: true, rows: fixtureRows });
+    expect(result).toEqual({ ok: true, summary: fixtureSummary });
   });
 
   it("surfaces non-2xx, malformed payloads, and thrown fetches as typed errors", async () => {
@@ -128,9 +112,11 @@ describe("fetchPortfolioQueue (#4306)", () => {
       ok: false,
       error: "local portfolio-queue API responded 500",
     });
-    expect(await fetchPortfolioQueue(async () => jsonResponse(200, { rows: "nope" }))).toMatchObject({ ok: false });
+    expect(await fetchPortfolioQueue(async () => jsonResponse(200, { rows: rawQueueRows }))).toMatchObject({
+      ok: false,
+    });
     expect(
-      await fetchPortfolioQueue(async () => jsonResponse(200, { rows: [{ ...fixtureRows[0], status: "warp" }] })),
+      await fetchPortfolioQueue(async () => jsonResponse(200, { summary: { total: 1, counts: { queued: "1" } } })),
     ).toMatchObject({ ok: false });
     expect(
       await fetchPortfolioQueue(async () => {
@@ -141,7 +127,7 @@ describe("fetchPortfolioQueue (#4306)", () => {
 });
 
 describe("handlePortfolioQueueRequest (#4306)", () => {
-  const rows = fixtureRows;
+  const rows = rawQueueRows;
   function deps(overrides: Partial<PortfolioQueueApiDeps> = {}): PortfolioQueueApiDeps {
     return {
       loadPortfolioQueueModule: async () => ({
@@ -153,12 +139,15 @@ describe("handlePortfolioQueueRequest (#4306)", () => {
     };
   }
 
-  it("serves the queue rows via the existing portfolio-queue.js exports", async () => {
+  it("serves only aggregate counts and omits raw queue metadata", async () => {
     const handled = await handlePortfolioQueueRequest("GET", "/api/portfolio-queue", deps());
-    expect(handled).toEqual({ status: 200, body: JSON.stringify({ rows }) });
+    expect(handled).toEqual({ status: 200, body: JSON.stringify({ summary: fixtureSummary }) });
+    expect(handled?.body).not.toContain("private-org/secret-repo");
+    expect(handled?.body).not.toContain("issue:12");
+    expect(handled?.body).not.toContain("priority");
   });
 
-  it("serves [] on a fresh install WITHOUT initializing the store", async () => {
+  it("serves an empty summary on a fresh install WITHOUT initializing the store", async () => {
     let listed = false;
     const handled = await handlePortfolioQueueRequest(
       "GET",
@@ -174,7 +163,7 @@ describe("handlePortfolioQueueRequest (#4306)", () => {
         fileExists: () => false,
       }),
     );
-    expect(handled).toEqual({ status: 200, body: JSON.stringify({ rows: [] }) });
+    expect(handled).toEqual({ status: 200, body: JSON.stringify({ summary: emptyPortfolioQueueSummary() }) });
     expect(listed).toBe(false);
   });
 
