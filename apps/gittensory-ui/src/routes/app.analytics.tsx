@@ -20,6 +20,10 @@ import {
   AcceptanceRateCard,
   type FindingAcceptance,
 } from "@/components/site/app-panels/acceptance-rate-card";
+import {
+  FindingsBreakdownCard,
+  type FindingsBreakdown,
+} from "@/components/site/app-panels/findings-breakdown-card";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { exportOperatorDashboardCsv } from "@/lib/csv-export";
 
@@ -113,6 +117,7 @@ type OperatorDashboard = {
   gateEval?: GateEvalReport;
   cycleTime?: CycleTimeAggregate;
   acceptance?: FindingAcceptance;
+  findingsBreakdown?: FindingsBreakdown;
 };
 
 function ProductAnalytics() {
@@ -215,6 +220,8 @@ function ProductAnalytics() {
           )}
 
           <AcceptanceRateCard acceptance={data.acceptance} />
+
+          <FindingsBreakdownCard findings={data.findingsBreakdown} />
 
           {data.usageSummary ? (
             <ProductUsageBreakdownPanel
