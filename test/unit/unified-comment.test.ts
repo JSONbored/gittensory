@@ -175,6 +175,40 @@ describe("renderUnifiedReviewComment", () => {
     expect(bodyAbove.every((l) => l.startsWith(">"))).toBe(true);
   });
 
+  // #4589: the generate-tests checkbox is a sibling of the re-run checkbox — same top-level-outside-the-
+  // blockquote placement, for the same GitHub-disables-checkboxes-in-a-blockquote reason.
+  it("renders the generate-tests checkbox OUTSIDE the blockquote too, alongside the re-run checkbox", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "merge" },
+      { ...ctx, generateTestsLabel: "Generate an AI Playwright test for this PR" },
+    );
+    const lines = md.split("\n");
+    const reRunLine = lines.find((l) => l.includes("Re-run Gittensory review"));
+    const generateTestsLine = lines.find((l) => l.includes("Generate an AI Playwright test for this PR"));
+    expect(reRunLine).toBeDefined();
+    expect(generateTestsLine).toBeDefined();
+    expect(reRunLine!.startsWith(">")).toBe(false);
+    expect(generateTestsLine!.startsWith(">")).toBe(false);
+    expect(generateTestsLine).toBe(`- [ ] ${"Generate an AI Playwright test for this PR"}`);
+    // Stable order: re-run first, generate-tests second (matches the order the two features shipped in).
+    expect(lines.indexOf(reRunLine!)).toBeLessThan(lines.indexOf(generateTestsLine!));
+  });
+
+  it("renders the generate-tests checkbox alone when reRunLabel is absent", () => {
+    const { reRunLabel: _reRunLabel, ...ctxWithoutReRun } = ctx;
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "merge" },
+      { ...ctxWithoutReRun, generateTestsLabel: "Generate an AI Playwright test for this PR" },
+    );
+    expect(md).not.toContain("Re-run Gittensory review");
+    expect(md).toContain("- [ ] Generate an AI Playwright test for this PR");
+  });
+
+  it("omits the generate-tests checkbox entirely when the host doesn't supply one", () => {
+    const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, ctx);
+    expect(md).not.toContain("Generate an AI Playwright test");
+  });
+
   it("blocked state uses the caution alert, red bar, and an expanded blockers section", () => {
     const md = renderUnifiedReviewComment(
       { ...base, decision: "close", recommendations: ["close", "close"], blockers: ["Introduces a hardcoded secret."] },
@@ -349,6 +383,62 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("check &lt;x&gt;");
     expect(md).toContain("broke &lt;/details&gt;");
     expect(md).not.toContain("broke </details>");
+  });
+
+  it("renders non-required-but-red checks as a non-blocking 'Flagged checks' section, independent of ciState (#4414-class advisory holds)", () => {
+    const md = renderUnifiedReviewComment(
+      {
+        ...base,
+        readiness: {
+          ciState: "passed",
+          nonRequiredFailingDetails: [{ name: "Contributor trust", summary: "flagged for manual review" }],
+        },
+      },
+      {},
+    );
+    expect(md).toContain("Flagged checks (non-blocking)");
+    expect(md).toContain("- Contributor trust — flagged for manual review");
+    // Never blocking: ciState stayed "passed" input, and this section must not read as the failing-checks one.
+    expect(md).not.toContain("**CI checks failing**");
+  });
+
+  it("omits the 'Flagged checks' section when nonRequiredFailingDetails is absent/empty (default, byte-identical)", () => {
+    expect(renderUnifiedReviewComment({ ...base, readiness: { ciState: "passed" } }, {})).not.toContain("Flagged checks");
+    expect(renderUnifiedReviewComment({ ...base, readiness: { ciState: "passed", nonRequiredFailingDetails: [] } }, {})).not.toContain("Flagged checks");
+  });
+
+  it("hides the 'Flagged checks' section under review.comment_verbosity: quiet, matching Nits/linked-issue-satisfaction", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, readiness: { ciState: "passed", nonRequiredFailingDetails: [{ name: "Contributor trust" }] } },
+      { commentVerbosity: "quiet" },
+    );
+    expect(md).not.toContain("Flagged checks");
+  });
+
+  it("angle-escapes a non-required-failing check name + detail (public-safety, mirrors FIX D3)", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, readiness: { ciState: "passed", nonRequiredFailingDetails: [{ name: "check <x>", summary: "broke </details>" }] } },
+      {},
+    );
+    expect(md).toContain("check &lt;x&gt;");
+    expect(md).toContain("broke &lt;/details&gt;");
+    expect(md).not.toContain("broke </details>");
+  });
+
+  it("drops a non-required-failing entry with a blank/whitespace-only name (defensive), keeping other valid entries", () => {
+    const md = renderUnifiedReviewComment(
+      {
+        ...base,
+        readiness: {
+          ciState: "passed",
+          nonRequiredFailingDetails: [{ name: "   " }, { name: "Contributor trust" }],
+        },
+      },
+      {},
+    );
+    expect(md).toContain("Flagged checks (non-blocking)");
+    expect(md).toContain("- Contributor trust");
+    expect(md).not.toMatch(/-\s*\n/); // the blank-named entry never rendered its own bullet
   });
 
   it("appends an explicit verdict reason across ready (merged + unmerged) and advisory states", () => {

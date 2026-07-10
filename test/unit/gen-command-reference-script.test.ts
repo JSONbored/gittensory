@@ -94,12 +94,12 @@ describe("gen-command-reference script (#3046)", () => {
       expect(actionCommands).toHaveLength(7);
     });
 
-    it("extracts the real 10 public + 9 maintainer-only + 7 action commands from the real repo source", () => {
+    it("extracts the real 10 public + 9 maintainer-only + 8 action commands from the real repo source", () => {
       const { publicCommands, maintainerCommands, actionCommands } = collectCommandCatalogs({ rootDir: process.cwd() });
 
       expect(publicCommands).toHaveLength(10);
       expect(maintainerCommands).toHaveLength(9);
-      expect(actionCommands).toHaveLength(7);
+      expect(actionCommands).toHaveLength(8);
       expect(publicCommands.map((c: CommandCatalogEntry) => c.id)).toEqual([
         "help",
         "ask",

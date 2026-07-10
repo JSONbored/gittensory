@@ -192,6 +192,20 @@ gate:
     # the gate. Bool. Default: false.
     aiAdvisory: false
 
+  # Copycat/plagiarism detection (#1969). CURRENTLY INERT — this config is parsed
+  # and threaded end-to-end, but the containment/similarity detection engine that
+  # would actually compute a copycat finding does not exist yet (tracked as
+  # separate, later PRs against #1969). Setting this today has no observable
+  # effect; it exists so an operator's config can already declare intent.
+  copycat:
+    # off | warn | label | block. Default: off. A dedicated 4-tier scale (not the
+    # shared off/advisory/block used elsewhere) — a further "strikes" escalation
+    # beyond block reuses the existing cross-repo banned-contributors ledger.
+    mode: off
+    # Containment/similarity threshold at/above which mode acts, once the
+    # detection engine exists. Number 0–100, or null for the engine default.
+    minScore: null
+
   # Oversized-PR gate. A PR at/above EITHER the file-count or line-count threshold
   # (engine defaults, not configurable here) gets a manual-review HOLD finding —
   # never a hard blocker; mode only turns this hold signal on or off.
@@ -492,6 +506,16 @@ review:
   # quiet | normal | detailed. Default: null/normal (byte-identical).
   # comment_verbosity: normal
 
+  # How a `@gittensory generate-tests` result is delivered, once features.e2eTests is on (#4197, part of
+  # the #4189 E2E-test-generation epic). `comment` (default, null/absent) posts the generated test as a
+  # reply comment only. `commit` pushes it as a real commit onto the PR's own head branch instead -- a
+  # bigger blast radius, so it stays opt-in even with e2eTests already enabled. `commit` mode is ALSO
+  # blocked at runtime (regardless of this setting) for a PR whose author is a confirmed Gittensor miner,
+  # to protect the externally-computed score from ever including a maintainer-authored line the miner
+  # didn't write themselves.
+  # comment | commit. Default: null/comment (byte-identical -- no write access to any PR branch).
+  # e2e_test_delivery: comment
+
   # Inline-comment layer toggles (#1956 / #1958). Bool | null. Default: null/false — byte-identical.
   # Requires operator flag GITTENSORY_REVIEW_INLINE_COMMENTS + cutover allowlist + review.inline_comments: true.
   # inline_comments: false
@@ -592,22 +616,32 @@ settings:
   # label like `gittensor:priority` -- it is NEVER inferred from a PR's title, changed files, AI
   # output, or existing PR labels, only ever copied from a linked/closing issue ("Fixes #123") that
   # ALREADY carries the configured issue label. Generic beyond the priority use case: any issue label
-  # can map to any PR label. `removeOtherTypeLabels: true` REPLACES the type label entirely (bug/
-  # feature are removed), matching how `gittensor:priority` behaves today; `false` applies the mapped
-  # label ADDITIVELY alongside the normal title-based bug/feature label, leaving it untouched -- useful
-  # for a mapping unrelated to the bug/feature/priority triad (e.g. a `customer:vip` issue label
-  # copied to a `triage:vip` PR label). Disabled by default (no mappings) -- a self-hoster opts in per
-  # repo. If your labels carry reward or moderation weight, configure this in PRIVATE per-repo/global
-  # config (see `config/examples/README.md`) rather than the public `.gittensory.yml`, so contributors
-  # cannot see the exact mapping rules. A per-repo `mappings` override in the private-config layer
-  # REPLACES the global default list wholesale -- it does not merge with it.
+  # can map to any PR label. `removeOtherTypeLabels: true` marks the mapping EXCLUSIVE -- it REPLACES
+  # the type label entirely (bug/feature are removed), for genuinely mutually-exclusive categories; only
+  # the FIRST-configured exclusive match wins when more than one applies. `false` (e.g. `gittensor:priority`,
+  # which is a reward tag that coexists WITH whichever type already applies, not a type of its own) applies
+  # the mapped label ADDITIVELY alongside whichever exclusive match (or the normal title-based bug/feature
+  # label) already won -- every additive match composes together rather than competing for a single slot.
+  # Each mapping normally requires the PR author to be the linked issue's own author or a GitHub assignee of
+  # it (`trustMaintainerAuthoredIssue: true` relaxes this for a routine, non-reward category like bug/feature
+  # -- see the field's own doc comment in `types.ts`). `trustMaintainerAuthoredIssueForReward: true` opts a
+  # REWARD mapping like `gittensor:priority` into that same relaxation: without it, a mapping like this can
+  # structurally never propagate to most external contributors, since GitHub silently refuses to assign
+  # anyone lacking push/triage access to the repo -- so if your issues are open-pickup (maintainer-authored,
+  # rarely formally assigned to a specific contributor), the reward label needs this flag to ever reach them.
+  # Disabled by default (no mappings) -- a self-hoster opts in per repo. If your labels carry reward or
+  # moderation weight, configure this in PRIVATE per-repo/global config (see `config/examples/README.md`)
+  # rather than the public `.gittensory.yml`, so contributors cannot see the exact mapping rules. A per-repo
+  # `mappings` override in the private-config layer REPLACES the global default list wholesale -- it does
+  # not merge with it.
   # linkedIssueLabelPropagation:
   #   enabled: true
   #   mode: exclusive_type_label
   #   mappings:
   #     - issueLabel: gittensor:priority
   #       prLabel: gittensor:priority
-  #       removeOtherTypeLabels: true
+  #       removeOtherTypeLabels: false
+  #       trustMaintainerAuthoredIssueForReward: true
 
   # Create the label if it does not yet exist. Bool. Default: true.
   createMissingLabel: true
@@ -858,6 +892,18 @@ settings:
   #   action: close                          # close is the only supported value. Default: close.
   #   message: "Custom close reason..."      # Default: null (built-in message).
 
+  # Advisory-AI routing (#4364): per-capability opt-in to the local-inference AI_ADVISORY binding for these
+  # four capabilities, none of which are ever gate-blocking, so none need frontier-model accuracy. Set a
+  # global default here (or in the shared/root config) and override per-repo; a capability only actually
+  # routes through AI_ADVISORY when BOTH this is true AND the AI_ADVISORY_BASE_URL binding is configured --
+  # absent either one, it stays on the shared frontier env.AI chain (byte-identical to before). All off by
+  # default.
+  # advisoryAiRouting:
+  #   slop: false          # gate.slop.aiAdvisory's second opinion. Default: false.
+  #   e2eTestGen: false    # Auto-generated E2E test scaffolding. Default: false.
+  #   planner: false       # The @gittensory plan / issue-planner completion. Default: false.
+  #   summaries: false     # AI summaries/rewrite text. Default: false.
+
 # Maintainer AI review tuning (`.gittensory.yml` top-level `review:` block). These knobs shape the advisory AI
 # review prompt and file selection only — gate/slop/secret-scan are unaffected.
 # review:
@@ -882,10 +928,13 @@ settings:
 #   security_focus: false
 #   # A repo-level natural-language brief handed to the AI reviewer on EVERY review (vs the per-path
 #   # path_instructions below) -- the maintainer's conventions/voice. Bounded + public-safe at parse time.
-#   # String or null. Default: null (byte-identical prompt).
+#   # String or null. Default: null (byte-identical prompt). Also feeds AI-generated E2E test coverage
+#   # (features.e2eTests, #4190/#4189) when that feature is enabled -- the same conventions brief steers
+#   # both the AI reviewer and the AI test generator, so you only write it once.
 #   instructions: "Prefer small, focused PRs. Flag any missing test for a bug fix."
 #   # Per-path natural-language guidance handed to the AI reviewer when a changed file matches the glob.
-#   # Empty/default ⇒ byte-identical prompt.
+#   # Empty/default ⇒ byte-identical prompt. Also feeds AI-generated E2E test coverage the same way as
+#   # `instructions` above, for path-scoped rules ("always test the payment-failure retry path").
 #   path_instructions:
 #     - path: "src/db/**"
 #       instructions: "Flag any migration missing a matching down-path note."
@@ -1045,18 +1094,21 @@ settings:
 #     auto_pause_after_reviewed_commits: 3
 
 # Per-repo activation overrides for the converged review features that ship behind a deployment-wide
-# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding). Each key is `true`
-# (force on for this repo, subject to the env flag still being enabled), `false` (force off), or omitted
+# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding/e2eTests). Each key is
+# `true` (force on for this repo, subject to the env flag still being enabled), `false` (force off), or omitted
 # (falls back to the GITTENSORY_REVIEW_REPOS allowlist default -- an operator who sets nothing keeps today's
 # behavior). Exception: `safety` is force-on-only -- an untrusted repo-controlled `false` is treated as "no
 # opinion" rather than an active force-off (#2269), since a lower-trust actor must never be able to silently
-# defeat the operator's own security-hardening enablement.
+# defeat the operator's own security-hardening enablement. `e2eTests` (#4190) is a plain symmetric override
+# like rag/reputation/unifiedComment -- generating AI test content carries no security-hardening rationale to
+# protect from a repo-controlled override, so there's no force-on/force-off asymmetry here.
 # features:
 #   rag: true
 #   reputation: false
 #   unifiedComment: true
 #   safety: true
 #   grounding: true
+#   e2eTests: false
 
 # Registry-review lane (#2435): lets a self-hosted maintainer point gittensory at their OWN structured
 # registry (e.g. a subnet/plugin/package catalog) without a gittensory code change -- reviewing additions
@@ -1091,3 +1143,13 @@ settings:
 # reviewRecap:
 #   enabled: true    # Bool. Default: false (no recap is ever built or posted).
 #   cadenceDays: 7   # Positive integer. Days of activity each recap covers. Default: 7 (weekly).
+
+# Cross-repo maintainer recap digest (#1963, #2250): config-as-code override for the CRON-scheduled digest
+# that folds gate-precision + outcome-calibration across every scanned repo into one report (distinct from
+# the single-repo reviewRecap above). Operator-level, not per-repo -- only meaningful on the gittensory
+# self-repo's own manifest (the repo this instance identifies as); a present block there wins over the
+# GITTENSORY_MAINTAINER_RECAP / GITTENSORY_RECAP_CADENCE env vars, which stay the fallback when absent.
+# maintainerRecap:
+#   enabled: true         # Bool. Default: false (env vars decide instead).
+#   cadence: weekly        # daily | weekly. Default: weekly. Invalid values fall back to weekly.
+#   channel: discord       # discord (only supported channel today). Invalid values fall back to discord.

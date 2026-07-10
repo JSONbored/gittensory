@@ -57,6 +57,42 @@ describe("gittensory-mcp CLI — profiles", () => {
     expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
   }, 45_000);
 
+  it("profile list --format ndjson streams one JSON object per profile (and --json stays pretty)", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const configPath = join(tempDir, "config.json");
+    // Two credential-free profiles (default + active "beta"); profile list needs only names to enumerate,
+    // so the fixture carries no session token — the streaming format is what this exercises.
+    writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          apiUrl: "https://api.example.test",
+          activeProfile: "beta",
+          profiles: {
+            default: { session: { login: "default-user", scopes: [] } },
+            beta: { session: { login: "beta-user", scopes: [] } },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { GITTENSORY_CONFIG_DIR: tempDir, GITTENSORY_SKIP_NPM_VERSION_CHECK: "true" };
+
+    const lines = run(["profile", "list", "--format", "ndjson"], env).trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) => JSON.parse(line) as { name: string; active: boolean });
+    expect(parsed.map((p) => p.name).sort()).toEqual(["beta", "default"]);
+    // The active profile is flagged on its own record.
+    expect(parsed.find((p) => p.name === "beta")?.active).toBe(true);
+    // Each line is a bare profile object — not the {activeProfile, profiles} wrapper.
+    for (const line of lines) expect(line).not.toContain("activeProfile");
+    // --json still returns the pretty wrapper object (unchanged behavior).
+    const pretty = JSON.parse(run(["profile", "list", "--json"], env)) as { activeProfile: string; profiles: unknown[] };
+    expect(pretty).toMatchObject({ activeProfile: "beta" });
+    expect(pretty.profiles).toHaveLength(2);
+  });
+
   it("keeps environment tokens ahead of active profile sessions", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];

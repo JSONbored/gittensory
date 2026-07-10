@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { createRequire } from "node:module";
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import { runDenyCheck } from "../lib/deny-check.js";
+import { runDiscover } from "../lib/discover-cli.js";
+import { runFeasibilityCli } from "../lib/feasibility-cli.js";
 import { runGovernorCli } from "../lib/governor-ledger-cli.js";
 import { runLedgerCli } from "../lib/event-ledger-cli.js";
 import { runManagePoll } from "../lib/manage-poll.js";
 import { runManageStatus } from "../lib/manage-status.js";
 import { runPlanCli } from "../lib/plan-store-cli.js";
+import { runClaimCli } from "../lib/claim-ledger-cli.js";
 import { runQueueCli } from "../lib/portfolio-queue-cli.js";
 import { runStateCli } from "../lib/run-state-cli.js";
 import { runInit } from "../lib/laptop-init.js";
@@ -16,6 +18,7 @@ import {
   resolveUpgradeCommand,
   startUpdateCheck,
 } from "../lib/update-check.js";
+import { resolveMinerVersion } from "../lib/version.js";
 
 const cliArgs = process.argv.slice(2);
 
@@ -42,6 +45,10 @@ if (cliArgs[0] === "queue") {
   process.exit(runQueueCli(cliArgs[1], cliArgs.slice(2)));
 }
 
+if (cliArgs[0] === "claim") {
+  process.exit(runClaimCli(cliArgs[1], cliArgs.slice(2)));
+}
+
 if (cliArgs[0] === "ledger") {
   process.exit(runLedgerCli(cliArgs[1], cliArgs.slice(2)));
 }
@@ -54,9 +61,12 @@ if (cliArgs[0] === "governor") {
   process.exit(await runGovernorCli(cliArgs[1], cliArgs.slice(2)));
 }
 
-const require = createRequire(import.meta.url);
+if (cliArgs[0] === "feasibility") {
+  process.exit(runFeasibilityCli(cliArgs.slice(1)));
+}
+
 const packageName = "@jsonbored/gittensory-miner";
-const packageVersion = require("../package.json").version;
+const packageVersion = resolveMinerVersion(process.env);
 const upgradeCommand = resolveUpgradeCommand(packageName);
 
 const updateCheck = startUpdateCheck(cliArgs, {
@@ -101,6 +111,12 @@ if (cliArgs[0] === "state") {
 
 if (cliArgs[0] === "manage" && cliArgs[1] === "poll") {
   const exitCode = await runManagePoll(cliArgs.slice(2));
+  await awaitOpportunisticUpdateCheck(updateCheck);
+  process.exit(exitCode);
+}
+
+if (cliArgs[0] === "discover") {
+  const exitCode = await runDiscover(cliArgs.slice(1));
   await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(exitCode);
 }

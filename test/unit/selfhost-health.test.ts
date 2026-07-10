@@ -9,6 +9,8 @@ import {
   buildHealthBody,
   codexAuthReadinessProbe,
   githubAppReadinessProbe,
+  publicOriginAcknowledgedGaugeValue,
+  publicOriginReachabilityAdvisory,
   readiness,
   sqliteBackupAdvisory,
 } from "../../src/selfhost/health";
@@ -216,6 +218,91 @@ describe("backupAcknowledgedGaugeValue (#2089)", () => {
     expect(backupAcknowledgedGaugeValue({ usingSqlite: true, backupAcknowledged: false })).toBe(0);
     expect(backupAcknowledgedGaugeValue({ usingSqlite: true, backupAcknowledged: true })).toBe(1);
     expect(backupAcknowledgedGaugeValue({ usingSqlite: false, backupAcknowledged: false })).toBe(1);
+  });
+});
+
+describe("publicOriginReachabilityAdvisory (#4180)", () => {
+  it("is silent when acknowledged, regardless of how bad the origin looks", () => {
+    expect(
+      publicOriginReachabilityAdvisory({
+        publicApiOrigin: "https://node.raccoon-bushi.ts.net",
+        publicSiteOrigin: undefined,
+        acknowledged: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("is silent when neither origin is set, or both are ordinary public https origins", () => {
+    expect(publicOriginReachabilityAdvisory({ publicApiOrigin: undefined, publicSiteOrigin: undefined, acknowledged: false })).toBeNull();
+    expect(publicOriginReachabilityAdvisory({ publicApiOrigin: "  ", publicSiteOrigin: undefined, acknowledged: false })).toBeNull();
+    expect(
+      publicOriginReachabilityAdvisory({
+        publicApiOrigin: "https://reviews.example.com",
+        publicSiteOrigin: "https://example.com",
+        acknowledged: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("is silent on an unparseable value — a well-formedness problem, not this advisory's job", () => {
+    expect(
+      publicOriginReachabilityAdvisory({ publicApiOrigin: "not a url", publicSiteOrigin: undefined, acknowledged: false }),
+    ).toBeNull();
+  });
+
+  it("regression: warns on the exact PR #4180 shape — a bare Tailscale MagicDNS origin", () => {
+    const message = publicOriginReachabilityAdvisory({
+      publicApiOrigin: "https://edge-us-01.raccoon-bushi.ts.net",
+      publicSiteOrigin: undefined,
+      acknowledged: false,
+    });
+    expect(message).toMatch(/edge-us-01\.raccoon-bushi\.ts\.net/);
+    expect(message).toMatch(/PUBLIC_ORIGIN_ACKNOWLEDGED/);
+  });
+
+  it("checks PUBLIC_SITE_ORIGIN too, not just PUBLIC_API_ORIGIN", () => {
+    expect(
+      publicOriginReachabilityAdvisory({
+        publicApiOrigin: "https://reviews.example.com",
+        publicSiteOrigin: "http://localhost:3000",
+        acknowledged: false,
+      }),
+    ).toMatch(/localhost/);
+  });
+
+  it("flags loopback, RFC1918 ranges, mDNS, and .internal — but not a normal public IP or domain", () => {
+    const bad = [
+      "http://localhost",
+      "http://0.0.0.0",
+      "http://[::1]",
+      "https://node.local",
+      "https://svc.internal",
+      "http://127.0.0.1",
+      "http://10.0.0.5",
+      "http://192.168.1.1",
+      "http://172.20.0.5",
+    ];
+    for (const publicApiOrigin of bad) {
+      expect(publicOriginReachabilityAdvisory({ publicApiOrigin, publicSiteOrigin: undefined, acknowledged: false })).not.toBeNull();
+    }
+    const fine = ["https://8.8.8.8", "http://172.15.0.5", "http://172.32.0.5", "https://reviews.example.com"];
+    for (const publicApiOrigin of fine) {
+      expect(publicOriginReachabilityAdvisory({ publicApiOrigin, publicSiteOrigin: undefined, acknowledged: false })).toBeNull();
+    }
+  });
+});
+
+describe("publicOriginAcknowledgedGaugeValue (#4180)", () => {
+  it("mirrors the advisory: 0 only when a suspect origin is unacknowledged", () => {
+    expect(
+      publicOriginAcknowledgedGaugeValue({ publicApiOrigin: "https://node.ts.net", publicSiteOrigin: undefined, acknowledged: false }),
+    ).toBe(0);
+    expect(
+      publicOriginAcknowledgedGaugeValue({ publicApiOrigin: "https://node.ts.net", publicSiteOrigin: undefined, acknowledged: true }),
+    ).toBe(1);
+    expect(
+      publicOriginAcknowledgedGaugeValue({ publicApiOrigin: "https://reviews.example.com", publicSiteOrigin: undefined, acknowledged: false }),
+    ).toBe(1);
   });
 });
 

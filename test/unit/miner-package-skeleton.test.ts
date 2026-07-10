@@ -62,6 +62,11 @@ describe("gittensory-miner package skeleton (#2287)", () => {
   it("serves --help and --version from the bin entry", () => {
     expect(runCapture(["--help", "--no-update-check"])).toContain("gittensory-miner --help");
     expect(runCapture(["--version", "--no-update-check"])).toContain("@jsonbored/gittensory-miner/");
+    expect(
+      runCapture(["--version", "--no-update-check"], {
+        GITTENSORY_MINER_VERSION: "gittensory-miner-fleet@abc1234",
+      }),
+    ).toContain("gittensory-miner-fleet@abc1234");
   });
 
   it("documents foundation scope and local checkout install paths in the README", () => {

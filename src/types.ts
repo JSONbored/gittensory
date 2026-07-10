@@ -158,6 +158,15 @@ export type JobMessage =
       windowDays?: number;
     }
   | {
+      // Cross-repo maintainer recap digest (#1963, #2248): folds gate-precision + outcome-calibration across
+      // every scanned repo into ONE RecapReport (buildMaintainerRecap, #2239) and delivers it to Discord --
+      // distinct from "generate-review-recap" above, which is single-repo. No `repoFullName`: this is always
+      // a global job, enqueued by the cron on a configurable daily/weekly cadence (GITTENSORY_RECAP_CADENCE).
+      type: "generate-maintainer-recap";
+      requestedBy: "schedule" | "api" | "test";
+      windowDays?: number;
+    }
+  | {
       // Scheduled re-gate sweep (#777). No `repoFullName` = fan-out: enqueue one per agent-configured repo.
       // With `repoFullName` = recompute the gate verdict for that repo's stale open PRs (advisory/audit only).
       type: "agent-regate-sweep";
@@ -586,6 +595,12 @@ export type BountyRecord = {
 
 export type GateRuleMode = "off" | "advisory" | "block";
 
+/** `gate.copycat.mode` (#1969) -- a dedicated 4-value enum rather than the shared {@link GateRuleMode}
+ *  tri-state, since the issue's tiered response is warn -> label -> block -> strikes (where "strikes" is a
+ *  separate escalation action reusing the existing cross-repo banned-contributors ledger, not a 5th mode
+ *  value). See {@link RepositorySettings.copycatGateMode}'s doc comment for the currently-inert status. */
+export type CopycatGateMode = "off" | "warn" | "label" | "block";
+
 /** Review-check publish surface (#2852). Controls ONLY whether/how the "Gittensory Orb Review Agent" check-run
  *  is created/updated -- never the underlying gate evaluation, disposition, comments, labels, audit, or
  *  autonomous merge/close, all of which run identically in every mode (the autonomous decision engine already
@@ -726,6 +741,17 @@ export type RepositorySettings = {
   /** `gate.cla.checkRunAppSlug`: the trusted GitHub App slug that must have produced `claCheckRunName`. Required
    *  for check-run detection so contributor-controlled same-name runs cannot satisfy a blocking CLA gate. */
   claCheckRunAppSlug?: string | null | undefined;
+  /** Copycat/plagiarism detection (#1969). `off` (default/absent) = no check; `warn`/`label`/`block` are
+   *  escalating tiers a future containment/similarity engine would act on (`block` additionally hard-blocks;
+   *  a further "strikes" escalation reuses the existing cross-repo banned-contributors ledger once wired).
+   *  Config-as-code only — no DB column or dashboard toggle; set via `.gittensory.yml gate.copycat.mode`.
+   *  CURRENTLY INERT: this field is parsed and threaded end-to-end, but no detection engine reads it yet —
+   *  see {@link CopycatGateMode}'s doc comment in packages/gittensory-engine for the tracked follow-up plan. */
+  copycatGateMode?: CopycatGateMode | undefined;
+  /** `gate.copycat.minScore`: containment/similarity score (0-100) at/above which `copycatGateMode` would act,
+   *  once the detection engine exists. `null`/absent ⇒ the engine's own default threshold. Config-as-code
+   *  only, alongside {@link copycatGateMode}. */
+  copycatGateMinScore?: number | null | undefined;
   /** `gate.expectedCiContexts` (#selfhost-ci-verification): maintainer-declared CI check/status context names to
    *  treat as required when GitHub branch protection returns no readable required-status-checks (unconfigured,
    *  or a 403 from a token lacking `administration:read` — common for GitHub App installations). Merged with any
@@ -871,6 +897,10 @@ export type RepositorySettings = {
    *  `.gittensory.yml settings.unlinkedIssueGuardrail` in private/global or per-repo config. Defaults
    *  all-off so a self-hoster opts into their own credibility-gate-farming defense. */
   unlinkedIssueGuardrail?: UnlinkedIssueGuardrailConfig | undefined;
+  /** Per-capability local-inference routing (#4364). Config-as-code only; set with `.gittensory.yml
+   *  settings.advisoryAiRouting` in shared/global or per-repo config. Defaults all-false so every advisory
+   *  capability stays on the shared frontier env.AI chain until an operator opts each one in. */
+  advisoryAiRouting?: AdvisoryAiRoutingConfig | undefined;
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;
@@ -1018,6 +1048,11 @@ export type RepositorySettings = {
   /** Per-repo dry-run/shadow mode (#776): when true, the action layer records what it WOULD do without
    *  performing any GitHub mutation. Default false. */
   agentDryRun?: boolean | undefined;
+  /** Per-repo override of the global DB-backed agent freeze (#4372): when true, this repo's actions execute
+   *  even while `global_agent_controls.frozen` is set, so an operator can re-activate one repo at a time
+   *  without lifting the fleet-wide brake. Never overrides the `AGENT_ACTIONS_PAUSED` env var, and
+   *  {@link agentPaused} on this same repo still wins over it. Default false. */
+  agentGlobalFreezeOverride?: boolean | undefined;
   /** Moderation-rules engine (#selfhost-mod-engine): whether the whole layer runs on THIS repo. `"inherit"`
    *  (the DB default) defers to `global_moderation_config.enabled`; `"off"`/`"enabled"` force this repo
    *  regardless of the global default. Always populated by the DB layer; optional so existing settings
@@ -1066,9 +1101,14 @@ export type RepositorySettings = {
 
 /** #4110: `request_changes`/`comment` were REMOVED (not just left unused) -- they were fully typed/validated
  *  but `src/queue/processors.ts` only ever branched on `=== "close"`, so setting either in `.gittensory.yml`
- *  silently did nothing. `"close"` is the only value this gate has ever enforced; a legacy config with either
- *  removed value normalizes to the default ("close") with a warning, exactly like any other invalid value. */
-export type ScreenshotTableGateAction = "close";
+ *  silently did nothing. A legacy config with either removed value normalizes to the default ("close") with a
+ *  warning, exactly like any other invalid value.
+ *  `"advisory"` (#4535) is a NEW, actually-wired value, not a resurrection of either removed one: the gate
+ *  still computes the violation and its reason, but `src/queue/processors.ts` only ever folds the result into
+ *  the close-triggering `screenshotTableMatch` when `action === "close"` -- so `"advisory"` is a real no-op on
+ *  merge/close by construction, with visibility left to the AI reviewer's own commentary (its context is
+ *  expected to mention the same completeness requirement -- see the review-context sync in the #4540 PR). */
+export type ScreenshotTableGateAction = "close" | "advisory";
 
 /** Per-repo config for the before/after screenshot-table gate (#2006). See {@link RepositorySettings.screenshotTableGate}
  *  and `review/screenshot-table-gate.ts` for the normalizer + pure evaluator. */
@@ -1077,7 +1117,25 @@ export type ScreenshotTableGateConfig = {
   whenLabels: string[];
   whenPaths: string[];
   action: ScreenshotTableGateAction;
+  /** Full replacement for the rejection reason -- when set, this is used verbatim and NEITHER the
+   *  auto-generated matrix "still missing: ..." list NOR `skillFileUrl` appear (a maintainer who sets
+   *  this owns the entire message). Leave unset to get the auto-generated, always-accurate message
+   *  (naming the exact missing pairs in matrix mode) with `skillFileUrl` appended when configured --
+   *  that combination is usually what you want; only set `message` for total control over the wording. */
   message?: string | undefined;
+  /** Viewport x theme completeness matrix (#4535). Both empty (the default) ⇒ byte-identical to the original
+   *  presence-only check (some image-bearing table, anywhere). A non-empty `requireViewports` switches the
+   *  evaluator into matrix mode: every configured viewport (crossed with every configured theme, when
+   *  `requireThemes` is also non-empty) must have its own labeled before/after row in the PR body's table --
+   *  see `review/screenshot-table-gate.ts` for the row-matching heuristic. `requireThemes` alone (viewports
+   *  empty) has no effect -- the viewport dimension is what turns matrix mode on. */
+  requireViewports: string[];
+  requireThemes: string[];
+  /** A link to this repo's contributor skill file, appended to the AUTO-GENERATED rejection message
+   *  (#4540 follow-up) so a closed contributor always gets pointed at the exact format/contract instead
+   *  of just being told evidence is missing. Ignored when `message` is set (a full override already
+   *  owns the entire text -- append the link into that string yourself if you want it there too). */
+  skillFileUrl?: string | undefined;
 };
 
 export type CommandAuthorizationRole = "maintainer" | "collaborator" | "pr_author" | "confirmed_miner";
@@ -1111,6 +1169,20 @@ export type LinkedIssueLabelPropagationMapping = {
    *  scarce, hand-picked label a contributor could otherwise farm by citing an unrelated issue they had no
    *  part in. See `review/linked-issue-label-propagation-fetch.ts`'s `isRepoMaintainerLogin`. */
   trustMaintainerAuthoredIssue?: boolean | undefined;
+  /** Like `trustMaintainerAuthoredIssue`, but for a mapping that DOES carry real reward weight (#priority-
+   *  linked-issue-gate-ownership, #priority-reward-maintainer-trust) -- e.g. `gittensor:priority`. Deliberately
+   *  a SEPARATE, distinctly-named flag rather than reusing `trustMaintainerAuthoredIssue`, so a repo that wants
+   *  the strict author-or-assignee bar preserved for its reward label keeps that behavior by default; this must
+   *  be explicitly opted into. GitHub silently refuses to assign a contributor lacking push/triage access to the
+   *  repo (`ensurePullRequestAssignee`'s own doc comment) -- so for a repo whose issues are opened for open
+   *  pickup and rarely formally assigned, requiring a literal GitHub assignee relationship means the reward
+   *  label can structurally never propagate to most real external contributors, no matter how the assign action
+   *  is timed. This flag accepts the SAME evidence bug/feature already trust (a maintainer authored the linked
+   *  issue) as sufficient for the reward label too, when a repo's operator has decided that's the intended
+   *  workflow (e.g. a maintainer hand-labels an issue `gittensor:priority` specifically to attract ANY
+   *  contributor to pick it up, per the label's own "reserved for outstanding work" framing -- the hand-picking
+   *  already happened at issue-labeling time, not gated on which contributor later closes it). */
+  trustMaintainerAuthoredIssueForReward?: boolean | undefined;
 };
 
 export type LinkedIssueLabelPropagationMode = "exclusive_type_label";
@@ -1153,6 +1225,18 @@ export type UnlinkedIssueGuardrailMode = "hold" | "off";
 export type UnlinkedIssueGuardrailConfig = {
   mode: UnlinkedIssueGuardrailMode;
   minConfidence: number;
+};
+
+/** Per-capability opt-in to the local-inference AI_ADVISORY binding (#4364): each of these four ADVISORY-ONLY
+ *  (never gate-blocking) capabilities independently decides whether it routes through env.AI_ADVISORY (when
+ *  configured) instead of the shared frontier env.AI chain. Config-as-code only, `.gittensory.yml
+ *  settings.advisoryAiRouting` (global default in shared/root config, per-repo override); defaults all-false
+ *  so an operator must deliberately opt each capability in. */
+export type AdvisoryAiRoutingConfig = {
+  slop: boolean;
+  e2eTestGen: boolean;
+  planner: boolean;
+  summaries: boolean;
 };
 
 /** A blocked contributor (#1425, anti-abuse): a GitHub `login` plus optional maintainer metadata. The converged
@@ -1215,6 +1299,10 @@ export type AgentPendingActionParams = {
   mergeMethod?: AutoMergeMethod;
   // For an `assign` action (#3182): the GitHub login to assign when a staged action is accepted.
   assignee?: string;
+  // Legacy approval-queue rows may contain this field from the reverted linked-issue assignment fan-out. New
+  // plans do not set it, actionParams does not persist it, and the executor ignores it because linked issue
+  // assignment is an authorization signal granted by maintainers, not by PR-body closing references.
+  assignLinkedIssues?: number[];
   closeComment?: string;
   // Individual close reasons, persisted for approval-queue replay so the eventual audit row keeps the structured
   // reason list rather than only the flattened `reason` field.
@@ -2353,5 +2441,44 @@ export type ReviewRecap = {
   gatePrecision: number | null;
   /** Total gate_decision predictions this report's precision rate was computed from (0 = no signal). */
   gateDecided: number;
+  summary: string[];
+};
+
+/** One repo's realized review-outcome roll-up inside a maintainer recap window (#2239, foundation for #1963).
+ *  Counts are ground-truth PR outcomes + gate/recommendation calibration totals — never predictions. */
+export type MaintainerRecapRepo = {
+  repoFullName: string;
+  /** PRs with a terminal outcome (merged or closed) over the window — the outcome-calibration sample size. */
+  reviewed: number;
+  merged: number;
+  closed: number;
+  /** Gate blocks that later MERGED anyway over the window (a gate FALSE POSITIVE), from GatePrecisionReport. */
+  gateFalsePositives: number;
+  /** Blocks a maintainer explicitly OVERRODE (the strongest false-positive signal), summed across gate types. */
+  gateOverrides: number;
+  /** Recommendations that resolved NEGATIVELY (a reversal) over the window, from the outcome calibration. */
+  reversals: number;
+};
+
+/** A serializable maintainer recap: a window of gittensory's OWN review-outcome data folded across repos.
+ *  Foundation for the #1963 recap digest — the pure data-shaping seam only (no delivery, no scheduling).
+ *  Distinct from {@link ReviewRecap} (single-repo, sourced from gate merge-precision predictions); this is
+ *  multi-repo and sourced from the gate-precision + outcome-calibration aggregators. (#2239) */
+export type RecapReport = {
+  generatedAt: string;
+  windowDays: number;
+  repos: MaintainerRecapRepo[];
+  totals: {
+    reviewed: number;
+    merged: number;
+    closed: number;
+    /** Total gate blocks over the window (the denominator of {@link gateFalsePositiveRate}). */
+    blocked: number;
+    gateFalsePositives: number;
+    gateOverrides: number;
+    reversals: number;
+    /** Aggregate false-positive rate (gateFalsePositives / blocked), null when nothing was blocked. */
+    gateFalsePositiveRate: number | null;
+  };
   summary: string[];
 };

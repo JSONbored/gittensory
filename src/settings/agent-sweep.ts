@@ -26,6 +26,16 @@ export const SWEEP_MAX_PRS = 3;
 // worst case ~25 x 9 = 225 REST calls, staggered by the same delaySeconds window the caller already uses.
 export const ISSUE_WAKE_MAX_PRS = 25;
 
+// Sibling-merge wake budget (#4005): companion to the merge-train gate -- when a PR MERGES, every OTHER open PR's
+// verdict can be invalidated (a newly-conflicting base, a duplicate cluster missing its winner, a linked-issue cap
+// that just freed up) with nothing proactively re-checking it until the next sweep tick. This handler fires ONCE
+// per merge, same one-shot shape as ISSUE_WAKE_MAX_PRS, but a merge is a far MORE common trigger than an issue
+// label/assignment change -- a busy repo can merge many PRs an hour, each firing this fan-out, so reusing
+// ISSUE_WAKE_MAX_PRS's 25 would let repeated merges inside one rate-limit window compound in a way the rarer
+// issue-wake trigger never does. 15 keeps each merge's worst case at 15 x 9 ≈ 135 REST calls (same ~9-REST-GET
+// per-PR re-review cost as the other agent-regate-pr fan-outs), staggered by the same delaySeconds window.
+export const MERGE_WAKE_MAX_PRS = 15;
+
 // Skip-if-fresh window: a PR touched within this span was almost certainly just gated by its webhook, so the
 // sweep leaves it alone for that brief moment to avoid racing the in-flight webhook review. Kept SHORT (2 min)
 // because the sweep is now LIGHT (re-gate + act, no AI) and runs every ~2 min — a just-approved PR must be
@@ -38,6 +48,12 @@ export const SWEEP_FRESHNESS_MS = 2 * 60 * 1000;
 // well above the few-seconds spread of a burst (a deploy-restart cron catch-up, or fan-out jobs that queued
 // behind a per-PR backlog and drained together).
 export const SWEEP_FANOUT_DEDUP_MS = 90 * 1000;
+
+// Draining window for backlog-convergence-sweep (#4502), the isRegateSweepDraining windowMs for THIS sweep
+// specifically -- distinct from SWEEP_FRESHNESS_MS because this sweep runs every ~30 min (not ~2 min), so its
+// own per-PR dispatch batch can legitimately still be draining minutes after fan-out. Sized to roughly match its
+// own cron cadence, mirroring how SWEEP_FRESHNESS_MS is sized to the ~2-min regate-sweep cadence.
+export const BACKLOG_CONVERGENCE_SWEEP_FRESHNESS_MS = 30 * 60 * 1000;
 
 // Candidate ordering mode (#3815, RepositorySettings["regateSweepOrderMode"]). "staleness" (default) is
 // selectRegateCandidates' original ordering; "oldest-first" is opt-in per repo. See the function doc comment
@@ -69,6 +85,17 @@ export type RegateSweepOrderMode = "staleness" | "oldest-first";
  * staleness key so continued periodic re-gating keeps converging instead of pinning the oldest PRs forever.
  * Selection-time only: real-time webhook-driven review is not gated by this sort and can still process any PR
  * out of order at any moment.
+ *
+ * `priorityPullNumbers` (outage repair -- surfaceRepairPriorityPullNumbers, processors.ts) affects ELIGIBILITY
+ * only, never final order (#selfhost-fifo-ordering): a repair candidate bypasses the freshness guard
+ * (`priorityBypassesFreshness`) and stays in the oldest-first pool even once it already has a `lastRegatedAt`
+ * stamp (`hasRepairPriority` in the pool filter below) -- but it is NOT sorted ahead of the rest of the queue.
+ * An earlier revision additionally sorted repair candidates first, which let a newer PR needing repair (e.g.
+ * opened during an extended pause, so it has never published anything) jump ahead of older PRs that merely
+ * went stale -- observed live as PRs dispatching out of their creation/staleness order ("spraying") whenever a
+ * repo had a mixed backlog of repaired and ordinary candidates. Every eligible PR -- repair or not -- is now
+ * ordered by the SAME `orderKey` (+ PR-number tiebreak), so a sweep processes its queue in one deterministic
+ * order every time, regardless of how many candidates happen to need repair.
  */
 export function selectRegateCandidates(input: {
   pulls: PullRequestRecord[];
@@ -115,8 +142,6 @@ export function selectRegateCandidates(input: {
     input.priorityPullNumbers instanceof Set
       ? input.priorityPullNumbers
       : new Set(input.priorityPullNumbers ?? []);
-  const repairPriority = (pr: PullRequestRecord): number =>
-    priorityPullNumbers.has(pr.number) ? 0 : 1;
   const eligible = input.pulls
     .filter((pr) => pr.state === "open" && !pr.isDraft)
     .filter((pr) => {
@@ -133,23 +158,29 @@ export function selectRegateCandidates(input: {
   };
   const hasRepairPriority = (pr: PullRequestRecord): boolean =>
     priorityPullNumbers.has(pr.number);
+  // One-shot review, fail-closed (#never-endless-reregate, incident 2026-07-09): a PR the sweep has ALREADY
+  // regated even once is permanently ineligible for future sweep candidacy -- full stop, no re-check-for-drift
+  // window, no periodic revisit. This deliberately drops the "catch silent drift" behavior the sweep used to
+  // provide (a moved base, a merged sibling duplicate, a changed focus-manifest could previously go unnoticed
+  // until the next real push) -- a PR gets exactly one automatic review at a given head SHA. Re-review is
+  // opt-in only, through two channels neither of which is this sweep: (1) a genuinely new push stamps a new
+  // headSha and is handled entirely by the real-time webhook path, never this sort (see doc comment above);
+  // (2) an explicit maintainer-triggered re-review (the PR panel's re-run checkbox, role-gated, never
+  // identity-hardlocked) also runs through the webhook path, not the sweep. `hasRepairPriority` remains a
+  // narrow bypass: it means THIS PR's prior review never actually landed (a crashed/incomplete publish), so
+  // retrying it delivers the one review it was owed, not a second one.
+  const candidates = eligible.filter(
+    (pr) => !hasBeenRegated(pr) || hasRepairPriority(pr),
+  );
   const oldestFirstInitialDrain =
     orderMode === "oldest-first" &&
-    eligible.some((pr) => !hasBeenRegated(pr) && !hasRepairPriority(pr));
-  const candidates = oldestFirstInitialDrain
-    ? eligible.filter((pr) => !hasBeenRegated(pr) || hasRepairPriority(pr))
-    : eligible;
+    candidates.some((pr) => !hasBeenRegated(pr) && !hasRepairPriority(pr));
   const orderKey =
     orderMode === "oldest-first" && oldestFirstInitialDrain
       ? creationOrder
       : regateProgress;
   return candidates
-    .sort(
-      (a, b) =>
-        repairPriority(a) - repairPriority(b) ||
-        orderKey(a) - orderKey(b) ||
-        a.number - b.number,
-    )
+    .sort((a, b) => orderKey(a) - orderKey(b) || a.number - b.number)
     .slice(0, Math.max(0, max));
 }
 

@@ -12,6 +12,7 @@ import {
 } from "../../src/services/ai-review";
 import { createTestEnv } from "../helpers/d1";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
+import { inlineFindingCategory } from "../../src/review/inline-comments-select";
 
 const {
   parseModelReview,
@@ -3113,7 +3114,7 @@ describe("pure helpers", () => {
     ]);
   });
 
-  it("parseModelReview parses a valid category, drops one outside the fixed enum, and leaves it absent when omitted (#1958)", () => {
+  it("parseModelReview keeps valid categories and leaves unknown or absent values for fallback (#2147)", () => {
     const json = JSON.stringify({
       assessment: "ok",
       blockers: [],
@@ -3123,13 +3124,41 @@ describe("pure helpers", () => {
         { path: "src/a.ts", line: 2, severity: "nit", body: "SQL injection risk.", category: "security" },
         { path: "src/b.ts", line: 4, severity: "nit", body: "Made up category.", category: "readability" },
         { path: "src/c.ts", line: 6, severity: "nit", body: "No category at all." },
+        { path: "src/d.ts", line: 8, severity: "nit", body: "Performance hint.", category: "performance" },
       ],
     });
-    expect(parseModelReview(json)?.inlineFindings).toEqual([
+    const inlineFindings = parseModelReview(json)?.inlineFindings;
+    expect(inlineFindings).toEqual([
       { path: "src/a.ts", line: 2, severity: "nit", body: "SQL injection risk.", category: "security" },
       { path: "src/b.ts", line: 4, severity: "nit", body: "Made up category." },
       { path: "src/c.ts", line: 6, severity: "nit", body: "No category at all." },
+      { path: "src/d.ts", line: 8, severity: "nit", body: "Performance hint.", category: "performance" },
     ]);
+    expect(inlineFindings).toHaveLength(4);
+    expect(inlineFindingCategory(inlineFindings![1]!)).toBe("correctness");
+  });
+
+  it("parseModelReview lets fallback classify invalid security-like model categories as security (regression)", () => {
+    const json = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      inlineFindings: [
+        {
+          path: "src/query.ts",
+          line: 4,
+          severity: "nit",
+          body: "This SQL injection risk also exposes authentication secrets.",
+          category: "readability",
+        },
+      ],
+    });
+    const inlineFindings = parseModelReview(json)!.inlineFindings;
+    expect(inlineFindings).toHaveLength(1);
+    const finding = inlineFindings[0]!;
+    expect(finding.category).toBeUndefined();
+    expect(inlineFindingCategory(finding)).toBe("security");
   });
 
   it("parseModelReview keeps findings but drops empty, whitespace-only, and malformed suggestions (#2138)", () => {

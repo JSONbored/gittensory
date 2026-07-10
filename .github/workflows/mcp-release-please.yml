@@ -30,9 +30,13 @@ concurrency:
   group: mcp-release-please
   cancel-in-progress: false
 
+# The release-please action can create public tags and GitHub Releases before it dispatches
+# the package publish workflows. Keep the whole job behind the protected release environment
+# so those release artifacts have the same approval boundary as the npm publish jobs.
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 15
     permissions:
       contents: write
@@ -52,20 +56,62 @@ jobs:
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # release-please's extra-files JSON-path updater doesn't reliably reach package-lock.json's
+      # per-workspace version fields (keys containing "/", nested under a manifest-mode component
+      # block) -- confirmed empirically (both the mcp-v0.7.0 dry run's precursor and the first two
+      # engine-v0.2.0 dry runs left it stale, breaking npm ci with "Missing: <pkg>@<version> from
+      # lock file"). Patches it directly on whichever release branch(es) release-please just
+      # created/updated, using the same branch naming convention its own commits already rely on.
+      - name: Sync package-lock.json on any release branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          trusted_sync_script="${RUNNER_TEMP}/sync-release-lockfile-versions.mjs"
+          cp scripts/sync-release-lockfile-versions.mjs "$trusted_sync_script"
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          gh auth setup-git
+          for component in mcp engine; do
+            branch="release-please--branches--main--components--${component}"
+            if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "No release branch for $component, skipping."
+              continue
+            fi
+            git fetch origin "$branch"
+            git checkout -B "sync-check-${component}" "origin/$branch"
+            node "$trusted_sync_script" packages/gittensory-mcp packages/gittensory-engine
+            if git diff --quiet package-lock.json; then
+              echo "package-lock.json already in sync on $branch."
+            else
+              git add package-lock.json
+              git commit -m "chore(release): sync package-lock.json"
+              git push origin "HEAD:$branch"
+            fi
+          done
+
       # release-please creates the component tag + GitHub Release with GITHUB_TOKEN, which (by
       # GitHub's recursion-prevention rule) does NOT fire push/tag-based workflows. workflow_dispatch
       # IS exempt from that rule, so dispatch the OIDC publish workflow explicitly, telling it
       # release-please already created the tag/release (released_by_release_please=true skips both
       # workflows' own tag-creation and GitHub-release steps). Without this, merging a Release PR
       # would silently never publish.
+      #
+      # Dispatched against the release tag itself, NOT main: main can move between this step and
+      # the dispatched run actually starting (anything else merging in that window), and the
+      # publish workflow's own safety check hard-fails if the commit it's building doesn't match
+      # the tag release-please just created (confirmed live: engine-v0.2.0's first dry run hit
+      # exactly this race when an unrelated PR merged seconds apart). A tag doesn't move, so
+      # dispatching against it makes the publish deterministic regardless of main's activity.
       - name: Dispatch MCP publish
         if: ${{ steps.release.outputs['packages/gittensory-mcp--release_created'] == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run npm-publish.yml --ref main -f released_by_release_please=true
+        run: gh workflow run npm-publish.yml --ref "${{ steps.release.outputs['packages/gittensory-mcp--tag_name'] }}" -f released_by_release_please=true
 
       - name: Dispatch Engine publish
         if: ${{ steps.release.outputs['packages/gittensory-engine--release_created'] == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run publish-engine.yml --ref main -f released_by_release_please=true
+        run: gh workflow run publish-engine.yml --ref "${{ steps.release.outputs['packages/gittensory-engine--tag_name'] }}" -f released_by_release_please=true

@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, codexErrorFromStdout, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, isAiProviderHealthy, markAiProviderUnhealthyAtBoot, resetAiProviderCircuitBreakerForTest, resetAiProviderHealthForTest, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexAuthPath, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveCodexFirstOutputTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, resolveSubscriptionCliPath, redactSecrets, routeProviders, shouldMarkAiProviderUnhealthyAtBoot, subscriptionCliEnv } from "../../src/selfhost/ai";
+import { assertNoLegacySharedAiEnv, buildProvider, claudeErrorStatus, codexErrorFromStdout, createAnthropicAi, createChainAi, createClaudeCodeAi, createCodexAi, createOpenAiCompatibleAi, createSelfHostAi, extractCliText, extractCliUsage, isAiProviderHealthy, markAiProviderUnhealthyAtBoot, resetAiProviderCircuitBreakerForTest, resetAiProviderHealthForTest, resolveAiReviewerPlan, resolveClaudeCliTimeoutMs, resolveCodexAuthPath, resolveCodexCliTimeoutMs, resolveCodexEffort, resolveCodexFirstOutputTimeoutMs, resolveEffort, resolveModel, resolveProviderNames, resolveRequiredCliProviders, resolveSubscriptionCliPath, redactSecrets, routeProviders, shouldMarkAiProviderUnhealthyAtBoot, subscriptionCliEnv, withAdvisoryAiEnv } from "../../src/selfhost/ai";
 import { labelSelfHostReviewerModel, labelSelfHostReviewerModels } from "../../src/selfhost/ai-config";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 
@@ -115,6 +115,41 @@ describe("createOpenAiCompatibleAi (#979)", () => {
     const first = calls[0];
     expect(first?.url).toBe("http://ollama:11434/v1/chat/completions"); // trailing slash trimmed
     expect(first?.body.model).toBe("llama3.1");
+  });
+
+  it("only sends an Authorization header when this OpenAI-compatible provider has its own apiKey", async () => {
+    const authHeaders: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init?: RequestInit) => {
+      authHeaders.push(new Headers(init?.headers).get("authorization"));
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+
+    await createOpenAiCompatibleAi({ baseUrl: "http://advisory.local/v1" }).run("m", { prompt: "x" });
+    await createOpenAiCompatibleAi({ baseUrl: "http://advisory.local/v1", apiKey: "sk-advisory" }).run("m", { prompt: "x" });
+
+    expect(authHeaders).toEqual([null, "Bearer sk-advisory"]);
+  });
+
+  it("forwards providerOptions verbatim as the request's `options` field (#4327/#4335 num_ctx capping)", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    const ai = createOpenAiCompatibleAi({ baseUrl: "http://ollama:11434/v1" });
+    await ai.run("qwen3-vl:8b-instruct", { messages: [{ role: "user", content: "x" }], providerOptions: { num_ctx: 4096 } });
+    expect(body?.options).toEqual({ num_ctx: 4096 });
+  });
+
+  it("omits `options` entirely from the request body when providerOptions is unset (byte-identical to before)", async () => {
+    let body: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init: { body: string }) => {
+      body = JSON.parse(init.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    }));
+    const ai = createOpenAiCompatibleAi({ baseUrl: "http://ollama:11434/v1" });
+    await ai.run("llama3.1", { messages: [{ role: "user", content: "x" }] });
+    expect("options" in (body ?? {})).toBe(false);
   });
 
   it("throws on a non-OK response so the caller degrades", async () => {
@@ -399,6 +434,42 @@ describe("createChainAi (fallback)", () => {
     expect(logged.pullNumber).toBeUndefined();
     expect(logged.attempt).toBeUndefined();
     errorSpy.mockRestore();
+  });
+});
+
+describe("AI provider request duration/error metrics (#4367)", () => {
+  it("records a duration observation and no error on a successful call", async () => {
+    const provider = { name: "gpu-metrics-ok-provider", ai: { run: async () => ({ response: "ok" }) } };
+    await createChainAi([provider]).run("m", { prompt: "review this" });
+    const metrics = await renderMetrics();
+    expect(metrics).toContain('gittensory_ai_provider_request_duration_seconds_count{provider="gpu-metrics-ok-provider",request_kind="review"} 1');
+    expect(metrics).not.toContain('gittensory_ai_provider_request_errors_total{provider="gpu-metrics-ok-provider"');
+  });
+
+  it("labels an embedding call's duration by request_kind=embedding", async () => {
+    const provider = { name: "gpu-metrics-embed-provider", ai: { run: async () => ({ response: "ok" }) } };
+    await createChainAi([provider]).run("m", { text: ["chunk one", "chunk two"] });
+    const metrics = await renderMetrics();
+    expect(metrics).toContain('gittensory_ai_provider_request_duration_seconds_count{provider="gpu-metrics-embed-provider",request_kind="embedding"} 1');
+  });
+
+  it("records duration AND increments the error counter on a real failure", async () => {
+    const provider = { name: "gpu-metrics-fail-provider", ai: { run: async () => { throw new Error("boom"); } } };
+    await expect(createChainAi([provider]).run("m", { prompt: "review this" })).rejects.toThrow(/boom/);
+    const metrics = await renderMetrics();
+    expect(metrics).toContain('gittensory_ai_provider_request_duration_seconds_count{provider="gpu-metrics-fail-provider",request_kind="review"} 1');
+    expect(metrics).toContain('gittensory_ai_provider_request_errors_total{provider="gpu-metrics-fail-provider",request_kind="review"} 1');
+  });
+
+  it("records duration but NOT the error counter for an expected embedding-routing fallback (matches gittensory_ai_provider_failures_total's exemption)", async () => {
+    const provider = {
+      name: "gpu-metrics-routing-provider",
+      ai: { run: async () => { throw new Error("claude_code_no_embed"); } },
+    };
+    await expect(createChainAi([provider]).run("m", { text: ["chunk"] })).rejects.toThrow();
+    const metrics = await renderMetrics();
+    expect(metrics).toContain('gittensory_ai_provider_request_duration_seconds_count{provider="gpu-metrics-routing-provider",request_kind="embedding"} 1');
+    expect(metrics).not.toContain('gittensory_ai_provider_request_errors_total{provider="gpu-metrics-routing-provider"');
   });
 });
 
@@ -1754,5 +1825,32 @@ describe("redactSecrets — strip credentials from untrusted CLI stderr before i
     expect(redactSecrets("Invalid API key · auth_error")).toBe("Invalid API key · auth_error");
     // "disk-usage-report-2024-summary" must survive — the \b anchor prevents an in-word `sk-` false positive
     expect(redactSecrets("disk-usage-report-2024-summary failed")).toBe("disk-usage-report-2024-summary failed");
+  });
+});
+
+describe("withAdvisoryAiEnv (#4364 — per-capability local-inference routing)", () => {
+  const frontierAi = { run: async () => ({ response: "frontier" }) };
+  const advisoryAi = { run: async () => ({ response: "advisory" }) };
+
+  it("swaps .AI to AI_ADVISORY when the capability opted in AND the binding is configured", () => {
+    const env = { AI: frontierAi, AI_ADVISORY: advisoryAi } as unknown as Env;
+    const result = withAdvisoryAiEnv(env, true);
+    expect(result.AI).toBe(advisoryAi);
+    // every other field is untouched (shallow spread, not a new unrelated object)
+    expect(result.AI_ADVISORY).toBe(advisoryAi);
+  });
+
+  it("leaves .AI unchanged when the capability did not opt in, even though the binding is configured", () => {
+    const env = { AI: frontierAi, AI_ADVISORY: advisoryAi } as unknown as Env;
+    const result = withAdvisoryAiEnv(env, false);
+    expect(result).toBe(env); // same reference — no-op, not just an equal value
+    expect(result.AI).toBe(frontierAi);
+  });
+
+  it("falls back to the shared frontier chain when opted in but AI_ADVISORY is unconfigured (byte-identical fail-safe)", () => {
+    const env = { AI: frontierAi } as unknown as Env;
+    const result = withAdvisoryAiEnv(env, true);
+    expect(result).toBe(env);
+    expect(result.AI).toBe(frontierAi);
   });
 });

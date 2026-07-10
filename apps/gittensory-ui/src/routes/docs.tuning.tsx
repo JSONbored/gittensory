@@ -133,6 +133,12 @@ function Tuning() {
           symbols defined just outside the diff hunk. Per-PR.
         </li>
         <li>
+          <code>GITTENSORY_REVIEW_E2E_TESTS</code> — master kill-switch for the opt-in,
+          maintainer-triggered AI-generated E2E test coverage feature. Off by default; a repo also
+          needs its own <code>features.e2eTests: true</code> override in{" "}
+          <code>.gittensory.yml</code> before the feature is active for it. Per-PR.
+        </li>
+        <li>
           <code>GITTENSORY_REVIEW_RAG</code> — retrieval-augmented context: queries the codebase
           vector index for related code and docs (callers, related modules, existing conventions)
           and appends a "Relevant existing code / docs" section to the reviewer prompt. Additive
@@ -302,6 +308,13 @@ function Tuning() {
           uses <code>60</code>, the "high" band). Set <code>gate.slop.aiAdvisory: true</code> to add
           a free advisory-only <code>ai_slop_advisory</code> finding — it never feeds the slop score
           or the gate.
+        </li>
+        <li>
+          <code>gate.copycat.mode</code> — code containment/similarity gate against prior art (repo
+          history, other PRs). Default <code>off</code>. Escalating tiers: <code>warn</code>,{" "}
+          <code>label</code>, <code>block</code>, plus a further strikes escalation for repeat
+          offenders. Pair it with <code>gate.copycat.minScore</code> (0–100). Config only today —
+          the detection engine has not shipped yet, so this has no effect until it does.
         </li>
         <li>
           <code>gate.mergeReadiness</code> — composite merge-readiness gate. Default{" "}

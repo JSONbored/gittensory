@@ -91,6 +91,12 @@ export interface MergeReadiness {
   ciState: "passed" | "failed" | "unverified";
   failingChecks?: string[];
   failingDetails?: CheckFailureDetail[];
+  /** Checks that reported red (e.g. a third-party app's `action_required` conclusion) but are NOT a
+   *  branch-protection required context -- so they never flip `ciState`/block merge on their own, but must
+   *  still be VISIBLE rather than silently dropped (#4414-class regression: a non-required advisory check must
+   *  neither auto-close the PR nor vanish without a trace). Rendered as its own non-blocking collapsible,
+   *  independent of `ciState`. */
+  nonRequiredFailingDetails?: CheckFailureDetail[];
 }
 
 /** The structured synthesis of the reviewers' notes that drives BOTH the legacy unified comment
@@ -256,6 +262,10 @@ export interface UnifiedCommentContext {
   extraCollapsibles?: UnifiedCollapsible[];
   /** Re-run checkbox label, e.g. "Re-run Gittensory review" (omitted = no checkbox). */
   reRunLabel?: string;
+  /** #4589: generate-tests checkbox label, e.g. "Generate an AI Playwright test for this PR" (omitted = no
+   *  checkbox). Same top-level-outside-the-blockquote placement as reRunLabel, for the same reason (see
+   *  renderUnifiedReviewComment's own comment on why the re-run checkbox can't render inside the alert). */
+  generateTestsLabel?: string;
   /** Footer markdown (earning + branding), rendered under a divider. */
   footerMarkdown?: string;
   /** Force the status (e.g. the host knows it auto-merged). */
@@ -524,6 +534,22 @@ function failingChecksBlock(readiness: MergeReadiness | undefined): string {
   return [...new Set(names)].map((name) => `- ${escapePublicHtmlAngles(name)}`).join("\n");
 }
 
+/** Render non-required-but-red checks (#4414-class advisory holds) as a `name — reason` bullet list, same
+ *  shape/public-safety rules as `failingChecksBlock`. Unlike that one, this is NOT gated on `ciState` -- these
+ *  checks by definition never flip `ciState`, so the section must render purely off the data's own presence. */
+function nonRequiredFailingChecksBlock(readiness: MergeReadiness | undefined): string {
+  const details = readiness?.nonRequiredFailingDetails ?? [];
+  const lines = details
+    .map((detail) => {
+      const name = escapePublicHtmlAngles(detail.name.trim());
+      if (!name) return "";
+      const reason = detail.summary?.trim() ? ` — ${escapePublicHtmlAngles(detail.summary.trim())}` : "";
+      return `- ${name}${reason}`;
+    })
+    .filter((line) => line.length > 0);
+  return lines.join("\n");
+}
+
 function signalTable(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
   const blockerCount = (input.blockers ?? []).length;
   const reviewerEvidence =
@@ -651,6 +677,13 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
   const failingChecks = failingChecksBlock(input.readiness);
   if (failingChecks) blocks.push(`**CI checks failing**\n${failingChecks}`);
 
+  // Non-required-but-red checks (#4414-class advisory holds): visible but never blocking, so this renders
+  // independent of ciState/status -- omitted entirely when nothing was flagged (default) ⇒ byte-identical.
+  const nonRequiredFailingChecks = nonRequiredFailingChecksBlock(input.readiness);
+  if (nonRequiredFailingChecks && verbosity !== "quiet") {
+    blocks.push(details("Flagged checks (non-blocking)", nonRequiredFailingChecks, undefined, collapsiblesOpen));
+  }
+
   blocks.push(signalTable(input, ctx));
 
   // Linked-issue satisfaction advisory (#2174): additive, collapsed section — omitted entirely when the host
@@ -676,13 +709,19 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
   );
   if (ctx.footerMarkdown?.trim()) blocks.push(`---\n${ctx.footerMarkdown.trim()}`);
 
-  // The re-run checkbox MUST render at top level, OUTSIDE the alert blockquote. GitHub disables interactive
+  // Every action checkbox MUST render at top level, OUTSIDE the alert blockquote. GitHub disables interactive
   // task-list checkboxes inside a blockquote (every line `> `-prefixed by asAlert), so a checkbox emitted via
-  // asAlert can never be ticked — no issue_comment.edited fires and maybeProcessPrPanelRetrigger never runs.
-  // Appending it after the alert keeps the box clickable AND keeps the checked-marker regex matching a non-
-  // quoted `- [x] <marker> …` line. The PR_PANEL_COMMENT_MARKER prepended by the bridge still leads the body.
+  // asAlert can never be ticked — no issue_comment.edited fires and neither maybeProcessPrPanelRetrigger nor
+  // maybeProcessPrPanelGenerateTests (#4589) ever runs. Appending them after the alert keeps each box clickable
+  // AND keeps its checked-marker regex matching a non-quoted `- [x] <marker> …` line. The PR_PANEL_COMMENT_MARKER
+  // prepended by the bridge still leads the body. Order is re-run first, generate-tests second (#4589) — stable
+  // and matches the order the two features shipped in.
   const alerted = asAlert(meta.alert, blocks.join("\n\n"));
-  return ctx.reRunLabel ? `${alerted}\n\n- [ ] ${ctx.reRunLabel}` : alerted;
+  const checkboxLines = [
+    ctx.reRunLabel ? `- [ ] ${ctx.reRunLabel}` : null,
+    ctx.generateTestsLabel ? `- [ ] ${ctx.generateTestsLabel}` : null,
+  ].filter((line): line is string => line !== null);
+  return checkboxLines.length > 0 ? `${alerted}\n\n${checkboxLines.join("\n")}` : alerted;
 }
 
 /**

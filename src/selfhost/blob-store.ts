@@ -5,7 +5,7 @@
 // surface those two paths use; every other R2Bucket method is unused on self-host. Node-only (fs import never
 // reaches the Worker bundle — wired in server.ts behind REVIEW_AUDIT_DIR). MODULAR + off by default: unset
 // REVIEW_AUDIT_DIR ⇒ no REVIEW_AUDIT binding ⇒ captures degrade to on-demand exactly as before.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 
 /** Build a filesystem-backed REVIEW_AUDIT store rooted at `baseDir`. Keys are app-generated
@@ -34,6 +34,12 @@ export function createFsBlobStore(baseDir: string): R2Bucket {
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, Buffer.from(await new Response(value ?? "").arrayBuffer()));
       return { key } as unknown as R2Object;
+    },
+    /** Remove a stored object. A missing file is not an error (matches R2's own delete-is-idempotent
+     *  semantics) -- unlike before this method existed, callers no longer hit a synchronous
+     *  "not a function" TypeError (see actions-fallback.ts's dispatch-marker cleanup). */
+    async delete(key: string): Promise<void> {
+      await rm(pathFor(key), { force: true });
     },
   };
   return store as unknown as R2Bucket;

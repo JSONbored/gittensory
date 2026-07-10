@@ -6,6 +6,7 @@
 export {
   COMMENT_VERBOSITY_LEVELS,
   CONVERGED_FEATURE_KEYS,
+  E2E_TEST_DELIVERY_MODES,
   EMPTY_AUTO_REVIEW_CONFIG,
   EMPTY_MAX_FINDINGS_CONFIG,
   EMPTY_SELF_HOST_AI_MODEL_CONFIG,
@@ -30,10 +31,12 @@ export {
   repoDocGenerationConfigToJson,
   reviewConfigToJson,
   reviewRecapConfigToJson,
+  maintainerRecapConfigToJson,
   settingsOverrideToJson,
   type AutoReviewConfig,
   type CommentVerbosity,
   type ConvergedFeatureKey,
+  type E2eTestDeliveryMode,
   type FocusManifest,
   type FocusManifestContentLaneConfig,
   type FocusManifestFeaturesConfig,
@@ -51,6 +54,7 @@ export {
   type FocusManifestRepoDocGenerationScope,
   type FocusManifestReviewConfig,
   type FocusManifestReviewRecapConfig,
+  type FocusManifestMaintainerRecapConfig,
   type FocusManifestSettings,
   type FocusManifestSource,
   type LabelingRule,
@@ -74,6 +78,7 @@ import { DEFAULT_TYPE_LABELS } from "../settings/pr-type-label";
 import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION } from "../review/linked-issue-label-propagation";
 import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "../review/linked-issue-hard-rules-config";
 import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guardrail-config";
+import { DEFAULT_ADVISORY_AI_ROUTING } from "../review/advisory-ai-routing-config";
 import { DEFAULT_SCREENSHOT_TABLE_GATE } from "../review/screenshot-table-gate";
 import { classifyChangedFile } from "./path-matchers";
 import {
@@ -85,6 +90,7 @@ import {
   matchesManifestPath,
   type AutoReviewConfig,
   type CommentVerbosity,
+  type E2eTestDeliveryMode,
   type FocusManifest,
   type FocusManifestFinding,
   type FocusManifestGateConfig,
@@ -162,12 +168,20 @@ export function evaluateAutoReviewSkipReason(config: AutoReviewConfig, input: Au
       return "review skipped (base branch out of scope)";
     }
   }
-  if (config.autoPauseAfterReviewedCommits !== null && config.autoPauseAfterReviewedCommits > 0) {
-    if (input.reviewedCommitCount >= config.autoPauseAfterReviewedCommits) {
-      return "review paused (commit threshold)";
-    }
+  if (isAutoReviewCommitThresholdReached(config, input.reviewedCommitCount)) {
+    return "review paused (commit threshold)";
   }
   return null;
+}
+
+/** Shared commit-threshold check (`review.auto_review.auto_pause_after_reviewed_commits`): once a PR's already
+ *  been reviewed this many times at essentially its current state, further AI spend on it should stop. Broken
+ *  out of `evaluateAutoReviewSkipReason` so a SECOND AI feature sharing the same PR (e.g. the slop advisory,
+ *  #ai-slop-repeat-spend) can reuse the identical threshold semantics without re-implementing the null/0
+ *  "unset" handling or pulling in every OTHER unrelated `auto_review` rule (draft/author/title/size/base-branch
+ *  skips) that only make sense for the primary review pass. */
+export function isAutoReviewCommitThresholdReached(config: AutoReviewConfig, reviewedCommitCount: number): boolean {
+  return config.autoPauseAfterReviewedCommits !== null && config.autoPauseAfterReviewedCommits > 0 && reviewedCommitCount >= config.autoPauseAfterReviewedCommits;
 }
 
 /** Known auto-review skip reason tokens returned by `evaluateAutoReviewSkipReason`. (#2067) */
@@ -247,7 +261,7 @@ export function composeManifestReviewInstructions(instructions: string | null, t
  *  failure). A null manifest yields the byte-identical defaults. Centralized so the AI-review caller threads them
  *  in one place with the null-manifest branch covered here (unit-tested) rather than inline in the processor.
  *  (#review-profile / #review-tone / #review-security-focus / #review-path-instructions / #review-exclude-paths / #2043 / #selfhost-ai-model-override / #1956) */
-export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; tone: string | null; securityFocus: boolean; inlineComments: boolean; suggestions: boolean; changedFilesSummary: boolean; effortScore: boolean; impactMap: boolean; cultureProfile: boolean; findingCategories: boolean; inlineCommentsPerCategory: number | null; minFindingSeverity: ReviewFindingSeverity | null; maxFindings: MaxFindingsConfig; commentVerbosity: CommentVerbosity | null; pathInstructions: ReviewPathInstruction[]; instructions: string | null; excludePaths: string[]; pathFilters: string[]; selfHostAiModel: SelfHostAiModelConfig } {
+export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { profile: ReviewProfile | null; tone: string | null; securityFocus: boolean; inlineComments: boolean; suggestions: boolean; changedFilesSummary: boolean; effortScore: boolean; impactMap: boolean; cultureProfile: boolean; findingCategories: boolean; inlineCommentsPerCategory: number | null; minFindingSeverity: ReviewFindingSeverity | null; maxFindings: MaxFindingsConfig; commentVerbosity: CommentVerbosity | null; e2eTestDelivery: E2eTestDeliveryMode | null; pathInstructions: ReviewPathInstruction[]; instructions: string | null; excludePaths: string[]; pathFilters: string[]; selfHostAiModel: SelfHostAiModelConfig } {
   // inlineComments resolves to a strict boolean — true ONLY when the manifest explicitly set review.inline_comments:
   // true; null/false/absent ⇒ false. `shouldRequestInlineFindings` (#4099) only ever checks `=== true`, so null
   // and false are functionally identical to it — collapsing here (matching every sibling field below) is simpler
@@ -270,7 +284,7 @@ export function resolveReviewPromptOverrides(manifest: FocusManifest | null): { 
   // cultureProfile resolves the same way (#2995) — true ONLY when the manifest explicitly set
   // review.culture_profile: true. The caller ANDs this per-repo opt-in with the GITTENSORY_REVIEW_CULTURE_PROFILE
   // global kill-switch (mirrors how RAG/reputation/grounding compose a global flag with a per-repo override).
-  return { profile: manifest?.review.profile ?? null, tone: manifest?.review.tone ?? null, securityFocus: manifest?.review.securityFocus === true, inlineComments: manifest?.review.inlineComments === true, suggestions: manifest?.review.suggestions === true, changedFilesSummary: manifest?.review.changedFilesSummary === true, effortScore: manifest?.review.effortScore === true, impactMap: manifest?.review.impactMap === true, cultureProfile: manifest?.review.cultureProfile === true, findingCategories: manifest?.review.findingCategories === true, inlineCommentsPerCategory: manifest?.review.inlineCommentsPerCategory ?? null, minFindingSeverity: manifest?.review.minFindingSeverity ?? null, maxFindings: manifest?.review.maxFindings ?? { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: manifest?.review.commentVerbosity ?? null, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [], pathFilters: manifest?.review.pathFilters ?? [], selfHostAiModel: resolveReviewSelfHostAiModel(manifest) };
+  return { profile: manifest?.review.profile ?? null, tone: manifest?.review.tone ?? null, securityFocus: manifest?.review.securityFocus === true, inlineComments: manifest?.review.inlineComments === true, suggestions: manifest?.review.suggestions === true, changedFilesSummary: manifest?.review.changedFilesSummary === true, effortScore: manifest?.review.effortScore === true, impactMap: manifest?.review.impactMap === true, cultureProfile: manifest?.review.cultureProfile === true, findingCategories: manifest?.review.findingCategories === true, inlineCommentsPerCategory: manifest?.review.inlineCommentsPerCategory ?? null, minFindingSeverity: manifest?.review.minFindingSeverity ?? null, maxFindings: manifest?.review.maxFindings ?? { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: manifest?.review.commentVerbosity ?? null, e2eTestDelivery: manifest?.review.e2eTestDelivery ?? null, pathInstructions: manifest?.review.pathInstructions ?? [], instructions: manifest?.review.instructions ?? null, excludePaths: manifest?.review.excludePaths ?? [], pathFilters: manifest?.review.pathFilters ?? [], selfHostAiModel: resolveReviewSelfHostAiModel(manifest) };
 }
 
 /** Resolve `review.memory` (#2179, config slice of #1964) from a possibly-null manifest (null = load failure ⇒
@@ -469,6 +483,8 @@ function applyGateConfigOverrides(effective: RepositorySettings, gate: FocusMani
   if (gate.claCheckRunName !== null) effective.claCheckRunName = gate.claCheckRunName;
   if (gate.claCheckRunAppSlug !== null) effective.claCheckRunAppSlug = gate.claCheckRunAppSlug;
   if (gate.expectedCiContexts !== null) effective.expectedCiContexts = gate.expectedCiContexts;
+  if (gate.copycatMode !== null) effective.copycatGateMode = gate.copycatMode;
+  if (gate.copycatMinScore !== null) effective.copycatGateMinScore = gate.copycatMinScore;
 }
 
 /**
@@ -496,6 +512,7 @@ export function resolveEffectiveSettings(
     linkedIssueHardRules: linkedIssueHardRulesOverride,
     unlinkedIssueGuardrail: unlinkedIssueGuardrailOverride,
     screenshotTableGate: screenshotTableGateOverride,
+    advisoryAiRouting: advisoryAiRoutingOverride,
     ...restManifestSettings
   } = manifest.settings;
   const effective: RepositorySettings = { ...dbSettings, ...restManifestSettings };
@@ -549,7 +566,19 @@ export function resolveEffectiveSettings(
       whenLabels: screenshotTableGateOverride.whenLabels ?? base.whenLabels,
       whenPaths: screenshotTableGateOverride.whenPaths ?? base.whenPaths,
       action: screenshotTableGateOverride.action ?? base.action,
+      requireViewports: screenshotTableGateOverride.requireViewports ?? base.requireViewports,
+      requireThemes: screenshotTableGateOverride.requireThemes ?? base.requireThemes,
       message: screenshotTableGateOverride.message ?? base.message,
+      skillFileUrl: screenshotTableGateOverride.skillFileUrl ?? base.skillFileUrl,
+    };
+  }
+  if (advisoryAiRoutingOverride !== undefined) {
+    const base = dbSettings.advisoryAiRouting ?? DEFAULT_ADVISORY_AI_ROUTING;
+    effective.advisoryAiRouting = {
+      slop: advisoryAiRoutingOverride.slop ?? base.slop,
+      e2eTestGen: advisoryAiRoutingOverride.e2eTestGen ?? base.e2eTestGen,
+      planner: advisoryAiRoutingOverride.planner ?? base.planner,
+      summaries: advisoryAiRoutingOverride.summaries ?? base.summaries,
     };
   }
   applyGateConfigOverrides(effective, manifest.gate);

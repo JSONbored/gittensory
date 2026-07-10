@@ -5,8 +5,10 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { buildFeasibilityVerdict } from "@jsonbored/gittensory-engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
+import { formatTable } from "../lib/format-table.js";
 
 // Read name/version from this package's own package.json (always present in any install --
 // global, npx, or local -- npm ships it regardless of the "files" allowlist) instead of hand-synced
@@ -39,6 +41,7 @@ const CLI_COMMAND_SPEC = {
   changelog: [],
   completion: [],
   version: [],
+  tools: [],
   doctor: [],
   "init-client": [],
   "decision-pack": [],
@@ -53,7 +56,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "approve", "reject", "pause", "resume", "set-level"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -193,6 +196,13 @@ const checkBeforeStartShape = {
   plannedPaths: z.array(z.string()).optional(),
 };
 
+const feasibilityGateShape = {
+  claimStatus: z.enum(["unclaimed", "claimed", "solved", "unknown"]),
+  duplicateClusterRisk: z.enum(["none", "low", "medium", "high"]),
+  issueStatus: z.enum(["ready", "needs_proof", "hold", "do_not_use", "duplicate", "invalid", "missing"]),
+  found: z.boolean().optional(),
+};
+
 const findOpportunitiesShape = {
   targets: z
     .array(
@@ -211,6 +221,15 @@ const findOpportunitiesShape = {
     })
     .optional(),
   limit: z.number().int().min(1).max(50).optional(),
+};
+
+const issueRagShape = {
+  owner: z.string(),
+  repo: z.string(),
+  title: z.string(),
+  body: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  topK: z.number().int().min(1).max(12).optional(),
 };
 
 const lintPrTextShape = {
@@ -351,6 +370,167 @@ const agentRunIdShape = {
   runId: z.string().min(1),
 };
 
+// Single source of truth for stdio tool name + one-line description (#2233).
+// Registration and `gittensory-mcp tools` both read this list.
+const STDIO_TOOL_DESCRIPTORS = [
+  {
+    name: "gittensory_get_repo_context",
+    description: "Return the canonical repo intelligence bundle from the private Gittensory API.",
+  },
+  {
+    name: "gittensory_get_maintainer_noise",
+    description: "Return the maintainer queue-noise triage report for a repo: a noise score/level, the specific noise sources to clear first, and recommended maintainer actions. Maintainer-authenticated; advisory only.",
+  },
+  {
+    name: "gittensory_preflight_pr",
+    description: "Preflight planned PR metadata against lane, duplicate, linked issue, test, and queue signals.",
+  },
+  {
+    name: "gittensory_validate_linked_issue",
+    description: "Report whether linking an issue will actually earn the standard linked-issue scoring multiplier for a planned PR — open, valid, single-owner, solvable by this PR — with the blocking reason if not. The raw multiplier value stays private.",
+  },
+  {
+    name: "gittensory_check_before_start",
+    description: "Before writing any code, check whether an issue is already claimed or solved, whether a duplicate cluster is forming, and whether it is a valid target. Returns a go/raise/avoid recommendation with public-safe reasons from cached metadata.",
+  },
+  {
+    name: "gittensory_find_opportunities",
+    description: "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list filtered by your MinerGoalSpec (lane, min rank score, languages). Metadata-only, no GitHub writes.",
+  },
+  {
+    name: "gittensory_retrieve_issue_context",
+    description: "Repo-scoped issue-centric RAG retrieval for the miner analyze phase. Returns related file paths and retrieval scores from issue title/body/labels — metadata only, never source text.",
+  },
+  {
+    name: "gittensory_lint_pr_text",
+    description: "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. No source upload.",
+  },
+  {
+    name: "gittensory_validate_config",
+    description: "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+  },
+  {
+    name: "gittensory_check_slop_risk",
+    description: "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. No repo data needed.",
+  },
+  {
+    name: "gittensory_check_issue_slop",
+    description: "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only.",
+  },
+  {
+    name: "gittensory_preflight_local_diff",
+    description: "Inspect local git diff metadata and run Gittensory preflight without uploading source contents.",
+  },
+  {
+    name: "gittensory_get_registry_changes",
+    description: "Return latest cached Gittensor registry change report.",
+  },
+  {
+    name: "gittensory_get_upstream_drift",
+    description: "Return the latest cached Gittensor upstream ruleset drift status (stale/drift warnings) for MCP planning.",
+  },
+  {
+    name: "gittensory_get_label_audit",
+    description:
+      "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private Gittensory API.",
+  },
+  {
+    name: "gittensory_get_burden_forecast",
+    description:
+      "Return the repo's cached maintainer burden forecast (projected review load, queue-growth risk, and stale-PR signals) with a freshness marker, from the private Gittensory API.",
+  },
+  {
+    name: "gittensory_preview_local_pr_score",
+    description: "Inspect local diff metadata and request a private Gittensory scoring preview. No source contents are uploaded.",
+  },
+  {
+    name: "gittensory_explain_score_breakdown",
+    description: "Explain a private score preview multiplier-by-multiplier with plain-English levers and the highest-impact improvement.",
+  },
+  {
+    name: "gittensory_get_decision_pack",
+    description: "Return the canonical private contributor decision pack for a GitHub login.",
+  },
+  {
+    name: "gittensory_explain_repo_decision",
+    description: "Return the contributor/repo decision from the canonical decision pack.",
+  },
+  {
+    name: "gittensory_compare_pr_variants",
+    description: "Compare private Gittensory scoring previews across local/metadata variants.",
+  },
+  {
+    name: "gittensory_local_status",
+    description: "Return local Gittensory MCP status, inferred git repo metadata, and privacy defaults.",
+  },
+  {
+    name: "gittensory_preflight_current_branch",
+    description: "Analyze the current git branch and return PR readiness. Sends metadata only.",
+  },
+  {
+    name: "gittensory_review_pr_before_push",
+    description: "Run a single composed pre-PR review of the current branch: preflight (lane/duplicate/linked-issue/test/queue fit), slop-risk, and PR-text lint, merged into one report with an overall pass/warn/fail status. Thin composition of the existing checks — does not reimplement any of them. Sends metadata only, no source upload.",
+  },
+  {
+    name: "gittensory_preview_current_branch_score",
+    description: "Analyze the current git branch and return private scoreability context. Sends metadata only.",
+  },
+  {
+    name: "gittensory_rank_local_next_actions",
+    description: "Analyze the current git branch and rank local next actions by private reward/risk and review friction.",
+  },
+  {
+    name: "gittensory_explain_local_blockers",
+    description: "Analyze the current git branch and explain private scoreability, lane, and review blockers.",
+  },
+  {
+    name: "gittensory_remediation_plan",
+    description: "Analyze the current git branch and return an ordered public-safe remediation checklist with rerun conditions.",
+  },
+  {
+    name: "gittensory_prepare_pr_packet",
+    description: "Analyze the current git branch and return a public-safe PR packet. Sends metadata only.",
+  },
+  {
+    name: "gittensory_compare_local_variants",
+    description: "Compare current-branch metadata variants without uploading source contents.",
+  },
+  {
+    name: "gittensory_agent_plan_next_work",
+    description: "Run the deterministic Gittensory base-agent planner for a GitHub login.",
+  },
+  {
+    name: "gittensory_agent_start_run",
+    description: "Create a queued copilot-only Gittensory base-agent run.",
+  },
+  {
+    name: "gittensory_agent_get_run",
+    description: "Fetch a persisted Gittensory base-agent run.",
+  },
+  {
+    name: "gittensory_agent_explain_next_action",
+    description: "Explain the next deterministic action and blocker context for a GitHub login.",
+  },
+  {
+    name: "gittensory_agent_prepare_pr_packet",
+    description: "Prepare a public-safe PR packet from current branch metadata. Sends metadata only.",
+  },
+  {
+    name: "gittensory_local_status_structured",
+    description: "Return local Gittensory MCP status with a validated structured output schema.",
+  },
+  {
+    name: "gittensory_feasibility_gate",
+    description: "Pure local go/raise/avoid feasibility verdict from claim status, duplicate-cluster risk, and issue quality/lifecycle status — the same discriminants the analyze-phase feasibility gate branches on. No API round-trip.",
+  },
+];
+
+function stdioToolDescription(name) {
+  const tool = STDIO_TOOL_DESCRIPTORS.find((entry) => entry.name === name);
+  if (!tool) throw new Error(`Unknown stdio tool descriptor: ${name}`);
+  return tool.description;
+}
+
 if (cliArgs[0] && cliArgs[0] !== "--stdio") {
   const exitCode = await runCli(cliArgs);
   process.exit(typeof exitCode === "number" ? exitCode : 0);
@@ -364,7 +544,7 @@ const server = new McpServer({
 server.registerTool(
   "gittensory_get_repo_context",
   {
-    description: "Return the canonical repo intelligence bundle from the private Gittensory API.",
+    description: stdioToolDescription("gittensory_get_repo_context"),
     inputSchema: ownerRepoShape,
   },
   async ({ owner, repo }) => {
@@ -374,9 +554,21 @@ server.registerTool(
 );
 
 server.registerTool(
+  "gittensory_get_maintainer_noise",
+  {
+    description: stdioToolDescription("gittensory_get_maintainer_noise"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult("Gittensory maintainer noise report.", await apiGet(`${prefix}/maintainer-noise`));
+  },
+);
+
+server.registerTool(
   "gittensory_preflight_pr",
   {
-    description: "Preflight planned PR metadata against lane, duplicate, linked issue, test, and queue signals.",
+    description: stdioToolDescription("gittensory_preflight_pr"),
     inputSchema: preflightShape,
   },
   async (input) => toolResult("Gittensory PR preflight.", await apiPost("/v1/preflight/pr", input)),
@@ -385,8 +577,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_validate_linked_issue",
   {
-    description:
-      "Report whether linking an issue will actually earn the standard linked-issue scoring multiplier for a planned PR — open, valid, single-owner, solvable by this PR — with the blocking reason if not. The raw multiplier value stays private.",
+    description: stdioToolDescription("gittensory_validate_linked_issue"),
     inputSchema: validateLinkedIssueShape,
   },
   async ({ owner, repo, issueNumber, plannedChange }) => {
@@ -399,8 +590,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_check_before_start",
   {
-    description:
-      "Before writing any code, check whether an issue is already claimed or solved, whether a duplicate cluster is forming, and whether it is a valid target. Returns a go/raise/avoid recommendation with public-safe reasons from cached metadata.",
+    description: stdioToolDescription("gittensory_check_before_start"),
     inputSchema: checkBeforeStartShape,
   },
   async ({ owner, repo, issueNumber, title, plannedPaths }) => {
@@ -417,8 +607,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_find_opportunities",
   {
-    description:
-      "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list filtered by your MinerGoalSpec (lane, min rank score, languages). Metadata-only, no GitHub writes.",
+    description: stdioToolDescription("gittensory_find_opportunities"),
     inputSchema: findOpportunitiesShape,
   },
   async ({ targets, searchQuery, goalSpec, limit }) => {
@@ -433,10 +622,28 @@ server.registerTool(
 );
 
 server.registerTool(
+  "gittensory_retrieve_issue_context",
+  {
+    description: stdioToolDescription("gittensory_retrieve_issue_context"),
+    inputSchema: issueRagShape,
+  },
+  async ({ owner, repo, title, body, labels, topK }) => {
+    const payload = {
+      owner,
+      repo,
+      title,
+      ...(body ? { body } : {}),
+      ...(labels && labels.length > 0 ? { labels } : {}),
+      ...(topK != null ? { topK } : {}),
+    };
+    return toolResult("Gittensory issue-centric RAG context.", await apiPost("/v1/issue-rag/retrieve", payload));
+  },
+);
+
+server.registerTool(
   "gittensory_lint_pr_text",
   {
-    description:
-      "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. No source upload.",
+    description: stdioToolDescription("gittensory_lint_pr_text"),
     inputSchema: lintPrTextShape,
   },
   async (input) => toolResult("Gittensory PR-text lint.", await apiPost("/v1/lint/pr-text", input)),
@@ -445,8 +652,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_validate_config",
   {
-    description:
-      "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+    description: stdioToolDescription("gittensory_validate_config"),
     inputSchema: validateConfigShape,
   },
   async (input) => toolResult("Gittensory manifest validation.", await apiPost("/v1/validate/focus-manifest", input)),
@@ -455,8 +661,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_check_slop_risk",
   {
-    description:
-      "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. No repo data needed.",
+    description: stdioToolDescription("gittensory_check_slop_risk"),
     inputSchema: checkSlopRiskShape,
   },
   async (input) => toolResult("Gittensory slop-risk self-check.", await apiPost("/v1/lint/slop-risk", input)),
@@ -465,8 +670,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_check_issue_slop",
   {
-    description:
-      "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only.",
+    description: stdioToolDescription("gittensory_check_issue_slop"),
     inputSchema: checkIssueSlopShape,
   },
   async (input) => toolResult("Gittensory issue-slop self-check.", await apiPost("/v1/lint/issue-slop", input)),
@@ -475,7 +679,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preflight_local_diff",
   {
-    description: "Inspect local git diff metadata and run Gittensory preflight without uploading source contents.",
+    description: stdioToolDescription("gittensory_preflight_local_diff"),
     inputSchema: localDiffShape,
   },
   async (input) => {
@@ -502,16 +706,60 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_registry_changes",
   {
-    description: "Return latest cached Gittensor registry change report.",
+    description: stdioToolDescription("gittensory_get_registry_changes"),
     inputSchema: {},
   },
   async () => toolResult("Gittensory registry changes.", await apiGet("/v1/registry/changes")),
 );
 
 server.registerTool(
+  "gittensory_get_upstream_drift",
+  {
+    description: stdioToolDescription("gittensory_get_upstream_drift"),
+    inputSchema: {},
+  },
+  async () => toolResult("Gittensory upstream drift status.", await apiGet("/v1/upstream/drift")),
+);
+
+server.registerTool(
+  "gittensory_get_label_audit",
+  {
+    description: stdioToolDescription("gittensory_get_label_audit"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const intelligence = await apiGet(`${prefix}/intelligence`);
+    return toolResult("Gittensory label audit.", {
+      repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
+      generatedAt: intelligence?.generatedAt,
+      labelAudit: intelligence?.labelAudit ?? null,
+    });
+  },
+);
+
+server.registerTool(
+  "gittensory_get_burden_forecast",
+  {
+    description: stdioToolDescription("gittensory_get_burden_forecast"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const intelligence = await apiGet(`${prefix}/intelligence`);
+    return toolResult("Gittensory burden forecast.", {
+      repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
+      generatedAt: intelligence?.generatedAt,
+      burdenForecast: intelligence?.burdenForecast ?? null,
+      burdenForecastFreshness: intelligence?.burdenForecastFreshness ?? null,
+    });
+  },
+);
+
+server.registerTool(
   "gittensory_preview_local_pr_score",
   {
-    description: "Inspect local diff metadata and request a private Gittensory scoring preview. No source contents are uploaded.",
+    description: stdioToolDescription("gittensory_preview_local_pr_score"),
     inputSchema: localScoreShape,
   },
   async (input) => toolResult("Gittensory private local PR scoring preview.", await previewLocalScore(await withClientWorkspaceRoots(input))),
@@ -520,7 +768,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_explain_score_breakdown",
   {
-    description: "Explain a private score preview multiplier-by-multiplier with plain-English levers and the highest-impact improvement.",
+    description: stdioToolDescription("gittensory_explain_score_breakdown"),
     inputSchema: localScoreShape,
   },
   async (input) => {
@@ -568,7 +816,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_decision_pack",
   {
-    description: "Return the canonical private contributor decision pack for a GitHub login.",
+    description: stdioToolDescription("gittensory_get_decision_pack"),
     inputSchema: loginShape,
   },
   async ({ login }) => {
@@ -580,7 +828,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_explain_repo_decision",
   {
-    description: "Return the contributor/repo decision from the canonical decision pack.",
+    description: stdioToolDescription("gittensory_explain_repo_decision"),
     inputSchema: loginRepoShape,
   },
   async ({ login, owner, repo }) => {
@@ -592,7 +840,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_compare_pr_variants",
   {
-    description: "Compare private Gittensory scoring previews across local/metadata variants.",
+    description: stdioToolDescription("gittensory_compare_pr_variants"),
     inputSchema: variantsShape,
   },
   async ({ variants }) => {
@@ -607,7 +855,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_local_status",
   {
-    description: "Return local Gittensory MCP status, inferred git repo metadata, and privacy defaults.",
+    description: stdioToolDescription("gittensory_local_status"),
     inputSchema: {
       cwd: z.string().optional(),
       baseRef: z.string().optional(),
@@ -643,7 +891,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preflight_current_branch",
   {
-    description: "Analyze the current git branch and return PR readiness. Sends metadata only.",
+    description: stdioToolDescription("gittensory_preflight_current_branch"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -660,8 +908,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_review_pr_before_push",
   {
-    description:
-      "Run a single composed pre-PR review of the current branch: preflight (lane/duplicate/linked-issue/test/queue fit), slop-risk, and PR-text lint, merged into one report with an overall pass/warn/fail status. Thin composition of the existing checks — does not reimplement any of them. Sends metadata only, no source upload.",
+    description: stdioToolDescription("gittensory_review_pr_before_push"),
     inputSchema: currentBranchShape,
   },
   async (input) => toolResult("Gittensory pre-PR review.", await reviewLocalPr(await withClientWorkspaceRoots(input))),
@@ -670,7 +917,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_preview_current_branch_score",
   {
-    description: "Analyze the current git branch and return private scoreability context. Sends metadata only.",
+    description: stdioToolDescription("gittensory_preview_current_branch_score"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -688,7 +935,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_rank_local_next_actions",
   {
-    description: "Analyze the current git branch and rank local next actions by private reward/risk and review friction.",
+    description: stdioToolDescription("gittensory_rank_local_next_actions"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -700,7 +947,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_explain_local_blockers",
   {
-    description: "Analyze the current git branch and explain private scoreability, lane, and review blockers.",
+    description: stdioToolDescription("gittensory_explain_local_blockers"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -720,7 +967,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_remediation_plan",
   {
-    description: "Analyze the current git branch and return an ordered public-safe remediation checklist with rerun conditions.",
+    description: stdioToolDescription("gittensory_remediation_plan"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -734,7 +981,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_prepare_pr_packet",
   {
-    description: "Analyze the current git branch and return a public-safe PR packet. Sends metadata only.",
+    description: stdioToolDescription("gittensory_prepare_pr_packet"),
     inputSchema: currentBranchShape,
   },
   async (input) => {
@@ -746,7 +993,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_compare_local_variants",
   {
-    description: "Compare current-branch metadata variants without uploading source contents.",
+    description: stdioToolDescription("gittensory_compare_local_variants"),
     inputSchema: currentBranchVariantsShape,
   },
   async ({ variants }) => {
@@ -773,7 +1020,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_plan_next_work",
   {
-    description: "Run the deterministic Gittensory base-agent planner for a GitHub login.",
+    description: stdioToolDescription("gittensory_agent_plan_next_work"),
     inputSchema: agentPlanShape,
   },
   async (input) => toolResult(`Gittensory base-agent plan for ${input.login}.`, await apiPost("/v1/agent/plan-next-work", input)),
@@ -782,7 +1029,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_start_run",
   {
-    description: "Create a queued copilot-only Gittensory base-agent run.",
+    description: stdioToolDescription("gittensory_agent_start_run"),
     inputSchema: agentRunShape,
   },
   async (input) =>
@@ -804,7 +1051,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_get_run",
   {
-    description: "Fetch a persisted Gittensory base-agent run.",
+    description: stdioToolDescription("gittensory_agent_get_run"),
     inputSchema: agentRunIdShape,
   },
   async ({ runId }) => toolResult(`Gittensory base-agent run ${runId}.`, await apiGet(`/v1/agent/runs/${encodeURIComponent(runId)}`)),
@@ -813,7 +1060,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_explain_next_action",
   {
-    description: "Explain the next deterministic action and blocker context for a GitHub login.",
+    description: stdioToolDescription("gittensory_agent_explain_next_action"),
     inputSchema: agentPlanShape,
   },
   async (input) => {
@@ -828,7 +1075,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_agent_prepare_pr_packet",
   {
-    description: "Prepare a public-safe PR packet from current branch metadata. Sends metadata only.",
+    description: stdioToolDescription("gittensory_agent_prepare_pr_packet"),
     inputSchema: currentBranchShape,
   },
   async (input) => toolResult("Gittensory base-agent public-safe PR packet.", await agentPreparePrPacket(await withClientWorkspaceRoots(input))),
@@ -900,7 +1147,7 @@ const agentPlanOutputSchema = {
 server.registerTool(
   "gittensory_local_status_structured",
   {
-    description: "Return local Gittensory MCP status with a validated structured output schema.",
+    description: stdioToolDescription("gittensory_local_status_structured"),
     inputSchema: {
       cwd: z.string().optional(),
       baseRef: z.string().optional(),
@@ -939,6 +1186,19 @@ server.registerTool(
     };
     return { content: [{ type: "text", text: `Gittensory local MCP status.\n\n${JSON.stringify(data, null, 2)}` }], structuredContent: data };
   },
+);
+
+server.registerTool(
+  "gittensory_feasibility_gate",
+  {
+    description: stdioToolDescription("gittensory_feasibility_gate"),
+    inputSchema: feasibilityGateShape,
+  },
+  ({ claimStatus, duplicateClusterRisk, issueStatus, found }) =>
+    toolResult(
+      "Gittensory feasibility gate.",
+      buildFeasibilityVerdict({ claimStatus, duplicateClusterRisk, issueStatus, found }),
+    ),
 );
 
 // ── Resources: decision-pack, doctor, compatibility, changelog (#292) ─────────
@@ -1394,6 +1654,7 @@ function printMaintainHelp() {
       "",
       "Subcommands:",
       "  status                       List the agent approval queue (auto_with_approval actions awaiting a decision).",
+      "  queue                        List pending actions (id, kind, target) for approve/reject. Alias: pending.",
       "  approve <id>                 Approve a staged action -> execute it.",
       "  reject <id>                  Reject a staged action -> cancel it.",
       "  pause                        Pause ALL agent actions on the repo (kill-switch).",
@@ -1401,6 +1662,7 @@ function printMaintainHelp() {
       "  set-level <action> <level>   Set the autonomy level for one action class.",
       `                               actions: ${MAINTAIN_ACTION_CLASSES.join(", ")}`,
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
+      "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -1429,6 +1691,24 @@ async function maintainCli(args) {
     emit(payload, [`Agent approval queue for ${repoFullName}: ${actions.length} pending.`, ...actions.map((action) => `- ${action.id}  ${action.actionClass} on #${action.pullNumber}  ${action.reason ?? ""}`)].join("\n"));
     return;
   }
+  // #2236 — explicit queue listing so maintainers can discover ids for approve/reject (alias: pending).
+  if (subcommand === "queue" || subcommand === "pending") {
+    const payload = await apiGet(queueBase);
+    const actions = payload.pendingActions ?? [];
+    emit(
+      payload,
+      [
+        `Pending agent actions for ${repoFullName}: ${actions.length}.`,
+        ...actions.map((action) => {
+          const kind = action.actionClass ?? action.kind ?? "unknown";
+          const target = action.pullNumber != null ? `#${action.pullNumber}` : (action.target ?? "—");
+          const summary = action.reason ?? action.summary ?? "";
+          return `- ${action.id}  ${kind}  ${target}${summary ? `  ${summary}` : ""}`;
+        }),
+      ].join("\n"),
+    );
+    return;
+  }
   if (subcommand === "approve" || subcommand === "reject") {
     if (!positional) throw new Error(`Pass the pending-action id: gittensory-mcp maintain ${subcommand} <id> --repo owner/repo.`);
     // The approval-queue route's decision verb is accept|reject (#779); the CLI exposes approve|reject.
@@ -1455,7 +1735,28 @@ async function maintainCli(args) {
     emit(payload, `Set ${action} autonomy to ${level} for ${repoFullName}.`);
     return;
   }
-  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | approve <id> | reject <id> | pause | resume | set-level <action> <level>.`);
+  if (subcommand === "precision") {
+    // #554 gate false-positive telemetry: read-only measurement of blocked-then-merged PRs per gate type.
+    // The API enforces maintainer authorization; the CLI never decides locally. Optional --window-days bounds
+    // the block ledger the same way the route's ?windowDays query does (a non-positive value falls through to
+    // full history server-side).
+    const windowDays = Number(options.windowDays);
+    const query = windowDays > 0 ? `?windowDays=${encodeURIComponent(windowDays)}` : "";
+    const payload = await apiGet(`${repoBase}/gate-precision${query}`);
+    const overall = payload.overall ?? {};
+    const window = payload.windowDays ? `last ${payload.windowDays}d` : "all history";
+    const rate = (value) => (value === null || value === undefined ? "n/a (below sample)" : `${Math.round(value * 100)}%`);
+    const lines = [
+      `Gate precision for ${repoFullName} (${window}): ${overall.blocked ?? 0} blocked, ${overall.blockedThenMerged ?? 0} blocked-then-merged, false-positive rate ${rate(overall.falsePositiveRate)}.`,
+      ...(payload.perGateType ?? []).map(
+        (type) => `- ${type.gateType}: ${type.blocked} blocked, ${type.blockedThenMerged} merged anyway${type.falsePositiveRate === null ? "" : ` (${Math.round(type.falsePositiveRate * 100)}% FP)`}`,
+      ),
+      ...(payload.signals ?? []),
+    ];
+    emit(payload, lines.join("\n"));
+    return;
+  }
+  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision.`);
 }
 
 async function runCli(args) {
@@ -1463,6 +1764,7 @@ async function runCli(args) {
   if (command === "--help" || command === "help") return printHelp();
   if (command === "--version" || command === "-v" || command === "version") return printVersion(parseOptions(args.slice(1)));
   if (command === "completion") return completionCommand(args.slice(1));
+  if (command === "tools") return toolsCommand(parseOptions(args.slice(1)));
   if (command === "agent") return runAgentCli(args.slice(1));
   if (command === "cache") return runCacheCli(args.slice(1));
   if (command === "maintain") return maintainCli(args.slice(1));
@@ -1516,7 +1818,31 @@ async function runCli(args) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
+  if (options.format === "table") {
+    writeBranchAnalysisTable(result, command);
+    return;
+  }
   writeBranchAnalysisCli(result, command);
+}
+
+// Render the report-shaped branch analysis (next actions, plus score blockers for analyze-branch) as
+// aligned monospace tables when `--format table` is passed. Default and `--json` output are untouched.
+function writeBranchAnalysisTable(result, command) {
+  const analysis = result.analysis;
+  const actionRows = (analysis.nextActions ?? []).map((action) => ({
+    action: action.actionKind ?? "—",
+    priority: action.priorityScore === undefined || action.priorityScore === null ? "—" : String(action.priorityScore),
+    why: (action.whyThisHelps ?? []).join("; ") || "—",
+  }));
+  process.stdout.write(
+    `${formatTable(
+      { headers: [{ key: "action", label: "Action" }, { key: "priority", label: "Priority", align: "right" }, { key: "why", label: "Why this helps" }], rows: actionRows },
+    )}\n`,
+  );
+  if (command === "analyze-branch" && analysis.scoreBlockers?.length) {
+    process.stdout.write("\n");
+    process.stdout.write(`${formatTable({ headers: [{ key: "blocker", label: "Score blocker" }], rows: analysis.scoreBlockers.map((blocker) => ({ blocker })) })}\n`);
+  }
 }
 
 function printReviewPrHelp() {
@@ -1819,8 +2145,8 @@ function runCacheCli(args) {
   }
   if (subcommand === "list" || subcommand === "ls") {
     const payload = listDecisionPackCache();
-    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    else if (payload.count === 0) process.stdout.write("Decision-pack cache is empty.\n");
+    if (emitList(options, payload.entries, payload)) return;
+    if (payload.count === 0) process.stdout.write("Decision-pack cache is empty.\n");
     else for (const entry of payload.entries) process.stdout.write(`- ${entry.login ?? "unknown"} (cached ${entry.cachedAt ?? "unknown"}, ${entry.bytes} bytes)\n`);
     return;
   }
@@ -1997,6 +2323,19 @@ function printVersion(options) {
   process.stdout.write(`${packageName}/${packageVersion} (api ${currentApiVersion}, node ${process.version})\n`);
 }
 
+function toolsCommand(options) {
+  const tools = STDIO_TOOL_DESCRIPTORS.map(({ name, description }) => ({ name, description }));
+  const payload = { count: tools.length, tools };
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  const nameWidth = tools.reduce((width, tool) => Math.max(width, tool.name.length), 0);
+  for (const tool of tools) {
+    process.stdout.write(`${tool.name.padEnd(nameWidth)}  ${tool.description}\n`);
+  }
+}
+
 function completionCommand(args) {
   const shell = args[0] && !args[0].startsWith("--") ? args[0] : undefined;
   const options = parseOptions(args.filter((arg) => arg.startsWith("--")));
@@ -2069,7 +2408,7 @@ _gittensory_mcp() {
   fi
   case "\${COMP_WORDS[1]}" in
 ${subcommandCases}
-      *) COMPREPLY=( $(compgen -W "--json --login --repo --profile --agent-profile --base --cwd" -- "$cur") ); return 0;;
+      *) COMPREPLY=( $(compgen -W "--json --format --login --repo --profile --agent-profile --base --cwd" -- "$cur") ); return 0;;
   esac
 }
 complete -F _gittensory_mcp gittensory-mcp`;
@@ -2142,6 +2481,7 @@ function printHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp --stdio
   gittensory-mcp version [--json]
+  gittensory-mcp tools [--json]
   gittensory-mcp completion bash|zsh|fish|powershell [--json]
   gittensory-mcp login [--profile name] [--github-token <token>] [--json]
   gittensory-mcp logout [--profile name] [--all] [--json]
@@ -2155,8 +2495,8 @@ function printHelp() {
   gittensory-mcp init-client --print codex|claude|cursor|mcp|vscode [--agent-profile miner-planner|maintainer-triage|repo-owner-intake] [--json]
   gittensory-mcp decision-pack --login <github-login> [--json]
   gittensory-mcp repo-decision --login <github-login> --repo owner/repo [--json]
-  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--json]
-  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--json]
+  gittensory-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--format table] [--json]
+  gittensory-mcp preflight --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--validation "passed|npm test|summary"] [--format table] [--json]
   gittensory-mcp review-pr --login <github-login> [--repo owner/repo] [--base origin/main] [--commit <message>]... [--body <text>] [--body-file <path>] [--linked-issue <number>] [--json]
   gittensory-mcp lint-pr-text [--commit <message>]... [--body <text>] [--body-file <path>] [--linked-issue <number>] [--json]
   gittensory-mcp validate-config --file <path> [--source repo_file|api_record|none] [--json]
@@ -2183,7 +2523,7 @@ function printHelp() {
 function printCacheHelp() {
   process.stdout.write(`Usage:
   gittensory-mcp cache status [--json]
-  gittensory-mcp cache list [--json]
+  gittensory-mcp cache list [--json | --format ndjson]
   gittensory-mcp cache clear [--json]
 
 Decision-pack cache entries are local-only stale fallbacks for temporary API/network outages.
@@ -2205,7 +2545,7 @@ Source upload remains disabled.
 
 function printProfileHelp() {
   process.stdout.write(`Usage:
-  gittensory-mcp profile list [--json]
+  gittensory-mcp profile list [--json | --format ndjson]
   gittensory-mcp profile create <name> [--json]
   gittensory-mcp profile switch <name> [--json]
   gittensory-mcp profile remove <name> [--json]
@@ -2224,6 +2564,16 @@ function parseOptions(args) {
       continue;
     }
     if (!arg?.startsWith("--")) continue;
+    // Support the inline `--key=value` form (e.g. `--format=table`) alongside the space-separated
+    // `--key value` form; splitting here keeps every existing space-separated option unchanged (#2231).
+    const equals = arg.indexOf("=");
+    if (equals !== -1) {
+      const inlineKey = camel(arg.slice(2, equals));
+      const inlineValue = arg.slice(equals + 1);
+      if (repeatable.has(inlineKey)) options[inlineKey] = [...(options[inlineKey] ?? []), inlineValue];
+      else options[inlineKey] = inlineValue;
+      continue;
+    }
     const key = camel(arg.slice(2));
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
@@ -2235,6 +2585,22 @@ function parseOptions(args) {
     else options[key] = value;
   }
   return options;
+}
+
+// Shared machine-readable output for list-shaped commands. `--format ndjson` streams one JSON object per
+// array element per line (for piping into jq/log processors); `--json` (or `--format json`) keeps the
+// existing pretty object. Returns true when it emitted a machine-readable format, so the caller skips the
+// human view. Each record ends in "\n" and Node flushes stdout on exit, so piped output is not truncated.
+function emitList(options, items, pretty) {
+  if (options.format === "ndjson") {
+    for (const item of items) process.stdout.write(`${JSON.stringify(item)}\n`);
+    return true;
+  }
+  if (options.json || options.format === "json") {
+    process.stdout.write(`${JSON.stringify(pretty, null, 2)}\n`);
+    return true;
+  }
+  return false;
 }
 
 async function login(options) {
@@ -2302,12 +2668,10 @@ function profileCommand(args) {
   if (subcommand === "list" || subcommand === "ls") {
     const profiles = profileList(config);
     const payload = { activeProfile: activeProfileName, profiles };
-    if (options.json) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    else {
-      process.stdout.write(`Active profile: ${activeProfileName}\n`);
-      for (const profile of profiles) {
-        process.stdout.write(`- ${profile.name}${profile.active ? " (active)" : ""}: ${profile.login ?? "not authenticated"}\n`);
-      }
+    if (emitList(options, profiles, payload)) return;
+    process.stdout.write(`Active profile: ${activeProfileName}\n`);
+    for (const profile of profiles) {
+      process.stdout.write(`- ${profile.name}${profile.active ? " (active)" : ""}: ${profile.login ?? "not authenticated"}\n`);
     }
     return;
   }

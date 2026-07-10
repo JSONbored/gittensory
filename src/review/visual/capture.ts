@@ -1,10 +1,14 @@
 // Realtime visual capture (reviewbot→gittensory convergence — visual port). taopedia-style before/after.
 //
-// before = production (PUBLIC_SITE_ORIGIN); after = the PR's preview-deploy URL, discovered the
+// before = production (review.visual.production_url, falling back to the global PUBLIC_SITE_ORIGIN env var);
+// after = the PR's preview-deploy URL, discovered the
 // provider-agnostic way (Deployments API → commit checks → cloudflare-bot PR comment). Each page is
 // rendered once here (in the queue consumer, which has the time budget), stored as a PNG in R2
-// (env.REVIEW_AUDIT), and embedded as <PUBLIC_API_ORIGIN>/gittensory/shot?key=<r2key> so GitHub's image
-// proxy fetches a fast static object instead of waiting on a live browser render.
+// (env.REVIEW_AUDIT), and embedded either as <PUBLIC_API_ORIGIN>/gittensory/shot?key=<r2key> (this
+// instance's own proxy route) or, when REVIEW_AUDIT_S3_PUBLIC_URL is configured (an operator's own
+// publicly-readable S3-compatible bucket — see src/selfhost/s3-blob-store.ts), a direct link at the
+// bucket's own public URL — see resolveShotUrl below. Either way, GitHub's image proxy fetches a fast
+// static object instead of waiting on a live browser render.
 //
 // PORTED from reviewbot's src/agents/gittensory/capture.ts (mapFilesToRoutes / routeForFile / capturePage /
 // buildCapture), adapted to gittensory bindings + origins. The agent-config-driven route rules, authed-route
@@ -27,7 +31,11 @@ import { encodeScrollGif, isScrollGifAvailable } from "./scroll-gif";
 
 const NAMESPACE = "gittensory";
 const DEFAULT_ROUTES = ["/"];
-const DEFAULT_ROUTE_FILE = /apps\/gittensory-ui\/src\/routes\/(.+?)\.(?:tsx|jsx)$/i;
+// The app-folder segment is a wildcard, not hardcoded to gittensory-ui: metagraphed's UI (apps/ui/src/routes/)
+// uses the identical TanStack flat-file convention `routeForFile` below implements, just under a different app
+// folder name. Only ever matched against the CURRENT repo's own changed-file paths (see mapFilesToRoutes'
+// caller), so widening this carries no cross-repo ambiguity risk.
+const DEFAULT_ROUTE_FILE = /apps\/[^/]+\/src\/routes\/(.+?)\.(?:tsx|jsx)$/i;
 // Each route renders desktop + mobile for before + after (up to 4 PNGs). Cap routes to bound browser-render
 // wall-clock — Browser Rendering is the costliest binding.
 const MAX_ROUTES = 2;
@@ -200,6 +208,22 @@ function routeForFile(raw: string): string {
 }
 
 /**
+ * The publicly-servable URL for an already-stored REVIEW_AUDIT key. Prefers a direct link at the operator's
+ * own S3-compatible bucket (REVIEW_AUDIT_S3_PUBLIC_URL) so GitHub's image proxy — and every other viewer —
+ * fetches straight from that bucket's own CDN, never touching this instance at all. Falls back to this
+ * instance's own /gittensory/shot?key= proxy route (today's only option, and still the only option for the
+ * filesystem-backed self-host store, which has no public URL of its own). Empty string when neither is
+ * configured, matching every call site's existing "no shotBase" degradation.
+ */
+function resolveShotUrl(env: Env, key: string): string {
+  if (env.REVIEW_AUDIT_S3_PUBLIC_URL) {
+    return `${env.REVIEW_AUDIT_S3_PUBLIC_URL.replace(/\/+$/, "")}/${key}`;
+  }
+  const shotBase = env.PUBLIC_API_ORIGIN;
+  return shotBase ? `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}` : "";
+}
+
+/**
  * Render `page`, store the PNG in R2, and return its /gittensory/shot?key= URL. Falls back to an on-demand
  * ?url= link if R2 or the render is unavailable; returns {} when there is no page (no preview deploy yet) so
  * the cell shows a dash. Reuses an identical cached fingerprint (a deployment_status re-run filling "after"
@@ -242,7 +266,7 @@ async function capturePage(
       `${target.headSha ?? target.prNumber}:${slot}:${viewportName}:${page}${theme ? `:${theme}` : ""}${theme && themeStorageKey ? `:${themeStorageKey}` : ""}`,
     );
     const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.png`;
-    const url = shotBase ? `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}` : onDemand;
+    const url = resolveShotUrl(env, key) || onDemand;
     const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
     if (cached) {
       if (!includeBytes) return { url };
@@ -281,8 +305,7 @@ async function resolveFallbackAfterShot(
   const key = await fallbackShotR2Key(target.headSha, path, viewportName);
   const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
   if (!cached) return { url: placeholder };
-  const shotBase = env.PUBLIC_API_ORIGIN;
-  return { url: shotBase ? `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}` : placeholder };
+  return { url: resolveShotUrl(env, key) || placeholder };
 }
 
 /** Upload a computed diff-overlay PNG to the same store `capturePage` uses, returning its shot URL — or
@@ -297,12 +320,11 @@ async function uploadDiffImage(
   theme?: ShotTheme | undefined,
 ): Promise<string | undefined> {
   if (!diff?.diffImagePng) return undefined;
-  const shotBase = env.PUBLIC_API_ORIGIN;
-  if (!env.REVIEW_AUDIT || !shotBase) return undefined;
+  if (!env.REVIEW_AUDIT || (!env.PUBLIC_API_ORIGIN && !env.REVIEW_AUDIT_S3_PUBLIC_URL)) return undefined;
   const fingerprint = await sha256Hex(`${target.headSha ?? target.prNumber}:diff:${viewportName}:${path}${theme ? `:${theme}` : ""}`);
   const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}-diff.png`;
   await env.REVIEW_AUDIT.put(key, diff.diffImagePng, { httpMetadata: { contentType: "image/png" } }).catch(() => undefined);
-  return `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}`;
+  return resolveShotUrl(env, key);
 }
 
 // How long each frame shows when the assembled GIF plays back (#3612) — a quick "evidence clip" pace: the
@@ -328,13 +350,12 @@ async function captureScrollGif(
   themeStorageKey?: string | undefined,
 ): Promise<string | undefined> {
   if (!page) return undefined;
-  const shotBase = env.PUBLIC_API_ORIGIN;
-  if (!env.REVIEW_AUDIT || !shotBase) return undefined;
+  if (!env.REVIEW_AUDIT || (!env.PUBLIC_API_ORIGIN && !env.REVIEW_AUDIT_S3_PUBLIC_URL)) return undefined;
   const fingerprint = await sha256Hex(
     `${target.headSha ?? target.prNumber}:scrollgif:${slot}:${viewportName}:${page}${theme ? `:${theme}` : ""}${theme && themeStorageKey ? `:${themeStorageKey}` : ""}`,
   );
   const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.gif`;
-  const url = `${shotBase}/${NAMESPACE}/shot?key=${encodeURIComponent(key)}`;
+  const url = resolveShotUrl(env, key);
   const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
   if (cached) return url;
   const { frames, authWalled } = await captureScrollFrames(env, page, viewport, theme ? { theme, ...(themeStorageKey ? { themeStorageKey } : {}) } : {}).catch(() => ({ frames: [] as Uint8Array[], authWalled: false }));
@@ -352,6 +373,11 @@ async function captureScrollGif(
  *  #3612 / #4109). Absent ⇒ byte-identical to today (GitHub-native discovery, automatic route inference,
  *  single default-theme capture, built-in route cap, no scroll-GIF, no localStorage theme forcing). */
 export type VisualCaptureConfig = {
+  /** `review.visual.production_url` (#3611 follow-up): overrides `env.PUBLIC_SITE_ORIGIN` (a single GLOBAL
+   *  value with no per-repo awareness) as the "before" base for THIS repo. ALWAYS wins when set, mirroring
+   *  `preview.urlTemplate`'s precedence over discovery. null/undefined ⇒ falls back to `env.PUBLIC_SITE_ORIGIN`,
+   *  byte-identical to today. */
+  productionUrl?: string | null | undefined;
   preview?: VisualPreviewInput | null | undefined;
   routes?: VisualRoutesInput | null | undefined;
   themes?: readonly ShotTheme[] | null | undefined;
@@ -375,8 +401,10 @@ export type VisualCaptureConfig = {
 export async function buildCapture(env: Env, token: string, target: CaptureTarget, visualFiles: string[], rateLimitAdmissionKey?: GitHubRateLimitAdmissionKey | undefined, visualConfig?: VisualCaptureConfig | null | undefined): Promise<CaptureResult> {
   const repo = parseRepo(target.repoFullName);
   const apiVersion = "2022-11-28";
-  // before = production (PUBLIC_SITE_ORIGIN, e.g. https://gittensory.aethereal.dev).
-  const prodBase = env.PUBLIC_SITE_ORIGIN ?? "";
+  // before = production. review.visual.production_url (#3611 follow-up) ALWAYS wins when set -- PUBLIC_SITE_ORIGIN
+  // is a single GLOBAL env var (e.g. https://gittensory.aethereal.dev) with no per-repo awareness, correct for at
+  // most one repo on a multi-repo self-host instance; every other repo needs its own override here.
+  const prodBase = visualConfig?.productionUrl ? visualConfig.productionUrl : (env.PUBLIC_SITE_ORIGIN ?? "");
 
   // after = the PR's preview deploy. An explicit review.visual.preview.url_template (#3609) ALWAYS wins —
   // a maintainer-configured template is a stronger signal than inference, and is the only option for a

@@ -6,6 +6,22 @@ export type SelfHostEnvReferenceRow = {
 
 export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   {
+    name: "AI_ADVISORY",
+    firstReference: "src/selfhost/ai.ts",
+  },
+  {
+    name: "AI_ADVISORY_API_KEY",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "AI_ADVISORY_BASE_URL",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "AI_ADVISORY_MODEL",
+    firstReference: "src/server.ts",
+  },
+  {
     name: "AI_COMBINE",
     firstReference: "src/selfhost/ai.ts",
   },
@@ -32,6 +48,18 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   {
     name: "AI_PROVIDER",
     firstReference: "src/selfhost/ai-config.ts",
+  },
+  {
+    name: "AI_VISION_API_KEY",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "AI_VISION_BASE_URL",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "AI_VISION_MODEL",
+    firstReference: "src/server.ts",
   },
   {
     name: "ANTHROPIC_AI_BASE_URL",
@@ -326,6 +354,14 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
     firstReference: "src/selfhost/preflight.ts",
   },
   {
+    name: "PUBLIC_ORIGIN_ACKNOWLEDGED",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "PUBLIC_SITE_ORIGIN",
+    firstReference: "src/server.ts",
+  },
+  {
     name: "QDRANT_API_KEY",
     firstReference: "src/selfhost/qdrant-vectorize.ts",
   },
@@ -359,6 +395,26 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "REVIEW_AUDIT_DIR",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "REVIEW_AUDIT_S3_ACCESS_KEY_ID",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "REVIEW_AUDIT_S3_BUCKET",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "REVIEW_AUDIT_S3_ENDPOINT",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "REVIEW_AUDIT_S3_REGION",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "REVIEW_AUDIT_S3_SECRET_ACCESS_KEY",
     firstReference: "src/server.ts",
   },
   {
@@ -406,6 +462,10 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
 export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| Name | First reference |",
   "| --- | --- |",
+  "| `AI_ADVISORY` | `src/selfhost/ai.ts` |",
+  "| `AI_ADVISORY_API_KEY` | `src/server.ts` |",
+  "| `AI_ADVISORY_BASE_URL` | `src/server.ts` |",
+  "| `AI_ADVISORY_MODEL` | `src/server.ts` |",
   "| `AI_COMBINE` | `src/selfhost/ai.ts` |",
   "| `AI_DUAL_REVIEW` | `src/selfhost/ai.ts` |",
   "| `AI_EMBED_API_KEY` | `src/server.ts` |",
@@ -413,6 +473,9 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `AI_EMBED_MODEL` | `src/selfhost/ai.ts` |",
   "| `AI_ON_MERGE` | `src/selfhost/ai.ts` |",
   "| `AI_PROVIDER` | `src/selfhost/ai-config.ts` |",
+  "| `AI_VISION_API_KEY` | `src/server.ts` |",
+  "| `AI_VISION_BASE_URL` | `src/server.ts` |",
+  "| `AI_VISION_MODEL` | `src/server.ts` |",
   "| `ANTHROPIC_AI_BASE_URL` | `src/selfhost/ai.ts` |",
   "| `ANTHROPIC_AI_MODEL` | `src/selfhost/ai.ts` |",
   "| `ANTHROPIC_API_KEY` | `src/selfhost/ai.ts` |",
@@ -486,6 +549,8 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `PGVECTOR_ENABLED` | `src/server.ts` |",
   "| `PORT` | `src/server.ts` |",
   "| `PUBLIC_API_ORIGIN` | `src/selfhost/preflight.ts` |",
+  "| `PUBLIC_ORIGIN_ACKNOWLEDGED` | `src/server.ts` |",
+  "| `PUBLIC_SITE_ORIGIN` | `src/server.ts` |",
   "| `QDRANT_API_KEY` | `src/selfhost/qdrant-vectorize.ts` |",
   "| `QDRANT_DIM` | `src/selfhost/qdrant-vectorize.ts` |",
   "| `QDRANT_URL` | `src/server.ts` |",
@@ -495,6 +560,11 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `QUEUE_STARTUP_JITTER_MIN_JOBS` | `src/selfhost/queue-common.ts` |",
   "| `REDIS_URL` | `src/selfhost/preflight.ts` |",
   "| `REVIEW_AUDIT_DIR` | `src/server.ts` |",
+  "| `REVIEW_AUDIT_S3_ACCESS_KEY_ID` | `src/server.ts` |",
+  "| `REVIEW_AUDIT_S3_BUCKET` | `src/server.ts` |",
+  "| `REVIEW_AUDIT_S3_ENDPOINT` | `src/server.ts` |",
+  "| `REVIEW_AUDIT_S3_REGION` | `src/server.ts` |",
+  "| `REVIEW_AUDIT_S3_SECRET_ACCESS_KEY` | `src/server.ts` |",
   "| `SELFHOST_BUNDLE_ALL` | `scripts/build-selfhost.mjs` |",
   "| `SELFHOST_SERVICE` | `scripts/smoke-observability-traces.mjs` |",
   "| `SELFHOST_SETUP_TOKEN` | `src/selfhost/preflight.ts` |",

@@ -155,3 +155,78 @@ export function sqliteBackupAdvisory(opts: { usingSqlite: boolean; backupAcknowl
 export function backupAcknowledgedGaugeValue(opts: { usingSqlite: boolean; backupAcknowledged: boolean }): 0 | 1 {
   return sqliteBackupAdvisory(opts) === null ? 1 : 0;
 }
+
+// Hostnames that are NEVER reachable from the public internet, regardless of deployment — loopback, RFC1918
+// private ranges, and the mDNS/internal-DNS conventions no public resolver honors. Deliberately excludes
+// Tailscale's own *.ts.net MagicDNS suffix from this "never" list: a node with Funnel explicitly enabled DOES
+// serve that exact hostname over public HTTPS, so *.ts.net gets its own softer check below rather than being
+// treated as definitely non-public.
+function isDefinitelyPrivateHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  // URL.hostname keeps the brackets on an IPv6 literal ("[::1]", not "::1") — compare against the bracketed
+  // form, not the bare address.
+  if (host === "localhost" || host === "0.0.0.0" || host === "[::1]") return true;
+  if (host.endsWith(".local") || host.endsWith(".internal")) return true;
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
+  if (ipv4) {
+    const first = Number(ipv4[1]);
+    const second = Number(ipv4[2]);
+    if (first === 127 || first === 10) return true;
+    if (first === 192 && second === 168) return true;
+    if (first === 172 && second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+/** True when `origin` parses as a URL whose hostname is a well-known non-public pattern (loopback, RFC1918,
+ *  mDNS/`.internal`), OR a bare Tailscale MagicDNS hostname (`*.ts.net`) — publicly reachable ONLY when the
+ *  operator has explicitly enabled Tailscale Funnel for that node, which this check has no way to observe.
+ *  An unparseable value is this function's job to reject as "not a URL at all", not "looks non-public" — but
+ *  that is a distinct, well-formedness problem this advisory doesn't cover (PUBLIC_API_ORIGIN's own
+ *  first-run-setup preflight check already validates that shape; nothing else currently reads
+ *  PUBLIC_SITE_ORIGIN at boot), so it's silently false here rather than double-reported. */
+function looksNonPublic(origin: string): boolean {
+  try {
+    const { hostname } = new URL(origin);
+    return isDefinitelyPrivateHostname(hostname) || hostname.toLowerCase().endsWith(".ts.net");
+  } catch {
+    return false;
+  }
+}
+
+/** Boot-time advisory (JSONbored/gittensory PR #4180's live bug): `PUBLIC_API_ORIGIN`/`PUBLIC_SITE_ORIGIN` get
+ *  embedded VERBATIM as `<img src>` in the public "Visual preview" PR comment table (see
+ *  `src/review/visual/capture.ts`) — a value GitHub's own servers, not this instance, must be able to fetch.
+ *  `PUBLIC_API_ORIGIN`'s existing preflight check (see `isBareHttpsOrigin` above) only confirms it's a
+ *  WELL-FORMED bare https origin — a private tailnet hostname like `https://node.example.ts.net` passes that
+ *  check fine while still being completely unfetchable by GitHub, so every screenshot silently renders as a
+ *  broken image with no operator-visible signal until a human notices. This never hard-fails boot (unlike
+ *  `assertSelfHostPreflight`'s checks): a false positive here (e.g. a legitimately Funnel-exposed `*.ts.net`
+ *  node) would only be a degraded review feature, not a security or data-loss risk, so — mirroring
+ *  {@link sqliteBackupAdvisory}'s own acknowledgment escape hatch — it warns rather than blocks, and the
+ *  operator can silence it with `PUBLIC_ORIGIN_ACKNOWLEDGED=true` once they've confirmed the origin really is
+ *  public (Funnel enabled, a reverse proxy in front of it, etc.). Neither var set is left alone: visual
+ *  capture degrades to dash cells in that case (see capture.ts), not a broken image, so there's nothing to warn
+ *  about until an operator sets one of these to something that looks wrong. */
+export function publicOriginReachabilityAdvisory(opts: {
+  publicApiOrigin: string | undefined;
+  publicSiteOrigin: string | undefined;
+  acknowledged: boolean;
+}): string | null {
+  if (opts.acknowledged) return null;
+  const suspect = [opts.publicApiOrigin, opts.publicSiteOrigin]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .find((value) => looksNonPublic(value));
+  if (!suspect) return null;
+  return `PUBLIC_API_ORIGIN/PUBLIC_SITE_ORIGIN includes "${suspect}", which looks like a private/internal hostname — GitHub's servers cannot fetch it, so visual-capture screenshots embedded in PR comments will render as broken images. Set it to a real publicly-reachable origin (or, if this host has Tailscale Funnel enabled and IS genuinely public, set PUBLIC_ORIGIN_ACKNOWLEDGED=true to silence this warning).`;
+}
+
+/** Prometheus gauge value mirroring {@link publicOriginReachabilityAdvisory}: 1 when no suspect origin is
+ *  configured (or the operator acknowledged it), 0 when the advisory would fire. */
+export function publicOriginAcknowledgedGaugeValue(opts: {
+  publicApiOrigin: string | undefined;
+  publicSiteOrigin: string | undefined;
+  acknowledged: boolean;
+}): 0 | 1 {
+  return publicOriginReachabilityAdvisory(opts) === null ? 1 : 0;
+}

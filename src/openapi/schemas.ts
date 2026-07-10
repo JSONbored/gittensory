@@ -651,6 +651,8 @@ export const RepositorySettingsSchema = z
     claCheckRunName: z.string().nullable().optional(),
     claCheckRunAppSlug: z.string().nullable().optional(),
     expectedCiContexts: z.array(z.string()).optional(),
+    copycatGateMode: z.enum(["off", "warn", "label", "block"]).optional(),
+    copycatGateMinScore: z.number().nullable().optional(),
     gateDryRun: z.boolean().optional(),
     premergeContentRecheck: z.boolean().optional(),
     requireFreshRebaseWindowMinutes: z.number().int().positive().nullable().optional(),
@@ -689,6 +691,7 @@ export const RepositorySettingsSchema = z
             prLabel: z.string(),
             removeOtherTypeLabels: z.boolean(),
             trustMaintainerAuthoredIssue: z.boolean().optional(),
+            trustMaintainerAuthoredIssueForReward: z.boolean().optional(),
           }),
         ),
       })
@@ -710,6 +713,14 @@ export const RepositorySettingsSchema = z
       .object({
         mode: z.enum(["hold", "off"]),
         minConfidence: z.number().min(0).max(1),
+      })
+      .optional(),
+    advisoryAiRouting: z
+      .object({
+        slop: z.boolean(),
+        e2eTestGen: z.boolean(),
+        planner: z.boolean(),
+        summaries: z.boolean(),
       })
       .optional(),
     gittensorLabel: z.string(),
@@ -741,6 +752,7 @@ export const RepositorySettingsSchema = z
     autoMaintain: z.object({ requireApprovals: z.number().int(), mergeMethod: z.enum(["merge", "squash", "rebase"]) }).optional(),
     agentPaused: z.boolean().optional(),
     agentDryRun: z.boolean().optional(),
+    agentGlobalFreezeOverride: z.boolean().optional(),
     contributorOpenPrCap: z.number().int().positive().max(MAX_CONTRIBUTOR_OPEN_ITEM_CAP).nullable().optional(),
     contributorOpenIssueCap: z.number().int().positive().max(MAX_CONTRIBUTOR_OPEN_ITEM_CAP).nullable().optional(),
     contributorCapLabel: z.string().nullable().optional(),
@@ -776,8 +788,11 @@ export const RepositorySettingsSchema = z
         enabled: z.boolean(),
         whenLabels: z.array(z.string()),
         whenPaths: z.array(z.string()),
-        action: z.enum(["close"]),
+        action: z.enum(["close", "advisory"]),
+        requireViewports: z.array(z.string()),
+        requireThemes: z.array(z.string()),
         message: z.string().optional(),
+        skillFileUrl: z.string().optional(),
       })
       .optional(),
     createdAt: z.string().nullable().optional(),

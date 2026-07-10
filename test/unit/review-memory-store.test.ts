@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_REVIEW_SUPPRESSIONS_PER_REPO, listReviewSuppressions, recordReviewSuppression } from "../../src/db/repositories";
+import * as repositoriesModule from "../../src/db/repositories";
+import { clearReviewSuppressionCacheForTest, getCachedReviewSuppressions, invalidateReviewSuppressionCache } from "../../src/review/review-memory-wire";
 import { createTestEnv } from "../helpers/d1";
 
 // Review memory (#2178, data-model slice of #1964): insert/list repository accessors over the
@@ -87,9 +89,20 @@ describe("review-memory suppression store (#2178)", () => {
 
   it("enforces the per-repo bound: once a repo exceeds MAX_REVIEW_SUPPRESSIONS_PER_REPO rows, the OLDEST are evicted", async () => {
     const env = createTestEnv();
-    // Insert one MORE than the cap, each a distinct key so none upsert into another.
-    for (let i = 0; i < MAX_REVIEW_SUPPRESSIONS_PER_REPO + 1; i += 1) {
-      await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_review_split", patternHash: `hash-${i}` });
+    // Fake timers force each insert's real createdAt (nowIso()) to be strictly increasing -- on real clocks, a
+    // fast in-memory D1 can otherwise complete several of these calls within the same millisecond, tying
+    // createdAt and leaving "which one is oldest" to the #4501 id tiebreak (a random UUID) rather than the
+    // insertion sequence this test's own assertions rely on.
+    vi.useFakeTimers();
+    try {
+      const start = new Date("2026-01-01T00:00:00.000Z");
+      // Insert one MORE than the cap, each a distinct key so none upsert into another.
+      for (let i = 0; i < MAX_REVIEW_SUPPRESSIONS_PER_REPO + 1; i += 1) {
+        vi.setSystemTime(new Date(start.getTime() + i * 1000));
+        await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_review_split", patternHash: `hash-${i}` });
+      }
+    } finally {
+      vi.useRealTimers();
     }
     // REGRESSION: assert the underlying table itself shrank back to the cap, via a raw count query --
     // listReviewSuppressions clamps its OWN `limit` param to MAX_REVIEW_SUPPRESSIONS_PER_REPO (see the test
@@ -134,5 +147,122 @@ describe("review-memory suppression store (#2178)", () => {
     await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_consensus_defect", patternHash: "hash-2" });
     expect(await listReviewSuppressions(env, "owner/repo", 0)).toHaveLength(1);
     expect(await listReviewSuppressions(env, "owner/repo", 999_999)).toHaveLength(2);
+  });
+
+  async function insertRawSuppression(env: Env, id: string, repoFullName: string, patternHash: string, createdAt: string) {
+    await env.DB.prepare(
+      "insert into review_suppression (id, repo_full_name, category, path_glob, pattern_hash, created_at) values (?, ?, 'ai_review_split', '', ?, ?)",
+    )
+      .bind(id, repoFullName, patternHash, createdAt)
+      .run();
+  }
+
+  it("INVARIANT (#4501): listReviewSuppressions orders same-createdAt rows deterministically by id, regardless of insertion order", async () => {
+    const env = createTestEnv();
+    // Same bug class as #4481 (listPullRequestFiles): without an id tiebreak, rows tied on createdAt have no
+    // guaranteed order. Inserted here in a SCRAMBLED (non-id-sorted) order on purpose.
+    for (const id of ["id-b", "id-d", "id-a", "id-c"]) {
+      await insertRawSuppression(env, id, "owner/repo", id, "2026-06-01T00:00:00.000Z");
+    }
+    const listed = await listReviewSuppressions(env, "owner/repo");
+    expect(listed.map((row) => row.id)).toEqual(["id-d", "id-c", "id-b", "id-a"]); // id DESC tiebreak
+  });
+
+  it("REGRESSION (#4501): eviction at the cap boundary is governed by the id tiebreak, not insertion order, when several suppressions share one createdAt", async () => {
+    const env = createTestEnv();
+    const repoFullName = "owner/repo";
+    // 496 rows with distinct, more-recent timestamps than the tied group below -- fills the table right up to
+    // where the tied group straddles the MAX_REVIEW_SUPPRESSIONS_PER_REPO cap boundary.
+    const newerStartMs = Date.parse("2026-06-01T00:00:00.000Z");
+    const NEWER_COUNT = 496;
+    await env.DB.batch(
+      Array.from({ length: NEWER_COUNT }, (_, index) =>
+        env.DB.prepare(
+          "insert into review_suppression (id, repo_full_name, category, path_glob, pattern_hash, created_at) values (?, ?, 'ai_review_split', '', ?, ?)",
+        ).bind(`newer-${index}`, repoFullName, `newer-hash-${index}`, new Date(newerStartMs + index * 1000).toISOString()),
+      ),
+    );
+    // 5 suppressions from ONE `@gittensory resolve` whole-PR Promise.all batch -- identical (same-millisecond)
+    // createdAt, inserted here in a SCRAMBLED (non-id-sorted) order to prove the eviction outcome doesn't
+    // depend on it.
+    const tiedCreatedAt = "2026-01-01T00:00:00.000Z";
+    const scrambledTiedIds = ["tied-c", "tied-e", "tied-a", "tied-d", "tied-b"];
+    await env.DB.batch(
+      scrambledTiedIds.map((id) =>
+        env.DB.prepare(
+          "insert into review_suppression (id, repo_full_name, category, path_glob, pattern_hash, created_at) values (?, ?, 'ai_review_split', '', ?, ?)",
+        ).bind(id, repoFullName, id, tiedCreatedAt),
+      ),
+    );
+    // Trigger the internal prune pass exactly how production reaches it: one more recorded suppression. Its
+    // real (current) createdAt is newest of all, so it and the 496 "newer" rows above are always kept -- the
+    // cap boundary lands squarely inside the 5-row tied group.
+    await recordReviewSuppression(env, { repoFullName, category: "ai_review_split", patternHash: "trigger-hash" });
+
+    const listed = await listReviewSuppressions(env, repoFullName, MAX_REVIEW_SUPPRESSIONS_PER_REPO);
+    const survivingTiedIds = new Set(scrambledTiedIds.filter((id) => listed.some((row) => row.id === id)));
+    // 1 trigger + 496 newer + 5 tied = 502 total; the cap keeps the newest 500 -- exactly 2 of the 5 tied rows
+    // are evicted, deterministically the two with the LOWEST id (desc(id) ranks the highest id first among ties).
+    expect(survivingTiedIds).toEqual(new Set(["tied-e", "tied-d", "tied-c"]));
+    expect(await rawCount(env, repoFullName)).toBe(MAX_REVIEW_SUPPRESSIONS_PER_REPO);
+  });
+});
+
+// Short in-isolate TTL cache over listReviewSuppressions (#4508), mirroring rag.ts's chunkCountCache.
+describe("getCachedReviewSuppressions / invalidateReviewSuppressionCache (#4508)", () => {
+  it("INVARIANT: a repeated read within the TTL for the same repo makes ZERO additional D1 reads", async () => {
+    clearReviewSuppressionCacheForTest();
+    const env = createTestEnv();
+    await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_review_split", patternHash: "hash-1" });
+    const t0 = 1_000_000;
+    const first = await getCachedReviewSuppressions(env, "owner/repo", t0);
+    expect(first).toHaveLength(1);
+
+    const spy = vi.spyOn(repositoriesModule, "listReviewSuppressions");
+    const second = await getCachedReviewSuppressions(env, "owner/repo", t0 + 30_000); // well within the 60s TTL
+    // Read the assertion BEFORE mockRestore() — mockRestore() also resets recorded calls.
+    expect(spy).not.toHaveBeenCalled(); // reused the cached set — no fresh listReviewSuppressions call
+    spy.mockRestore();
+
+    expect(second).toEqual(first);
+  });
+
+  it("REGRESSION: a fresh suppression recorded between two renders IS reflected in the very next render, not masked by a stale cache entry", async () => {
+    clearReviewSuppressionCacheForTest();
+    const env = createTestEnv();
+    const t0 = 2_000_000;
+    const before = await getCachedReviewSuppressions(env, "owner/live-repo", t0);
+    expect(before).toHaveLength(0); // cold cache, nothing recorded yet — this populates the cache with an empty set
+
+    // A maintainer runs `@gittensory resolve` between the two renders, well within the cache's TTL.
+    await recordReviewSuppression(env, { repoFullName: "owner/live-repo", category: "ai_review_split", patternHash: "hash-fresh" });
+    invalidateReviewSuppressionCache("owner/live-repo");
+
+    const after = await getCachedReviewSuppressions(env, "owner/live-repo", t0 + 5_000); // still within the 60s TTL
+    expect(after).toHaveLength(1); // the fresh write is visible — NOT masked by the stale empty cached set
+    expect(after[0]).toMatchObject({ patternHash: "hash-fresh" });
+  });
+
+  it("cache expires naturally past the TTL even without an explicit invalidation", async () => {
+    clearReviewSuppressionCacheForTest();
+    const env = createTestEnv();
+    const t0 = 3_000_000;
+    await getCachedReviewSuppressions(env, "owner/repo", t0); // populates the cache with an empty set
+
+    await recordReviewSuppression(env, { repoFullName: "owner/repo", category: "ai_review_split", patternHash: "hash-late" });
+    // No invalidateReviewSuppressionCache call here — relies on TTL expiry alone.
+    const afterTtl = await getCachedReviewSuppressions(env, "owner/repo", t0 + 60_001);
+    expect(afterTtl).toHaveLength(1);
+  });
+
+  it("caches independently per repoFullName", async () => {
+    clearReviewSuppressionCacheForTest();
+    const env = createTestEnv();
+    await recordReviewSuppression(env, { repoFullName: "owner/repo-a", category: "ai_review_split", patternHash: "hash-a" });
+    const t0 = 4_000_000;
+    const a = await getCachedReviewSuppressions(env, "owner/repo-a", t0);
+    const b = await getCachedReviewSuppressions(env, "owner/repo-b", t0);
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(0);
   });
 });

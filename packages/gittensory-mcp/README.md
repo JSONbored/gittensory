@@ -29,6 +29,8 @@ npm link --workspace @jsonbored/gittensory-mcp
 ```sh
 gittensory-mcp version
 gittensory-mcp version --json
+gittensory-mcp tools
+gittensory-mcp tools --json
 gittensory-mcp login
 gittensory-mcp logout
 gittensory-mcp whoami
@@ -85,6 +87,8 @@ Add `--json` for machine-readable output:
   "node": "v22.12.0"
 }
 ```
+
+`gittensory-mcp tools` lists every stdio MCP tool the local wrapper registers, with its one-line description. Add `--json` for `{ "count": N, "tools": [{ "name", "description" }, ...] }`.
 
 ### Shell completion
 
