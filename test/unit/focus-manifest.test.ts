@@ -3988,6 +3988,7 @@ describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
       },
     });
     expect(m.review.visual).toEqual({
+      productionUrl: null,
       preview: { urlTemplate: "https://pr-{number}.preview.example.com" },
       routes: { paths: ["/pricing", "/docs"], maxRoutes: 3 },
       themes: [],
@@ -4090,7 +4091,68 @@ describe("review.visual (#3609 preview.url_template / #3610 routes)", () => {
   it("resolveReviewVisualConfig: null manifest yields empty defaults; a set manifest passes through", () => {
     expect(resolveReviewVisualConfig(null)).toEqual({ ...EMPTY_VISUAL_CONFIG });
     const manifest = parseFocusManifest({ review: { visual: { routes: { paths: ["/app"] } } } });
-    expect(resolveReviewVisualConfig(manifest)).toEqual({ preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null }, themes: [], gif: false, enabled: null, themeStorageKey: null, actionsFallback: false });
+    expect(resolveReviewVisualConfig(manifest)).toEqual({ productionUrl: null, preview: { urlTemplate: null }, routes: { paths: ["/app"], maxRoutes: null }, themes: [], gif: false, enabled: null, themeStorageKey: null, actionsFallback: false });
+  });
+});
+
+describe("review.visual.production_url (#3611 follow-up — per-repo override of the global PUBLIC_SITE_ORIGIN env var)", () => {
+  it("parses a valid production_url, marks present, and round-trips", () => {
+    const m = parseFocusManifest({ review: { visual: { production_url: "https://metagraph.sh" } } });
+    expect(m.review.visual.productionUrl).toBe("https://metagraph.sh");
+    expect(m.review.present).toBe(true);
+    expect(reviewConfigToJson(m.review)).toEqual({ visual: { production_url: "https://metagraph.sh" } });
+  });
+
+  it("absent production_url stays null and does not mark review present on its own", () => {
+    expect(parseFocusManifest({}).review.visual.productionUrl).toBeNull();
+    expect(parseFocusManifest({ review: { visual: {} } }).review.present).toBe(false);
+  });
+
+  it("rejects a non-HTTPS production_url with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: { production_url: "http://metagraph.sh" } } });
+    expect(bad.review.visual.productionUrl).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.production_url.*valid HTTPS URL/.test(w))).toBe(true);
+  });
+
+  it("rejects a production_url resolving to a private/internal host with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: { production_url: "https://prod.internal" } } });
+    expect(bad.review.visual.productionUrl).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.production_url.*valid HTTPS URL/.test(w))).toBe(true);
+  });
+
+  it("rejects a malformed production_url with a warning", () => {
+    const bad = parseFocusManifest({ review: { visual: { production_url: "not-a-url-at-all" } } });
+    expect(bad.review.visual.productionUrl).toBeNull();
+    expect(bad.warnings.some((w) => /review\.visual\.production_url.*valid HTTPS URL/.test(w))).toBe(true);
+  });
+
+  it("composes with preview.url_template — both configured independently and both round-trip", () => {
+    const m = parseFocusManifest({
+      review: { visual: { production_url: "https://metagraph.sh", preview: { url_template: "https://pr-{number}.example.com" } } },
+    });
+    expect(m.review.visual.productionUrl).toBe("https://metagraph.sh");
+    expect(m.review.visual.preview.urlTemplate).toBe("https://pr-{number}.example.com");
+    expect(reviewConfigToJson(m.review)).toEqual({
+      visual: { production_url: "https://metagraph.sh", preview: { url_template: "https://pr-{number}.example.com" } },
+    });
+  });
+
+  it("resolveReviewVisualConfig passes a configured production_url through", () => {
+    const manifest = parseFocusManifest({ review: { visual: { production_url: "https://metagraph.sh" } } });
+    expect(resolveReviewVisualConfig(manifest).productionUrl).toBe("https://metagraph.sh");
+  });
+
+  it("overlay: a per-repo production_url wins over a global-default value", () => {
+    const globalDefault = parseReviewConfigMapping({ visual: { production_url: "https://gittensory.aethereal.dev" } }, []);
+    const perRepo = parseReviewConfigMapping({ visual: { production_url: "https://metagraph.sh" } }, []);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.productionUrl).toBe("https://metagraph.sh");
+  });
+
+  it("overlay: an unset per-repo production_url falls back to the global-default value", () => {
+    const globalDefault = parseReviewConfigMapping({ visual: { production_url: "https://gittensory.aethereal.dev" } }, []);
+    const perRepo = parseReviewConfigMapping({ visual: { routes: { paths: ["/app"] } } }, []);
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.productionUrl).toBe("https://gittensory.aethereal.dev");
+    expect(overlayReviewConfig(globalDefault, perRepo).visual.routes.paths).toEqual(["/app"]);
   });
 });
 
@@ -4175,7 +4237,7 @@ describe("review.visual.gif (#3612 scroll-through GIF capture)", () => {
 
   it("composes with themes — both configured independently and both round-trip", () => {
     const m = parseFocusManifest({ review: { visual: { gif: true, themes: ["dark"] } } });
-    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: true, enabled: null, themeStorageKey: null, actionsFallback: false });
+    expect(m.review.visual).toEqual({ productionUrl: null, preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: true, enabled: null, themeStorageKey: null, actionsFallback: false });
     expect(reviewConfigToJson(m.review)).toEqual({ visual: { themes: ["dark"], gif: true } });
   });
 
@@ -4278,7 +4340,7 @@ describe("review.visual.theme_storage_key (#4109 localStorage theme-forcing fall
 
   it("composes with themes — both configured independently and both round-trip", () => {
     const m = parseFocusManifest({ review: { visual: { themes: ["dark"], theme_storage_key: "theme" } } });
-    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: false, enabled: null, themeStorageKey: "theme", actionsFallback: false });
+    expect(m.review.visual).toEqual({ productionUrl: null, preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: ["dark"], gif: false, enabled: null, themeStorageKey: "theme", actionsFallback: false });
     expect(reviewConfigToJson(m.review)).toEqual({ visual: { themes: ["dark"], theme_storage_key: "theme" } });
   });
 
@@ -4333,7 +4395,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
 
   it("composes with gif — both configured independently and both round-trip", () => {
     const m = parseFocusManifest({ review: { visual: { actions_fallback: true, gif: true } } });
-    expect(m.review.visual).toEqual({ preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: [], gif: true, enabled: null, themeStorageKey: null, actionsFallback: true });
+    expect(m.review.visual).toEqual({ productionUrl: null, preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: [], gif: true, enabled: null, themeStorageKey: null, actionsFallback: true });
     expect(reviewConfigToJson(m.review)).toEqual({ visual: { gif: true, actions_fallback: true } });
   });
 
