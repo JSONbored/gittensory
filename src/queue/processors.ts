@@ -1029,10 +1029,16 @@ const PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES: Partial<
   },
 };
 
+// #4583: surfaces the AI test-generation command right where a maintainer already sees the missing-coverage
+// finding, mirroring CodeRabbit's inline "Generate unit tests" walkthrough checkbox instead of requiring the
+// maintainer to already know the `@gittensory generate-tests` command exists from documentation alone.
+const E2E_TEST_GEN_CTA = "Maintainers can also comment `@gittensory generate-tests` for an AI-generated Playwright test.";
+
 export function publicSafeManifestPolicyFinding(
   finding: FocusManifestFinding,
+  options: { e2eTestGenAvailable?: boolean } = {},
 ): AdvisoryFinding {
-  return {
+  const base: AdvisoryFinding = {
     code: finding.code,
     severity: finding.severity,
     title: finding.title,
@@ -1043,6 +1049,16 @@ export function publicSafeManifestPolicyFinding(
     // private blocked-path globs / test expectations; codes absent from the table keep their already-generic text.
     ...PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES[finding.code],
   };
+  // Only appended when e2eTests is actually enabled for this repo (the SAME resolveConvergedFeature check the
+  // #4196 auto-trigger already gates on), so an unconfigured repo is never told about a command that would just
+  // bounce with "not enabled" -- and only for the missing-tests finding, the one case where the command is a
+  // directly relevant next step rather than noise on an unrelated finding. base.action is always defined here
+  // (PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES.manifest_missing_tests always sets one), the same always-populated
+  // guarantee the v8-ignore above already documents for this code path.
+  if (finding.code === "manifest_missing_tests" && options.e2eTestGenAvailable) {
+    return { ...base, action: `${base.action} ${E2E_TEST_GEN_CTA}` };
+  }
+  return base;
 }
 
 export async function processJob(env: Env, message: JobMessage): Promise<void> {
@@ -9442,9 +9458,14 @@ async function maybePublishPrPublicSurface(
       // Keep deterministic manifest policy findings independent from AI-review eligibility: ignored authors
       // suppress review/public output only, never maintainer-configured gate blockers or their downstream triggers.
       const policyFindings = guidance.findings;
+      // Computed once and reused below for the #4196 auto-trigger check -- same feature gate, one call. Also
+      // feeds #4583's inline CTA so the missing-tests finding surfaces `@gittensory generate-tests` right in
+      // ORB's own comment (mirrors CodeRabbit's inline walkthrough checkbox) only when the command would
+      // actually work for this repo, never as noise on a repo that hasn't opted in.
+      const e2eTestGenAvailable = resolveConvergedFeature(env, manifest, "e2eTests", repoFullName);
       for (const finding of policyFindings) {
         if (!policyCodes.has(finding.code)) continue;
-        advisory.findings.push(publicSafeManifestPolicyFinding(finding));
+        advisory.findings.push(publicSafeManifestPolicyFinding(finding, { e2eTestGenAvailable }));
       }
       // E2E test-generation auto-trigger (#4196, part of the #4189 epic): promotes the deterministic
       // manifest_missing_tests finding above from advisory-only text into an actual trigger for #4192/#4194's
@@ -9454,7 +9475,7 @@ async function maybePublishPrPublicSurface(
       // tests" from scratch, per the issue's own requirement -- this is why the auto-trigger lives inside this
       // exact manifestPolicyGateMode-gated block instead of a parallel code path: that is the only place this
       // finding is computed at all today.
-      if (pr.headSha && policyFindings.some((finding) => finding.code === "manifest_missing_tests") && resolveConvergedFeature(env, manifest, "e2eTests", repoFullName)) {
+      if (pr.headSha && policyFindings.some((finding) => finding.code === "manifest_missing_tests") && e2eTestGenAvailable) {
         const e2eTargetKey = `${repoFullName}#${pr.number}`;
         // Double-generation guard: an unchanged head SHA re-entering this pass (a re-review/sweep tick, not a
         // new push) must never re-spend an LLM call or repost a duplicate suggestion. A genuinely NEW push
