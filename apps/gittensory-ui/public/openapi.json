@@ -13855,7 +13855,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Public GitHub repository stars/forks for the website chrome; only JSONbored/gittensory is accepted.",
+            "description": "Public GitHub repository stars/forks for the website chrome; any syntactically-valid owner/repo is accepted unless the deployment configures PUBLIC_REPO_STATS_ALLOWLIST.",
             "content": {
               "application/json": {
                 "schema": {

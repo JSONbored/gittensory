@@ -51,8 +51,6 @@ type RepoStatsCacheEntry = {
   staleUntilMs: number;
 };
 
-const PUBLIC_REPO_STATS_OWNER = "jsonbored";
-const PUBLIC_REPO_STATS_REPO = "gittensory";
 const REPO_STATS_CACHE_TTL_MS = 1000 * 60 * 10;
 const REPO_STATS_STALE_TTL_MS = 1000 * 60 * 60 * 24;
 const repoStatsCache = new Map<string, RepoStatsCacheEntry>();
@@ -122,8 +120,12 @@ export async function fetchPublicContributorProfile(login: string, env?: Pick<En
   }
 }
 
-export async function fetchPublicRepoStats(env: Pick<Env, "GITHUB_PUBLIC_TOKEN">, owner: string, repo: string): Promise<PublicRepoStats> {
-  const repoFullName = publicRepoFullName(owner, repo);
+export async function fetchPublicRepoStats(
+  env: Pick<Env, "GITHUB_PUBLIC_TOKEN" | "PUBLIC_REPO_STATS_ALLOWLIST">,
+  owner: string,
+  repo: string,
+): Promise<PublicRepoStats> {
+  const repoFullName = publicRepoFullName(env, owner, repo);
   const cacheKey = repoFullName.toLowerCase();
   const nowMs = Date.now();
   const cached = repoStatsCache.get(cacheKey);
@@ -143,15 +145,30 @@ export function clearPublicRepoStatsCacheForTests(): void {
   repoStatsCache.clear();
 }
 
-function publicRepoFullName(owner: string, repo: string): string {
+// Parses PUBLIC_REPO_STATS_ALLOWLIST into a lowercased "owner/repo" set, mirroring publicStatsProjects's
+// comma-separated parsing in src/review/public-stats.ts. Empty/unset -> empty set -> no allowlist restriction
+// (#4612): a self-hosted fork's own repo works out of the box, with no code change, exactly like the sibling
+// badge.svg route already does for any installed repo.
+function publicRepoStatsAllowlist(env: Pick<Env, "PUBLIC_REPO_STATS_ALLOWLIST">): Set<string> {
+  const allowlist = new Set<string>();
+  for (const entry of (env.PUBLIC_REPO_STATS_ALLOWLIST ?? "").split(",")) {
+    const project = entry.trim().toLowerCase();
+    if (project) allowlist.add(project);
+  }
+  return allowlist;
+}
+
+function publicRepoFullName(env: Pick<Env, "PUBLIC_REPO_STATS_ALLOWLIST">, owner: string, repo: string): string {
   const ownerName = owner.trim();
   const repoName = repo.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(ownerName)) throw new Error("invalid_github_repo");
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(repoName) || repoName === "." || repoName === "..") throw new Error("invalid_github_repo");
   const normalizedOwnerName = ownerName.toLowerCase();
   const normalizedRepoName = repoName.toLowerCase();
-  if (normalizedOwnerName !== PUBLIC_REPO_STATS_OWNER || normalizedRepoName !== PUBLIC_REPO_STATS_REPO) throw new Error("invalid_github_repo");
-  return `${normalizedOwnerName}/${normalizedRepoName}`;
+  const normalizedFullName = `${normalizedOwnerName}/${normalizedRepoName}`;
+  const allowlist = publicRepoStatsAllowlist(env);
+  if (allowlist.size > 0 && !allowlist.has(normalizedFullName)) throw new Error("invalid_github_repo");
+  return normalizedFullName;
 }
 
 async function fetchRepoStatsFromGitHub(env: Pick<Env, "GITHUB_PUBLIC_TOKEN">, repoFullName: string, nowMs: number): Promise<PublicRepoStats> {

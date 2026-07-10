@@ -155,6 +155,54 @@ describe("api routes", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("serves public GitHub repo stats for any repo when PUBLIC_REPO_STATS_ALLOWLIST is unset (#4612)", async () => {
+    const app = createApp();
+    // No PUBLIC_REPO_STATS_ALLOWLIST override: a self-hoster's own fork must work without code changes.
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      calls.push(input.toString());
+      return Response.json({ full_name: "acme/widgets", html_url: "https://github.com/acme/widgets", stargazers_count: 5, forks_count: 1 });
+    });
+
+    const response = await app.request("/v1/public/github/repos/acme/widgets/stats", {}, env);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      repoFullName: "acme/widgets",
+      htmlUrl: "https://github.com/acme/widgets",
+      stargazers_count: 5,
+      forks_count: 1,
+      source: "github",
+      stale: false,
+    });
+    expect(calls).toEqual(["https://api.github.com/repos/acme/widgets"]);
+  });
+
+  it("rejects public GitHub repo stats for repos outside a configured PUBLIC_REPO_STATS_ALLOWLIST, tolerating whitespace/casing/empty entries (#4612)", async () => {
+    const app = createApp();
+    const env = createTestEnv({
+      GITHUB_PUBLIC_TOKEN: "public-token",
+      PUBLIC_REPO_STATS_ALLOWLIST: " JSONbored/gittensory , Acme/Widgets ,,",
+    });
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      calls.push(input.toString());
+      return Response.json({ stargazers_count: 9, forks_count: 2 });
+    });
+
+    // A listed repo (with mismatched casing, exercising the trim + lowercase parsing) is served.
+    const allowed = await app.request("/v1/public/github/repos/ACME/WIDGETS/stats", {}, env);
+    expect(allowed.status).toBe(200);
+    await expect(allowed.json()).resolves.toMatchObject({ stargazers_count: 9, forks_count: 2, source: "github" });
+    expect(calls).toEqual(["https://api.github.com/repos/acme/widgets"]);
+
+    // A repo absent from the allowlist is rejected before ever calling GitHub.
+    const rejected = await app.request("/v1/public/github/repos/Attacker/missing-one/stats", {}, env);
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ error: "invalid_github_repo" });
+    expect(calls).toHaveLength(1);
+  });
+
   it("normalizes allowlisted public GitHub repo stats casing before fetching and caching", async () => {
     const app = createApp();
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
@@ -403,18 +451,6 @@ describe("api routes", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await app.request("/v1/public/github/repos/-bad/gittensory/stats", {}, env);
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: "invalid_github_repo" });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-allowlisted public GitHub repo stats paths before calling GitHub", async () => {
-    const app = createApp();
-    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    const response = await app.request("/v1/public/github/repos/Attacker/missing-one/stats", {}, env);
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: "invalid_github_repo" });
     expect(fetchMock).not.toHaveBeenCalled();
