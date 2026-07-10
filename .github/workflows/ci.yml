@@ -261,6 +261,16 @@ jobs:
       - name: Docs drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ui == 'true' }}
         run: npm run docs:drift-check
+      # Mechanical tripwire (#4518): src/rules/advisory.ts and packages/gittensory-engine/src/advisory/
+      # gate-advisory.ts are a hand-duplicated GATE-DECISION pair that ENGINE_PARITY_AREAS structurally
+      # cannot discover (different directory name AND filename on each side) -- fails when either twin's
+      # gate-decision logic changed in this PR without a corresponding version bump to
+      # packages/gittensory-engine/package.json, so a locally-installed engine copy always has a real signal
+      # for how stale it is. Was local-only (npm run test:ci) until now, same gap class as the drift checks
+      # above. Gated on `engine` too, not just `backend`: the engine twin lives outside src/** entirely.
+      - name: Gate-logic engine version-bump check
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' }}
+        run: npm run engine-parity:gate-logic-version-check
       - name: Validate observability configs
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.observability == 'true' }}
         env:

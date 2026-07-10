@@ -4,6 +4,7 @@
 // parallel — this script discovers those pairs, normalizes known-harmless import-path aliases, and fails CI when
 // the normalized bodies diverge. Also compares the workspace-installed @jsonbored/gittensory-engine semver against
 // the monorepo engine package's declared version (version-skew tripwire; no live-gate round-trip).
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -259,6 +260,106 @@ export function checkMinerEngineVersionPinSync({
   return { failures, expected, pin };
 }
 
+// ── Gate-logic version-bump tripwire (#4518) ────────────────────────────────────────────────────────────────
+// The hand-duplicated GATE-DECISION engine pair. Unlike ENGINE_PARITY_AREAS' area-scanned twins (same
+// directory name, same filename in both trees, expected to be byte-identical after import normalization),
+// this pair lives at DIFFERENT paths on each side and the engine copy is a DELIBERATE SUBSET (no check-run-
+// formatting/issue-advisory code a miner's local prediction never needs — only the actual gate-decision
+// functions: evaluateGateCheck, isConfiguredGateBlocker, buildPullRequestAdvisory, and their helpers). A
+// byte-comparison check (even normalized) would false-fail here on both legitimate scope differences and
+// harmless style differences (e.g. `?? 0` vs an explicit null/undefined check, or an extracted helper
+// function) that a straight text diff can't distinguish from a real logic change. So instead of content
+// parity, this enforces a LIGHTER, MECHANICAL tripwire (#4518's own framing, vs #4257's heavier behavioral
+// cross-check): touch EITHER twin's gate-decision logic and you must ALSO bump
+// packages/gittensory-engine/package.json's version, so a stale locally-installed engine copy (the
+// #2333/#2334 local iterate-loop's eventual dependency) has a real, discoverable signal for how far behind
+// main's actual gate-decision rules it is — rather than silently, indefinitely drifting the way
+// linkedIssueSatisfactionGateMode (#1961/#3906) did before this issue's own audit found it missing entirely
+// from the engine copy (ported back in this same PR).
+export const GATE_LOGIC_TWIN_FILES = Object.freeze(["src/rules/advisory.ts", "packages/gittensory-engine/src/advisory/gate-advisory.ts"] as const);
+
+export type GateLogicVersionBumpResult = { failures: string[]; touchedTwins: string[] };
+
+/**
+ * Pure: given the set of files THIS PR changed and whether the engine package's version string itself
+ * changed, fail when a gate-logic twin was touched without a version bump. Neither twin touched, or a bump
+ * present alongside a touched twin, both pass — this never fires for the common case (a PR touching neither
+ * file at all).
+ */
+export function checkGateLogicVersionBump({
+  changedFiles,
+  engineVersionChanged,
+}: {
+  changedFiles: string[];
+  engineVersionChanged: boolean;
+}): GateLogicVersionBumpResult {
+  const changed = new Set(changedFiles);
+  const touchedTwins = GATE_LOGIC_TWIN_FILES.filter((file) => changed.has(file));
+  if (touchedTwins.length === 0 || engineVersionChanged) return { failures: [], touchedTwins };
+  return {
+    touchedTwins,
+    failures: [
+      [
+        `This PR changes gate-decision logic (${touchedTwins.join(", ")}) without bumping`,
+        `${ENGINE_PACKAGE_JSON}'s version. Either twin changing the live gate's rules means a locally-installed`,
+        `${ENGINE_PACKAGE_NAME} copy is now stale relative to main -- bump the version (even a patch bump)`,
+        `so that staleness has a real, discoverable signal (see checkEngineVersionSkew /`,
+        `checkMinerEngineVersionPinSync).`,
+      ].join(" "),
+    ],
+  };
+}
+
+/** Real IO: the list of files this PR changed, via `git diff --name-only <base>...HEAD`. Fails SAFE to an
+ *  empty list (never blocks a PR over an unrelated git/environment hiccup — this is a cost-control-style
+ *  mechanical tripwire, not a correctness gate). */
+export function defaultGetChangedFiles(root: string, baseRef: string = "origin/main"): string[] {
+  try {
+    const output = execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], { cwd: root, encoding: "utf8" });
+    return output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Real IO: whether packages/gittensory-engine/package.json's `version` field differs from the base ref's
+ *  copy. Fails SAFE to `true` (already-changed) when the base ref's copy can't be resolved (e.g. the file is
+ *  new on this branch, or a shallow clone) -- an environment limitation must never masquerade as "you forgot
+ *  to bump it". */
+export function defaultDidEngineVersionChange(root: string, baseRef: string = "origin/main"): boolean {
+  try {
+    const baseText = execFileSync("git", ["show", `${baseRef}:${ENGINE_PACKAGE_JSON}`], { cwd: root, encoding: "utf8" });
+    const baseVersion = JSON.parse(baseText).version ?? null;
+    const currentVersion = defaultReadExpectedEngineVersion(root);
+    return baseVersion !== currentVersion;
+  } catch {
+    return true;
+  }
+}
+
+/** @internal CLI entry for the gate-logic version-bump tripwire, kept SEPARATE from runEngineParityMain
+ *  (below) rather than folded into its default check set: that function's own regression-guard tests assert
+ *  a clean `failures: []` result for `process.cwd()` unconditionally, which a git-diff-dependent check must
+ *  never risk breaking on an environment without a resolvable `origin/main` (a shallow clone, a detached
+ *  fetch, ...). This check gets its own opt-in CLI flag and CI step instead. */
+export function runGateLogicVersionBumpMain(root: string = process.cwd(), baseRef?: string): number {
+  const changedFiles = defaultGetChangedFiles(root, baseRef);
+  const engineVersionChanged = defaultDidEngineVersionChange(root, baseRef);
+  const { failures } = checkGateLogicVersionBump({ changedFiles, engineVersionChanged });
+
+  if (failures.length > 0) {
+    console.error(`Gate-logic version-bump check found ${failures.length} issue(s):`);
+    for (const failure of failures) console.error(failure);
+    return 1;
+  }
+
+  console.log("Gate-logic version-bump check ok.");
+  return 0;
+}
+
 /** Run both the file-pair drift check and the version-skew check. */
 export function runEngineParityChecks(options: {
   root: string;
@@ -299,6 +400,10 @@ export function runEngineParityMain(root: string = process.cwd()): number {
 }
 
 function main(): void {
+  if (process.argv.includes("--gate-logic-version-bump")) {
+    process.exit(runGateLogicVersionBumpMain(process.cwd()));
+    return;
+  }
   process.exit(runEngineParityMain(process.cwd()));
 }
 

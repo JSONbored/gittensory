@@ -6,19 +6,24 @@ import { describe, expect, it, vi } from "vitest";
 import {
   checkEngineParityDrift,
   checkEngineVersionSkew,
+  checkGateLogicVersionBump,
   checkMinerEngineVersionPinSync,
   compareSemver,
+  defaultDidEngineVersionChange,
+  defaultGetChangedFiles,
   defaultReadExpectedEngineVersion,
   defaultResolveInstalledEngineVersion,
   describeEngineVersionSkew,
   discoverEngineParityPairs,
   type EngineParityPair,
+  GATE_LOGIC_TWIN_FILES,
   isEngineStubPair,
   isThinEngineReExportShim,
   normalizeEngineParityText,
   normalizeImportSpec,
   runEngineParityChecks,
   runEngineParityMain,
+  runGateLogicVersionBumpMain,
 } from "../../scripts/check-engine-parity";
 
 const TSX_BIN = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -187,7 +192,7 @@ describe("check-engine-parity script", () => {
 
     it("uses default version readers against the real monorepo workspace", () => {
       expect(defaultResolveInstalledEngineVersion(process.cwd())).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(defaultReadExpectedEngineVersion(process.cwd())).toBe("0.2.0");
+      expect(defaultReadExpectedEngineVersion(process.cwd())).toBe("0.2.1");
       const result = runEngineParityChecks({ root: process.cwd() });
       expect(result.failures).toEqual([]);
     });
@@ -244,5 +249,151 @@ describe("check-engine-parity script", () => {
       readExpected: () => "0.2.0",
     });
     expect(combined.failures.length).toBeGreaterThanOrEqual(2);
+  });
+
+  describe("gate-logic version-bump tripwire (#4518)", () => {
+    it("names the actual twin file pair", () => {
+      expect(GATE_LOGIC_TWIN_FILES).toEqual(["src/rules/advisory.ts", "packages/gittensory-engine/src/advisory/gate-advisory.ts"]);
+    });
+
+    it("passes when neither twin was touched, regardless of whether the version changed", () => {
+      expect(checkGateLogicVersionBump({ changedFiles: ["src/other-file.ts"], engineVersionChanged: false }).failures).toEqual([]);
+      expect(checkGateLogicVersionBump({ changedFiles: [], engineVersionChanged: false }).failures).toEqual([]);
+    });
+
+    it("passes when a twin was touched AND the engine version changed", () => {
+      const result = checkGateLogicVersionBump({ changedFiles: ["src/rules/advisory.ts"], engineVersionChanged: true });
+      expect(result.failures).toEqual([]);
+      expect(result.touchedTwins).toEqual(["src/rules/advisory.ts"]);
+    });
+
+    it("fails when the HOST twin was touched without a version bump", () => {
+      const result = checkGateLogicVersionBump({ changedFiles: ["src/rules/advisory.ts", "src/unrelated.ts"], engineVersionChanged: false });
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toContain("src/rules/advisory.ts");
+      expect(result.failures[0]).toContain("packages/gittensory-engine/package.json");
+      expect(result.touchedTwins).toEqual(["src/rules/advisory.ts"]);
+    });
+
+    it("fails when the ENGINE twin was touched without a version bump", () => {
+      const result = checkGateLogicVersionBump({
+        changedFiles: ["packages/gittensory-engine/src/advisory/gate-advisory.ts"],
+        engineVersionChanged: false,
+      });
+      expect(result.failures).toHaveLength(1);
+      expect(result.touchedTwins).toEqual(["packages/gittensory-engine/src/advisory/gate-advisory.ts"]);
+    });
+
+    it("lists BOTH twins in the failure when both were touched without a version bump", () => {
+      const result = checkGateLogicVersionBump({
+        changedFiles: [...GATE_LOGIC_TWIN_FILES],
+        engineVersionChanged: false,
+      });
+      expect(result.touchedTwins).toEqual([...GATE_LOGIC_TWIN_FILES]);
+      expect(result.failures[0]).toContain("src/rules/advisory.ts");
+      expect(result.failures[0]).toContain("gate-advisory.ts");
+    });
+
+    it("defaultGetChangedFiles fails safe to an empty list when the base ref cannot be resolved", () => {
+      expect(defaultGetChangedFiles("/definitely-not-a-git-repo", "origin/main")).toEqual([]);
+    });
+
+    it("defaultDidEngineVersionChange fails safe to true when the base ref cannot be resolved", () => {
+      expect(defaultDidEngineVersionChange("/definitely-not-a-git-repo", "origin/main")).toBe(true);
+    });
+
+    it("defaultGetChangedFiles resolves real changed files against a real git ref (regression guard)", () => {
+      // HEAD vs itself is always an empty diff -- proves the real git plumbing runs without throwing.
+      expect(defaultGetChangedFiles(process.cwd(), "HEAD")).toEqual([]);
+    });
+
+    it("defaultDidEngineVersionChange is false comparing HEAD's engine package.json against itself (regression guard)", () => {
+      expect(defaultDidEngineVersionChange(process.cwd(), "HEAD")).toBe(false);
+    });
+
+    it("runGateLogicVersionBumpMain returns 0 and logs ok when nothing failed", () => {
+      // Other tests earlier in this file spy on console.log/error without restoring, so a shared/leaked spy
+      // can already have prior calls recorded by the time this runs -- assert BY CONTENT (some call matches),
+      // never by position ([0]), and always restore this test's own spy.
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      // HEAD vs itself: no changed files, so the check trivially passes regardless of the real repo state.
+      expect(runGateLogicVersionBumpMain(process.cwd(), "HEAD")).toBe(0);
+      expect(log.mock.calls.some((c) => String(c[0]).includes("Gate-logic version-bump check ok"))).toBe(true);
+      log.mockRestore();
+    });
+
+    it("runGateLogicVersionBumpMain fails safe to 0 (no touched twins) against a root with no git history", () => {
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      // No .git at all: defaultGetChangedFiles fails safe to [] (never blocks a PR over an environment
+      // hiccup) -- the ACTUAL failure path is exercised end-to-end below with a real git fixture. Asserts
+      // this test's OWN call never mentions "Gate-logic" (not "never called at all" -- a leaked, unrestored
+      // spy from an earlier test in this file can carry prior unrelated calls into this one).
+      expect(runGateLogicVersionBumpMain("/definitely-not-a-gittensory-root", "origin/main")).toBe(0);
+      expect(errorLog.mock.calls.some((c) => String(c[0]).includes("Gate-logic"))).toBe(false);
+      errorLog.mockRestore();
+    });
+
+    describe("end-to-end against a real git fixture", () => {
+      function initFixtureRepo(): string {
+        const dir = mkdtempSync(join(tmpdir(), "engine-parity-gate-logic-"));
+        const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+        git("init", "--quiet", "-b", "main");
+        git("config", "user.email", "test@example.com");
+        git("config", "user.name", "Test");
+        mkdirSync(join(dir, "src", "rules"), { recursive: true });
+        mkdirSync(join(dir, "packages", "gittensory-engine"), { recursive: true });
+        writeFileSync(join(dir, "src", "rules", "advisory.ts"), "export const V = 1;\n");
+        writeFileSync(join(dir, "packages", "gittensory-engine", "package.json"), JSON.stringify({ name: "@jsonbored/gittensory-engine", version: "0.2.0" }));
+        git("add", "-A");
+        git("commit", "--quiet", "-m", "base");
+        git("branch", "base-ref"); // a stable ref this test can diff against, independent of any real origin/main
+        return dir;
+      }
+
+      it("fails when the host twin changes without a version bump", () => {
+        const dir = initFixtureRepo();
+        try {
+          writeFileSync(join(dir, "src", "rules", "advisory.ts"), "export const V = 2;\n");
+          execFileSync("git", ["add", "-A"], { cwd: dir });
+          execFileSync("git", ["commit", "--quiet", "-m", "change gate logic"], { cwd: dir });
+
+          const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+          expect(runGateLogicVersionBumpMain(dir, "base-ref")).toBe(1);
+          expect(errorLog.mock.calls.some((c) => String(c[0]).includes("Gate-logic version-bump check found"))).toBe(true);
+          errorLog.mockRestore();
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it("passes when the host twin changes together with a version bump", () => {
+        const dir = initFixtureRepo();
+        try {
+          writeFileSync(join(dir, "src", "rules", "advisory.ts"), "export const V = 2;\n");
+          writeFileSync(join(dir, "packages", "gittensory-engine", "package.json"), JSON.stringify({ name: "@jsonbored/gittensory-engine", version: "0.2.1" }));
+          execFileSync("git", ["add", "-A"], { cwd: dir });
+          execFileSync("git", ["commit", "--quiet", "-m", "change gate logic + bump"], { cwd: dir });
+
+          const log = vi.spyOn(console, "log").mockImplementation(() => {});
+          expect(runGateLogicVersionBumpMain(dir, "base-ref")).toBe(0);
+          log.mockRestore();
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it("passes when neither twin changes", () => {
+        const dir = initFixtureRepo();
+        try {
+          writeFileSync(join(dir, "README.md"), "unrelated change\n");
+          execFileSync("git", ["add", "-A"], { cwd: dir });
+          execFileSync("git", ["commit", "--quiet", "-m", "unrelated"], { cwd: dir });
+
+          expect(runGateLogicVersionBumpMain(dir, "base-ref")).toBe(0);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    });
   });
 });
