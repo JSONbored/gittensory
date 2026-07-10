@@ -15,6 +15,8 @@
 #   --profile pgbouncer     PgBouncer connection pooler in front of Postgres
 #   --profile qdrant        Qdrant vector database for RAG
 #   --profile ollama        Local Ollama AI backend
+#   --profile gpu           GPU metrics exporter (nvidia-smi -> Prometheus -> Grafana), requires the NVIDIA
+#                           Container Toolkit; combine with --profile ollama on a GPU host
 #   --profile visual-review Headless Chromium (browserless) for before/after PR screenshot capture
 #   --profile rees          Review-enrichment service (REES) for heavier PR analysis, in-network only
 #   --profile litestream    Continuous SQLite backup to S3/B2/R2 via Litestream
@@ -348,12 +350,50 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 5
-    # Ollama can load multi-GB models into memory; default high enough for common 7-8B quantized models but
-    # cap it so a large model pull can't exhaust host RAM and take down the core review pipeline (#1828).
+    # Concurrency/residency tuning for a shared embed+vision GPU deployment (#4327/#4335). Defaults sized
+    # for a single 24GB-class card running bge-m3 (embeddings) alongside one vision model concurrently --
+    # NUM_PARALLEL=2 keeps worst-case VRAM (resident weights + per-slot KV cache) well under 24GB; raising
+    # it on the vision model without also raising MAX_LOADED_MODELS/testing risks per-slot KV cache
+    # exhausting VRAM under burst load (latency collapse, not a hard OOM crash -- Ollama backpressures via
+    # its request queue instead). MAX_LOADED_MODELS pins exactly {embed model, vision model} resident so a
+    # stray third pull mid-burst can't force an unload/reload cycle on either one you actually need.
+    environment:
+      OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-2}"
+      OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-2}"
+      # Reviews land in bursts, not constant load -- keep both models warm across typical gaps between
+      # bursts instead of Ollama's 5m default forcing a cold-start reload every time.
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-30m}"
+    # Ollama can load multi-GB models into memory; raised from the single-embedder-era default (8g) now that
+    # a vision model (#4335) shares this container's memory ceiling alongside bge-m3 -- still capped so a
+    # runaway pull can't exhaust host RAM and take down the core review pipeline (#1828).
     deploy:
       resources:
         limits:
-          memory: "${OLLAMA_MEM_LIMIT:-8g}"
+          memory: "${OLLAMA_MEM_LIMIT:-20g}"
+
+  # ── GPU metrics exporter (--profile gpu, #4367) ─────────────────────────────
+  # Shells to `nvidia-smi` via the NVIDIA Container Toolkit -- DCGM is built for datacenter fleets and is
+  # the wrong fit for a single consumer/workstation-class card like the one this deployment targets. The
+  # device reservation below only takes effect once this profile is actually activated, so a host with no
+  # GPU (and no --profile gpu) never evaluates it.
+  gpu-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:1.3.2
+    restart: unless-stopped
+    <<: *default-logging
+    profiles: ["gpu"]
+    environment:
+      # The exporter only shells out to nvidia-smi -- it never runs CUDA workloads itself, so the
+      # lightest capability tier is sufficient (matches the upstream project's own recommended config).
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    expose:
+      - "9835"
 
   # ── Browserless / visual review (--profile visual-review) ──────────────────
   # Headless Chromium for automated before/after PR screenshot capture (src/review/visual/**).

@@ -47,22 +47,25 @@ import {
   buildHealthBody,
   codexAuthReadinessProbe,
   githubAppReadinessProbe,
+  publicOriginAcknowledgedGaugeValue,
+  publicOriginReachabilityAdvisory,
   readiness,
   sqliteBackupAdvisory,
   type ReadinessProbe,
 } from "./selfhost/health";
 import { clockSkewSecondsSample } from "./selfhost/clock-skew";
+import { d1DatabaseSizeBytesSample, d1SignalSnapshotsRowsPerKeySample, d1TableRowCountSamples, isD1SizeProbeEnabled, runD1SizeProbe } from "./selfhost/d1-size-probe";
 import { gauge, gaugeVector, incr, observe, renderMetrics, setSelfHostedMetricsMode } from "./selfhost/metrics";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter, tuneGithubRateLimitObservationsAutovacuum } from "./selfhost/pg-adapter";
 import { createPgQueue } from "./selfhost/pg-queue";
 import { createPgVectorize, initPgVectorize } from "./selfhost/pg-vectorize";
-import { resolvePostgresPoolMax, type SelfHostQueueSnapshot } from "./selfhost/queue-common";
-import type { BacklogRepoCount } from "./selfhost/queue-fairness";
-import type { MaintenancePressureSignals } from "./selfhost/maintenance-admission";
+import { resolvePostgresPoolMax } from "./selfhost/queue-common";
+import type { DurableQueue } from "./selfhost/backend-contracts";
 import { createSqliteQueue } from "./selfhost/sqlite-queue";
 import { createSqliteVectorize } from "./selfhost/vectorize";
 import { createFsBlobStore } from "./selfhost/blob-store";
+import { createS3BlobStore } from "./selfhost/s3-blob-store";
 import {
   makeLocalManifestReader,
   makeLocalReviewContextReader,
@@ -128,18 +131,11 @@ function loadFileSecrets(): void {
 
 interface Backend {
   db: D1Database;
-  queue: {
-    binding: Queue;
-    start(): void;
-    stop(): Promise<void>;
-    size(): number | Promise<number>;
-    deadCount(): number | Promise<number>;
-    processingCount(): number | Promise<number>;
-    stats(): Record<string, number> | Promise<Record<string, number>>;
-    pressureSignals(): MaintenancePressureSignals | Promise<MaintenancePressureSignals>;
-    snapshot(): SelfHostQueueSnapshot | Promise<SelfHostQueueSnapshot>;
-    topBacklogRepos(limit: number): BacklogRepoCount[] | Promise<BacklogRepoCount[]>;
-  };
+  // Unified DurableQueue (backend-contracts.ts, #4010) -- previously an inline type papering over the sqlite
+  // and Postgres queue backends' independently-declared interfaces with a loose `T | Promise<T>` union on
+  // every method. Both createSqliteQueue and createPgQueue now return the same fully-async DurableQueue, so
+  // this can reference it directly instead of re-declaring a looser subset by hand.
+  queue: DurableQueue;
   vectorize?: Vectorize;
   shutdown(): Promise<void>;
 }
@@ -274,6 +270,27 @@ function buildSqliteBackend(
   };
 }
 
+/** Resolve the REVIEW_AUDIT blob-store binding from env vars, or undefined for the on-demand (no persistence)
+ *  default. An S3-compatible bucket (an operator's own Cloudflare R2 bucket, or any other S3-compatible
+ *  provider) takes priority over the plain filesystem store when both are configured -- S3 is the one that can
+ *  actually be made publicly reachable without exposing this instance itself (see s3-blob-store.ts's own
+ *  header comment), so it's the strictly more capable option when an operator has set up both. */
+function resolveReviewAuditBinding(): R2Bucket | undefined {
+  const { REVIEW_AUDIT_S3_BUCKET, REVIEW_AUDIT_S3_ENDPOINT, REVIEW_AUDIT_S3_ACCESS_KEY_ID, REVIEW_AUDIT_S3_SECRET_ACCESS_KEY, REVIEW_AUDIT_S3_REGION } =
+    process.env;
+  if (REVIEW_AUDIT_S3_BUCKET && REVIEW_AUDIT_S3_ENDPOINT && REVIEW_AUDIT_S3_ACCESS_KEY_ID && REVIEW_AUDIT_S3_SECRET_ACCESS_KEY) {
+    return createS3BlobStore({
+      bucket: REVIEW_AUDIT_S3_BUCKET,
+      endpoint: REVIEW_AUDIT_S3_ENDPOINT,
+      accessKeyId: REVIEW_AUDIT_S3_ACCESS_KEY_ID,
+      secretAccessKey: REVIEW_AUDIT_S3_SECRET_ACCESS_KEY,
+      ...(REVIEW_AUDIT_S3_REGION ? { region: REVIEW_AUDIT_S3_REGION } : {}),
+    });
+  }
+  if (process.env.REVIEW_AUDIT_DIR) return createFsBlobStore(process.env.REVIEW_AUDIT_DIR);
+  return undefined;
+}
+
 async function main(): Promise<void> {
   loadFileSecrets();
   /* v8 ignore next -- importing this entrypoint starts the Node server; pure validation is covered in selfhost-preflight tests. */
@@ -391,6 +408,24 @@ async function main(): Promise<void> {
       }),
     );
 
+  // Public-origin advisory (JSONbored/gittensory#4180): warn LOUDLY at boot if PUBLIC_API_ORIGIN/
+  // PUBLIC_SITE_ORIGIN look like a private/internal hostname, so an operator doesn't run for weeks with every
+  // visual-capture screenshot silently rendering as a broken image in public PR comments.
+  const publicOriginOpts = {
+    publicApiOrigin: process.env.PUBLIC_API_ORIGIN,
+    publicSiteOrigin: process.env.PUBLIC_SITE_ORIGIN,
+    acknowledged: process.env.PUBLIC_ORIGIN_ACKNOWLEDGED === "true",
+  };
+  const publicOriginAdvisory = publicOriginReachabilityAdvisory(publicOriginOpts);
+  if (publicOriginAdvisory)
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "selfhost_public_origin_advisory",
+        message: publicOriginAdvisory,
+      }),
+    );
+
   const applied = await runSelfHostMigrations(
     backend.db,
     process.env.MIGRATIONS_DIR ?? "migrations",
@@ -451,6 +486,48 @@ async function main(): Promise<void> {
         event: "selfhost_embed_provider",
         baseUrl: process.env.AI_EMBED_BASE_URL,
         model: process.env.AI_EMBED_MODEL ?? "bge-m3",
+      }),
+    );
+  // Dedicated visual-vision provider (#4111/#4335): when AI_VISION_BASE_URL is set, the visual-vision
+  // advisory routes to a SEPARATE openai-compatible endpoint (e.g. ollama at http://ollama:11434/v1, a
+  // vision-language model) instead of requiring a maintainer BYOK key -- kept separate from AI_EMBED (a
+  // different model, a different capability) the same way AI_EMBED is kept separate from the review chain.
+  // Unset ⇒ absent ⇒ visual-vision falls back to BYOK-only (byte-identical to before this binding existed).
+  const visionAi = process.env.AI_VISION_BASE_URL
+    ? createOpenAiCompatibleAi({
+        baseUrl: process.env.AI_VISION_BASE_URL,
+        apiKey: process.env.AI_VISION_API_KEY ?? process.env.OPENAI_API_KEY,
+        model: process.env.AI_VISION_MODEL,
+      })
+    : undefined;
+  if (visionAi)
+    console.log(
+      JSON.stringify({
+        event: "selfhost_vision_provider",
+        baseUrl: process.env.AI_VISION_BASE_URL,
+        model: process.env.AI_VISION_MODEL,
+      }),
+    );
+  // Dedicated advisory-tier provider (#4364): several capabilities (slop advisory, e2e test-gen, issue
+  // planner, AI summaries) are NEVER gate-blocking and share the review chain's frontier-only env.AI today
+  // purely because no cheaper alternative existed -- unlike AI_EMBED/AI_VISION, which each back a single
+  // narrow capability, this one binding is shared across all four, gated per-capability by
+  // `.gittensory.yml` (global default + per-repo override, see focus-manifest.ts) so routing stays
+  // config-driven, not hardcoded. Unset ⇒ absent ⇒ every advisory capability falls back to env.AI, byte-
+  // identical to before this binding existed.
+  const advisoryAi = process.env.AI_ADVISORY_BASE_URL
+    ? createOpenAiCompatibleAi({
+        baseUrl: process.env.AI_ADVISORY_BASE_URL,
+        apiKey: process.env.AI_ADVISORY_API_KEY,
+        model: process.env.AI_ADVISORY_MODEL,
+      })
+    : undefined;
+  if (advisoryAi)
+    console.log(
+      JSON.stringify({
+        event: "selfhost_advisory_provider",
+        baseUrl: process.env.AI_ADVISORY_BASE_URL,
+        model: process.env.AI_ADVISORY_MODEL,
       }),
     );
   // Dual-review plan (#dual-ai-combiner): resolve which provider(s) review + how to combine, attached to env
@@ -559,6 +636,8 @@ async function main(): Promise<void> {
     WEBHOOKS: backend.queue.binding, // the brokered relay receiver enqueues via WEBHOOKS; both lanes share the in-process queue
     AI: ai,
     ...(embedAi ? { AI_EMBED: embedAi as unknown as Ai } : {}),
+    ...(visionAi ? { AI_VISION: visionAi as unknown as Ai } : {}),
+    ...(advisoryAi ? { AI_ADVISORY: advisoryAi as unknown as Ai } : {}),
     ...(aiReviewPlan ? { AI_REVIEW_PLAN: aiReviewPlan } : {}),
     SELFHOST_TRANSIENT_CACHE: webhookCache,
     // Qdrant takes priority; falls back to the backend's built-in vectorize (pgvector or sqlite-vec)
@@ -571,12 +650,13 @@ async function main(): Promise<void> {
     // Visual review: when BROWSER_WS_ENDPOINT is set, expose a truthy BROWSER binding so shot.ts's
     // `if (!env.BROWSER) return` guard is bypassed; the puppeteer stub then connects via WS.
     ...(process.env.BROWSER_WS_ENDPOINT ? { BROWSER: {} } : {}),
-    // Visual screenshot persistence (#10): bind an fs-backed REVIEW_AUDIT store when REVIEW_AUDIT_DIR is set so
-    // captured PNGs are cached + served from /gittensory/shot?key=… instead of re-rendering on demand. Unset ⇒
-    // no binding ⇒ on-demand behavior, byte-identical to before.
-    ...(process.env.REVIEW_AUDIT_DIR
-      ? { REVIEW_AUDIT: createFsBlobStore(process.env.REVIEW_AUDIT_DIR) }
-      : {}),
+    // Visual screenshot persistence (#10 / S3-bucket support): bind a REVIEW_AUDIT store (S3-compatible bucket,
+    // or plain filesystem — see resolveReviewAuditBinding) so captured PNGs are cached instead of re-rendering
+    // on demand. Unset (neither configured) ⇒ no binding ⇒ on-demand behavior, byte-identical to before.
+    ...(() => {
+      const binding = resolveReviewAuditBinding();
+      return binding ? { REVIEW_AUDIT: binding } : {};
+    })(),
   } as unknown as Env;
 
   // GitHub App auth: a successful JWT mint proves GITHUB_APP_PRIVATE_KEY is set and parses as a valid signing
@@ -673,6 +753,13 @@ async function main(): Promise<void> {
   // from "no signal on this platform" (see host-pressure.ts).
   gauge("gittensory_host_load_avg1_per_core", async () => (await maintenancePressure()).hostLoadAvg1PerCore ?? -1);
   gauge("gittensory_clock_skew_seconds", () => clockSkewSecondsSample());
+  // D1 size/row-count observability probe (#3810): opt-in Cloudflare Management API poll for the shared
+  // cloud D1's file size and monitored-table row counts. Always registered (byte-identical -1/empty samples
+  // when the probe is disabled or has never completed) so the metric names/HELP/TYPE lines are present on
+  // the very first scrape, matching the seeded-counter convention below.
+  gauge("gittensory_d1_database_size_bytes", () => d1DatabaseSizeBytesSample());
+  gaugeVector("gittensory_d1_table_row_count", () => d1TableRowCountSamples());
+  gauge("gittensory_signal_snapshots_rows_per_key", () => d1SignalSnapshotsRowsPerKeySample());
   // Backlog-vs-fresh-intake fairness lanes (#selfhost-lane-observability, see queue-fairness.ts): the SAME
   // `foreground_lane` classification the claim-time fairness mechanism itself consults, so an operator can see
   // whether a stuck-looking queue is actually a real, unresolved PR-review backlog (high backlog-convergence
@@ -693,6 +780,7 @@ async function main(): Promise<void> {
     Math.floor((Date.now() - startedAt) / 1000),
   );
   gauge("gittensory_backup_acknowledged", () => backupAcknowledgedGaugeValue(sqliteBackupOpts));
+  gauge("gittensory_public_origin_acknowledged", () => publicOriginAcknowledgedGaugeValue(publicOriginOpts));
   // Pre-initialize job counters to 0 so they appear in the first Prometheus scrape (lazy counters
   // created on first use would otherwise cause "No data" in Grafana until the first job event).
   for (const c of [
@@ -713,6 +801,9 @@ async function main(): Promise<void> {
   // first scrape (keeping the metric consistently labeled — never mix labeled and unlabeled samples).
   for (const status of ["2xx", "3xx", "4xx", "5xx"])
     incr("gittensory_http_requests_total", { status }, 0);
+  // Same seeding for the D1 probe's error counter (#3810) -- byte-identical to 0 whether or not the probe is
+  // even enabled, so its stat panel reads "0" rather than "No data" before any failure has ever occurred.
+  for (const part of ["database_info", "table_row_count"]) incr("gittensory_d1_probe_errors_total", { part }, 0);
 
   const ctx = {
     waitUntil: (p: Promise<unknown>) =>
@@ -998,6 +1089,24 @@ async function main(): Promise<void> {
     relayDrainState?.lastDrainAtMs == null ? -1 : Math.floor((Date.now() - relayDrainState.lastDrainAtMs) / 1000),
   );
   /* v8 ignore stop */
+
+  // D1 size/row-count observability probe (#3810): a no-op everywhere until an operator sets all three
+  // CLOUDFLARE_D1_MONITOR_* vars (see isD1SizeProbeEnabled) -- most self-host installs run their own
+  // SQLite/Postgres backend and have no Cloudflare D1 to watch. 15-minute cadence: the underlying figures
+  // (a multi-GB database's file size, monitored-table row counts) move slowly, so this stays well clear of
+  // Cloudflare Management API rate limits even across a large monitored-table list.
+  const d1ProbeEnv = {
+    CLOUDFLARE_D1_MONITOR_ACCOUNT_ID: process.env.CLOUDFLARE_D1_MONITOR_ACCOUNT_ID,
+    CLOUDFLARE_D1_MONITOR_DATABASE_ID: process.env.CLOUDFLARE_D1_MONITOR_DATABASE_ID,
+    CLOUDFLARE_D1_MONITOR_API_TOKEN: process.env.CLOUDFLARE_D1_MONITOR_API_TOKEN,
+  };
+  if (isD1SizeProbeEnabled(d1ProbeEnv)) {
+    /* v8 ignore start -- self-host entrypoint timer; probe logic itself is unit-tested in d1-size-probe.test.ts. */
+    const runD1Probe = () => runD1SizeProbe(d1ProbeEnv).catch((error) => captureError(error, { kind: "d1_size_probe" }));
+    void runD1Probe();
+    setInterval(runD1Probe, 900_000);
+    /* v8 ignore stop */
+  }
 
   // Pull-mode relay drain (#secure-relay): when ORB_RELAY_MODE=pull, the engine DRAINS its events from the Orb on a
   // timer instead of exposing an inbound endpoint — the right fit behind NAT/tailnet. Acks the previous batch so the

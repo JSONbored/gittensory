@@ -298,9 +298,46 @@ export async function startFixtureServer(
       response.end(JSON.stringify({ ranked, totalCandidates: candidates.length, appliedLane: lane, appliedMinRankScore: minRank }));
       return;
     }
+    if (request.url === "/v1/issue-rag/retrieve" && request.method === "POST") {
+      const body = (await readJsonRequest(request)) as { owner?: string; repo?: string; title?: string };
+      response.end(
+        JSON.stringify({
+          status: "ok",
+          repoFullName: `${body.owner}/${body.repo}`,
+          telemetry: {
+            attempted: true,
+            injected: true,
+            candidates: 1,
+            kept: 1,
+            topScore: 0.9,
+            minScore: 0.4,
+            reranked: true,
+            injectedChars: 120,
+            retrievedPathCount: 1,
+            retrievedPaths: ["src/helper.ts"],
+          },
+        }),
+      );
+      return;
+    }
     // #784 maintainer controls (agent approval queue + kill-switch).
     if (request.url === "/v1/repos/owner/repo/agent/pending-actions" && request.method === "GET") {
       response.end(JSON.stringify({ repoFullName: "owner/repo", pendingActions: [{ id: "pa-1", actionClass: "merge", pullNumber: 7, reason: "clean", status: "pending" }] }));
+      return;
+    }
+    if (request.url === "/v1/repos/owner/repo/maintainer-noise" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          generatedAt: "2026-06-01T00:00:00.000Z",
+          score: 42,
+          level: "medium",
+          noiseSources: ["3 open PRs lack linked issue context."],
+          maintainerActions: ["review_now"],
+          queueHealth: { signals: { openPullRequests: 2 } },
+          summary: "Gittensory maintainer noise report for owner/repo: medium noise (score 42); 1 source(s) to triage.",
+        }),
+      );
       return;
     }
     if (request.url?.startsWith("/v1/repos/owner/repo/agent/pending-actions/") && request.method === "POST") {
@@ -315,6 +352,63 @@ export async function startFixtureServer(
     if (request.url === "/v1/repos/owner/repo/settings" && request.method === "PUT") {
       const body = (await readJsonRequest(request)) as { agentPaused?: boolean; autonomy?: Record<string, string> };
       response.end(JSON.stringify({ repoFullName: "owner/repo", agentPaused: body.agentPaused === true, ...(body.autonomy ? { autonomy: body.autonomy } : {}) }));
+      return;
+    }
+    // #554 gate precision telemetry (read-only). Echoes ?windowDays so the CLI window pass-through is testable.
+    if (request.url?.startsWith("/v1/repos/owner/repo/gate-precision") && request.method === "GET") {
+      const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          windowDays: windowDays ? Number(windowDays) : null,
+          perGateType: [
+            { gateType: "duplicate-pr", blocked: 8, blockedThenMerged: 2, overridden: 1, falsePositiveRate: 0.25 },
+            { gateType: "missing-linked-issue", blocked: 3, blockedThenMerged: 0, overridden: 0, falsePositiveRate: null },
+          ],
+          overall: { blocked: 11, blockedThenMerged: 2, falsePositiveRate: 0.182 },
+          signals: ["Highest false-positive gate: `duplicate-pr` — 25% of its 8 blocks merged anyway (1 overridden). Keep it advisory until this drops."],
+        }),
+      );
+      return;
+    }
+    if (request.url === "/v1/upstream/drift" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          upstreamDrift: { status: "ok", ruleset: "gittensor-core", lastCheckedAt: "2026-05-30T00:00:00.000Z", warnings: [] },
+          reports: [{ id: "drift-1", severity: "info", summary: "no drift detected", detectedAt: "2026-05-30T00:00:00.000Z" }],
+        }),
+      );
+      return;
+    }
+    if (request.url === "/v1/repos/owner/repo/intelligence" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          status: "ready",
+          source: "computed",
+          repoFullName: "owner/repo",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          labelAudit: {
+            configuredLabels: ["gittensor:feature", "gittensor:bug"],
+            liveLabels: ["gittensor:feature", "visual"],
+            missingConfiguredLabels: ["gittensor:bug"],
+            suspiciousLabels: ["visual"],
+            trustedLabelPipelineReady: false,
+          },
+          burdenForecast: {
+            projectedReviewLoad: "elevated",
+            queueGrowthRisk: "medium",
+            stalePrSignals: ["#101 idle 21d"],
+          },
+          burdenForecastFreshness: {
+            source: "cache",
+            generatedAt: "2026-05-30T00:00:00.000Z",
+            ageSeconds: 120,
+            freshness: "fresh",
+          },
+        }),
+      );
       return;
     }
     response.statusCode = 404;

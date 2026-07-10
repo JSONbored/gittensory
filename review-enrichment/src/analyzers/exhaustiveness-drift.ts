@@ -7,12 +7,13 @@ import type { EnrichRequest, ExhaustivenessFinding } from "../types.js";
 import { reconstructOldContent } from "./doc-comment-drift.js";
 import { isDiffFileHeaderLine } from "./diff-lines.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
 const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_FILES = 10;
 const MAX_FETCHES = 10;
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const MAX_FETCH_BYTES = 1_000_000;
 const MAX_SWITCH_HEADER_LINES = 25;
 const SOURCE_RE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;

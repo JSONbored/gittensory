@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeFixtureServer, run, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
+import mcpPackageJson from "../../packages/gittensory-mcp/package.json";
 
 describe("gittensory-mcp CLI — profiles", () => {
   let tempDir: string | null = null;
@@ -55,6 +56,42 @@ describe("gittensory-mcp CLI — profiles", () => {
     );
     expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
   }, 45_000);
+
+  it("profile list --format ndjson streams one JSON object per profile (and --json stays pretty)", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const configPath = join(tempDir, "config.json");
+    // Two credential-free profiles (default + active "beta"); profile list needs only names to enumerate,
+    // so the fixture carries no session token — the streaming format is what this exercises.
+    writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          apiUrl: "https://api.example.test",
+          activeProfile: "beta",
+          profiles: {
+            default: { session: { login: "default-user", scopes: [] } },
+            beta: { session: { login: "beta-user", scopes: [] } },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { GITTENSORY_CONFIG_DIR: tempDir, GITTENSORY_SKIP_NPM_VERSION_CHECK: "true" };
+
+    const lines = run(["profile", "list", "--format", "ndjson"], env).trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) => JSON.parse(line) as { name: string; active: boolean });
+    expect(parsed.map((p) => p.name).sort()).toEqual(["beta", "default"]);
+    // The active profile is flagged on its own record.
+    expect(parsed.find((p) => p.name === "beta")?.active).toBe(true);
+    // Each line is a bare profile object — not the {activeProfile, profiles} wrapper.
+    for (const line of lines) expect(line).not.toContain("activeProfile");
+    // --json still returns the pretty wrapper object (unchanged behavior).
+    const pretty = JSON.parse(run(["profile", "list", "--json"], env)) as { activeProfile: string; profiles: unknown[] };
+    expect(pretty).toMatchObject({ activeProfile: "beta" });
+    expect(pretty.profiles).toHaveLength(2);
+  });
 
   it("keeps environment tokens ahead of active profile sessions", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
@@ -157,12 +194,12 @@ describe("gittensory-mcp CLI — profiles", () => {
       }),
     ) as { package: { name: string; version: string; latestStatus: string }; api: { status: string }; auth: { login: string } };
 
-    expect(status.package).toMatchObject({ name: "@jsonbored/gittensory-mcp", version: "0.7.0", latestStatus: "skipped" });
+    expect(status.package).toMatchObject({ name: "@jsonbored/gittensory-mcp", version: mcpPackageJson.version, latestStatus: "skipped" });
     expect(status.api.status).toBe("ok");
     expect(status.auth.login).toBe("JSONbored");
 
     const changelog = JSON.parse(run(["changelog", "--json"])) as { package: { version: string }; changelog: string };
-    expect(changelog.package.version).toBe("0.7.0");
+    expect(changelog.package.version).toBe(mcpPackageJson.version);
     expect(changelog.changelog).toContain("# Changelog");
   });
 
@@ -180,7 +217,7 @@ describe("gittensory-mcp CLI — profiles", () => {
 
     const sessionRequest = requests.find((request) => request.url === "/v1/auth/session");
     expect(sessionRequest?.headers["x-gittensory-mcp-package"]).toBe("@jsonbored/gittensory-mcp");
-    expect(sessionRequest?.headers["x-gittensory-mcp-version"]).toBe("0.7.0");
+    expect(sessionRequest?.headers["x-gittensory-mcp-version"]).toBe(mcpPackageJson.version);
     expect(sessionRequest?.headers["x-gittensory-mcp-client"]).toBe("gittensory-mcp-cli");
     const telemetryHeaders = JSON.stringify({
       package: sessionRequest?.headers["x-gittensory-mcp-package"],

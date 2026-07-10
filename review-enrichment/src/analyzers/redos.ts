@@ -4,11 +4,12 @@
 // Pure compute, no network, no external detector (structural-only → high precision: linear shapes like `(abc)+`
 // are NOT flagged). Line-cited via hunk headers, mirroring the actions-pin analyzer.
 import type { EnrichRequest, RedosFinding } from "../types.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
 // Every loop runs over an attacker-controlled patch, so each is bounded.
-const MAX_FINDINGS = 25; // keep the brief bounded
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const MAX_PATTERN_CHARS = 1000; // ignore absurdly long literals (a hand-written regex is never this long)
-const MAX_LINE_CHARS = 2000; // skip extraction on pathologically long lines (defensive)
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 const REPORT_CHARS = 80; // truncate the reported pattern so the brief stays readable
 
 type RedosScanLimits = {

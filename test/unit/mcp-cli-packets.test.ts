@@ -131,6 +131,30 @@ describe("gittensory-mcp CLI — packets", () => {
     expect(human).toContain("jsonbored");
   });
 
+  it("cache list --format ndjson streams one JSON object per cached entry", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    const url = await startFixtureServer();
+    const env = {
+      GITTENSORY_API_URL: url,
+      GITTENSORY_TOKEN: "session-token",
+      GITTENSORY_CONFIG_DIR: tempDir,
+      GITTENSORY_API_TIMEOUT_MS: "1000",
+    };
+
+    // Empty cache → zero ndjson lines (not a wrapper object).
+    expect(run(["cache", "list", "--format", "ndjson"], env).trim()).toBe("");
+
+    await runAsync(["decision-pack", "--login", "JSONbored", "--json"], env);
+    const lines = run(["cache", "list", "--format", "ndjson"], env).trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const [firstLine] = lines as [string];
+    const entry = JSON.parse(firstLine) as { login: string; bytes: number };
+    expect(entry).toMatchObject({ login: "jsonbored" });
+    expect(entry.bytes).toBeGreaterThan(0);
+    // Each line is a bare entry, not the {count, entries} wrapper.
+    expect(firstLine).not.toContain('"count"');
+  });
+
   it("does not use stale decision-pack cache created by a different local token", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
     const fixtureOptions: { decisionPackStatus?: number } = {};

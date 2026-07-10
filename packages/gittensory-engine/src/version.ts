@@ -1,5 +1,4 @@
-/**
- * Published semver of `@jsonbored/gittensory-engine`. Keep in lockstep with `package.json` `version`
- * (enforced by `test/unit/engine-version.test.ts`).
- */
-export const ENGINE_VERSION = "0.1.0";
+import ownPackageJson from "../package.json" with { type: "json" };
+
+/** Published semver of `@jsonbored/gittensory-engine`, derived from this package's own package.json. */
+export const ENGINE_VERSION: string = ownPackageJson.version;

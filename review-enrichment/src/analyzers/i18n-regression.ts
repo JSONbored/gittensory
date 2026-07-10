@@ -4,9 +4,10 @@
 // Pure compute over added lines, no network. Never returns string content in findings.
 import type { EnrichRequest, I18nFinding } from "../types.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 const UI_PATH_RE = /\.(?:tsx|jsx|vue)$/i;
 

@@ -9,10 +9,11 @@
 // version, the change direction, the documented reason, and the recommended replacement — never manifest contents.
 import type { DeprecatedDependencyFinding, EnrichRequest } from "../types.js";
 import { extractDependencyChanges } from "./dependency-scan.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const MAX_MANIFEST_FILES = 20; // bound manifest files parsed per PR
 const MAX_PATCH_LINES_PER_FILE = 500; // bound patch lines parsed per manifest
-const MAX_FINDINGS = 25; // keep the brief bounded
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 
 interface DeprecationNote {
   reason: string;

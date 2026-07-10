@@ -22,7 +22,7 @@ import {
   type QueueHealth,
   type RepoOutcomePatterns,
 } from "../signals/engine";
-import { isFailingCheckSummary } from "../signals/local-branch";
+import { isFailingCheckSummary } from "../signals/check-summary";
 import { buildMaintainerNoiseReport, type MaintainerNoiseReport } from "../signals/reward-risk";
 
 const PUBLIC_MENTION_COMMAND_CATALOG = [
@@ -97,6 +97,11 @@ export const GITTENSORY_ACTION_COMMAND_CATALOG = [
     id: "explain",
     title: "Explain finding",
     description: "Explain a specific review finding; supply the finding reference in trailing text.",
+  },
+  {
+    id: "generate-tests",
+    title: "Generate E2E tests",
+    description: "Generate an AI E2E test for this PR's changed behavior and post it as a reply comment (maintainer-only).",
   },
 ] as const;
 

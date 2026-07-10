@@ -54,7 +54,13 @@ test("isDuplicateClusterWinnerByClaim: fails closed on an invalid claim timestam
   );
 });
 
-test("isDuplicateClusterWinnerByClaim createdAt precedence: elects the PR GitHub says opened first, even when observed later", () => {
+// #3956 (anti-backdating): createdAt is deliberately NOT part of the election (see
+// prPrecedesSibling's doc comment in src/duplicate-winner.ts) -- an older PR could otherwise steal
+// winner credit by editing its body to claim the linked issue later. This block replaces three
+// stale "createdAt precedence" tests that asserted the OLD, since-removed createdAt-based ordering
+// (root test/unit/duplicate-winner.test.ts was updated for the same fix in #3956; this package's
+// own parallel test file wasn't, because it isn't part of test:ci and nobody noticed).
+test("isDuplicateClusterWinnerByClaim: ignores createdAt even when present on both sides, decides purely by claim time", () => {
   const openedFirstButClaimedLater = {
     number: 9,
     createdAt: "2026-01-01T00:00:00Z",
@@ -65,22 +71,15 @@ test("isDuplicateClusterWinnerByClaim createdAt precedence: elects the PR GitHub
     createdAt: "2026-01-02T00:00:00Z",
     linkedIssueClaimedAt: "2026-01-01T00:00:00Z",
   };
-  assert.equal(isDuplicateClusterWinnerByClaim(openedFirstButClaimedLater, [openedSecondButClaimedFirst]), true);
-  assert.equal(isDuplicateClusterWinnerByClaim(openedSecondButClaimedFirst, [openedFirstButClaimedLater]), false);
+  // openedSecondButClaimedFirst claimed earlier, so it wins despite its later createdAt.
+  assert.equal(isDuplicateClusterWinnerByClaim(openedFirstButClaimedLater, [openedSecondButClaimedFirst]), false);
+  assert.equal(isDuplicateClusterWinnerByClaim(openedSecondButClaimedFirst, [openedFirstButClaimedLater]), true);
 });
 
-test("isDuplicateClusterWinnerByClaim createdAt precedence: falls back to claim-time when only one side has a valid createdAt", () => {
-  const modern = { number: 9, createdAt: "2026-01-01T00:00:00Z", linkedIssueClaimedAt: "2026-01-05T00:00:00Z" };
-  const legacy = { number: 3, linkedIssueClaimedAt: "2026-01-02T00:00:00Z" };
-  // Neither side has BOTH createdAt values, so this falls back to claim-time comparison: modern claimed later, so legacy wins.
-  assert.equal(isDuplicateClusterWinnerByClaim(legacy, [modern]), true);
-  assert.equal(isDuplicateClusterWinnerByClaim(modern, [legacy]), false);
-});
-
-test("isDuplicateClusterWinnerByClaim createdAt precedence: ties break by PR number", () => {
-  const a = { number: 3, createdAt: "2026-01-01T00:00:00Z" };
-  const b = { number: 9, createdAt: "2026-01-01T00:00:00Z" };
-  assert.equal(isDuplicateClusterWinnerByClaim(a, [b]), true);
+test("isDuplicateClusterWinnerByClaim: still fails closed when createdAt is present but claim timing is missing", () => {
+  const a = { number: 12, createdAt: "2026-06-29T10:00:00.000Z" };
+  const b = { number: 13, createdAt: "2026-06-29T10:05:00.000Z" };
+  assert.equal(isDuplicateClusterWinnerByClaim(a, [b]), false);
   assert.equal(isDuplicateClusterWinnerByClaim(b, [a]), false);
 });
 

@@ -150,7 +150,13 @@ export const ACTION_COMMAND_ENTRIES = [
     description:
       "Explain a specific review finding; supply the finding reference in trailing text.",
   },
+  {
+    id: "generate-tests",
+    title: "Generate E2E tests",
+    description:
+      "Generate an AI E2E test for this PR's changed behavior and post it as a reply comment (maintainer-only).",
+  },
 ] as const;
 
 export const ACTION_COMMAND_LIST =
-  "@gittensory gate-override\n@gittensory review\n@gittensory pause\n@gittensory resume\n@gittensory resolve\n@gittensory configuration\n@gittensory explain";
+  "@gittensory gate-override\n@gittensory review\n@gittensory pause\n@gittensory resume\n@gittensory resolve\n@gittensory configuration\n@gittensory explain\n@gittensory generate-tests";

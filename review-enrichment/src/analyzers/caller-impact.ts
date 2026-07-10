@@ -29,6 +29,7 @@ import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
 import { exportedNames, isPublicEntrypoint } from "./api-break.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -37,7 +38,7 @@ const MAX_SYMBOLS = 6; // removed symbols searched per PR (Code Search rate budg
 const MAX_SEARCHES = 6; // bounded Code Search queries per PR
 const MAX_FILE_FETCHES = 12; // bounded candidate-caller content fetches per PR
 const MAX_CALLERS_PER_FINDING = 5; // caller paths listed per finding (keeps the brief bounded)
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const MIN_SYMBOL_LEN = 3; // skip 1-2 char names — too generic to search reliably
 const MAX_FETCH_BYTES = 1_000_000;
 const MAX_SEARCH_JSON_BYTES = 256 * 1024;

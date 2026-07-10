@@ -19,7 +19,7 @@ describe("docker-compose.yml — per-service memory limits (#1828, #2495, #3893)
     redis: "${REDIS_MEM_LIMIT:-512m}",
     postgres: "${POSTGRES_MEM_LIMIT:-2g}",
     qdrant: "${QDRANT_MEM_LIMIT:-2g}",
-    ollama: "${OLLAMA_MEM_LIMIT:-8g}",
+    ollama: "${OLLAMA_MEM_LIMIT:-20g}", // raised from 8g (#4335): a vision model now shares this ceiling with bge-m3
     prometheus: "${PROMETHEUS_MEM_LIMIT:-1g}",
     loki: "${LOKI_MEM_LIMIT:-1g}",
     tempo: "${TEMPO_MEM_LIMIT:-1g}",
@@ -54,6 +54,34 @@ describe("docker-compose.yml — per-service memory limits (#1828, #2495, #3893)
       "GRAFANA_MEM_LIMIT",
       "RUNNER_MEM_LIMIT",
     ]) {
+      expect(env, key).toContain(key);
+    }
+  });
+});
+
+// Concurrency/residency tuning for a shared embed+vision GPU deployment (#4327/#4335) — separate describe
+// block from the memory-limit checks above since these are `environment:` entries, not `deploy.resources`.
+describe("docker-compose.yml — ollama concurrency/residency env vars (#4327, #4335)", () => {
+  const EXPECTED_OLLAMA_ENV: Record<string, string> = {
+    OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-2}",
+    OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-2}",
+    OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-30m}",
+  };
+
+  it("sets an operator-overridable default for every ollama concurrency/residency variable", () => {
+    const compose = readYaml("docker-compose.yml");
+    const services = (compose.services as Record<string, Record<string, unknown>>) ?? {};
+    const environment = (services.ollama?.environment as Record<string, unknown>) ?? {};
+
+    for (const [key, expected] of Object.entries(EXPECTED_OLLAMA_ENV)) {
+      expect(environment[key], key).toBe(expected);
+    }
+  });
+
+  it("documents every ollama concurrency/residency override variable in .env.example", () => {
+    const env = readFileSync(".env.example", "utf8");
+
+    for (const key of Object.keys(EXPECTED_OLLAMA_ENV)) {
       expect(env, key).toContain(key);
     }
   });

@@ -6,6 +6,7 @@ import {
   isParityCutoverReady,
   MIN_PARITY_SAMPLE,
   PARITY_AGREEMENT_FLOOR,
+  REVERSAL_DISCOUNT_WEIGHT,
 } from "../../src/review/parity";
 
 // NOTE: this is the SELF-CONTAINED native port of reviewbot's parity test (eval.test.ts). The reviewbot
@@ -447,5 +448,97 @@ describe("computeGateEval — source scoping for per-system standalone accuracy 
     const nan: { binds?: unknown[] } = {};
     await computeGateEval(cap(nan), { days: Number.POSITIVE_INFINITY, nowMs: NOW }); // non-finite → 90
     expect(nan.binds?.[0]).toBe(new Date(NOW - 90 * 86_400_000).toISOString().slice(0, 10));
+  });
+});
+
+describe("computeGateEval — value-weighted precision (#2348, discounts a later-reversed merge/close)", () => {
+  it("backward-compat: a zero-reversal fixture (matching pre-#2348 cells, no `reversed` field at all) produces weighted precision identical to raw precision", async () => {
+    const cells = [
+      { project: "p", pred: "merge", truth: "merged", n: 8 },
+      { project: "p", pred: "merge", truth: "closed", n: 2 },
+      { project: "p", pred: "close", truth: "closed", n: 5 },
+      { project: "p", pred: "close", truth: "merged", n: 1 },
+    ];
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: cells }) }) }) } } as unknown as Env;
+    const out = await computeGateEval(env, { days: 90, nowMs: NOW });
+    const r = out.rows[0];
+    expect(r).toBeDefined();
+    if (!r) return;
+    expect(r.weightedMergeConfirmed).toBe(r.mergeConfirmed);
+    expect(r.weightedCloseConfirmed).toBe(r.closeConfirmed);
+    expect(r.weightedMergePrecision).toBe(r.mergePrecision);
+    expect(r.weightedClosePrecision).toBe(r.closePrecision);
+  });
+
+  it("discounts a reversed merge's credit toward weightedMergeConfirmed, while raw mergeConfirmed and wouldMerge (the denominator) stay unchanged", async () => {
+    const cells = [
+      { project: "p", pred: "merge", truth: "merged", reversed: 0, n: 6 }, // held up
+      { project: "p", pred: "merge", truth: "merged", reversed: 1, n: 4 }, // later reverted
+    ];
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: cells }) }) }) } } as unknown as Env;
+    const out = await computeGateEval(env, { days: 90, nowMs: NOW });
+    const r = out.rows[0];
+    expect(r).toBeDefined();
+    if (!r) return;
+    expect(r.wouldMerge).toBe(10); // denominator unaffected by reversal
+    expect(r.mergeConfirmed).toBe(10); // raw bucket: both count as "predicted merge, human merged"
+    expect(r.mergePrecision).toBeCloseTo(1); // raw precision unaffected — byte-identical to pre-#2348
+    expect(r.weightedMergeConfirmed).toBe(6 + 4 * REVERSAL_DISCOUNT_WEIGHT);
+    expect(r.weightedMergePrecision).toBeCloseTo((6 + 4 * REVERSAL_DISCOUNT_WEIGHT) / 10);
+    // REVERSAL_DISCOUNT_WEIGHT is documented as 0 (full discount) — assert the current formula's real effect,
+    // not just the generic shape, so a silent formula change is caught here.
+    expect(r.weightedMergePrecision).toBeCloseTo(0.6);
+  });
+
+  it("discounts a reversed (reopened) close's credit toward weightedCloseConfirmed the same way", async () => {
+    const cells = [
+      { project: "p", pred: "close", truth: "closed", reversed: 0, n: 3 }, // stayed closed
+      { project: "p", pred: "close", truth: "closed", reversed: 1, n: 2 }, // reopened by a contributor
+    ];
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: cells }) }) }) } } as unknown as Env;
+    const out = await computeGateEval(env, { days: 90, nowMs: NOW });
+    const r = out.rows[0];
+    expect(r).toBeDefined();
+    if (!r) return;
+    expect(r.wouldClose).toBe(5);
+    expect(r.closeConfirmed).toBe(5);
+    expect(r.closePrecision).toBeCloseTo(1);
+    expect(r.weightedCloseConfirmed).toBe(3 + 2 * REVERSAL_DISCOUNT_WEIGHT);
+    expect(r.weightedClosePrecision).toBeCloseTo(0.6);
+  });
+
+  it("a reversed mergeFalse/closeFalse cell (the dangerous-error buckets) never contributes to either weighted CONFIRMED bucket", async () => {
+    // Reversal only ever applies to the CONFIRMED (correct-and-later-undone) buckets; a cell that was already
+    // a mismatch (mergeFalse/closeFalse) has no "confirmed" credit to discount in the first place.
+    const cells = [
+      { project: "p", pred: "merge", truth: "closed", reversed: 1, n: 3 }, // mergeFalse, marked reversed
+      { project: "p", pred: "close", truth: "merged", reversed: 1, n: 2 }, // closeFalse, marked reversed
+    ];
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: cells }) }) }) } } as unknown as Env;
+    const out = await computeGateEval(env, { days: 90, nowMs: NOW });
+    const r = out.rows[0];
+    expect(r).toBeDefined();
+    if (!r) return;
+    expect(r.mergeFalse).toBe(3);
+    expect(r.closeFalse).toBe(2);
+    expect(r.weightedMergeConfirmed).toBe(0);
+    expect(r.weightedCloseConfirmed).toBe(0);
+    expect(r.weightedMergePrecision).toBe(0);
+    expect(r.weightedClosePrecision).toBe(0);
+  });
+
+  it("weighted precisions are null (not 0/0) when there is no would-merge/would-close prediction at all", async () => {
+    const cells = [{ project: "p", pred: "hold", truth: "merged", n: 4 }];
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: cells }) }) }) } } as unknown as Env;
+    const out = await computeGateEval(env, { days: 90, nowMs: NOW });
+    const r = out.rows[0];
+    expect(r?.weightedMergePrecision).toBeNull();
+    expect(r?.weightedClosePrecision).toBeNull();
+  });
+
+  it("REVERSAL_DISCOUNT_WEIGHT is a hardcoded module constant, not read from env/config (auditability requirement)", () => {
+    // #2348 explicitly requires this NOT be silently runtime-tunable. Pin its current documented value so a
+    // change to the objective function is a visible, reviewed diff here, not a silent behavior shift.
+    expect(REVERSAL_DISCOUNT_WEIGHT).toBe(0);
   });
 });

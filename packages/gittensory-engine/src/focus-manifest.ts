@@ -9,6 +9,7 @@
  */
 import { parse as parseYaml } from "yaml";
 import type {
+  AdvisoryAiRoutingConfig,
   CombineStrategy,
   GatePolicyPack,
   GateRuleMode,
@@ -42,6 +43,7 @@ import {
   isUnlinkedIssueGuardrailMode,
   normalizeUnlinkedIssueGuardrailConfig,
 } from "./review/unlinked-issue-guardrail-config.js";
+import { normalizeAdvisoryAiRoutingConfig } from "./review/advisory-ai-routing-config.js";
 import {
   DEFAULT_SCREENSHOT_TABLE_GATE,
   isScreenshotTableGateAction,
@@ -162,7 +164,35 @@ export type FocusManifestGateConfig = {
    *  (unset) ⇒ no generic fallback configured — the live-CI aggregate keeps today's fold-all behavior
    *  when branch protection is also unreadable. See {@link RepositorySettings.expectedCiContexts}. */
   expectedCiContexts: ReadonlyArray<string> | null;
+  /** `gate.aiJudgmentBlockers` (#3907): "gate" | "advisory", null (unset) ⇒ "advisory" (byte-identical to
+   *  today everywhere that doesn't opt in). Config-as-code only, YML-only (no DB column, no dashboard
+   *  toggle) — mirrors `contentLane`'s own YML-only shape, since this only has an effect for repos already
+   *  running the registry content lane. When "gate", a confident AI-judgment-only finding that
+   *  applySurfaceGate's default "advisory" behavior would otherwise let a decisive surface merge override
+   *  instead SURVIVES into the deterministic gate's own blockers array, demoting `decision` away from
+   *  `merge` — see content-lane-wire.ts's `applySurfaceGate` guard #3 and `evaluateWithSurfaceLane` for the
+   *  wiring. This deliberately reopens exactly the risk #2592 accepted for the general case (an AI
+   *  hallucination can one-shot-close a structurally-clean PR) as an explicit, per-repo, documented
+   *  trade-off — never the default. */
+  aiJudgmentBlockersMode: "gate" | "advisory" | null;
+  /** `gate.copycat.mode` (#1969): off|warn|label|block, off by default. Config-as-code only -- no DB column
+   *  or dashboard toggle. Deliberately a DEDICATED 4-value enum, not the shared `GateRuleMode` tri-state: the
+   *  issue's tiered response is warn -> label -> block -> strikes, where "strikes" is a separate escalation
+   *  action (reusing the existing cross-repo banned-contributors ledger once wired) rather than a 5th mode
+   *  value. THIS FIELD IS CURRENTLY INERT -- the similarity/containment detection engine that would actually
+   *  compute a copycat finding does not exist yet (tracked as later, separate PRs against #1969); parsing and
+   *  threading this config end-to-end first proves the plumbing and lets an operator's `.gittensory.yml`
+   *  already declare intent without waiting on the detection engine. */
+  copycatMode: CopycatGateMode | null;
+  /** `gate.copycat.minScore` (#1969): containment/similarity score (0-100) at/above which `copycatMode` acts.
+   *  null (unset) ⇒ the (also currently inert) engine's own default threshold once it exists. Same 0-100
+   *  clamp-and-round normalization as `slopMinScore`/`readinessMinScore` above. */
+  copycatMinScore: number | null;
 };
+
+/** `gate.copycat.mode` (#1969) -- see {@link FocusManifestGateConfig.copycatMode}'s doc comment for why this
+ *  is a dedicated enum rather than the shared `GateRuleMode`. */
+export type CopycatGateMode = "off" | "warn" | "label" | "block";
 
 // The converged per-PR review features a self-host operator toggles PER-REPO under `features:` in the private
 // `.gittensory.yml`. Each feature ALSO has a GLOBAL env flag (GITTENSORY_REVIEW_*) that stays a master
@@ -179,8 +209,11 @@ export type FocusManifestGateConfig = {
 // outside this block, as its own top-level `review.selftune` field below — it has no `GITTENSORY_REVIEW_REPOS`
 // allowlist to fall back to (its own repo scoping is `isAgentConfigured`, a different consent boundary), so it
 // doesn't fit this resolver's env-kill-switch → override → allowlist-default shape; see `selfTuneRepos` in
-// `review/selftune-wire.ts`.
-export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding"] as const;
+// `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189 E2E-test-generation epic) fits this shape
+// exactly as a plain symmetric override — unlike `safety`/`grounding` it has no force-on-only or force-off-only
+// floor/ceiling, since AI-generated test content carries no security-hardening or full-file-fetch rationale to
+// protect from a repo-controlled override.
+export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests"] as const;
 export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
 
 /** Per-repo activation overrides for the converged review features (`features:` block). `true`/`false` force the
@@ -254,6 +287,25 @@ export type FocusManifestReviewRecapConfig = {
 };
 
 /**
+ * Config-as-code override for the CROSS-repo maintainer recap digest's cron knobs (#1963, #2250), declared
+ * under `maintainerRecap:`. Distinct from `reviewRecap:` above (that is the single-repo digest's own window/
+ * enable knob); this instead overrides the GITTENSORY_MAINTAINER_RECAP / GITTENSORY_RECAP_CADENCE env vars
+ * that gate the cron-scheduled cross-repo digest (buildMaintainerRecap, #2239 / #2248) — read from the
+ * gittensory self-repo's manifest (resolveGittensorySelfRepoFullName), since the digest is an operator-level
+ * setting, not a per-contributor-repo one. Mirrors `reviewRecap:` exactly: no DB-backed counterpart, so the
+ * parsed value (or the default below when unset) IS the effective value. Not present (or present with no
+ * fields set) ⇒ the caller falls back to the env vars, byte-identical to before this override existed.
+ */
+export type FocusManifestMaintainerRecapConfig = {
+  present: boolean;
+  enabled: boolean;
+  cadence: "daily" | "weekly";
+  /** Delivery channel for the digest. Discord-only for now (mirrors deliverRecapToDiscord, #2245) — Slack
+   *  delivery for this cross-repo digest is a follow-up, so any other value falls back to "discord". */
+  channel: "discord";
+};
+
+/**
  * Generic repository-settings override declared in `.gittensory.yml` under `settings:`. A partial of
  * {@link RepositorySettings} — every behaviour a maintainer can toggle in the dashboard can be set here
  * as code. Unset fields are omitted so the resolver layers it OVER the DB-backed settings
@@ -298,6 +350,7 @@ export type FocusManifestSettings = Partial<
     | "autoMaintain"
     | "agentPaused"
     | "agentDryRun"
+    | "agentGlobalFreezeOverride"
     | "commandAuthorization"
     | "contributorBlacklist"
     | "blacklistLabel"
@@ -354,6 +407,9 @@ export type FocusManifestSettings = Partial<
   // unlinkedIssueGuardrail above -- a manifest naming only `enabled` must not silently reset `whenLabels`/
   // `whenPaths`/`action`/`message` back to their defaults.
   screenshotTableGate?: Partial<ScreenshotTableGateConfig> | undefined;
+  // Advisory-AI routing (#4364): same sparse-partial merge reasoning -- a manifest naming only `slop` must
+  // not silently reset `e2eTestGen`/`planner`/`summaries` back to their (false) defaults.
+  advisoryAiRouting?: Partial<AdvisoryAiRoutingConfig> | undefined;
 };
 
 /** Field keys for the public review-panel rows a maintainer can show/hide via `review.fields`. */
@@ -495,12 +551,25 @@ export type FocusManifestReviewConfig = {
    *  (default, absent) ⇒ byte-identical to today. Net-new vs the changed-files-summary (#1957) and effort-score
    *  (#1955) knobs. (#2047) */
   commentVerbosity: CommentVerbosity | null;
+  /** `review.e2e_test_delivery` (#4197, part of the #4189 epic): how a `@gittensory generate-tests` result is
+   *  delivered once `features.e2eTests` is on. `"comment"` (default, null/absent) posts the generated test as
+   *  a reply comment only — no write access to the PR branch. `"commit"` pushes it as a real commit onto the
+   *  PR's own head branch (git/trees -> git/commits -> a ref UPDATE, mirroring `repo-doc-pr.ts`'s write
+   *  chokepoint) — a materially bigger blast radius, so it stays opt-in per repo even with e2eTests already
+   *  on. `"commit"` mode is additionally blocked at runtime (regardless of this config) for a PR whose author
+   *  is a confirmed Gittensor miner, to protect the external, upstream-computed score from ever including a
+   *  maintainer-authored line the miner didn't write themselves — see `src/github/e2e-test-commit.ts`. */
+  e2eTestDelivery: E2eTestDeliveryMode | null;
   /** `review.path_instructions`: per-path natural-language guidance handed to the AI reviewer when the PR's
-   *  changed files match the glob. Empty (default) ⇒ byte-identical reviewer prompt. (#review-path-instructions) */
+   *  changed files match the glob. Empty (default) ⇒ byte-identical reviewer prompt. Also consumed by
+   *  AI-generated E2E test coverage (`resolveE2eTestGenInstructions` in `ai-e2e-test-gen.ts`, #4200) when
+   *  that feature is enabled — the same maintainer-authored guidance steers both consumers, no separate
+   *  test-generation-specific instructions schema. (#review-path-instructions) */
   pathInstructions: ReviewPathInstruction[];
   /** `review.instructions`: a repo-level natural-language brief handed to the AI reviewer on EVERY review (vs the
    *  per-path path_instructions) — the maintainer's conventions/voice for this repo. Bounded + public-safe at parse
-   *  time (so it stays cost-cheap, unlike ingesting a whole CLAUDE.md). null (default, absent) ⇒ byte-identical
+   *  time (so it stays cost-cheap, unlike ingesting a whole CLAUDE.md). Also consumed by AI-generated E2E test
+   *  coverage (#4200) for the same reason as pathInstructions above. null (default, absent) ⇒ byte-identical
    *  reviewer prompt. (#review-instructions) */
   instructions: string | null;
   /** `review.exclude_paths`: globs whose matching files are EXCLUDED from the AI review (diff + grounding + RAG)
@@ -555,6 +624,10 @@ export type LinkedIssueSatisfactionMode = (typeof LINKED_ISSUE_SATISFACTION_MODE
 /** `review.comment_verbosity` levels (#2047). `normal` = today's behavior (same as unset). */
 export const COMMENT_VERBOSITY_LEVELS = ["quiet", "normal", "detailed"] as const;
 export type CommentVerbosity = (typeof COMMENT_VERBOSITY_LEVELS)[number];
+
+/** `review.e2e_test_delivery` modes (#4197). `comment` = today's behavior (same as unset). */
+export const E2E_TEST_DELIVERY_MODES = ["comment", "commit"] as const;
+export type E2eTestDeliveryMode = (typeof E2E_TEST_DELIVERY_MODES)[number];
 
 /** One `review.labeling_rules[]` entry: a non-reserved `label` plus the deterministic `when` criteria that must ALL
  *  match for it to fire. A rule always has at least one criterion (enforced at parse). */
@@ -646,6 +719,13 @@ export const EMPTY_SELF_HOST_AI_MODEL_CONFIG: SelfHostAiModelConfig = {
 /** Per-repo before/after screenshot-capture config under `review.visual` (#3609 / #3610). Generic by design —
  *  every self-hoster wires their OWN repo's preview-deploy setup and route shape with config, not code. */
 export type VisualConfig = {
+  /** `review.visual.production_url`: the repo's "before" production URL — e.g. `https://metagraph.sh` for a
+   *  repo whose live site differs from the operator's own `PUBLIC_SITE_ORIGIN` env var (a single GLOBAL value
+   *  with no per-repo awareness, correct for at most one repo on a multi-repo self-host instance). ALWAYS wins
+   *  over `PUBLIC_SITE_ORIGIN` when set, mirroring `preview.url_template`'s precedence over GitHub-native
+   *  discovery. null (default) ⇒ byte-identical to today (falls back to `PUBLIC_SITE_ORIGIN`). Validated at
+   *  parse time against the same SSRF guard (`isSafeHttpUrl`) the renderer itself unconditionally applies. */
+  productionUrl: string | null;
   preview: VisualPreviewConfig;
   routes: VisualRoutesConfig;
   themes: VisualTheme[];
@@ -714,6 +794,7 @@ export type VisualRoutesConfig = {
 };
 
 export const EMPTY_VISUAL_CONFIG: VisualConfig = {
+  productionUrl: null,
   preview: { urlTemplate: null },
   routes: { paths: [], maxRoutes: null },
   themes: [],
@@ -768,6 +849,7 @@ export type FocusManifest = {
   contentLane: FocusManifestContentLaneConfig;
   repoDocGeneration: FocusManifestRepoDocGenerationConfig;
   reviewRecap: FocusManifestReviewRecapConfig;
+  maintainerRecap: FocusManifestMaintainerRecapConfig;
   warnings: string[];
 };
 
@@ -845,6 +927,9 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   claCheckRunName: null,
   claCheckRunAppSlug: null,
   expectedCiContexts: null,
+  aiJudgmentBlockersMode: null,
+  copycatMode: null,
+  copycatMinScore: null,
 };
 
 const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
@@ -854,6 +939,7 @@ const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
   unifiedComment: null,
   safety: null,
   grounding: null,
+  e2eTests: null,
 };
 
 const EMPTY_CONTENT_LANE_CONFIG: FocusManifestContentLaneConfig = {
@@ -885,6 +971,16 @@ const EMPTY_REVIEW_RECAP_CONFIG: FocusManifestReviewRecapConfig = {
   cadenceDays: DEFAULT_REVIEW_RECAP_CADENCE_DAYS,
 };
 
+const DEFAULT_MAINTAINER_RECAP_CADENCE: "daily" | "weekly" = "weekly";
+const DEFAULT_MAINTAINER_RECAP_CHANNEL: "discord" = "discord";
+
+const EMPTY_MAINTAINER_RECAP_CONFIG: FocusManifestMaintainerRecapConfig = {
+  present: false,
+  enabled: false,
+  cadence: DEFAULT_MAINTAINER_RECAP_CADENCE,
+  channel: DEFAULT_MAINTAINER_RECAP_CHANNEL,
+};
+
 const EMPTY_MANIFEST: FocusManifest = {
   present: false,
   source: "none",
@@ -897,11 +993,12 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
   reviewRecap: { ...EMPTY_REVIEW_RECAP_CONFIG },
+  maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
   warnings: [],
 };
 
@@ -927,11 +1024,12 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
     reviewRecap: { ...EMPTY_REVIEW_RECAP_CONFIG },
+  maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
   };
 }
 
@@ -1130,6 +1228,11 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
   if (slop !== undefined && slop !== null && slopRecord === undefined) {
     warnings.push(`Manifest gate field "gate.slop" must be a mapping; ignoring it.`);
   }
+  const copycat = record.copycat;
+  const copycatRecord = copycat !== null && typeof copycat === "object" && !Array.isArray(copycat) ? (copycat as Record<string, JsonValue>) : undefined;
+  if (copycat !== undefined && copycat !== null && copycatRecord === undefined) {
+    warnings.push(`Manifest gate field "gate.copycat" must be a mapping; ignoring it.`);
+  }
   const size = record.size;
   const sizeRecord = size !== null && typeof size === "object" && !Array.isArray(size) ? (size as Record<string, JsonValue>) : undefined;
   if (size !== undefined && size !== null && sizeRecord === undefined) {
@@ -1176,6 +1279,9 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     claCheckRunName: parsePublicSafeText(claRecord?.checkRunName, "gate.cla.checkRunName", warnings),
     claCheckRunAppSlug: parsePublicSafeText(claRecord?.checkRunAppSlug, "gate.cla.checkRunAppSlug", warnings),
     expectedCiContexts: normalizeOptionalStringList(record.expectedCiContexts, "gate.expectedCiContexts", warnings),
+    aiJudgmentBlockersMode: normalizeOptionalEnum(record.aiJudgmentBlockers, "gate.aiJudgmentBlockers", ["gate", "advisory"] as const, warnings),
+    copycatMode: normalizeOptionalEnum(copycatRecord?.mode, "gate.copycat.mode", ["off", "warn", "label", "block"] as const, warnings),
+    copycatMinScore: normalizeOptionalScore(copycatRecord?.minScore, "gate.copycat.minScore", warnings),
   };
   // #2266: the flag is parsed, clamped, and threaded end-to-end, but the gate evaluator never reads it — a
   // maintainer who sets it to true believing it softens a blocker for newcomers gets no such effect. Surface
@@ -1218,7 +1324,10 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.claConsentPhrase !== null ||
     gate.claCheckRunName !== null ||
     gate.claCheckRunAppSlug !== null ||
-    gate.expectedCiContexts !== null;
+    gate.expectedCiContexts !== null ||
+    gate.aiJudgmentBlockersMode !== null ||
+    gate.copycatMode !== null ||
+    gate.copycatMinScore !== null;
   return gate;
 }
 
@@ -1293,6 +1402,13 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
     out.cla = cla;
   }
   if (gate.expectedCiContexts !== null) out.expectedCiContexts = gate.expectedCiContexts as JsonValue;
+  if (gate.aiJudgmentBlockersMode !== null) out.aiJudgmentBlockers = gate.aiJudgmentBlockersMode;
+  if (gate.copycatMode !== null || gate.copycatMinScore !== null) {
+    const copycat: Record<string, JsonValue> = {};
+    if (gate.copycatMode !== null) copycat.mode = gate.copycatMode;
+    if (gate.copycatMinScore !== null) copycat.minScore = gate.copycatMinScore;
+    out.copycat = copycat;
+  }
   return out;
 }
 
@@ -1497,6 +1613,32 @@ export function reviewRecapConfigToJson(config: FocusManifestReviewRecapConfig):
   return { enabled: config.enabled, cadenceDays: config.cadenceDays };
 }
 
+/**
+ * Parse the optional `maintainerRecap:` mapping (#1963, #2250). Mirrors {@link parseReviewRecapConfig}: every
+ * field has a concrete default (no DB layer to overlay onto), so the parsed value IS the effective value. An
+ * invalid `cadence`/`channel` falls back to its default via {@link normalizeEnum} (with a warning) rather than
+ * silently firing more often or targeting an unsupported channel.
+ */
+function parseMaintainerRecapConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestMaintainerRecapConfig {
+  if (value === undefined || value === null) return { ...EMPTY_MAINTAINER_RECAP_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "maintainerRecap" must be a mapping; ignoring it.');
+    return { ...EMPTY_MAINTAINER_RECAP_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "maintainerRecap.enabled", warnings) ?? false;
+  const cadence = normalizeEnum<"daily" | "weekly">(record.cadence, "maintainerRecap.cadence", ["daily", "weekly"], DEFAULT_MAINTAINER_RECAP_CADENCE, warnings);
+  const channel = normalizeEnum<"discord">(record.channel, "maintainerRecap.channel", ["discord"], DEFAULT_MAINTAINER_RECAP_CHANNEL, warnings);
+  return { present: true, enabled, cadence, channel };
+}
+
+/** Serialize a maintainerRecap config back into the parse-compatible shape so a cached snapshot round-trips
+ *  through {@link parseMaintainerRecapConfig} unchanged. Returns null when nothing is configured. */
+export function maintainerRecapConfigToJson(config: FocusManifestMaintainerRecapConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled, cadence: config.cadence, channel: config.channel };
+}
+
 function normalizeOptionalEnum<T extends string>(value: JsonValue | undefined, field: string, allowed: readonly T[], warnings: string[]): T | null {
   if (value === undefined || value === null) return null;
   if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
@@ -1522,7 +1664,7 @@ const MAX_REVIEW_NAG_COOLDOWN_DAYS = 365;
  * Parse the optional `settings:` mapping — a partial repository-settings override. Only recognized
  * fields are kept; unknown/invalid values are dropped with a warning and never throw.
  */
-function parseSettingsOverride(value: JsonValue | undefined, warnings: string[]): FocusManifestSettings {
+function parseSettingsOverride(value: JsonValue | undefined, warnings: string[], source?: FocusManifestSource): FocusManifestSettings {
   if (value === undefined || value === null) return {};
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "settings" must be a mapping; ignoring it.`);
@@ -1587,6 +1729,29 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   for (const key of ["aiReviewByok", "aiReviewAllAuthors", "closeOwnerAuthors", "autoLabelEnabled", "typeLabelsEnabled", "badgeEnabled", "publicQualityMetrics", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "agentPaused", "agentDryRun"] as const) {
     const flag = normalizeOptionalBoolean(r[key], `settings.${key}`, warnings);
     if (flag !== null) out[key] = flag;
+  }
+  // agentGlobalFreezeOverride is deliberately NOT in the generic boolean loop above (#4372/#4391/operator-only-
+  // freeze-fix): it is an OPERATOR-ONLY emergency lever ("re-activate this one repo while the fleet-wide kill-
+  // switch stays on elsewhere"), and every OTHER settings field in that loop is readable from BOTH the public,
+  // maintainer-owned `.gittensory.yml` committed in the repo's own git history (source: "repo_file") AND the
+  // operator's private, container-local self-host config (source: "api_record") -- see loadRepoFocusManifestWithCachePolicy
+  // in focus-manifest-loader.ts for how each source is produced. A repo MAINTAINER must never be able to grant
+  // their own repo an exemption from the operator's fleet-wide freeze via their own committed yml (that is
+  // exactly the "scope leak" #4391 closed by stripping this field from the shared loop entirely). But the
+  // OPERATOR's own private config source is a fundamentally different trust boundary -- it is edited only by
+  // whoever has filesystem access to the container's private config directory, not by any repo's maintainers --
+  // and #4391 over-corrected by also removing the operator's own legitimate, config-as-code path for this lever,
+  // forcing raw undocumented DB writes as the only remaining mechanism (violating this project's config-as-code
+  // convention: every operator-facing control belongs in the global-default + per-repo-override config files,
+  // env vars are for bootstrap only). Restore it, gated STRICTLY to the private source.
+  if (source === "api_record") {
+    const agentGlobalFreezeOverride = normalizeOptionalBoolean(r.agentGlobalFreezeOverride, "settings.agentGlobalFreezeOverride", warnings);
+    if (agentGlobalFreezeOverride !== null) out.agentGlobalFreezeOverride = agentGlobalFreezeOverride;
+  } else if (r.agentGlobalFreezeOverride !== undefined) {
+    // A public/maintainer-owned manifest attempting to set this is silently dropped, not surfaced as a normal
+    // "invalid value" warning -- warnings are public-safe text that can reach a contributor-facing preview, and
+    // this should not teach a non-operator that the field exists or that they almost bypassed the fleet freeze.
+    warnings.push("Ignored settings.agentGlobalFreezeOverride: operator-only, not settable from a repo-owned manifest.");
   }
   // Agent-layer autonomy dial (#773): `settings.autonomy` maps each action class to a level. Only set it
   // when at least one valid class→level pair survives normalization, so a malformed block never blanks the
@@ -1724,9 +1889,26 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     if (Array.isArray(rawGate.whenPaths)) sparseGate.whenPaths = validated.whenPaths;
     if (isScreenshotTableGateAction(rawGate.action)) sparseGate.action = validated.action;
     if (typeof rawGate.message === "string" && rawGate.message.trim().length > 0) sparseGate.message = validated.message;
+    if (Array.isArray(rawGate.requireViewports)) sparseGate.requireViewports = validated.requireViewports;
+    if (Array.isArray(rawGate.requireThemes)) sparseGate.requireThemes = validated.requireThemes;
+    if (typeof rawGate.skillFileUrl === "string" && rawGate.skillFileUrl.trim().length > 0) sparseGate.skillFileUrl = validated.skillFileUrl;
     out.screenshotTableGate = sparseGate;
   } else if (r.screenshotTableGate !== undefined) {
     warnings.push(`Manifest "settings.screenshotTableGate" must be an object; ignoring it and keeping any existing policy.`);
+  }
+  // Advisory-AI routing (#4364): same sparse-partial overlay contract as screenshotTableGate above -- a repo
+  // naming only `slop` must not silently reset `e2eTestGen`/`planner`/`summaries` back to their defaults.
+  if (typeof r.advisoryAiRouting === "object" && r.advisoryAiRouting !== null && !Array.isArray(r.advisoryAiRouting)) {
+    const rawRouting = r.advisoryAiRouting as Record<string, unknown>;
+    const validated = normalizeAdvisoryAiRoutingConfig(rawRouting, warnings);
+    const sparseRouting: Partial<AdvisoryAiRoutingConfig> = {};
+    if (typeof rawRouting.slop === "boolean") sparseRouting.slop = validated.slop;
+    if (typeof rawRouting.e2eTestGen === "boolean") sparseRouting.e2eTestGen = validated.e2eTestGen;
+    if (typeof rawRouting.planner === "boolean") sparseRouting.planner = validated.planner;
+    if (typeof rawRouting.summaries === "boolean") sparseRouting.summaries = validated.summaries;
+    out.advisoryAiRouting = sparseRouting;
+  } else if (r.advisoryAiRouting !== undefined) {
+    warnings.push(`Manifest "settings.advisoryAiRouting" must be an object; ignoring it and keeping any existing policy.`);
   }
   // Contributor blacklist (#1425): `settings.contributorBlacklist` is a list of banned-login entries. Only set it
   // when at least one VALID entry survives normalization, so a malformed block never blanks the DB-configured
@@ -1933,7 +2115,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -1993,6 +2175,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   );
   const maxFindings = parseMaxFindingsConfig(r.max_findings, warnings);
   const commentVerbosity = normalizeOptionalEnum(r.comment_verbosity, "review.comment_verbosity", COMMENT_VERBOSITY_LEVELS, warnings);
+  const e2eTestDelivery = normalizeOptionalEnum(r.e2e_test_delivery, "review.e2e_test_delivery", E2E_TEST_DELIVERY_MODES, warnings);
   const pathInstructions = parseReviewPathInstructions(r.path_instructions, warnings);
   const instructions = parsePublicSafeText(r.instructions, "review.instructions", warnings);
   const excludePaths = parseReviewExcludePaths(r.exclude_paths, warnings);
@@ -2025,6 +2208,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       minFindingSeverity !== null ||
       maxFindingsPresent(maxFindings) ||
       commentVerbosity !== null ||
+      e2eTestDelivery !== null ||
       pathInstructions.length > 0 ||
       instructions !== null ||
       excludePaths.length > 0 ||
@@ -2063,6 +2247,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     minFindingSeverity,
     maxFindings,
     commentVerbosity,
+    e2eTestDelivery,
     pathInstructions,
     instructions,
     excludePaths,
@@ -2124,6 +2309,7 @@ function overlaySelfHostAiModelConfig(base: SelfHostAiModelConfig, override: Sel
 
 function overlayVisualConfig(base: VisualConfig, override: VisualConfig): VisualConfig {
   return {
+    productionUrl: pickOverlayNullable(override.productionUrl, base.productionUrl),
     preview: { urlTemplate: pickOverlayNullable(override.preview.urlTemplate, base.preview.urlTemplate) },
     routes: {
       paths: pickOverlayStringList(override.routes.paths, base.routes.paths),
@@ -2159,6 +2345,7 @@ function computeReviewConfigPresent(review: Omit<FocusManifestReviewConfig, "pre
     review.minFindingSeverity !== null ||
     maxFindingsPresent(review.maxFindings) ||
     review.commentVerbosity !== null ||
+    review.e2eTestDelivery !== null ||
     review.pathInstructions.length > 0 ||
     review.instructions !== null ||
     review.excludePaths.length > 0 ||
@@ -2203,6 +2390,7 @@ export function overlayReviewConfig(
     minFindingSeverity: pickOverlayNullable(override.minFindingSeverity, base.minFindingSeverity),
     maxFindings: overlayMaxFindingsConfig(base.maxFindings, override.maxFindings),
     commentVerbosity: pickOverlayNullable(override.commentVerbosity, base.commentVerbosity),
+    e2eTestDelivery: pickOverlayNullable(override.e2eTestDelivery, base.e2eTestDelivery),
     pathInstructions: override.pathInstructions.length > 0 ? [...override.pathInstructions] : [...base.pathInstructions],
     instructions: pickOverlayNullable(override.instructions, base.instructions),
     excludePaths: pickOverlayStringList(override.excludePaths, base.excludePaths),
@@ -2364,6 +2552,7 @@ function parseSelfHostAiModelConfig(value: JsonValue | undefined, warnings: stri
 
 function visualConfigPresent(config: VisualConfig): boolean {
   return (
+    config.productionUrl !== null ||
     config.preview.urlTemplate !== null ||
     config.routes.paths.length > 0 ||
     config.routes.maxRoutes !== null ||
@@ -2409,6 +2598,20 @@ const VISUAL_URL_TEMPLATE_DUMMY_VARS: Record<string, string> = {
   "{head_sha}": "0000000000000000000000000000000000000000",
 };
 
+/** Parse `review.visual.production_url` — validated at CONFIG-READ time against the exact same SSRF guard
+ *  (`isSafeHttpUrl`) the renderer itself unconditionally applies to every URL it navigates to. Unlike
+ *  `preview.url_template`, this is a plain static origin with no `{number}`/`{head_sha}` placeholders to
+ *  substitute — the "before" shot is always the SAME production page, just at a different path per route. */
+function parseVisualProductionUrl(value: JsonValue | undefined, warnings: string[]): string | null {
+  const url = parsePublicSafeText(value, "review.visual.production_url", warnings);
+  if (url === null) return null;
+  if (!isSafeHttpUrl(url)) {
+    warnings.push(`Manifest "review.visual.production_url" must be a valid HTTPS URL targeting a public host; ignoring it.`);
+    return null;
+  }
+  return url;
+}
+
 /** Parse `review.visual.preview.url_template` — validated at CONFIG-READ time against the exact same SSRF
  *  guard (`isSafeHttpUrl`) the renderer itself unconditionally applies to every URL it navigates to,
  *  regardless of source (`src/review/visual/shot.ts`). This is deliberately redundant with that runtime
@@ -2438,6 +2641,8 @@ function parseVisualConfig(value: JsonValue | undefined, warnings: string[]): Vi
   }
   const record = value as Record<string, JsonValue>;
 
+  const productionUrl = parseVisualProductionUrl(record.production_url, warnings);
+
   const previewRecord = record.preview !== null && typeof record.preview === "object" && !Array.isArray(record.preview) ? (record.preview as Record<string, JsonValue>) : undefined;
   if (record.preview !== undefined && record.preview !== null && previewRecord === undefined) {
     warnings.push(`Manifest "review.visual.preview" must be a mapping; ignoring it.`);
@@ -2457,7 +2662,7 @@ function parseVisualConfig(value: JsonValue | undefined, warnings: string[]): Vi
   const themeStorageKey = parsePublicSafeText(record.theme_storage_key, "review.visual.theme_storage_key", warnings);
   const actionsFallback = normalizeOptionalBoolean(record.actions_fallback, "review.visual.actions_fallback", warnings) === true;
 
-  return { preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif, enabled, themeStorageKey, actionsFallback };
+  return { productionUrl, preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif, enabled, themeStorageKey, actionsFallback };
 }
 
 function parseAutoReviewTitleKeywords(value: JsonValue | undefined, warnings: string[]): string[] {
@@ -2708,6 +2913,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
     out.max_findings = maxFindings;
   }
   if (review.commentVerbosity !== null) out.comment_verbosity = review.commentVerbosity;
+  if (review.e2eTestDelivery !== null) out.e2e_test_delivery = review.e2eTestDelivery;
   if (review.instructions !== null) out.instructions = review.instructions;
   if (review.pathInstructions.length > 0) out.path_instructions = review.pathInstructions.map((entry) => ({ path: entry.path, instructions: entry.instructions }));
   if (review.excludePaths.length > 0) out.exclude_paths = [...review.excludePaths];
@@ -2763,6 +2969,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   }
   if (visualConfigPresent(review.visual)) {
     const visual: Record<string, JsonValue> = {};
+    if (review.visual.productionUrl !== null) visual.production_url = review.visual.productionUrl;
     if (review.visual.preview.urlTemplate !== null) visual.preview = { url_template: review.visual.preview.urlTemplate };
     if (review.visual.routes.paths.length > 0 || review.visual.routes.maxRoutes !== null) {
       const routes: Record<string, JsonValue> = {};
@@ -2794,9 +3001,10 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
   }
   const record = raw as Record<string, JsonValue>;
   const warnings: string[] = [];
+  const resolvedSource = normalizeSource(source, record.source, warnings);
   const manifest: FocusManifest = {
     present: true,
-    source: normalizeSource(source, record.source, warnings),
+    source: resolvedSource,
     wantedPaths: normalizeStringList(record.wantedPaths, "wantedPaths", warnings),
     preferredLabels: normalizeStringList(record.preferredLabels, "preferredLabels", warnings),
     linkedIssuePolicy: normalizeEnum(record.linkedIssuePolicy, "linkedIssuePolicy", ["required", "preferred", "optional"] as const, "optional", warnings),
@@ -2805,12 +3013,13 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     maintainerNotes: normalizeStringList(record.maintainerNotes, "maintainerNotes", warnings),
     publicNotes: normalizeStringList(record.publicNotes, "publicNotes", warnings).filter(isFocusManifestPublicSafe),
     gate: parseGateConfig(record.gate, warnings),
-    settings: parseSettingsOverride(record.settings, warnings),
+    settings: parseSettingsOverride(record.settings, warnings, resolvedSource),
     review: parseReviewConfig(record.review, warnings),
     features: parseFeaturesConfig(record.features, warnings),
     contentLane: parseContentLaneConfig(record.contentLane, warnings),
     repoDocGeneration: parseRepoDocGenerationConfig(record.repoDocGeneration, warnings),
     reviewRecap: parseReviewRecapConfig(record.reviewRecap, warnings),
+    maintainerRecap: parseMaintainerRecapConfig(record.maintainerRecap, warnings),
     warnings,
   };
   if (
@@ -2827,7 +3036,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     !manifest.features.present &&
     !manifest.contentLane.present &&
     !manifest.repoDocGeneration.present &&
-    !manifest.reviewRecap.present
+    !manifest.reviewRecap.present &&
+    !manifest.maintainerRecap.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;

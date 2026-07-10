@@ -5,9 +5,10 @@
 // `console.log("password reset")` is NOT flagged — a hit requires a sensitive name used as CODE (property access,
 // a `${…}` interpolation, or a dumped request object). Line-cited via hunk headers, mirroring the other analyzers.
 import type { EnrichRequest, SecretLogFinding } from "../types.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25; // keep the brief bounded
-const MAX_LINE_CHARS = 2000; // skip pathologically long lines (defensive)
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 // All matchers below are FLAT alternations (no group is itself quantified), so each is linear-time — the analyzer
 // can never be the DoS class it sits beside (#1503). Logging / stdout sinks. The console branch is kept separate

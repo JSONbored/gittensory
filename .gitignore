@@ -39,3 +39,10 @@ site/.vitepress/cache/
 !migrations/*.sql
 apps/gittensory-ui/public/downloads/gittensory-extension.zip
 .worker-configuration.gen-check.d.ts
+# Ad-hoc operator backup files (e.g. `cp file.yml file.yml.bak-notes-20260707`) -- general
+# catch-alls so a stray manual snapshot never dirties `git status` on a Git-backed self-host
+# checkout. Trailing on purpose: the narrower gittensory-config.backup-*/ and .deploy-backups/
+# rules above already cover their specific directories, and nothing tracked in the repo matches
+# either pattern (verified via `git ls-files | grep -E '\.bak-|\.backup-'`) (#1660).
+*.bak-*
+*.backup-*

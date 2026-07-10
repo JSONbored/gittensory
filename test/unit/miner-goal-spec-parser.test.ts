@@ -41,6 +41,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
       blockedLabels: ["duplicate", " duplicate "],
       maxConcurrentClaims: 2.9,
       issueDiscoveryPolicy: "encouraged",
+      feasibilityGate: { enabled: false, suppressedReasons: ["duplicate_cluster_high", "duplicate_cluster_high"] },
     });
 
     expect(parsed).toEqual({
@@ -53,6 +54,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         blockedLabels: ["duplicate"],
         maxConcurrentClaims: 2,
         issueDiscoveryPolicy: "encouraged",
+        feasibilityGate: { enabled: false, suppressedReasons: ["duplicate_cluster_high"] },
       },
       warnings: ['MinerGoalSpec field "blockedPaths" truncated an over-long entry.'],
     });
@@ -78,6 +80,50 @@ describe("MinerGoalSpec parser (#2301)", () => {
     expect(parsed.warnings.join(" ")).not.toMatch(/exceeded 100 entries/i);
   });
 
+  it("bounds inspection of a hostile all-non-string list instead of scanning it in full", () => {
+    // Regression: the cap used to be checked only after a candidate was accepted (duplicate-check-adjacent),
+    // so an array of entries that ALWAYS take the `continue` path (non-string, duplicate, or empty-after-trim)
+    // never hit the cap and got fully scanned -- unbounded CPU/memory work and unbounded warnings for a hostile
+    // input. The cap must now be checked against the raw index, before any per-entry work. `minerEnabled: false`
+    // keeps the spec "present" regardless of what wantedPaths ends up as, so these assertions stay focused on
+    // the list cap rather than incidentally exercising the separate all-fields-default fallback.
+    const wantedPaths = Array.from({ length: 1_000 }, () => null);
+    const parsed = parseMinerGoalSpec({ minerEnabled: false, wantedPaths });
+
+    expect(parsed.spec.wantedPaths).toEqual([]);
+    expect(parsed.warnings).toHaveLength(101);
+    expect(parsed.warnings.at(-1)).toMatch(/exceeded 100 entries/);
+  });
+
+  it("bounds inspection of a hostile all-duplicate or all-empty list to a single cap warning", () => {
+    const duplicates = parseMinerGoalSpec({
+      minerEnabled: false,
+      wantedPaths: Array.from({ length: 1_000 }, () => "src/**"),
+    });
+    expect(duplicates.spec.wantedPaths).toEqual(["src/**"]);
+    expect(duplicates.warnings).toEqual(['MinerGoalSpec field "wantedPaths" exceeded 100 entries; extra entries ignored.']);
+
+    const empty = parseMinerGoalSpec({
+      minerEnabled: false,
+      wantedPaths: Array.from({ length: 1_000 }, () => "   "),
+    });
+    expect(empty.spec.wantedPaths).toEqual([]);
+    expect(empty.warnings).toEqual(['MinerGoalSpec field "wantedPaths" exceeded 100 entries; extra entries ignored.']);
+  });
+
+  it("bounds inspection of a hostile all-overlong list, even though each inspected entry still warns once", () => {
+    // Different from the duplicate/empty case: an overlong entry is TRUNCATED (with its own warning), not
+    // silently dropped, so every one of the 100 inspected entries produces a truncation warning before the
+    // post-truncation duplicate check collapses them into one result entry. Still bounded to exactly
+    // 100 truncate warnings + 1 cap warning, never proportional to the input's true length.
+    const wantedPaths = Array.from({ length: 1_000 }, () => "x".repeat(300));
+    const parsed = parseMinerGoalSpec({ minerEnabled: false, wantedPaths });
+
+    expect(parsed.spec.wantedPaths).toEqual(["x".repeat(256)]);
+    expect(parsed.warnings).toHaveLength(101);
+    expect(parsed.warnings.at(-1)).toMatch(/exceeded 100 entries/);
+  });
+
   it("falls back per field for invalid values without throwing", () => {
     const parsed = parseMinerGoalSpec({
       minerEnabled: "yes",
@@ -87,6 +133,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
       blockedLabels: [123, " wontfix "],
       maxConcurrentClaims: "3",
       issueDiscoveryPolicy: "always",
+      feasibilityGate: "not a mapping",
     });
 
     expect(parsed).toEqual({
@@ -99,6 +146,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         blockedLabels: ["wontfix"],
         maxConcurrentClaims: 1,
         issueDiscoveryPolicy: "neutral",
+        feasibilityGate: { enabled: true, suppressedReasons: [] },
       },
       warnings: expect.arrayContaining([
         expect.stringMatching(/minerEnabled/i),
@@ -108,8 +156,47 @@ describe("MinerGoalSpec parser (#2301)", () => {
         expect.stringMatching(/blockedLabels/i),
         expect.stringMatching(/maxConcurrentClaims/i),
         expect.stringMatching(/issueDiscoveryPolicy/i),
+        expect.stringMatching(/feasibilityGate/i),
       ]),
     });
+  });
+
+  it("normalizes nested feasibilityGate sub-fields independently and rejects a non-mapping value", () => {
+    const validSubFields = parseMinerGoalSpec({
+      wantedPaths: ["src/**"],
+      feasibilityGate: { enabled: false, suppressedReasons: ["duplicate_cluster_high"] },
+    });
+    expect(validSubFields.spec.feasibilityGate).toEqual({
+      enabled: false,
+      suppressedReasons: ["duplicate_cluster_high"],
+    });
+    expect(validSubFields.warnings).toEqual([]);
+
+    const malformedSubFields = parseMinerGoalSpec({
+      wantedPaths: ["src/**"],
+      feasibilityGate: { enabled: "nope", suppressedReasons: "not a list" },
+    });
+    expect(malformedSubFields.spec.feasibilityGate).toEqual({ enabled: true, suppressedReasons: [] });
+    expect(malformedSubFields.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/feasibilityGate\.enabled/i),
+        expect.stringMatching(/feasibilityGate\.suppressedReasons/i),
+      ]),
+    );
+
+    const arrayValue = parseMinerGoalSpec({ wantedPaths: ["src/**"], feasibilityGate: ["not", "a", "mapping"] });
+    expect(arrayValue.spec.feasibilityGate).toEqual({ enabled: true, suppressedReasons: [] });
+    expect(arrayValue.warnings.join(" ")).toMatch(/feasibilityGate.*must be a mapping/i);
+  });
+
+  it("a feasibilityGate policy alone (all other fields default) marks the spec present", () => {
+    const parsed = parseMinerGoalSpec({ feasibilityGate: { enabled: false, suppressedReasons: [] } });
+    expect(parsed.present).toBe(true);
+    expect(parsed.spec.feasibilityGate).toEqual({ enabled: false, suppressedReasons: [] });
+
+    const suppressedOnly = parseMinerGoalSpec({ feasibilityGate: { suppressedReasons: ["issue_missing"] } });
+    expect(suppressedOnly.present).toBe(true);
+    expect(suppressedOnly.spec.feasibilityGate).toEqual({ enabled: true, suppressedReasons: ["issue_missing"] });
   });
 
   it("rejects claim counts below one after flooring", () => {
@@ -139,6 +226,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         blockedLabels: [],
         maxConcurrentClaims: 1,
         issueDiscoveryPolicy: "neutral",
+        feasibilityGate: { enabled: true, suppressedReasons: [] },
       }),
     ).toEqual({
       present: false,
@@ -178,6 +266,19 @@ describe("MinerGoalSpec parser (#2301)", () => {
         minerEnabled: false,
         blockedPaths: ["dist/**"],
         issueDiscoveryPolicy: "discouraged",
+      },
+      warnings: [],
+    });
+
+    expect(
+      parseMinerGoalSpecContent(
+        "feasibilityGate:\n  enabled: false\n  suppressedReasons:\n    - duplicate_cluster_high\n",
+      ),
+    ).toEqual({
+      present: true,
+      spec: {
+        ...DEFAULT_MINER_GOAL_SPEC,
+        feasibilityGate: { enabled: false, suppressedReasons: ["duplicate_cluster_high"] },
       },
       warnings: [],
     });

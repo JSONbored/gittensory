@@ -6,9 +6,10 @@
 import type { DebugLeftoverFinding, EnrichRequest } from "../types.js";
 import { codeOnly } from "./secret-log.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 const DEBUGGER_RE = /\bdebugger\s*;/;
 const CONSOLE_RE = /\bconsole\s*\.\s*(?:log|debug|info|warn|error|trace|dir|table)\s*\(/;

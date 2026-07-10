@@ -29,6 +29,10 @@ import { buildContributorFit, buildContributorOutcomeHistory, buildContributorPr
 import { buildContributorOpenPrMonitor, type ContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest, type LocalBranchAnalysis, type LocalBranchAnalysisInput } from "../signals/local-branch";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { resolveRepositorySettings } from "../settings/repository-settings";
+import { resolveRepoActionMode } from "../github/client";
+import { isGlobalAgentPause } from "../settings/agent-execution";
+import { withAdvisoryAiEnv } from "../selfhost/ai";
 import { withAgentActionExplanationCard } from "./agent-action-explanation-card";
 import { attachRecommendationSnapshots } from "./recommendation-snapshots";
 import type {
@@ -223,7 +227,19 @@ export async function executeAgentRun(env: Env, runId: string): Promise<AgentRun
 }
 
 async function attachPrivateAiSummary(env: Env, bundle: AgentRunBundle): Promise<AgentRunBundle> {
-  const summary = await summarizeAgentBundleWithAi(env, bundle, "private");
+  // Advisory-AI routing (#4364): this summary is never gate-blocking, so it's a routing candidate like
+  // slop/e2e-test-gen/planner. repoFullName can be absent for a cross-repo run (e.g. plan_next_work) --
+  // falls back to the plain env (byte-identical) rather than resolving settings for an empty key.
+  const repoFullName = String(bundle.run.payload.repoFullName ?? "");
+  const repoSettings = repoFullName ? await resolveRepositorySettings(env, repoFullName) : null;
+  const routeThroughAdvisory = repoSettings?.advisoryAiRouting?.summaries === true;
+  // #token-bleed-spend-gate: a paused repo (or the fleet-wide env brake, which applies with no repoFullName at
+  // all) must never reach the LLM call below -- same reasoning as runAiReviewForAdvisory/runAiSlopForAdvisory in
+  // src/queue/processors.ts. A cross-repo run (no repoFullName) has no per-repo freeze to check, so only the
+  // fleet-wide brake applies to it.
+  const mode = repoSettings ? await resolveRepoActionMode(env, repoSettings) : (isGlobalAgentPause(env) ? "paused" : "live");
+  if (mode === "paused") return bundle;
+  const summary = await summarizeAgentBundleWithAi(withAdvisoryAiEnv(env, routeThroughAdvisory), bundle, "private");
   if (summary.status === "disabled" || summary.status === "unavailable") return bundle;
   await updateAgentRun(env, bundle.run.id, {
     payload: {

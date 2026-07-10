@@ -14,6 +14,7 @@ import type { AnalysisContext } from "../analysis-context.js";
 import { boundedFetchJson } from "../external-fetch.js";
 import { exportedSymbols, parseAddedExports } from "./undocumented-export.js";
 import { isTestPath } from "./test-ratio.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -21,7 +22,7 @@ const SLUG_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_SYMBOLS = 10;
 const MAX_SEARCHES = 10;
 const MAX_FILE_FETCHES = 10;
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const MIN_SYMBOL_LEN = 3;
 const MAX_FETCH_BYTES = 1_000_000;
 const MAX_SEARCH_JSON_BYTES = 256 * 1024;

@@ -233,6 +233,18 @@ MCP_ACTUATION_REPO_ALLOWLIST=owner/repo-one, owner/repo-two
           fully inert without it.
         </li>
         <li>
+          <code>REVIEW_AUDIT_S3_BUCKET</code> / <code>_ENDPOINT</code> / <code>_ACCESS_KEY_ID</code>{" "}
+          / <code>_SECRET_ACCESS_KEY</code> — an alternative to <code>REVIEW_AUDIT_DIR</code>:
+          persist screenshots in an S3-compatible bucket (your own Cloudflare R2 bucket, or any
+          other S3-compatible provider) instead of the local filesystem, and set{" "}
+          <code>REVIEW_AUDIT_S3_PUBLIC_URL</code> to that bucket&rsquo;s own public base URL so
+          screenshots link directly at the bucket instead of proxying through this instance. This
+          matters if your instance sits behind a private network (a VPN, a firewall, no public DNS)
+          — without a public bucket, screenshots embedded in a public PR comment are unreachable by
+          GitHub and by anyone viewing the PR who isn&rsquo;t on that same private network. Takes
+          priority over <code>REVIEW_AUDIT_DIR</code> when both are set.
+        </li>
+        <li>
           <code>CODEX_HOME</code> — do not set this for the app container. The Codex provider
           rejects a container-set <code>CODEX_HOME</code> outright (fails closed with{" "}
           <code>codex_credential_isolation_required</code>) because <code>codex exec</code> reads

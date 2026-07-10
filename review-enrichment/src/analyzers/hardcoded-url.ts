@@ -4,9 +4,10 @@
 // over added lines, no network. Hostnames are redacted/truncated in findings — never full paths or queries.
 import type { EnrichRequest, HardcodedUrlFinding } from "../types.js";
 import { isMagicNumberSourcePath } from "./magic-number.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 const MAX_HOST_CHARS = 40;
 
 const CONFIG_PATH_RE =

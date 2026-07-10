@@ -9,7 +9,7 @@
 import type { AiContentBlock, CombineStrategy, OnMerge } from "../services/ai-review";
 import { isConfiguredSelfHostProvider, resolveConfiguredProviderNames } from "./ai-config";
 export { assertNoLegacySharedAiEnv } from "./ai-config";
-import { incr } from "./metrics";
+import { incr, observe } from "./metrics";
 import { withReviewSpan } from "./tracing";
 import { delimiter } from "node:path";
 
@@ -25,6 +25,12 @@ interface AiRunOptions {
   text?: string[]; // embedding input — the core's embedTexts passes { text: string[] }
   max_tokens?: number;
   temperature?: number;
+  // Ollama-specific runtime options (e.g. `{ num_ctx: 4096 }` to bound per-request KV cache on a
+  // concurrency-constrained GPU, #4327/#4335) — forwarded verbatim as the OpenAI-compatible endpoint's
+  // `options` extension field. Only createOpenAiCompatibleAi's chat path reads this; every other provider
+  // (embeddings, the subscription CLIs, Anthropic) ignores it, so it is safe to set unconditionally on a
+  // call that ONLY ever targets an Ollama-backed binding (e.g. AI_VISION).
+  providerOptions?: Record<string, unknown>;
   // Correlation context for a provider-failure log (#codex-timeout-fields): purely observational, never read by a
   // provider's own request logic. The caller (runWorkersOpinion) passes whatever of these it already has in scope
   // for THIS review — job id and attempt are per-attempt, repoFullName/pullNumber identify the PR being reviewed —
@@ -281,6 +287,7 @@ export function createOpenAiCompatibleAi(opts: {
           messages: toMessages(options).map((message) => ({ role: message.role, content: toOpenAiMessageContent(message.content) })),
           max_tokens: options.max_tokens,
           temperature: options.temperature,
+          ...(options.providerOptions ? { options: options.providerOptions } : {}),
         }),
         signal: AbortSignal.timeout(120_000),
       });
@@ -346,6 +353,13 @@ export function createAnthropicAi(opts: { apiKey: string; model?: string | undef
 // SECURITY: subscription CLIs get a strict allowlisted env, not the worker env. This keeps runtime
 // credentials out of prompt-injectable subprocesses while preserving CLI auth/home/proxy/cert settings. The CLI
 // runs read-only / no extra tools, and non-zero exit / empty output / error-envelope THROWS so the caller degrades.
+//
+// NOTE (#4284): the reusable half of this pattern — a parameterized allowlist builder + secret redaction — now also
+// lives in `@jsonbored/gittensory-engine` (`SUBPROCESS_CLI_ENV_ALLOWLIST`, `buildAllowlistedEnv`, `SECRET_PATTERNS`,
+// `redactSecrets`) so the coming gittensory-miner coding-agent drivers can depend on one source of truth. This copy
+// is deliberately kept parallel for now (the review path's `subscriptionCliEnv` also folds in CLI-specific PATH
+// resolution); keep the two in sync, or shim this onto the engine copy (like `src/rules/predicted-gate.ts` does) in
+// a follow-up if it drifts.
 const SUBSCRIPTION_CLI_ENV_ALLOWLIST = [
   "HOME",
   "HTTPS_PROXY",
@@ -1082,12 +1096,18 @@ async function runProviderWithOtel(
       `circuit_open: provider "${provider.name}" is in cooldown after ${AI_PROVIDER_FAILURE_THRESHOLD} consecutive failures — skipping this attempt`,
     );
   }
+  const requestKindLabel = requestKind(options);
+  const startedAtMs = Date.now();
   try {
     const result = await withReviewSpan(
       "selfhost.ai.provider",
-      { "ai.provider": provider.name, "ai.model": model || "default", "ai.request_kind": requestKind(options) },
+      { "ai.provider": provider.name, "ai.model": model || "default", "ai.request_kind": requestKindLabel },
       () => provider.ai.run(model, options),
     );
+    observe("gittensory_ai_provider_request_duration_seconds", (Date.now() - startedAtMs) / 1000, {
+      provider: provider.name,
+      request_kind: requestKindLabel,
+    });
     aiProviderCircuits.delete(provider.name);
     if (result.usage) {
       return {
@@ -1101,8 +1121,13 @@ async function runProviderWithOtel(
     }
     return result;
   } catch (error) {
+    observe("gittensory_ai_provider_request_duration_seconds", (Date.now() - startedAtMs) / 1000, {
+      provider: provider.name,
+      request_kind: requestKindLabel,
+    });
     if (isExpectedEmbeddingRoutingError(options, error)) throw error;
     incr("gittensory_ai_provider_failures_total", { provider: provider.name });
+    incr("gittensory_ai_provider_request_errors_total", { provider: provider.name, request_kind: requestKindLabel });
     // Re-read the map here rather than reusing the `circuit` captured above: that read happened BEFORE the
     // `await` on the real provider call, so under concurrent same-provider calls it can be stale by the time
     // this catch runs, and computing `failures` from it would clobber a sibling call's write (lost-update race)
@@ -1270,4 +1295,17 @@ export function resolveAiReviewerPlan(
   const rawOnMerge = (env.AI_ON_MERGE ?? "").trim().toLowerCase() as OnMerge;
   const onMerge = ON_MERGE_RULES.has(rawOnMerge) ? rawOnMerge : undefined;
   return { reviewers: names.slice(0, 2).map((model) => ({ model })), combine, onMerge };
+}
+
+/**
+ * Advisory-AI routing (#4364): return an `env` view whose `.AI` binding is `env.AI_ADVISORY` instead of the
+ * shared frontier chain, for a single ADVISORY-ONLY capability (slop, e2e test-gen, planner, summaries) that
+ * opted in via `settings.advisoryAiRouting`. A shallow spread — every other `env` field (including
+ * `AI_ADVISORY` itself, `AI_GATEWAY_ID`, the enablement flags) is untouched, so the capability's own
+ * fail-safe checks keep working unmodified. Falls back to the real `env` (unchanged `.AI`) whenever the
+ * capability didn't opt in OR the binding itself is unconfigured — byte-identical to before this existed in
+ * either case, exactly like `AI_EMBED`/`AI_VISION`'s own "absent ⇒ falls back" contract.
+ */
+export function withAdvisoryAiEnv(env: Env, useAdvisory: boolean): Env {
+  return useAdvisory && env.AI_ADVISORY ? { ...env, AI: env.AI_ADVISORY } : env;
 }

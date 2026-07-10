@@ -4,8 +4,9 @@
 // Detection is purely structural (a fixed run of seven identical characters at column 0), so there is no
 // comment/string state to track. Line-cited via hunk headers, mirroring the sibling local analyzers.
 import type { EnrichRequest, ConflictMarkerFinding } from "../types.js";
+import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 
 // Git writes each conflict marker as EXACTLY seven identical characters at the start of the line. The ours/base/
 // theirs markers may carry a trailing space + label (a branch or commit); the separator is a bare seven `=`.

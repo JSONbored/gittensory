@@ -299,6 +299,32 @@ describe("visual screenshot on-demand SSRF guard", () => {
     expect(mocks.reload).toHaveBeenCalledWith({ waitUntil: "networkidle0", timeout: 20000 });
   });
 
+  it("REGRESSION (security review): times out a hostile theme localStorage write before reload", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.finalUrl = "https://preview.pages.dev/page";
+      mocks.evaluate.mockImplementation((fn: (...fnArgs: unknown[]) => unknown, ...fnArgs: unknown[]) => {
+        if (fnArgs.length > 0) return new Promise(() => undefined);
+        try {
+          fn(...fnArgs);
+        } catch {
+          // expected — see default mock comment above.
+        }
+        return Promise.resolve(mocks.scrollHeight);
+      });
+
+      const result = captureShot(env(), "https://preview.pages.dev/page", undefined, { theme: "dark", themeStorageKey: "theme" });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(result).resolves.toEqual({ png: null, authWalled: false });
+      expect(mocks.reload).not.toHaveBeenCalled();
+      expect(mocks.screenshot).not.toHaveBeenCalled();
+      expect(mocks.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never forces a theme via localStorage/reload when no themeStorageKey is configured — byte-identical to pre-#4109", async () => {
     mocks.finalUrl = "https://preview.pages.dev/page";
     await captureShot(env(), "https://preview.pages.dev/page", undefined, { theme: "dark" });
@@ -442,6 +468,31 @@ describe("captureScrollFrames (#3612 scroll-through GIF evidence)", () => {
     await captureScrollFrames(env(), "https://preview.pages.dev/page", { width: 1440, height: 900 }, { theme: "dark", themeStorageKey: "theme" });
     expect(mocks.evaluate).toHaveBeenCalledWith(expect.any(Function), "theme", "dark");
     expect(mocks.reload).toHaveBeenCalledWith({ waitUntil: "networkidle0", timeout: 20000 });
+  });
+
+  it("REGRESSION (security review): times out a hostile theme localStorage write before scroll capture", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.evaluate.mockImplementation((fn: (...fnArgs: unknown[]) => unknown, ...fnArgs: unknown[]) => {
+        if (fnArgs.length > 0) return new Promise(() => undefined);
+        try {
+          fn(...fnArgs);
+        } catch {
+          // expected — see default mock comment above.
+        }
+        return Promise.resolve(mocks.scrollHeight);
+      });
+
+      const result = captureScrollFrames(env(), "https://preview.pages.dev/page", { width: 1440, height: 900 }, { theme: "dark", themeStorageKey: "theme" });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(result).resolves.toEqual({ frames: [], authWalled: false });
+      expect(mocks.reload).not.toHaveBeenCalled();
+      expect(mocks.screenshot).not.toHaveBeenCalled();
+      expect(mocks.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("never forces a theme via localStorage/reload when no themeStorageKey is configured — byte-identical to pre-#4109", async () => {

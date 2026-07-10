@@ -39,4 +39,16 @@ describe("createFsBlobStore (#10 — self-host visual screenshot persistence)", 
     await expect(store.put("../escape.png", new Uint8Array([1]))).rejects.toThrow(/escapes base dir/);
     expect(await store.get("../../etc/passwd")).toBeNull(); // the pathFor throw is caught inside get → safe miss
   });
+
+  it("delete removes a stored object — a subsequent get is a miss", async () => {
+    const store = createFsBlobStore(dir);
+    await store.put("gittensory/shots/gone.png", new Uint8Array([1, 2, 3]));
+    expect(await store.get("gittensory/shots/gone.png")).not.toBeNull();
+    await store.delete("gittensory/shots/gone.png");
+    expect(await store.get("gittensory/shots/gone.png")).toBeNull();
+  });
+
+  it("delete on a key that was never written does not throw (idempotent, matches R2)", async () => {
+    await expect(createFsBlobStore(dir).delete("gittensory/shots/never-existed.png")).resolves.toBeUndefined();
+  });
 });

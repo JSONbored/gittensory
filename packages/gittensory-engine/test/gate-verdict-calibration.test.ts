@@ -9,6 +9,7 @@ import {
   resolveGateVerdictCalibrationConfig,
   scoreObjectiveAnchor,
 } from "../dist/index.js";
+import type { GateVerdictCalibrationIngestion } from "../dist/index.js";
 
 test("barrel: exports structured gate-verdict calibration APIs (#3015)", () => {
   assert.equal(typeof resolveGateVerdictCalibrationConfig, "function");
@@ -475,35 +476,41 @@ test("renderGateVerdictCalibrationAuditMarkdown escapes markdown controls and co
 });
 
 test("computeGateVerdictCompositeCalibrationScore sanitizes pre-ingested audit rows", () => {
+  // Deliberately malformed/untrusted input (extra rawReviewText/privateMetadata/trustScore fields
+  // an external, unsanitized source could send) -- the cast simulates data that arrived outside
+  // TypeScript's type system (e.g. JSON.parse of a webhook payload), which is exactly what
+  // isGateVerdictCalibrationIngestion + sanitizeGateVerdictCalibrationIngestion exist to validate
+  // and strip at runtime.
+  const gateVerdicts = {
+    accepted: [
+      {
+        repoFullName: "JSONbored/Gittensory",
+        replayRunId: " replay-13 ",
+        gateRunId: "gate-13",
+        observedAt: "not an ISO timestamp",
+        score: 1,
+        dimensions: [
+          { dimension: "correctness", outcome: "pass", confidence: 1, rawReviewText: "private" },
+          { dimension: "trustScore", outcome: "pass", confidence: 1, privateMetadata: "private" },
+        ],
+        rawReviewText: "private",
+        trustScore: 99,
+      },
+    ],
+    rejected: [
+      {
+        repoFullName: "JSONbored/Gittensory",
+        replayRunId: "replay-13",
+        gateRunId: "gate-13",
+        reason: "not_opted_in",
+        privateMetadata: "private",
+      },
+    ],
+  } as unknown as GateVerdictCalibrationIngestion;
   const result = computeGateVerdictCompositeCalibrationScore({
     objectiveAnchor: 0.5,
     pairwise: 0.5,
-    gateVerdicts: {
-      accepted: [
-        {
-          repoFullName: "JSONbored/Gittensory",
-          replayRunId: " replay-13 ",
-          gateRunId: "gate-13",
-          observedAt: "not an ISO timestamp",
-          score: 1,
-          dimensions: [
-            { dimension: "correctness", outcome: "pass", confidence: 1, rawReviewText: "private" },
-            { dimension: "trustScore", outcome: "pass", confidence: 1, privateMetadata: "private" },
-          ],
-          rawReviewText: "private",
-          trustScore: 99,
-        },
-      ],
-      rejected: [
-        {
-          repoFullName: "JSONbored/Gittensory",
-          replayRunId: "replay-13",
-          gateRunId: "gate-13",
-          reason: "not_opted_in",
-          privateMetadata: "private",
-        },
-      ],
-    },
+    gateVerdicts,
   });
   const serialized = JSON.stringify(result);
 
@@ -533,37 +540,40 @@ test("computeGateVerdictCompositeCalibrationScore sanitizes pre-ingested audit r
 });
 
 test("computeGateVerdictCompositeCalibrationScore ignores malformed pre-ingested rows", () => {
+  // Same as above: deliberately invalid enum values ("trustScore" as a dimension, "private" as an
+  // outcome, "privateMetadata" as a rejection reason) simulating untrusted external input.
+  const gateVerdicts = {
+    accepted: [
+      {
+        repoFullName: "not a repo",
+        replayRunId: "replay-14",
+        gateRunId: "gate-14",
+        observedAt: "2026-07-04T17:00:00.000Z",
+        score: 1,
+        dimensions: [{ dimension: "correctness", outcome: "pass", confidence: 1 }],
+      },
+      {
+        repoFullName: "jsonbored/gittensory",
+        replayRunId: "replay-14",
+        gateRunId: "gate-14",
+        observedAt: "2026-07-04T17:00:00.000Z",
+        score: 1,
+        dimensions: [{ dimension: "rawReviewText", outcome: "private", confidence: 1 }],
+      },
+    ],
+    rejected: [
+      {
+        repoFullName: "jsonbored/gittensory",
+        replayRunId: "replay-14",
+        gateRunId: "gate-14",
+        reason: "privateMetadata",
+      },
+    ],
+  } as unknown as GateVerdictCalibrationIngestion;
   const result = computeGateVerdictCompositeCalibrationScore({
     objectiveAnchor: 0.5,
     pairwise: 0.5,
-    gateVerdicts: {
-      accepted: [
-        {
-          repoFullName: "not a repo",
-          replayRunId: "replay-14",
-          gateRunId: "gate-14",
-          observedAt: "2026-07-04T17:00:00.000Z",
-          score: 1,
-          dimensions: [{ dimension: "correctness", outcome: "pass", confidence: 1 }],
-        },
-        {
-          repoFullName: "jsonbored/gittensory",
-          replayRunId: "replay-14",
-          gateRunId: "gate-14",
-          observedAt: "2026-07-04T17:00:00.000Z",
-          score: 1,
-          dimensions: [{ dimension: "rawReviewText", outcome: "private", confidence: 1 }],
-        },
-      ],
-      rejected: [
-        {
-          repoFullName: "jsonbored/gittensory",
-          replayRunId: "replay-14",
-          gateRunId: "gate-14",
-          reason: "privateMetadata",
-        },
-      ],
-    },
+    gateVerdicts,
   });
 
   assert.equal(result.structuredGateVerdictScore, null);

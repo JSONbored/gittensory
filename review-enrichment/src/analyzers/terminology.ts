@@ -6,9 +6,10 @@
 // `master` token (in `master`, `master_node`, `masterNode`, or a comment word) does. URLs are blanked first so a
 // link path segment cannot trip a finding. Line-cited via hunk headers, mirroring the sibling local analyzers.
 import type { EnrichRequest, TerminologyFinding } from "../types.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
-const MAX_FINDINGS = 25;
-const MAX_LINE_CHARS = 2000;
+const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
+const MAX_LINE_CHARS = DEFAULT_MAX_LINE_CHARS;
 
 // A bounded, in-file term → neutral-suggestion table (self-host operators can read the whole policy here). Keys
 // are the lowercased TOKENS the tokenizer produces. A key matches whenever it appears as a WHOLE token after

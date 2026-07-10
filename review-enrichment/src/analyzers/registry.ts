@@ -32,9 +32,10 @@ import { scanLooseRanges } from "./loose-range.js";
 import { scanMagicNumbers } from "./magic-number.js";
 import { scanConflictMarkers } from "./conflict-marker.js";
 import { scanDebugLeftover } from "./debug-leftover.js";
-import { scanDeepNesting } from "./deep-nesting.js";
+import { scanDeepNesting, DEFAULT_MAX_DEPTH } from "./deep-nesting.js";
 import { scanI18nRegression } from "./i18n-regression.js";
 import { scanErrorSwallow } from "./error-swallow.js";
+import { scanComplexity, DEFAULT_MAX_COMPLEXITY } from "./complexity.js";
 import { scanFloatingPromise } from "./floating-promise.js";
 import { scanSizeSmell } from "./size-smell.js";
 import { scanA11yRegression } from "./a11y-regression.js";
@@ -59,6 +60,7 @@ import type {
   AnalyzerRegistry,
   AnyAnalyzerDescriptor,
 } from "./types.js";
+import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
 
 function descriptor<Name extends AnalyzerName>(
   definition: AnalyzerDescriptor<Name>,
@@ -75,7 +77,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxManifestFiles: 20, maxPatchLinesPerFile: 500 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxManifestFiles: 20, maxPatchLinesPerFile: 500 },
     docs: {
       summary:
         "Summarizes direct dependency add/remove/version-change deltas in changed manifest patches — informational, not a CVE scan.",
@@ -195,7 +197,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000, maxHostChars: 40 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS, maxHostChars: 40 },
     docs: {
       summary:
         "Flags absolute HTTP(S) URLs and raw IP:port endpoints newly added in non-test, non-config source.",
@@ -260,7 +262,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxPatternChars: 1000, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxPatternChars: 1000, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary: "Finds newly introduced regex shapes that can catastrophically backtrack.",
       looksAt: "Regex literals and RegExp constructor string arguments in added lines.",
@@ -323,7 +325,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary: "Flags added code that writes sensitive values to logs or stdout.",
       looksAt: "Added lines that call console, logger, process.stdout, or process.stderr sinks.",
@@ -405,7 +407,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary: "Flags risky IaC/config changes such as public buckets or insecure CORS.",
       looksAt: "Added lines in Docker, Terraform, YAML, JSON, and similar config files.",
@@ -499,7 +501,7 @@ export const ANALYZER_DESCRIPTORS = [
       minRun: 8,
       maxCandidates: 40,
       maxFetches: 30,
-      maxFindings: 25,
+      maxFindings: DEFAULT_MAX_FINDINGS,
       maxFileBytes: 500_000,
     },
     docs: {
@@ -716,7 +718,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "github-light",
     defaultEnabled: true,
     requires: ["github-token"],
-    limits: { maxCommits: 100, maxFindings: 25 },
+    limits: { maxCommits: 100, maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Flags commit-history hygiene issues: a merge commit pulled into the PR's own history, a commit left with git's fixup!/squash! autosquash marker, and a commit carrying a Co-authored-by trailer.",
@@ -806,7 +808,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 20, maxLineChars: 2000 },
+    limits: { maxFindings: 20, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags risky schema operations in added migration SQL: drops, renames, non-nullable columns without a default, and blocking table rewrites.",
@@ -847,7 +849,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 20, maxLineChars: 2000 },
+    limits: { maxFindings: 20, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags newly-added npm dependency specifiers that use dangerously loose ranges instead of a pinned/caret/tilde range.",
@@ -888,7 +890,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags non-inclusive terms newly added in identifiers or comments (whitelist/blacklist, master/slave) and suggests the neutral replacement.",
@@ -917,7 +919,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000, maxNoteChars: 120 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS, maxNoteChars: 120 },
     docs: {
       summary:
         "Surfaces TODO/FIXME/HACK/XXX markers a PR adds in comments, so a reviewer sees the change is shipping known-incomplete work.",
@@ -947,7 +949,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags newly-added non-trivial numeric literals in non-test source where a named constant would clarify intent.",
@@ -977,7 +979,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Flags leftover VCS conflict markers (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`) accidentally committed in added lines.",
@@ -1006,7 +1008,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags debugging leftovers a PR adds in non-test source — `debugger;`, bare console sinks, or `print()` calls.",
@@ -1035,7 +1037,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxFileLines: 400, maxFunctionLines: 60, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxFileLines: 400, maxFunctionLines: 60, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags maintainability size smells from patch structure: an estimated resulting file length or an added function body span that exceeds configured thresholds.",
@@ -1067,7 +1069,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000, maxCallChars: 40 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS, maxCallChars: 40 },
     docs: {
       summary:
         "Flags newly-added promise-shaped calls whose returned promise is neither awaited, returned, voided, nor same-line .then/.catch-chained.",
@@ -1096,7 +1098,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxDepth: 4, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxDepth: DEFAULT_MAX_DEPTH, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags newly-added control-flow blocks whose nesting depth exceeds a threshold inside a contiguous run of added lines.",
@@ -1125,27 +1127,67 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
-        "Flags newly-added catch/except blocks that swallow the error — empty body, unused binding, or a bare `return null`.",
-      looksAt: "Added lines in changed non-test JS/TS/Python source files.",
-      reports: "File, line, and kind: empty-catch, unused-binding, or return-null.",
+        "Flags newly-added catch/except blocks (and Go if-err checks) that swallow or mishandle the error — empty body, unused binding, a bare `return null`/`nil`, or a Python bare `except:` naming no exception type.",
+      looksAt: "Added lines in changed non-test JS/TS/Python/Go source files.",
+      reports: "File, line, and kind: empty-catch, unused-binding, return-null, or bare-except.",
       network: "Pure local analyzer. No external network call.",
       notes:
-        "Multiline catch bodies are collected with brace balance. Catches that log, rethrow, or reference the binding are not flagged. Brace counting is character-level (string literals are not stripped).",
+        "Multiline catch/if-err bodies are collected with brace balance (Go's `if err != nil { … }`, including the if-with-initializer form, is treated the same as a JS/TS catch). Handlers that log, rethrow/panic, or reference the checked binding are not flagged. Python's bare `except:` is flagged regardless of body — it catches SystemExit/KeyboardInterrupt too. Brace counting is character-level (string literals are not stripped).",
     },
     render: (findings, helpers) => {
       if (!findings.length) return [];
-      const lines = ["### Swallowed errors (empty catch / unused binding / return null)"];
+      const explain = (kind: (typeof findings)[number]["kind"]): string => {
+        switch (kind) {
+          case "empty-catch":
+            return "empty-catch — the error is checked/caught but the handling block is empty";
+          case "unused-binding":
+            return "unused-binding — the error is checked/caught but never referenced, logged, or returned";
+          case "return-null":
+            return "return-null — returns null/nil instead of propagating the error";
+          case "bare-except":
+            return "bare-except — catches every exception (including SystemExit/KeyboardInterrupt), no type named";
+        }
+      };
+      const lines = ["### Swallowed errors (empty catch / unused binding / return null / bare except)"];
       for (const item of findings) {
-        lines.push(
-          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${helpers.safeCodeSpan(item.kind)}`,
-        );
+        lines.push(`- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} — ${explain(item.kind)}`);
       }
       return lines;
     },
     run: (req, { signal }) => scanErrorSwallow(req, signal),
+  }),
+  descriptor({
+    name: "complexity",
+    title: "Approximate cyclomatic complexity",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxComplexity: DEFAULT_MAX_COMPLEXITY, maxLineChars: DEFAULT_MAX_LINE_CHARS },
+    docs: {
+      summary:
+        "Flags a newly-added function whose approximate cyclomatic complexity (branch/loop/logical-operator density, computed on the diff-visible lines) exceeds a threshold.",
+      looksAt:
+        "Added lines in changed non-test TS/JS source files, starting from a named function declaration or a const/let/var-assigned arrow function whose opening line is part of the diff.",
+      reports: "File, line, the detected function name, the measured complexity, and the configured threshold.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Diff-hunk approximation, not a whole-function true McCabe count: REES has no full-file content, so this counts if/for/while/case/catch/&&/||/?? token occurrences across the function's ADDED body lines only (1 + count), the same function-boundary detection size-smell.ts (#2019) uses for 'big-function'. A function whose signature line is not part of the diff is not scored. Distinct from deep-nesting (#2030), which measures brace NESTING depth, a readability smell, not decision-point density. Ternary (`? :`) is intentionally excluded — see the analyzer source header for why.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Approximate cyclomatic complexity (diff-visible branch/loop/logical-operator density)"];
+      for (const item of findings) {
+        const location = helpers.safeCodeSpan(`${item.file}:${item.line}`);
+        const name = helpers.safeCodeSpan(item.name);
+        lines.push(`- ${location} — ${name}: approx. complexity ${item.complexity} (threshold ${item.threshold})`);
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanComplexity(req, signal),
   }),
   descriptor({
     name: "unsafeAny",
@@ -1154,7 +1196,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Counts and locates explicit `any` annotations, `<any>` assertions, and `as any` casts newly introduced in TypeScript diffs.",
@@ -1183,7 +1225,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "Flags common accessibility regressions in newly added JSX/HTML markup lines.",
@@ -1214,7 +1256,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxFindings: 25, maxLineChars: 2000 },
+    limits: { maxFindings: DEFAULT_MAX_FINDINGS, maxLineChars: DEFAULT_MAX_LINE_CHARS },
     docs: {
       summary:
         "When the diff shows a translation convention, flags newly-added user-facing JSX text or label/title props that bypass it.",
@@ -1241,7 +1283,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "github-light",
     defaultEnabled: true,
     requires: ["files", "github-token", "head-sha"],
-    limits: { maxSymbols: 10, maxSearches: 10, maxFindings: 25 },
+    limits: { maxSymbols: 10, maxSearches: 10, maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Flags exports newly added by the PR that have zero non-declaration references anywhere in the repo.",
@@ -1273,7 +1315,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "github-light",
     defaultEnabled: true,
     requires: ["files", "github-token", "head-sha"],
-    limits: { maxFiles: 10, maxFetches: 10, maxFindings: 25 },
+    limits: { maxFiles: 10, maxFetches: 10, maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Flags when a PR adds a new enum member or string-literal union variant but an exhaustive switch still omits it.",
@@ -1312,7 +1354,7 @@ export const ANALYZER_DESCRIPTORS = [
       maxCommitsPerFile: 5,
       maxCheckRunFetches: 12,
       windowDays: 30,
-      maxFindings: 25,
+      maxFindings: DEFAULT_MAX_FINDINGS,
     },
     docs: {
       summary:
@@ -1345,7 +1387,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "github-light",
     defaultEnabled: true,
     requires: ["github-token"],
-    limits: { maxCommits: 100, maxFindings: 25 },
+    limits: { maxCommits: 100, maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Lints the PR's commit subjects against the Conventional Commits spec and flags non-conforming subjects (bad/absent type, over-long, or empty).",
@@ -1387,7 +1429,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxEntrypoints: 25, maxFindings: 25 },
+    limits: { maxEntrypoints: 25, maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Flags an exported symbol a PR removes or renames in a package public entrypoint — a semver-major break for downstream consumers shipped without a major version bump.",
@@ -1420,7 +1462,7 @@ export const ANALYZER_DESCRIPTORS = [
     cost: "local",
     defaultEnabled: true,
     requires: ["files"],
-    limits: { maxManifestFiles: 20, maxPatchLinesPerFile: 500, maxFindings: 25 },
+    limits: { maxManifestFiles: 20, maxPatchLinesPerFile: 500, maxFindings: DEFAULT_MAX_FINDINGS },
     docs: {
       summary:
         "Flags a direct dependency a PR newly adds or upgrades that is an officially deprecated or unmaintained package with a maintained successor — an adoption risk the review brief should surface.",
@@ -1460,7 +1502,7 @@ export const ANALYZER_DESCRIPTORS = [
       maxFilesProbed: 5,
       commitsPerFile: 15,
       maxRevertLookups: 10,
-      maxFindings: 25,
+      maxFindings: DEFAULT_MAX_FINDINGS,
     },
     docs: {
       summary:
@@ -1548,7 +1590,7 @@ export const ANALYZER_DESCRIPTORS = [
       maxSearches: 6,
       maxFileFetches: 12,
       maxCallersPerFinding: 5,
-      maxFindings: 25,
+      maxFindings: DEFAULT_MAX_FINDINGS,
     },
     docs: {
       summary:

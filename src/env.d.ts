@@ -11,15 +11,42 @@ declare global {
      *  local/openai-compatible endpoint (ollama). Built at boot from AI_EMBED_BASE_URL/AI_EMBED_MODEL. Absent ⇒
      *  `createReviewAdapters` falls back to `env.AI` (byte-identical to before). */
     AI_EMBED?: Ai;
+    /** Self-host (visual-vision, #4111/#4335): a DEDICATED vision-capable provider, separate from both the
+     *  review chain and the embed provider — a local/openai-compatible endpoint (ollama + a vision-language
+     *  model). Built at boot from AI_VISION_BASE_URL/AI_VISION_MODEL. Absent ⇒ visual-vision advisory falls
+     *  back to requiring a maintainer BYOK key (the only option before this binding existed). */
+    AI_VISION?: Ai;
+    /** Self-host (advisory-tier, #4364): a DEDICATED local-inference provider shared by every capability that is
+     *  NEVER gate-blocking (slop advisory, e2e test-gen, issue planner, AI summaries) — separate from the review
+     *  chain, the embed provider, and the vision provider, since none of these need frontier-model accuracy.
+     *  Built at boot from AI_ADVISORY_BASE_URL/AI_ADVISORY_MODEL. Which capability actually routes through it is
+     *  config-driven (`.gittensory.yml`, global default + per-repo override), not hardcoded here. Absent ⇒ every
+     *  advisory capability falls back to `env.AI` (byte-identical to before this binding existed). */
+    AI_ADVISORY?: Ai;
     /** Self-host RAG vector adapter. Cloudflare no longer binds Vectorize for hosted reviews; the Node runtime
      *  injects Qdrant/sqlite/pg adapters here when configured. Absent ⇒ no RAG, review proceeds with no retrieved
      *  context. */
     VECTORIZE?: Vectorize;
     /** Self-host RAG vector width. Must match the configured embedding model and vector backend. */
     QDRANT_DIM?: string;
+    /** Self-host RAG embed batch size (items per embed-provider call). Defaults to the shipped
+     *  Workers-AI-safe constant (96) when unset — this override exists for self-host operators tuning
+     *  throughput on their own hardware (e.g. GPU-accelerated Ollama), not to change the hosted default. */
+    AI_EMBED_BATCH?: string;
     /** Optional self-host review audit + visual-capture blob store. The Node runtime injects a filesystem-backed
-     *  store when REVIEW_AUDIT_DIR is set; the Cloudflare API worker no longer binds the review R2 bucket. */
+     *  store when REVIEW_AUDIT_DIR is set, or an S3-compatible-bucket-backed store (an operator's own Cloudflare
+     *  R2 bucket, or any other S3-compatible provider) when REVIEW_AUDIT_S3_BUCKET + _ENDPOINT +
+     *  _ACCESS_KEY_ID + _SECRET_ACCESS_KEY are all set (takes priority when both are configured); the
+     *  Cloudflare API worker no longer binds the review R2 bucket. */
     REVIEW_AUDIT?: R2Bucket;
+    /** Public base URL for an S3-compatible REVIEW_AUDIT bucket's own public read access (an R2 `r2.dev` public
+     *  bucket URL, or a custom domain connected to the bucket) -- see src/selfhost/s3-blob-store.ts. When set,
+     *  capture.ts's resolveShotUrl links screenshots DIRECTLY at `${this}/${key}` so GitHub's image proxy (and
+     *  every other viewer) fetches straight from the bucket's own CDN, never touching this instance's
+     *  PUBLIC_API_ORIGIN at all. Unset (default) ⇒ served through this instance's own /gittensory/shot?key=
+     *  proxy route instead, exactly as before -- the bucket still gets used for storage, just not linked to
+     *  directly. Only meaningful alongside a configured REVIEW_AUDIT_S3_* bucket; ignored otherwise. */
+    REVIEW_AUDIT_S3_PUBLIC_URL?: string;
     /** Optional visual capture binding. Self-host exposes this when BROWSER_WS_ENDPOINT is set; the Cloudflare API
      *  worker no longer binds Browser Rendering for reviews. */
     BROWSER?: Fetcher;
@@ -98,11 +125,18 @@ declare global {
      *  admin/bot contributor may have open ACROSS EVERY repo this install gates, combined. Purely an
      *  install-scoped aggregate over this same database (no cross-instance networking) -- catches an actor
      *  spreading low-volume spam/farming PRs across several gated repos in one self-hosted install, which no
-     *  single repo's own contributorOpenPrCap/contributorOpenIssueCap can see. Unset/invalid (the default) = no
-     *  cap, byte-identical to today. Checked IN ADDITION TO (not instead of) the existing per-repo caps, in the
+     *  single repo's own contributorOpenPrCap/contributorOpenIssueCap can see. Unset/invalid falls back to a
+     *  real default (20) rather than "no cap" (#4511) -- set to the literal string "off" for the old
+     *  unconditional-no-cap behavior. Checked IN ADDITION TO (not instead of) the existing per-repo caps, in the
      *  same contributor_cap short-circuit (src/settings/agent-actions.ts). A positive integer string (e.g. "20");
      *  see src/settings/global-contributor-cap.ts for parsing. */
     GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP?: string;
+    /** Same shape as {@link GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP}, but for a CONFIRMED official Gittensor miner
+     *  specifically (#4511) -- a verified miner identity gets this cap instead of the human one, since a
+     *  legitimate fleet spread across many repos in one install is expected to run more concurrent open items
+     *  than a single human contributor. Unset/invalid falls back to a higher real default (50); "off" exempts
+     *  confirmed miners from the install-wide cap entirely while humans stay capped. */
+    GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP_MINER?: string;
     /** Install-wide default for the per-repo contributorCapCancelCi setting (#2462): "true"/"1"/"yes"/"on"
      *  (case-insensitive) enables cancelling in-flight CI runs on a contributor_cap close for every repo that
      *  hasn't explicitly configured its own value. Unset/blank/anything else = off (the existing behavior). A
@@ -206,19 +240,25 @@ declare global {
     /** Convergence (visual capture): when truthy, the review path captures a before/after screenshot for
      *  PRs that touch WEB-VISIBLE files (frontend pages / public OG images — see review/visual/paths.ts
      *  isVisualPath). "before" = production (PUBLIC_SITE_ORIGIN); "after" = the PR's preview deploy. Each shot
-     *  is rendered via the optional BROWSER binding, stored through REVIEW_AUDIT when configured, and embedded in
-     *  the unified PR comment as a "Visual preview" table served from the PUBLIC /gittensory/shot route. Self-host
-     *  equivalents are BROWSER_WS_ENDPOINT + REVIEW_AUDIT_DIR; degrades gracefully (placeholders / dashes) without
-     *  them. Backend .ts/.md/.json/.py PRs NEVER trigger capture. Capture runs for a repo ONLY IF this flag is
-     *  ON *AND* the repo is in GITTENSORY_REVIEW_REPOS (the per-repo cutover allowlist) — see
-     *  review/visual-wire.ts screenshotsAllowed. Default OFF — unset/false captures nothing (no render, no audit
-     *  write, no comment change) so the review path is byte-identical to today. */
+     *  is rendered via the optional BROWSER binding, stored through REVIEW_AUDIT when configured, and embedded
+     *  in the unified PR comment as a "Visual preview" table — served either from this instance's own PUBLIC
+     *  /gittensory/shot route, or, when REVIEW_AUDIT_S3_PUBLIC_URL is set, directly from the operator's own
+     *  S3-compatible bucket instead (see src/selfhost/s3-blob-store.ts). Self-host equivalents are
+     *  BROWSER_WS_ENDPOINT + (REVIEW_AUDIT_DIR or the REVIEW_AUDIT_S3_* bucket vars); degrades gracefully
+     *  (placeholders / dashes) without them. Backend .ts/.md/.json/.py PRs NEVER trigger capture. Capture runs
+     *  for a repo ONLY IF this flag is ON *AND* the repo is in GITTENSORY_REVIEW_REPOS (the per-repo cutover
+     *  allowlist) — see review/visual-wire.ts screenshotsAllowed. Default OFF — unset/false captures nothing
+     *  (no render, no audit write, no comment change) so the review path is byte-identical to today. */
     GITTENSORY_REVIEW_SCREENSHOTS?: string;
     /** Convergence (grounding): when truthy, the AI reviewer prompt is GROUNDED — the PR's finished CI status
      *  + the FULL post-change content of the changed files are appended so a non-frontier model verifies its
      *  claims against reality instead of predicting CI / flagging symbols defined just outside the hunk.
      *  Default OFF — unset/false keeps the reviewer prompt byte-identical and makes no extra GitHub fetch. */
     GITTENSORY_REVIEW_GROUNDING?: string;
+    /** Convergence (e2eTests, #4190/#4189): master kill-switch for the opt-in, maintainer-triggered AI-generated
+     *  E2E test coverage feature. Default OFF — unset/false the feature is never active for any repo regardless
+     *  of a per-repo `features.e2eTests` override. */
+    GITTENSORY_REVIEW_E2E_TESTS?: string;
     /** Convergence (reputation): when truthy, the INTERNAL-only ported submitter-reputation signal extends the
      *  AI-spend gate — a new / burst / low-reputation submitter is downgraded to a deterministic-only review
      *  (the AI neurons are skipped), and the per-(project, submitter) outcome is recorded after the gate
@@ -305,6 +345,17 @@ declare global {
      *  recording are wired, reading a promoted override into the live gate is a noted follow-up that must not
      *  risk loosening the gate. See src/review/selftune-wire.ts. */
     GITTENSORY_REVIEW_SELFTUNE?: string;
+    /** Maintainer recap digest (#1963, #2248): when truthy, a cross-repo RecapReport -- gittensory's OWN
+     *  gate-precision + outcome-calibration data folded across every scanned repo (buildMaintainerRecap,
+     *  #2239) -- is delivered to Discord on a cron cadence. GITTENSORY_RECAP_CADENCE ("daily" | "weekly",
+     *  default "weekly"; an invalid value falls back to "weekly") picks how often; GITTENSORY_RECAP_HOUR
+     *  (0-23, default 14) and GITTENSORY_RECAP_DAY (0-6, Sunday=0, default 1/Monday, only consulted when
+     *  weekly) pick when, so the tick fires at most once per period. Default OFF -- unset/false means the
+     *  cron enqueues NO recap job, byte-identical to today. See src/review/maintainer-recap-wire.ts. */
+    GITTENSORY_MAINTAINER_RECAP?: string;
+    GITTENSORY_RECAP_CADENCE?: string;
+    GITTENSORY_RECAP_HOUR?: string;
+    GITTENSORY_RECAP_DAY?: string;
     /** #1941: route the live CI aggregate (the gate's check/status read) through ONE GraphQL statusCheckRollup
      *  query instead of the paginated /check-runs + /status + /check-suites REST reads, moving that hot path onto
      *  the separate GraphQL rate-limit bucket. Default OFF (byte-identical, proven REST aggregate); when ON the
@@ -379,6 +430,19 @@ declare global {
      *  flagged (see the same-author guard in buildCollisionReport). Default OFF — unset/false leaves every
      *  PullRequestRecord's changedFiles unset, byte-identical to today. See src/signals/engine.ts prItem. */
     GITTENSORY_OPEN_PR_FILE_COLLISION?: string;
+    /** D1 size/row-count observability probe (#3810): the Cloudflare account id that owns the D1 database to
+     *  monitor. Presence of this AND the two vars below IS the enablement switch (see isD1SizeProbeEnabled,
+     *  src/selfhost/d1-size-probe.ts) -- unset/blank ⇒ the probe never runs, byte-identical to today. Most
+     *  self-host operators run their own SQLite/Postgres backend and have no Cloudflare D1 to watch; this is
+     *  for whichever deployment owns a real D1 worth monitoring (including gittensory's own central cloud
+     *  database, the one that hit its ~10GB cap on 2026-07-06). */
+    CLOUDFLARE_D1_MONITOR_ACCOUNT_ID?: string;
+    /** The D1 database id (uuid) to monitor. See CLOUDFLARE_D1_MONITOR_ACCOUNT_ID. */
+    CLOUDFLARE_D1_MONITOR_DATABASE_ID?: string;
+    /** A Cloudflare API token with read access to D1 for the account above (a scoped, read-only custom
+     *  token is sufficient — this probe never writes). A secret — never commit a real value. See
+     *  CLOUDFLARE_D1_MONITOR_ACCOUNT_ID. */
+    CLOUDFLARE_D1_MONITOR_API_TOKEN?: string;
   }
 }
 

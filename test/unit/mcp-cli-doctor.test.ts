@@ -4,6 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bin, closeFixtureServer, createPacketRepo, git, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
+import mcpPackageJson from "../../packages/gittensory-mcp/package.json";
+
+// A "higher-core prerelease" fixture (release outranks any prerelease of the same core, but a
+// HIGHER-core prerelease still beats a lower-core release) needs a version strictly above the local
+// package's own -- computed instead of hardcoded so it stays correct across every future release.
+const oneMinorAboveLocal = (() => {
+  const [major, minor] = mcpPackageJson.version.split(".").map(Number) as [number, number, number];
+  return `${major}.${minor + 1}.0`;
+})();
 
 describe("gittensory-mcp CLI — doctor", () => {
   let tempDir: string | null = null;
@@ -146,7 +155,7 @@ describe("gittensory-mcp CLI — doctor", () => {
 
   it("reports a current install without upgrade guidance", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
-    const url = await startFixtureServer({ latestVersion: "0.7.0", minMcpVersion: "0.5.0" });
+    const url = await startFixtureServer({ latestVersion: mcpPackageJson.version, minMcpVersion: "0.5.0" });
     const payload = JSON.parse(
       await runAsync(["status", "--json"], {
         GITTENSORY_API_URL: url,
@@ -166,7 +175,7 @@ describe("gittensory-mcp CLI — doctor", () => {
       status: "compatible",
       source: "compatibility_endpoint",
       minVersion: "0.5.0",
-      latestRecommendedVersion: "0.7.0",
+      latestRecommendedVersion: mcpPackageJson.version,
       apiVersion: "0.1.0",
     });
   });
@@ -186,8 +195,8 @@ describe("gittensory-mcp CLI — doctor", () => {
     expect(ahead.package).toMatchObject({ state: "ahead", updateAvailable: false });
     await closeFixtureServer();
 
-    // Local 0.7.0 vs a higher-core prerelease 0.8.0-rc.1 -> stale.
-    const staleUrl = await startFixtureServer({ latestVersion: "0.8.0-rc.1" });
+    // Local (mcpPackageJson.version) vs a higher-core prerelease (one minor above) -> stale.
+    const staleUrl = await startFixtureServer({ latestVersion: `${oneMinorAboveLocal}-rc.1` });
     const stale = JSON.parse(
       await runAsync(["status", "--json"], {
         GITTENSORY_API_URL: staleUrl,
@@ -227,7 +236,7 @@ describe("gittensory-mcp CLI — doctor", () => {
 
   it("flags a stale install in doctor with upgrade remediation", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
-    const url = await startFixtureServer({ latestVersion: "1.0.0" });
+    const url = await startFixtureServer({ latestVersion: oneMinorAboveLocal });
     const payload = JSON.parse(
       await runAsync(["doctor", "--cwd", tempDir, "--repo", "JSONbored/gittensory", "--json"], {
         GITTENSORY_API_URL: url,
@@ -282,7 +291,7 @@ describe("gittensory-mcp CLI — doctor", () => {
 
   it("uses API recommended package metadata when the npm registry is unavailable", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
-    const url = await startFixtureServer({ npmStatus: 500, latestRecommendedMcpVersion: "0.8.0" });
+    const url = await startFixtureServer({ npmStatus: 500, latestRecommendedMcpVersion: oneMinorAboveLocal });
     const payload = JSON.parse(
       await runAsync(["status", "--json"], {
         GITTENSORY_API_URL: url,
@@ -294,7 +303,7 @@ describe("gittensory-mcp CLI — doctor", () => {
     expect(payload.package).toMatchObject({
       state: "stale",
       latestStatus: "api",
-      latestVersion: "0.8.0",
+      latestVersion: oneMinorAboveLocal,
       upgradeCommand: "npm install -g @jsonbored/gittensory-mcp@latest",
     });
   });
