@@ -50,7 +50,9 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TRANSCRIPT_CHARS = 8000;
 const MAX_ERROR_DETAIL_CHARS = 500;
 
-function defaultBuildArgs(task: CodingAgentDriverTask): string[] {
+/** The default argv contract, exported so the factory (#4289) can PREFIX provider config (e.g. a configured
+ *  model flag) without re-inventing — and silently drifting from — this baseline argv shape. */
+export function defaultCliSubprocessArgs(task: CodingAgentDriverTask): string[] {
   return [
     "--max-turns",
     String(task.maxTurns),
@@ -67,7 +69,7 @@ function defaultBuildArgs(task: CodingAgentDriverTask): string[] {
  */
 export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDriverOptions): CodingAgentDriver {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const buildArgs = options.buildArgs ?? defaultBuildArgs;
+  const buildArgs = options.buildArgs ?? defaultCliSubprocessArgs;
   const knownSecrets = options.knownSecrets ?? [];
   return {
     async run(task: CodingAgentDriverTask): Promise<CodingAgentDriverResult> {
