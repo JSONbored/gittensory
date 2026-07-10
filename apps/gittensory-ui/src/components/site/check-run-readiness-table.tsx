@@ -77,7 +77,9 @@ export function CheckRunReadinessTable({
                   </StatusPill>
                 </td>
                 <td className="px-3 py-2 text-muted-foreground">{row.evidence}</td>
-                <td className="hidden px-3 py-2 text-muted-foreground lg:table-cell">{row.action}</td>
+                <td className="hidden px-3 py-2 text-muted-foreground lg:table-cell">
+                  {row.action}
+                </td>
               </tr>
             ))}
           </tbody>

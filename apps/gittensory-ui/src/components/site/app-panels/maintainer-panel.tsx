@@ -171,7 +171,9 @@ const MAINTAINER_ROLES = ["maintainer", "owner", "operator"] as const;
  * dashboard query and the BYOK form from ever mounting for a non-maintainer (defense-in-depth + a clean
  * message instead of a raw 403). The backend remains the source of truth.
  */
-export function MaintainerPanel({ initialRepoFullName }: { initialRepoFullName?: string | undefined } = {}) {
+export function MaintainerPanel({
+  initialRepoFullName,
+}: { initialRepoFullName?: string | undefined } = {}) {
   const { session, hydrated } = useSession();
   const isMaintainer = (session?.roles ?? []).some((role) =>
     MAINTAINER_ROLES.includes(role as (typeof MAINTAINER_ROLES)[number]),
@@ -189,7 +191,11 @@ export function MaintainerPanel({ initialRepoFullName }: { initialRepoFullName?:
   return <MaintainerDashboardView initialRepoFullName={initialRepoFullName} />;
 }
 
-function MaintainerDashboardView({ initialRepoFullName }: { initialRepoFullName?: string | undefined }) {
+function MaintainerDashboardView({
+  initialRepoFullName,
+}: {
+  initialRepoFullName?: string | undefined;
+}) {
   const dashboard = useApiResource<MaintainerDashboard>(
     "/v1/app/maintainer-dashboard",
     "Maintainer dashboard",
@@ -363,7 +369,10 @@ function MaintainerDashboardView({ initialRepoFullName }: { initialRepoFullName?
 
           <ActivationPreview reviewability={data.reviewability} />
 
-          <SurfacePreview reviewability={data.reviewability} initialRepoFullName={initialRepoFullName} />
+          <SurfacePreview
+            reviewability={data.reviewability}
+            initialRepoFullName={initialRepoFullName}
+          />
 
           <MaintainerSettings reviewability={data.reviewability} />
 

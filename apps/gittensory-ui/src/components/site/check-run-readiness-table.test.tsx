@@ -41,7 +41,9 @@ describe("resolveCheckRunReadinessView", () => {
   });
 
   it("returns the readiness payload at standard when components are present", () => {
-    expect(resolveCheckRunReadinessView({ detailLevel: "standard", readiness: SAMPLE })).toEqual(SAMPLE);
+    expect(resolveCheckRunReadinessView({ detailLevel: "standard", readiness: SAMPLE })).toEqual(
+      SAMPLE,
+    );
   });
 });
 
