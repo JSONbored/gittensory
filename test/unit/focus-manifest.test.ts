@@ -2903,7 +2903,7 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
   it("resolveEffectiveSettings falls back to the built-in default when the DB layer has no screenshotTableGate at all (#2006)", () => {
     const db = {} as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { screenshotTableGate: { enabled: true } } }));
-    expect(eff.screenshotTableGate).toEqual({ enabled: true, whenLabels: [], whenPaths: [], action: "close" });
+    expect(eff.screenshotTableGate).toEqual({ enabled: true, whenLabels: [], whenPaths: [], action: "close", requireViewports: [], requireThemes: [] });
   });
 
   it("resolveEffectiveSettings keeps the DB layer's enabled/action when the manifest override omits them (#2006)", () => {
@@ -2922,6 +2922,30 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     const parsed = parseFocusManifest({ settings: { screenshotTableGate: "oops" } });
     expect(parsed.settings.screenshotTableGate).toBeUndefined();
     expect(parsed.warnings).toContain(`Manifest "settings.screenshotTableGate" must be an object; ignoring it and keeping any existing policy.`);
+  });
+
+  it("wires settings.screenshotTableGate.requireViewports/requireThemes into the manifest parser as a sparse override (#4535)", () => {
+    const parsed = parseFocusManifest({ settings: { screenshotTableGate: { requireViewports: ["Desktop", "Tablet", "Mobile"], requireThemes: ["Light", "Dark"] } } });
+    expect(parsed.settings.screenshotTableGate).toEqual({ requireViewports: ["Desktop", "Tablet", "Mobile"], requireThemes: ["Light", "Dark"] });
+  });
+
+  it("omits requireViewports/requireThemes from the sparse override when the raw manifest doesn't name them (#4535)", () => {
+    const parsed = parseFocusManifest({ settings: { screenshotTableGate: { enabled: true } } });
+    expect(parsed.settings.screenshotTableGate).toEqual({ enabled: true });
+    expect(parsed.settings.screenshotTableGate).not.toHaveProperty("requireViewports");
+    expect(parsed.settings.screenshotTableGate).not.toHaveProperty("requireThemes");
+  });
+
+  it("resolveEffectiveSettings merges requireViewports/requireThemes without clearing the DB layer's other fields (#4535)", () => {
+    const db = { screenshotTableGate: { enabled: true, whenLabels: ["frontend"], whenPaths: [], action: "close", requireViewports: [], requireThemes: [] } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { screenshotTableGate: { requireViewports: ["Desktop"], requireThemes: ["Light", "Dark"] } } }));
+    expect(eff.screenshotTableGate).toEqual({ enabled: true, whenLabels: ["frontend"], whenPaths: [], action: "close", requireViewports: ["Desktop"], requireThemes: ["Light", "Dark"] });
+  });
+
+  it("resolveEffectiveSettings keeps the DB layer's requireViewports/requireThemes when the manifest override omits them (#4535)", () => {
+    const db = { screenshotTableGate: { enabled: true, whenLabels: [], whenPaths: [], action: "close", requireViewports: ["Desktop"], requireThemes: ["Light"] } } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { screenshotTableGate: { enabled: true } } }));
+    expect(eff.screenshotTableGate).toEqual({ enabled: true, whenLabels: [], whenPaths: [], action: "close", requireViewports: ["Desktop"], requireThemes: ["Light"] });
   });
 
   it("wires settings.advisoryAiRouting into the manifest parser as a sparse override (#4364)", () => {

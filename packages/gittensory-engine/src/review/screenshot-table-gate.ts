@@ -14,6 +14,8 @@ const MAX_LABELS = 50;
 const MAX_PATHS = 50;
 const MAX_LABEL_CHARS = 100;
 const MAX_PATH_CHARS = 300;
+const MAX_MATRIX_DIMENSION = 12;
+const MAX_MATRIX_TOKEN_CHARS = 40;
 
 // Extensions treated as "an image file" for the committed-image-file check below. Deliberately excludes SVG:
 // an SVG can embed script/foreign-object content, so it is never accepted as review evidence anywhere in this
@@ -26,9 +28,11 @@ export const DEFAULT_SCREENSHOT_TABLE_GATE: ScreenshotTableGateConfig = {
   whenLabels: [],
   whenPaths: [],
   action: "close",
+  requireViewports: [],
+  requireThemes: [],
 };
 
-const VALID_ACTIONS: readonly ScreenshotTableGateAction[] = ["close"];
+const VALID_ACTIONS: readonly ScreenshotTableGateAction[] = ["close", "advisory"];
 
 export function isScreenshotTableGateAction(value: unknown): value is ScreenshotTableGateAction {
   return typeof value === "string" && (VALID_ACTIONS as readonly string[]).includes(value);
@@ -59,10 +63,10 @@ function normalizeStringList(value: unknown, field: string, max: number, maxChar
  *  throws: malformed fields fall back to the default (disabled/empty), matching every other settings normalizer
  *  in this codebase. */
 export function normalizeScreenshotTableGateConfig(input: unknown, warnings: string[]): ScreenshotTableGateConfig {
-  if (input === undefined || input === null) return { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [] };
+  if (input === undefined || input === null) return { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [], requireViewports: [], requireThemes: [] };
   if (typeof input !== "object" || Array.isArray(input)) {
     warnings.push("settings.requireScreenshotTable must be an object; using the default (disabled).");
-    return { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [] };
+    return { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [], requireViewports: [], requireThemes: [] };
   }
   const record = input as Record<string, unknown>;
   const enabled = typeof record.enabled === "boolean" ? record.enabled : DEFAULT_SCREENSHOT_TABLE_GATE.enabled;
@@ -72,7 +76,7 @@ export function normalizeScreenshotTableGateConfig(input: unknown, warnings: str
   const action = isScreenshotTableGateAction(record.action)
     ? record.action
     : (() => {
-        if (record.action !== undefined) warnings.push(`settings.requireScreenshotTable.action must be "close" (the only supported value; #4110 removed request_changes/comment as dead config surface); using the default "close".`);
+        if (record.action !== undefined) warnings.push(`settings.requireScreenshotTable.action must be "close" or "advisory" (#4110 removed request_changes/comment as dead config surface); using the default "close".`);
         return DEFAULT_SCREENSHOT_TABLE_GATE.action;
       })();
   const message = typeof record.message === "string" && record.message.trim().length > 0 ? record.message.trim() : undefined;
@@ -84,6 +88,8 @@ export function normalizeScreenshotTableGateConfig(input: unknown, warnings: str
     whenLabels: normalizeStringList(record.whenLabels, "whenLabels", MAX_LABELS, MAX_LABEL_CHARS, warnings),
     whenPaths: normalizeStringList(record.whenPaths, "whenPaths", MAX_PATHS, MAX_PATH_CHARS, warnings),
     action,
+    requireViewports: normalizeStringList(record.requireViewports, "requireViewports", MAX_MATRIX_DIMENSION, MAX_MATRIX_TOKEN_CHARS, warnings),
+    requireThemes: normalizeStringList(record.requireThemes, "requireThemes", MAX_MATRIX_DIMENSION, MAX_MATRIX_TOKEN_CHARS, warnings),
     ...(message !== undefined ? { message } : {}),
   };
 }
@@ -156,6 +162,96 @@ export function hasCommittedImageFile(changedFiles: string[], scopedPaths: strin
   });
 }
 
+const IMAGE_CELL_PATTERN = /!\[[^\]]*\]\([^)]+\)|<img\b[^>]*>/i;
+
+/** One data row of a detected markdown table: the cell texts in source order (leading/trailing pipes and
+ *  whitespace stripped). Deliberately a SEPARATE table-detection pass from {@link hasImageBearingMarkdownTable}
+ *  rather than a shared refactor of it -- that function's exact behavior is pinned by existing tests, and this
+ *  one needs actual cell contents (not just "does some cell have an image"), so duplicating its short
+ *  header+separator detection loop keeps both independently simple instead of risking a regression in either
+ *  from a shared-code change. */
+function extractTableRows(body: string | null | undefined): string[][] {
+  if (!body) return [];
+  const lines = body.split(/\r?\n/);
+  const tableRowPattern = /^\s*\|.*\|\s*$/;
+  const rows: string[][] = [];
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    /* v8 ignore next -- defensive: the loop bound above guarantees lines[i] always exists here. */
+    const header = lines[i] ?? "";
+    /* v8 ignore next -- defensive: the loop bound above guarantees lines[i + 1] always exists here. */
+    const separator = lines[i + 1] ?? "";
+    if (!tableRowPattern.test(header) || !isMarkdownTableSeparatorRow(separator)) continue;
+    let j = i + 2;
+    /* v8 ignore next -- defensive: the `j < lines.length` guard above guarantees lines[j] always exists here. */
+    while (j < lines.length && tableRowPattern.test(lines[j] ?? "")) {
+      /* v8 ignore next -- defensive: same loop-bound guarantee as above. */
+      const line = lines[j] ?? "";
+      const cells = line
+        .trim()
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
+        .split("|")
+        .map((cell) => cell.trim());
+      rows.push(cells);
+      j += 1;
+    }
+  }
+  return rows;
+}
+
+/** One (viewport, theme) combination the matrix must cover. `theme: null` means the theme dimension isn't
+ *  required at all (a repo can require viewport coverage without color-mode coverage). */
+export type ScreenshotMatrixPair = { viewport: string; theme: string | null };
+
+/** The full set of (viewport, theme) pairs `config` requires, or `[]` when matrix mode is off. Matrix mode
+ *  turns on via `requireViewports` alone -- `requireThemes` with an empty `requireViewports` has no effect,
+ *  since there is no viewport to cross it against. */
+export function requiredScreenshotMatrixPairs(config: ScreenshotTableGateConfig): ScreenshotMatrixPair[] {
+  if (config.requireViewports.length === 0) return [];
+  if (config.requireThemes.length === 0) return config.requireViewports.map((viewport) => ({ viewport, theme: null }));
+  const pairs: ScreenshotMatrixPair[] = [];
+  for (const viewport of config.requireViewports) {
+    for (const theme of config.requireThemes) pairs.push({ viewport, theme });
+  }
+  return pairs;
+}
+
+/** True when some row's first cell (the row LABEL, e.g. "Desktop · Light") mentions both `pair.viewport` and
+ *  `pair.theme` (case-insensitive substring match -- tolerant of whatever separator character the contributor
+ *  used between them) AND that row has at least two image-bearing cells among the rest (before + after). */
+function rowSatisfiesMatrixPair(row: string[], pair: ScreenshotMatrixPair): boolean {
+  const label = (row[0] ?? "").toLowerCase();
+  if (!label.includes(pair.viewport.toLowerCase())) return false;
+  if (pair.theme !== null && !label.includes(pair.theme.toLowerCase())) return false;
+  const imageCells = row.slice(1).filter((cell) => IMAGE_CELL_PATTERN.test(cell)).length;
+  return imageCells >= 2;
+}
+
+/** The subset of `pairs` with NO satisfying row anywhere in `body`'s tables. Empty ⇒ full coverage. */
+export function missingScreenshotMatrixPairs(body: string | null | undefined, pairs: ScreenshotMatrixPair[]): ScreenshotMatrixPair[] {
+  if (pairs.length === 0) return [];
+  const rows = extractTableRows(body);
+  return pairs.filter((pair) => !rows.some((row) => rowSatisfiesMatrixPair(row, pair)));
+}
+
+function formatMatrixPair(pair: ScreenshotMatrixPair): string {
+  return pair.theme === null ? pair.viewport : `${pair.viewport} · ${pair.theme}`;
+}
+
+/** Build the rejection reason for a matrix violation, naming exactly which viewport/theme combinations are
+ *  still missing a real before+after pair -- so the contributor knows precisely what to add, not just that
+ *  "something" is missing. */
+export function buildScreenshotMatrixMessage(missing: ScreenshotMatrixPair[]): string {
+  const list = missing.map(formatMatrixPair).join(", ");
+  const dimensionLabel = missing.some((pair) => pair.theme !== null) ? "viewport × theme" : "viewport";
+  return (
+    "This pull request changes UI/visual code but its screenshot evidence is incomplete. Every required " +
+    `${dimensionLabel} combination needs its own before/after image pair in a labeled table row (e.g. ` +
+    '"Desktop · Light | before | after"). Still missing: ' +
+    `${list}.\n\nPlease resubmit with the remaining rows filled in.`
+  );
+}
+
 /** True when the PR is IN SCOPE for the gate: it carries one of `config.whenLabels` OR touches a path matching
  *  one of `config.whenPaths`. Both empty ⇒ every PR is in scope (an operator who enables the gate with no
  *  scoping at all wants it enforced everywhere). Only one non-empty list configured ⇒ that list alone decides
@@ -182,10 +278,16 @@ export type ScreenshotTableGateResult = {
 
 const NO_VIOLATION: ScreenshotTableGateResult = { violated: false, reason: null };
 
-/** PURE evaluator. Off (`enabled: false`) or out-of-scope (no configured label/path match) ⇒ no violation. In
- *  scope AND (no image-bearing table in the body OR an image pasted outside a table OR a committed image file
- *  under a scoped path), UNLESS `botCaptureSatisfied` ⇒ violated, with the configured (or default) templated
- *  message as the reason. */
+/** PURE evaluator. Off (`enabled: false`) or out-of-scope (no configured label/path match) ⇒ no violation.
+ *  `botCaptureSatisfied` ⇒ no violation regardless of mode (an automated capture is equivalent to a
+ *  hand-authored table, and the bot doesn't (yet) shoot a full viewport/theme matrix -- see #4535's scope note).
+ *
+ *  Two modes, chosen by whether `config.requireViewports` is non-empty (#4535):
+ *  - MATRIX mode: every required (viewport, theme) pair (`requiredScreenshotMatrixPairs`) must have a labeled
+ *    before/after row. Violated ⇒ the reason names exactly which pairs are still missing.
+ *  - PRESENCE mode (the original #2006 behavior, unchanged): in scope AND (no image-bearing table in the body
+ *    OR an image pasted outside a table OR a committed image file under a scoped path) ⇒ violated, with the
+ *    configured (or default) templated message as the reason. */
 export function evaluateScreenshotTableGate(input: {
   config: ScreenshotTableGateConfig;
   prBody: string | null | undefined;
@@ -203,6 +305,14 @@ export function evaluateScreenshotTableGate(input: {
   if (!config.enabled) return NO_VIOLATION;
   if (!isScreenshotTableGateInScope(config, input.prLabels, input.changedFiles)) return NO_VIOLATION;
   if (input.botCaptureSatisfied === true) return NO_VIOLATION;
+
+  const matrixPairs = requiredScreenshotMatrixPairs(config);
+  if (matrixPairs.length > 0) {
+    const missing = missingScreenshotMatrixPairs(input.prBody, matrixPairs);
+    if (missing.length === 0) return NO_VIOLATION;
+    return { violated: true, reason: config.message ?? buildScreenshotMatrixMessage(missing) };
+  }
+
   const hasTable = hasImageBearingMarkdownTable(input.prBody);
   const outsideTable = hasImageOutsideTable(input.prBody);
   const committedImage = hasCommittedImageFile(input.changedFiles, config.whenPaths);

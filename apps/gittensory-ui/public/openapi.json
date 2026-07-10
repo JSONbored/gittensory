@@ -9480,18 +9480,33 @@
               "action": {
                 "type": "string",
                 "enum": [
-                  "close"
+                  "close",
+                  "advisory"
                 ]
               },
               "message": {
                 "type": "string"
+              },
+              "requireViewports": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requireThemes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
               "enabled",
               "whenLabels",
               "whenPaths",
-              "action"
+              "action",
+              "requireViewports",
+              "requireThemes"
             ]
           },
           "createdAt": {

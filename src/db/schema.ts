@@ -184,6 +184,11 @@ export const repositorySettings = sqliteTable("repository_settings", {
   screenshotTableGateWhenPathsJson: text("screenshot_table_gate_when_paths_json").notNull().default("[]"),
   screenshotTableGateAction: text("screenshot_table_gate_action").notNull().default("close"),
   screenshotTableGateMessage: text("screenshot_table_gate_message"),
+  // Viewport x theme completeness matrix (#4535): empty (default) keeps today's presence-only check
+  // byte-identical; a non-empty requireViewports switches the evaluator into matrix mode, requiring a
+  // labeled before/after row per configured viewport (x theme, when requireThemes is also set).
+  screenshotTableGateRequireViewportsJson: text("screenshot_table_gate_require_viewports_json").notNull().default("[]"),
+  screenshotTableGateRequireThemesJson: text("screenshot_table_gate_require_themes_json").notNull().default("[]"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
 });

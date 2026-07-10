@@ -1881,6 +1881,8 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[],
     if (Array.isArray(rawGate.whenPaths)) sparseGate.whenPaths = validated.whenPaths;
     if (isScreenshotTableGateAction(rawGate.action)) sparseGate.action = validated.action;
     if (typeof rawGate.message === "string" && rawGate.message.trim().length > 0) sparseGate.message = validated.message;
+    if (Array.isArray(rawGate.requireViewports)) sparseGate.requireViewports = validated.requireViewports;
+    if (Array.isArray(rawGate.requireThemes)) sparseGate.requireThemes = validated.requireThemes;
     out.screenshotTableGate = sparseGate;
   } else if (r.screenshotTableGate !== undefined) {
     warnings.push(`Manifest "settings.screenshotTableGate" must be an object; ignoring it and keeping any existing policy.`);

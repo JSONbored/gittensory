@@ -570,7 +570,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
       mergeTrainMode: "off",
-      screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [] },
+      screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [], requireViewports: [], requireThemes: [] },
     };
   }
   return {
@@ -857,6 +857,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
       screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
       screenshotTableGateAction: resolved.screenshotTableGate.action,
+      screenshotTableGateRequireViewportsJson: jsonString(resolved.screenshotTableGate.requireViewports),
+      screenshotTableGateRequireThemesJson: jsonString(resolved.screenshotTableGate.requireThemes),
       screenshotTableGateMessage: resolved.screenshotTableGate.message ?? null,
       updatedAt: nowIso(),
     })
@@ -943,6 +945,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
         screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
         screenshotTableGateAction: resolved.screenshotTableGate.action,
+        screenshotTableGateRequireViewportsJson: jsonString(resolved.screenshotTableGate.requireViewports),
+        screenshotTableGateRequireThemesJson: jsonString(resolved.screenshotTableGate.requireThemes),
         screenshotTableGateMessage: resolved.screenshotTableGate.message ?? null,
         updatedAt: nowIso(),
       },
@@ -7316,6 +7320,8 @@ function parseScreenshotTableGateRow(row: typeof repositorySettings.$inferSelect
     whenLabels: parseJsonStringArray(row.screenshotTableGateWhenLabelsJson),
     whenPaths: parseJsonStringArray(row.screenshotTableGateWhenPathsJson),
     action: isScreenshotTableGateAction(row.screenshotTableGateAction) ? row.screenshotTableGateAction : DEFAULT_SCREENSHOT_TABLE_GATE.action,
+    requireViewports: parseJsonStringArray(row.screenshotTableGateRequireViewportsJson),
+    requireThemes: parseJsonStringArray(row.screenshotTableGateRequireThemesJson),
     ...(row.screenshotTableGateMessage ? { message: row.screenshotTableGateMessage } : {}),
   };
 }
