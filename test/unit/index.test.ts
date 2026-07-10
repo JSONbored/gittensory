@@ -234,6 +234,43 @@ describe("worker entrypoint", () => {
     expect(retries).toEqual([]);
   });
 
+  it("INVARIANT (#4505): pre-yields a reconcile-open-prs job while the shared GitHub REST budget is exhausted", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-24T12:00:00.000Z"));
+    const env = createTestEnv();
+    // reconcile-open-prs has no per-installation field, so it draws from the SAME shared (no-admissionKey)
+    // observation refresh-registry's own equivalent test above uses.
+    await recordGitHubRateLimitObservation(env, { repoFullName: "owner/repo", resource: "rest", path: "/x", statusCode: 200, limitValue: 5000, remaining: 5, resetAt: "2026-06-24T12:30:00.000Z", observedAt: "2026-06-24T12:00:00.000Z" });
+    const acked: string[] = [];
+    const retries: Array<{ delaySeconds?: number } | undefined> = [];
+    const requeued: Array<{ message: import("../../src/types").JobMessage; delaySeconds?: number }> = [];
+    env.JOBS = {
+      async send(message: import("../../src/types").JobMessage, options?: { delaySeconds?: number }) {
+        requeued.push({ message, ...(options?.delaySeconds === undefined ? {} : { delaySeconds: options.delaySeconds }) });
+      },
+    } as unknown as Queue;
+    const batch = {
+      messages: [
+        {
+          id: "reconcile-tick",
+          body: { type: "reconcile-open-prs", requestedBy: "schedule" },
+          ack: () => acked.push("reconcile-tick"),
+          retry: (options?: { delaySeconds?: number }) => retries.push(options),
+        },
+      ],
+    } as unknown as MessageBatch<import("../../src/types").JobMessage>;
+
+    await worker.queue(batch, env);
+
+    // Pre-yielded, not run: acked (not retried, preserving retry budget) and re-queued after the reset --
+    // BEFORE this fix, reconcile-open-prs was missing from GITHUB_BUDGET_BACKGROUND_TYPES, so this exhausted
+    // budget would have been silently ignored and runOpenPrReconciliation would have run immediately.
+    expect(acked).toEqual(["reconcile-tick"]);
+    expect(retries).toEqual([]);
+    expect(requeued).toEqual([{ message: { type: "reconcile-open-prs", requestedBy: "schedule" }, delaySeconds: 900 }]); // delayUntil clamps to [30, 900]
+    vi.useRealTimers();
+  });
+
   it("runs scheduled jobs through waitUntil", async () => {
     const env = createTestEnv();
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
