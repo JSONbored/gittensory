@@ -6,9 +6,13 @@ import { rankCandidateIssues } from "../../packages/gittensory-miner/lib/opportu
 const contentScript = readFileSync("apps/gittensory-miner-extension/content.js", "utf8");
 const backgroundScript = readFileSync("apps/gittensory-miner-extension/background.js", "utf8");
 const badgeScript = readFileSync("apps/gittensory-miner-extension/opportunity-badge.js", "utf8");
+const calibrationTrendScript = readFileSync("apps/gittensory-miner-extension/calibration-accuracy-trend.js", "utf8");
+const calibrationPanelScript = readFileSync("apps/gittensory-miner-extension/calibration-trend-panel.js", "utf8");
+const panelRegistryScript = readFileSync("apps/gittensory-miner-extension/panel-registry.js", "utf8");
 const optionsScript = readFileSync("apps/gittensory-miner-extension/options.js", "utf8");
 const manifest = JSON.parse(readFileSync("apps/gittensory-miner-extension/manifest.json", "utf8"));
 
+const CALIBRATION_SNAPSHOTS_STORAGE_KEY = "calibrationAccuracySnapshots";
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 
 function rawIssue(overrides: Record<string, unknown> = {}) {
@@ -36,12 +40,21 @@ afterEach(() => {
 describe("miner extension opportunity badge", () => {
   it("ships browser-loadable content scripts without ESM export syntax", () => {
     expect(badgeScript).not.toMatch(/\bexport\s+/);
+    expect(calibrationTrendScript).not.toMatch(/\bexport\s+/);
+    expect(calibrationPanelScript).not.toMatch(/\bexport\s+/);
+    expect(panelRegistryScript).not.toMatch(/\bexport\s+/);
   });
 
-  it("ships a Manifest V3 issue-page content script with badge assets", () => {
+  it("ships a Manifest V3 issue-page content script with badge and calibration panel assets", () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.content_scripts[0].matches).toEqual(["https://github.com/*/*/issues/*"]);
-    expect(manifest.content_scripts[0].js).toEqual(["opportunity-badge.js", "content.js"]);
+    expect(manifest.content_scripts[0].js).toEqual([
+      "opportunity-badge.js",
+      "calibration-accuracy-trend.js",
+      "calibration-trend-panel.js",
+      "panel-registry.js",
+      "content.js",
+    ]);
     expect(manifest.content_scripts[0].css).toEqual(["styles.css"]);
   });
 
@@ -135,6 +148,16 @@ describe("miner extension opportunity badge", () => {
     expect(payload.badge).toBeNull();
   });
 
+  it("loads a read-only calibration trend view from local snapshot storage", async () => {
+    const internals = loadBackgroundInternals({
+      snapshots: [{ observedAt: "2026-07-01T00:00:00.000Z", combinedAccuracy: 0.58 }],
+    });
+    const payload = await internals.loadCalibrationTrendView({});
+    expect(payload.readOnly).toBe(true);
+    expect(payload.view.pointCount).toBe(1);
+    expect(payload.view.status).toBe("insufficient_history");
+  });
+
   it("parses watched repos and ranked candidate JSON for options storage", () => {
     const internals = loadOptionsInternals();
     expect(internals.parseWatchedRepos("JSONbored/gittensory\nowner/repo")).toEqual([
@@ -158,6 +181,13 @@ function createMockContainer() {
     },
   };
   return container;
+}
+
+function loadExtensionSupportScripts(vmContext: Record<string, unknown>) {
+  new Script(badgeScript).runInContext(vmContext);
+  new Script(calibrationTrendScript).runInContext(vmContext);
+  new Script(calibrationPanelScript).runInContext(vmContext);
+  new Script(panelRegistryScript).runInContext(vmContext);
 }
 
 function loadBadgeInternals() {
@@ -189,6 +219,7 @@ function loadContentInternals() {
   };
   context.globalThis = context;
   const vmContext = createContext(context);
+  loadExtensionSupportScripts(vmContext);
   new Script(contentScript).runInContext(vmContext);
   return vmContext.__gittensoryMinerContentInternals as {
     matchGitHubIssueTarget: (
@@ -201,6 +232,7 @@ function loadContentInternals() {
 function loadBackgroundInternals({
   watchedRepos = [] as string[],
   rankedCandidates = [] as unknown[],
+  snapshots = [] as unknown[],
 } = {}) {
   const context: Record<string, unknown> = {
     __GITTENSORY_MINER_EXTENSION_TEST__: true,
@@ -210,7 +242,12 @@ function loadBackgroundInternals({
           get: async () => ({ watchedRepos, discoveryIndexUrl: "" }),
         },
         local: {
-          get: async () => ({ rankedCandidates }),
+          get: async (keys: Record<string, unknown>) => {
+            if (CALIBRATION_SNAPSHOTS_STORAGE_KEY in keys) {
+              return { [CALIBRATION_SNAPSHOTS_STORAGE_KEY]: snapshots };
+            }
+            return { rankedCandidates };
+          },
         },
       },
       runtime: { onMessage: { addListener: () => {} } },
@@ -218,8 +255,8 @@ function loadBackgroundInternals({
   };
   context.globalThis = context;
   const vmContext = createContext(context);
-  new Script(badgeScript).runInContext(vmContext);
-  const backgroundForTest = backgroundScript.replace(/^import\s+["'][^"']+["'];\s*/m, "");
+  loadExtensionSupportScripts(vmContext);
+  const backgroundForTest = backgroundScript.replace(/^import\s+["'][^"']+["'];\s*/gm, "");
   new Script(backgroundForTest).runInContext(vmContext);
   return vmContext.__gittensoryMinerBackgroundInternals as {
     loadIssueOpportunityContext: (message: {
@@ -229,6 +266,10 @@ function loadBackgroundInternals({
     }) => Promise<{
       status: string;
       badge: { tier: string; why: string } | null;
+    }>;
+    loadCalibrationTrendView: (message: Record<string, unknown>) => Promise<{
+      readOnly: boolean;
+      view: { pointCount: number; status: string };
     }>;
   };
 }

@@ -85,6 +85,15 @@ export {
   type CalibrationDashboardView,
 } from "./calibration-dashboard.js";
 export {
+  buildCalibrationAccuracyTrendView,
+  CALIBRATION_ACCURACY_TREND_DEFAULT_WINDOW_DAYS,
+  type CalibrationAccuracySnapshot,
+  type CalibrationAccuracyTrendDirection,
+  type CalibrationAccuracyTrendPoint,
+  type CalibrationAccuracyTrendStatus,
+  type CalibrationAccuracyTrendView,
+} from "./calibration-accuracy-trend.js";
+export {
   computeFindingSeverityCompositeCalibrationScore,
   ingestFindingSeverityCalibrationSignals,
   renderFindingSeverityCalibrationAuditMarkdown,

@@ -9,6 +9,7 @@ import { runManagePoll } from "../lib/manage-poll.js";
 import { runManageStatus } from "../lib/manage-status.js";
 import { runPlanCli } from "../lib/plan-store-cli.js";
 import { runClaimCli } from "../lib/claim-ledger-cli.js";
+import { runCalibrationCli } from "../lib/calibration-cli.js";
 import { runQueueCli } from "../lib/portfolio-queue-cli.js";
 import { runStateCli } from "../lib/run-state-cli.js";
 import { runInit } from "../lib/laptop-init.js";
@@ -43,6 +44,10 @@ if (cliArgs[0] === "manage" && cliArgs[1] === "status") {
 
 if (cliArgs[0] === "queue") {
   process.exit(runQueueCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "calibration") {
+  process.exit(runCalibrationCli(cliArgs[1], cliArgs.slice(2)));
 }
 
 if (cliArgs[0] === "claim") {

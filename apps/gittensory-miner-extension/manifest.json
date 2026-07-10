@@ -12,7 +12,13 @@
   "content_scripts": [
     {
       "matches": ["https://github.com/*/*/issues/*"],
-      "js": ["opportunity-badge.js", "content.js"],
+      "js": [
+        "opportunity-badge.js",
+        "calibration-accuracy-trend.js",
+        "calibration-trend-panel.js",
+        "panel-registry.js",
+        "content.js"
+      ],
       "css": ["styles.css"],
       "run_at": "document_idle"
     }

@@ -24,6 +24,7 @@ export function printHelp(input) {
       "  gittensory-miner queue list [--repo <owner/repo>] [--json]    List portfolio backlog rows",
       "  gittensory-miner queue next [--json]                          Claim the highest-priority queued item",
       "  gittensory-miner queue done <owner/repo> <identifier> [--json]",
+      "  gittensory-miner calibration trend [--json]                  Read-only calibration accuracy trend",
       "  gittensory-miner claim claim <owner/repo> <issue#> [--note <text>] [--json]",
       "  gittensory-miner claim release <owner/repo> <issue#> [--json]",
       "  gittensory-miner claim list [--repo <owner/repo>] [--status active|released|expired] [--json]",
