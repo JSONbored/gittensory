@@ -296,7 +296,7 @@ import {
   type PlannedAgentAction,
 } from "../settings/agent-actions";
 import { isAutoCloseExempt } from "../settings/auto-close-exempt";
-import { resolveGlobalContributorOpenItemCap } from "../settings/global-contributor-cap";
+import { resolveGlobalContributorOpenItemCap, resolveGlobalContributorOpenItemCapForMiner } from "../settings/global-contributor-cap";
 import { detectMigrationCollisions, extractMigrationNumber, KNOWN_MIGRATION_DUPLICATES } from "../db/migration-collisions";
 import { listMigrationFilenamesAtRef } from "../github/migration-tree";
 import {
@@ -3054,12 +3054,27 @@ async function runAgentMaintenancePlanAndExecute(
 
   // Install-wide contributor open-item cap (#2562, anti-abuse): IN ADDITION TO the per-repo cap above, not
   // instead of it -- only evaluated when the per-repo cap didn't already match (short-circuit: no need for a
-  // second cross-repo DB read once this PR is already being closed). Off by default (resolveGlobalContributorOpenItemCap
-  // returns null when GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP is unset/invalid) ⇒ zero extra queries, zero behavior
-  // change for an install that hasn't opted in. Reuses the shared autoCloseExemptLogins list (#2463) so a
-  // maintainer-named login is exempt here exactly like the per-repo caps and review-nag cooldown.
-  if (contributorCapMatch === undefined && pr.authorLogin && !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) {
-    const globalCap = resolveGlobalContributorOpenItemCap(env);
+  // second cross-repo DB read once this PR is already being closed). Defaults to a real cap even when unset
+  // (#4511) -- a CONFIRMED official Gittensor miner gets its own, higher fleet-appropriate default instead of
+  // either "no cap" or the plain human default, since a legitimate fleet spread across many repos in one
+  // install is expected to run more concurrent open items than a single human contributor. Reuses the shared
+  // autoCloseExemptLogins list (#2463) so a maintainer-named login is exempt here exactly like the per-repo
+  // caps and review-nag cooldown.
+  const prGlobalCapForHuman = resolveGlobalContributorOpenItemCap(env);
+  const prGlobalCapForMiner = resolveGlobalContributorOpenItemCapForMiner(env);
+  if (
+    contributorCapMatch === undefined &&
+    pr.authorLogin &&
+    (prGlobalCapForHuman !== null || prGlobalCapForMiner !== null) &&
+    !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)
+  ) {
+    // Deferred until we know at least one of the two resolvers is actually active (#4511): the identity
+    // lookup below is cached but still a DB/network round trip, and both resolvers above are plain env reads.
+    const officialMiner = await getCachedOfficialMinerDetection(env, pr.authorLogin, {
+      targetKey: `${repoFullName}#${pr.number}`,
+      deliveryId,
+    });
+    const globalCap = officialMiner.status === "confirmed" ? prGlobalCapForMiner : prGlobalCapForHuman;
     if (globalCap !== null) {
       const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, pr.authorLogin, {
         repoFullName,
@@ -5406,15 +5421,19 @@ async function verifiedGlobalOpenItemCount(
  */
 async function maybeCloseIssueOverContributorCap(
   env: Env,
-  args: { installationId: number; repoFullName: string; issue: IssueRecord; settings: RepositorySettings },
+  args: { installationId: number; repoFullName: string; issue: IssueRecord; settings: RepositorySettings; deliveryId: string },
 ): Promise<void> {
-  const { installationId, repoFullName, issue, settings } = args;
+  const { installationId, repoFullName, issue, settings, deliveryId } = args;
   const cap = settings.contributorOpenIssueCap;
   const authorLogin = issue.authorLogin;
   // Install-wide cap (#2562) is checked IN ADDITION TO the per-repo cap, so this function must still run when
-  // ONLY the global cap is configured (the per-repo cap stays optional/off, its usual default).
-  const globalCap = resolveGlobalContributorOpenItemCap(env);
-  if ((typeof cap !== "number" && globalCap === null) || !authorLogin) return;
+  // ONLY a global cap is configured (the per-repo cap stays optional/off, its usual default). Both global
+  // resolvers now default to a real number even when unset (#4511) -- a CONFIRMED official Gittensor miner
+  // gets its own fleet-appropriate cap instead of the human one, checked separately below once we know at
+  // least one of the two is active (both resolvers here are plain env reads; the identity check isn't).
+  const globalCapForHuman = resolveGlobalContributorOpenItemCap(env);
+  const globalCapForMiner = resolveGlobalContributorOpenItemCapForMiner(env);
+  if ((typeof cap !== "number" && globalCapForHuman === null && globalCapForMiner === null) || !authorLogin) return;
 
   const repoOwner = repoOwnerLoginFromFullName(repoFullName);
   const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
@@ -5429,7 +5448,13 @@ async function maybeCloseIssueOverContributorCap(
   // Install-wide check first (#2562): reuses the shared autoCloseExemptLogins list, same as the PR path.
   // verifiedGlobalOpenItemCount live-verifies every OTHER counted item before trusting it toward an
   // irreversible close (#2562 gate-review follow-up), mirroring the per-repo cap's own sibling live-verify.
-  if (globalCap !== null && !isAutoCloseExempt(authorLogin, settings.autoCloseExemptLogins)) {
+  if ((globalCapForHuman !== null || globalCapForMiner !== null) && !isAutoCloseExempt(authorLogin, settings.autoCloseExemptLogins)) {
+    const officialMiner = await getCachedOfficialMinerDetection(env, authorLogin, {
+      targetKey: `${repoFullName}#${issue.number}`,
+      deliveryId,
+    });
+    const globalCap = officialMiner.status === "confirmed" ? globalCapForMiner : globalCapForHuman;
+    if (globalCap === null) return;
     const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, authorLogin, {
       repoFullName,
       number: issue.number,
@@ -6396,6 +6421,7 @@ async function processGitHubWebhook(
           repoFullName: payload.repository.full_name,
           issue,
           settings: issueSettings,
+          deliveryId,
         }).catch((error) => {
           /* v8 ignore next -- best-effort: an issue-cap enforcement failure is logged, never surfaced to the webhook. */
           console.error(
