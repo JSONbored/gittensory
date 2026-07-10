@@ -245,6 +245,7 @@ describe("runVisualVisionForAdvisory", () => {
     // #4513: the reputation/miner-identity check at the top of runVisualVisionForAdvisory runs regardless of
     // the BYOK cap outcome -- only the shot fetches and the provider call are gated by the cap.
     const fetchMock = stubMinerCheckOnly();
+    vi.stubGlobal("fetch", fetchMock);
     const adv = findingsHolder();
     await runVisualVisionForAdvisory(env, {
       mode: "live",
@@ -470,6 +471,30 @@ describe("runVisualVisionForAdvisory", () => {
       repoFullName,
       pr,
       author: "alice",
+      confirmedContributor: true,
+      settings: byokSettings(),
+      advisory: adv,
+      routes: [route({ path: "/app", diffUrl: "https://x/gittensory/shot?key=diff", beforeUrl: "https://x/gittensory/shot?key=before", afterUrl: "https://x/gittensory/shot?key=after" })],
+    });
+    expect(adv.findings).toEqual([]);
+  });
+
+  it("adds no finding when the provider returns 200 with no usable text (distinct from an http_error failure)", async () => {
+    const env = byokEnv();
+    await upsertRepositoryAiKey(env, { repoFullName, provider: "anthropic", key: "sk-ant-vision-key", model: null });
+    // An empty string is a genuine 2xx response, unlike stubShotsAndProvider(null)'s 500 -- callAiProvider
+    // returns { text: "", failure: undefined } here (no "http_error"), exercising the "no usable output"
+    // fallback in recordVisualVisionUsage's detail message rather than the provider-failure one. Also uses a
+    // null author (ghost/deleted account, `args.author ?? undefined` short-circuits the reputation/miner
+    // check to neutral with no fetch) to exercise recordVisualVisionUsage's own `actor: args.author ?? null`
+    // fallback alongside it.
+    stubShotsAndProvider("");
+    const adv = findingsHolder();
+    await runVisualVisionForAdvisory(env, {
+      mode: "live",
+      repoFullName,
+      pr,
+      author: null,
       confirmedContributor: true,
       settings: byokSettings(),
       advisory: adv,

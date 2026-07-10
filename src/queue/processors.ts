@@ -8564,6 +8564,31 @@ export async function runVisualVisionForAdvisory(
     // false case: if neither is set here, the gate itself would already have returned run:false above.
     /* v8 ignore next 2 -- see comment above */
     if (!visionProviderKey && !selfHostVisionAvailable) return;
+    // BYOK (a maintainer's own anthropic/openai key) takes priority when both are configured -- matches every
+    // other dual-path AI call site's convention (BYOK bills the maintainer's own account, so it's preferred
+    // over the shared/free local resource when the operator has explicitly set one up). Only the BYOK branch
+    // is metered/capped below -- self-host vision consumes the operator's own resources, already gated
+    // separately by selfHostVisionAllowed above, and was never part of the BYOK daily-spend surface. The cap
+    // check runs BEFORE the shot-fetching loop so a repo that's already over budget never even pays for the
+    // screenshot fetches, not just the provider call.
+    if (visionProviderKey) {
+      const byokDailyLimit = clampNumber(
+        Number(env.AI_BYOK_DAILY_REPO_LIMIT || DEFAULT_BYOK_DAILY_REPO_LIMIT),
+        0,
+        10_000,
+      );
+      const byokUsed = await countByokAiEventsForRepoSince(env, args.repoFullName, utcDayStartIso());
+      if (byokUsed >= byokDailyLimit) {
+        await recordVisualVisionUsage(
+          env,
+          args,
+          visionProviderKey,
+          "quota_exceeded",
+          "BYOK daily repo limit reached",
+        );
+        return;
+      }
+    }
     const images: AiContentBlock[] = [];
     for (const route of visionGate.routes) {
       // Show the model the viewport that actually crossed the pixel-diff threshold — a route can qualify via
@@ -8582,30 +8607,9 @@ export async function runVisualVisionForAdvisory(
       if (afterBlock) images.push(afterBlock);
     }
     if (images.length === 0) return;
-    // BYOK (a maintainer's own anthropic/openai key) takes priority when both are configured -- matches
-    // every other dual-path AI call site's convention (BYOK bills the maintainer's own account, so it's
-    // preferred over the shared/free local resource when the operator has explicitly set one up). Only the
-    // BYOK branch is metered/capped below -- self-host vision consumes the operator's own resources, already
-    // gated separately by selfHostVisionAllowed above, and was never part of the BYOK daily-spend surface.
     let visionText: string | null;
     let visionUsage: AiReviewActualUsage | undefined;
     if (visionProviderKey) {
-      const byokDailyLimit = clampNumber(
-        Number(env.AI_BYOK_DAILY_REPO_LIMIT || DEFAULT_BYOK_DAILY_REPO_LIMIT),
-        0,
-        10_000,
-      );
-      const byokUsed = await countByokAiEventsForRepoSince(env, args.repoFullName, utcDayStartIso());
-      if (byokUsed >= byokDailyLimit) {
-        await recordVisualVisionUsage(
-          env,
-          args,
-          visionProviderKey,
-          "quota_exceeded",
-          "BYOK daily repo limit reached",
-        );
-        return;
-      }
       const visionResponse = await callAiProvider(visionProviderKey, VISUAL_VISION_SYSTEM_PROMPT, buildVisualVisionUserPrompt(visionGate.routes), 600, images);
       visionText = visionResponse.text;
       visionUsage = visionResponse.usage;
