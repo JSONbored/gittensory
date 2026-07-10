@@ -567,7 +567,16 @@ import {
 } from "../review/linked-issue-hard-rules";
 import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guardrail-config";
 import { resolveUnlinkedIssueMatchDisposition } from "../review/unlinked-issue-guardrail";
-import { DEFAULT_SCREENSHOT_TABLE_GATE, evaluateScreenshotTableGate } from "../review/screenshot-table-gate";
+import { DEFAULT_SCREENSHOT_TABLE_GATE, evaluateScreenshotTableGate, extractTableRowImageUrls } from "../review/screenshot-table-gate";
+import { isSafeHttpUrl } from "../review/content-lane/safe-url";
+import {
+  buildScreenshotTableVisionFindings,
+  buildScreenshotTableVisionUserPrompt,
+  evaluateScreenshotTableVisionGate,
+  parseScreenshotTableVisionResponse,
+  SCREENSHOT_TABLE_VISION_FINDING_CODE,
+  SCREENSHOT_TABLE_VISION_SYSTEM_PROMPT,
+} from "../review/visual/screenshot-table-vision";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import { isRecapEnabled, resolveMaintainerRecapManifestOverride, runMaintainerRecapJob } from "../review/maintainer-recap-wire";
 import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
@@ -8748,6 +8757,147 @@ async function recordVisualVisionUsage(
   });
 }
 
+async function recordScreenshotTableVisionUsage(
+  env: Env,
+  args: { repoFullName: string; pr: { number: number }; author: string | null },
+  providerKey: { provider: string },
+  status: string,
+  detail: string,
+  usage?: AiReviewActualUsage | undefined,
+): Promise<void> {
+  await recordAiUsageEvent(env, {
+    feature: "screenshot_table_vision",
+    actor: args.author ?? null,
+    route: "github_app.screenshot_table_vision",
+    model: `byok:${providerKey.provider}`,
+    status,
+    estimatedNeurons: 0,
+    provider: usage?.provider,
+    effort: usage?.effort,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    totalTokens: usage?.totalTokens,
+    costUsd: usage?.costUsd,
+    detail,
+    metadata: { repoFullName: args.repoFullName, pullNumber: args.pr.number },
+  });
+}
+
+/**
+ * Vision-verify a contributor-pasted screenshot-table's images (#4366, part of #4325): screenshot-table-gate.ts's
+ * DETERMINISTIC check only verifies markdown STRUCTURE (a table exists with image-bearing cells), so a
+ * contributor can satisfy it with two identical images or a screenshot unrelated to the stated change. This
+ * adds that missing check on top, in the SAME two stages screenshot-table-vision.ts's header documents:
+ * a free byte-identical pre-check (no AI) here, then a bounded AI-vision call for genuinely different pairs.
+ * Gated on `settings.screenshotTableGate?.enabled` — this repo must already have opted into the deterministic
+ * gate at all; there is no separate dedicated toggle, mirroring how #4111's sibling visual-vision check has no
+ * config field of its own either (gated by AI_VISION/BYOK availability + the existing reputation/aiReviewAllAuthors
+ * settings). STRICTLY ADVISORY, mirrors `runVisualVisionForAdvisory`'s exact shape (resolve reputation + BYOK,
+ * gate, call, parse, mutate `args.advisory.findings`) so it can be exercised directly in tests. Never throws:
+ * any failure (a broken image fetch, a provider error, an unparseable response) degrades to "no finding added".
+ */
+export async function runScreenshotTableVisionForAdvisory(
+  env: Env,
+  args: {
+    mode: AgentActionMode;
+    repoFullName: string;
+    pr: { number: number };
+    prBody: string | null | undefined;
+    prTitle: string | null | undefined;
+    author: string | null;
+    confirmedContributor: boolean;
+    settings: RepositorySettings;
+    advisory: { findings: AdvisoryFinding[] };
+  },
+): Promise<void> {
+  if (args.mode === "paused" || !args.settings.screenshotTableGate?.enabled) return;
+  const rawPairs = extractTableRowImageUrls(args.prBody).filter((pair) => pair.every((url) => isSafeHttpUrl(url)));
+  if (rawPairs.length === 0) return;
+  try {
+    const fetchedPairs: Array<{ before: AiContentBlock; after: AiContentBlock }> = [];
+    let identicalPairCount = 0;
+    for (const [beforeUrl, afterUrl] of rawPairs.slice(0, 2)) {
+      /* v8 ignore next -- defensive: rawPairs only contains rows with >=2 urls, so both slots exist here. */
+      if (!beforeUrl || !afterUrl) continue;
+      const [beforeBlock, afterBlock] = await Promise.all([
+        fetchShotContentBlock(beforeUrl),
+        fetchShotContentBlock(afterUrl),
+      ]);
+      if (!beforeBlock || !afterBlock) continue;
+      /* v8 ignore next -- defensive: fetchShotContentBlock's only success return shape is {type:"image",...}. */
+      if (beforeBlock.type !== "image" || afterBlock.type !== "image") continue;
+      if (beforeBlock.data === afterBlock.data) {
+        identicalPairCount += 1;
+        continue;
+      }
+      fetchedPairs.push({ before: beforeBlock, after: afterBlock });
+    }
+    const findings: AdvisoryFinding[] = Array.from({ length: identicalPairCount }, () => ({
+      code: SCREENSHOT_TABLE_VISION_FINDING_CODE,
+      severity: "warning" as const,
+      title: "Possible screenshot-table issue: identical images",
+      detail: "The before and after images for this row are byte-identical — this doesn't look like real before/after evidence.",
+      action: "Advisory only — verify the screenshot-table images against the stated change before deciding.",
+    }));
+    if (fetchedPairs.length > 0) {
+      const reputation = await getEffectiveSubmitterReputation(env, { repoFullName: args.repoFullName, submitter: args.author ?? undefined });
+      const storedKey =
+        args.confirmedContributor && args.settings.aiReviewByok
+          ? await getDecryptedRepositoryAiKey(env, args.repoFullName)
+          : null;
+      const providerKey =
+        storedKey && (!args.settings.aiReviewProvider || args.settings.aiReviewProvider === storedKey.provider)
+          ? { provider: storedKey.provider, key: storedKey.key, model: args.settings.aiReviewModel ?? storedKey.model }
+          : null;
+      const selfHostVisionAllowed = args.confirmedContributor || args.settings.aiReviewAllAuthors;
+      const selfHostVisionAvailable = selfHostVisionAllowed && Boolean(env.AI_VISION);
+      const gate = evaluateScreenshotTableVisionGate({
+        imagePairCount: fetchedPairs.length,
+        reputationSignal: reputation.signal,
+        providerKey,
+        selfHostVisionAvailable,
+      });
+      if (gate.run) {
+        const images: AiContentBlock[] = fetchedPairs
+          .slice(0, gate.pairCount)
+          .flatMap((pair) => [pair.before, pair.after]);
+        const userPrompt = buildScreenshotTableVisionUserPrompt(args.prTitle, gate.pairCount);
+        let visionText: string | null;
+        let visionUsage: AiReviewActualUsage | undefined;
+        if (providerKey) {
+          const response = await callAiProvider(providerKey, SCREENSHOT_TABLE_VISION_SYSTEM_PROMPT, userPrompt, 400, images);
+          visionText = response.text;
+          visionUsage = response.usage;
+          await recordScreenshotTableVisionUsage(
+            env,
+            args,
+            providerKey,
+            visionText ? "ok" : response.failure ? "error" : "ok",
+            visionText ? `advisory findings check (${gate.pairCount} pairs)` : response.failure ? `provider failure: ${String(response.failure)}` : "no usable output",
+            visionUsage,
+          );
+        } else {
+          visionText = await runSelfHostVisualVision(env, SCREENSHOT_TABLE_VISION_SYSTEM_PROMPT, userPrompt, images);
+        }
+        if (visionText) {
+          const parsed = parseScreenshotTableVisionResponse(visionText, gate.pairCount);
+          findings.push(...buildScreenshotTableVisionFindings(parsed));
+        }
+      }
+    }
+    if (findings.length > 0) args.advisory.findings.push(...findings);
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        event: "screenshot_table_vision_error",
+        repoFullName: args.repoFullName,
+        pull: args.pr.number,
+        message: errorMessage(error).slice(0, 200),
+      }),
+    );
+  }
+}
+
 /**
  * Resolve `manifest_missing_tests`' `passedValidationCount` signal (gate-review finding, #4719): a PR-body
  * validation-note match (`hasValidationNote`) is checked FIRST since it's free; only when that misses, AND
@@ -11322,6 +11472,20 @@ async function maybePublishPrPublicSurface(
         settings,
         advisory,
         routes: beforeAfter,
+      });
+      // Vision-verify a contributor-pasted screenshot-table (#4366 wiring) — see runScreenshotTableVisionForAdvisory's
+      // own doc comment. Independent of the bot-capture vision block above: this checks the CONTRIBUTOR's own
+      // pasted table images, not the bot's rendered before/after pair.
+      await runScreenshotTableVisionForAdvisory(env, {
+        mode,
+        repoFullName,
+        pr,
+        prBody: pr.body,
+        prTitle: pr.title,
+        author,
+        confirmedContributor,
+        settings,
+        advisory,
       });
       // review.memory (#2181, apply slice of #1964): before the unified comment renders, suppress/demote
       // advisory (non-blocking) findings a maintainer already dismissed as false positives for this repo. ONLY
