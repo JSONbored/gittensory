@@ -122,6 +122,7 @@ describe("private-beta auth and rate limiting", () => {
     expect(routeClassForPath("/v1/repos/acme/widgets/ai-key")).toBe("expensive");
     expect(routeClassForPath("/v1/repos/acme/widgets/ai-review")).toBe("expensive");
     expect(routeClassForPath("/v1/repos/acme/widgets/linear-key")).toBe("expensive");
+    expect(routeClassForPath("/v1/repos/acme/widgets/linear-workspace-probe")).toBe("expensive");
     expect(routeClassForPath("/v1/repos")).toBe("normal");
   });
 

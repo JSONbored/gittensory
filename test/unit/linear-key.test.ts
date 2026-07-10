@@ -278,3 +278,45 @@ describe("maintainer Linear key route (session/API-token scoped, #3186)", () => 
     expect(await del.json()).toMatchObject({ error: "insufficient_repo_permission" });
   });
 });
+
+describe("maintainer Linear workspace probe route (#3186)", () => {
+  const REPO = "acme/widgets";
+  const PROBE_PATH = `/v1/repos/${REPO}/linear-workspace-probe`;
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  function apiHeaders(env: Env): Record<string, string> {
+    return { authorization: `Bearer ${env.GITTENSORY_API_TOKEN}`, "content-type": "application/json" };
+  }
+
+  it("returns unreachable when no Linear key is configured", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    const res = await app.request(PROBE_PATH, { headers: apiHeaders(env) }, env);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ reachable: false, openProjectCount: 0, openMilestoneCount: 0 });
+  });
+
+  it("returns reachable counts when the stored key can list Linear projects and milestones", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositoryLinearKey(env, { repoFullName: REPO, key: "lin_api_route-key-7777" });
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+      if (body.query.includes("projectMilestones")) {
+        return Response.json({ data: { projectMilestones: { nodes: [{ id: "mile-1", name: "M3" }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+      }
+      return Response.json({ data: { projects: { nodes: [{ id: "proj-1", name: "Roadmap" }], pageInfo: { hasNextPage: false, endCursor: null } } } });
+    });
+    const res = await app.request(PROBE_PATH, { headers: apiHeaders(env) }, env);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ reachable: true, openProjectCount: 1, openMilestoneCount: 1 });
+  });
+
+  it("rejects unauthenticated access", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    const res = await app.request(PROBE_PATH, {}, env);
+    expect(res.status).toBe(401);
+  });
+});

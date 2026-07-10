@@ -119,8 +119,9 @@ export function routeClassForPath(path: string): RateLimitClass {
     path === "/v1/opportunities/find" ||
     path === "/v1/issue-rag/retrieve" ||
     // Maintainer BYOK config: POST /ai-key and /linear-key both run PBKDF2 (100k iters) + an encrypted D1
+    // upsert; GET /linear-workspace-probe also calls the external Linear API.
     // upsert per request.
-    /\/(?:ai-(?:key|review)|linear-key)$/.test(path) ||
+    /\/(?:ai-(?:key|review)|linear-(?:key|workspace-probe))$/.test(path) ||
     /^\/v1\/installations\/[^/]+\/repair\/refresh$/.test(path) ||
     path.includes("/upstream/") ||
     path.includes("/internal/jobs/generate-signal-snapshots") ||

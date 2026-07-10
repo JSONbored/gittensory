@@ -277,7 +277,7 @@ export class GitHubCompositeProjectTrackerAdapter implements ProjectTrackerAdapt
 
 /**
  * Factory for the configured project/milestone tracker backend (#3186). The orchestration layer
- * ({@link resolveTrackerMatches}) still prefers {@link findLinearNativeLink} before fuzzy matching when the
+ * ({@link resolveProjectTrackerMatches}) still prefers {@link findLinearNativeLink} before fuzzy matching when the
  * backend is `"linear"`, but every list/attach surface routes through this selector.
  */
 export function createProjectTrackerAdapter(backend: ProjectMilestoneMatchBackendInput): ProjectTrackerAdapter {
@@ -377,26 +377,23 @@ type ProjectMilestoneMatchBackendInput = "github" | "linear" | null | undefined;
  * projects when no native link is found for either project or milestone. The GitHub path (default, #3183/#3184)
  * has no native-link concept -- it always fuzzy-matches both open Milestones and open Projects v2.
  */
-async function resolveTrackerMatches(ctx: ProjectTrackerContext, backend: ProjectMilestoneMatchBackendInput, prTitle: string, prBody: string | null | undefined, prUrl: string): Promise<ProjectTrackerMatches> {
+export async function resolveProjectTrackerMatches(
+  ctx: ProjectTrackerContext,
+  backend: ProjectMilestoneMatchBackendInput,
+  prTitle: string,
+  prBody: string | null | undefined,
+  prUrl: string,
+): Promise<ProjectTrackerMatches> {
   if (backend === "linear") {
     const nativeLink = await findLinearNativeLink(ctx, prUrl);
     if (nativeLink.project || nativeLink.milestone) return nativeLink;
-    const linearAdapter = new LinearAdapter();
-    // Fail-open, independently, for each tracker type (mirrors the GitHub path below): a transient projects
-    // lookup must never suppress a valid project-milestone match, and vice versa.
-    const [projects, milestones] = await Promise.all([
-      linearAdapter.listOpenProjects(ctx).catch(() => []),
-      linearAdapter.listOpenMilestones(ctx).catch(() => []),
-    ]);
-    return {
-      milestone: matchOpenTrackerItems(prTitle, prBody, milestones),
-      project: matchOpenTrackerItems(prTitle, prBody, projects),
-    };
   }
-  const githubAdapter = new GitHubCompositeProjectTrackerAdapter();
-  const [milestones, projects] = await Promise.all([
-    githubAdapter.listOpenMilestones(ctx).catch(() => []),
-    githubAdapter.listOpenProjects(ctx).catch(() => []),
+  const adapter = createProjectTrackerAdapter(backend);
+  // Fail-open, independently, for each tracker type: a transient projects lookup must never suppress a valid
+  // project-milestone match, and vice versa -- either lookup degrading to an empty list is a missed suggestion.
+  const [projects, milestones] = await Promise.all([
+    adapter.listOpenProjects(ctx).catch(() => []),
+    adapter.listOpenMilestones(ctx).catch(() => []),
   ]);
   return {
     milestone: matchOpenTrackerItems(prTitle, prBody, milestones),
@@ -419,7 +416,7 @@ export async function maybeSuggestProjectOrMilestoneMatch(
   backend: ProjectMilestoneMatchBackendInput,
   prUrl: string,
 ): Promise<{ suggested: boolean }> {
-  const matches = await resolveTrackerMatches(ctx, backend, prTitle, prBody, prUrl);
+  const matches = await resolveProjectTrackerMatches(ctx, backend, prTitle, prBody, prUrl);
   if (!matches.milestone && !matches.project) return { suggested: false };
 
   const { owner, repo } = parseRepoFullName(ctx.repoFullName);

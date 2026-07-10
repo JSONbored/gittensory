@@ -10,6 +10,7 @@ import {
   maybeSuggestProjectOrMilestoneMatch,
   matchOpenTrackerItems,
   resolveProjectV2Fields,
+  resolveProjectTrackerMatches,
   type ProjectTrackerRef,
 } from "../../src/integrations/project-tracker-adapter";
 import { LinearAdapter } from "../../src/integrations/linear-adapter";
@@ -478,6 +479,87 @@ describe("resolveProjectV2Fields (#3184)", () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() });
     const fields = await resolveProjectV2Fields({ env, installationId: 123, repoFullName: "some-org/gittensory" }, "PVT_missing");
     expect(fields).toEqual([]);
+  });
+});
+
+describe("resolveProjectTrackerMatches production wiring (#3186)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("routes github fuzzy lookups through createProjectTrackerAdapter (GitHubCompositeProjectTrackerAdapter)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) return Response.json([]);
+      if (url.endsWith("/graphql")) return Response.json(noOpenProjectsGraphQlBody());
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() });
+    const adapter = createProjectTrackerAdapter("github");
+    expect(adapter).toBeInstanceOf(GitHubCompositeProjectTrackerAdapter);
+    const matches = await resolveProjectTrackerMatches(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      "github",
+      "unrelated typo fix",
+      null,
+      "https://github.com/JSONbored/gittensory/pull/4",
+    );
+    expect(matches).toEqual({ milestone: null, project: null });
+  });
+
+  it("routes linear fuzzy lookups through createProjectTrackerAdapter (LinearAdapter) after native-link miss", async () => {
+    const env = suggestTestEnv();
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    const adapter = createProjectTrackerAdapter("linear");
+    expect(adapter).toBeInstanceOf(LinearAdapter);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) return Response.json({ data: { attachmentsForURL: { nodes: [] } } });
+        if (body.query.includes("projectMilestones")) {
+          return Response.json({ data: { projectMilestones: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+        }
+        return Response.json({ data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const matches = await resolveProjectTrackerMatches(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      "linear",
+      "unrelated typo fix",
+      null,
+      PR_URL,
+    );
+    expect(matches).toEqual({ milestone: null, project: null });
+  });
+
+  it("short-circuits on a linear native link without calling createProjectTrackerAdapter list methods", async () => {
+    const env = suggestTestEnv();
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    let projectsListed = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) {
+          return Response.json({ data: { attachmentsForURL: { nodes: [{ issue: { project: { id: "proj-1", name: "Roadmap" }, projectMilestone: null } }] } } });
+        }
+        projectsListed = true;
+        return Response.json({ data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const matches = await resolveProjectTrackerMatches(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      "linear",
+      "any title",
+      null,
+      PR_URL,
+    );
+    expect(matches.project?.source).toBe("native");
+    expect(projectsListed).toBe(false);
   });
 });
 

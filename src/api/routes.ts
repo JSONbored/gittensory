@@ -109,6 +109,7 @@ import {
   getGlobalAgentFrozenState,
   setGlobalAgentFrozen,
 } from "../db/repositories";
+import { probeLinearWorkspaceAccess } from "../integrations/linear-adapter";
 import { dedupeSignalSnapshots, pruneExpiredRecords, RETENTION_POLICY } from "../db/retention";
 import {
   backfillOpenPullRequestDetails,
@@ -2651,6 +2652,22 @@ export function createApp() {
     const actor = gate.identity?.kind === "session" ? gate.identity.actor : null;
     await deleteRepositoryLinearKey(c.env, fullName, actor);
     return c.json({ configured: false });
+  });
+
+  // Maintainer connectivity probe for a configured Linear workspace (#3186). Uses the stored per-repo API key
+  // to list open projects/milestones without returning any key material or tracker titles.
+  app.get("/v1/repos/:owner/:repo/linear-workspace-probe", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    if (gate instanceof Response) return gate;
+    const repo = await getRepository(c.env, fullName);
+    return c.json(
+      await probeLinearWorkspaceAccess({
+        env: c.env,
+        installationId: repo?.installationId ?? 0,
+        repoFullName: fullName,
+      }),
+    );
   });
 
   app.post("/v1/repos/:owner/:repo/settings-preview", async (c) => {
@@ -5413,7 +5430,7 @@ function isRepoAiConfigPath(path: string): boolean {
 // module's own broad path-allowlist BEFORE ever reaching the route's own requireRepoWriteAccess check --
 // same shape as isRepoAiConfigPath above, just for the new Linear key route.
 function isRepoLinearConfigPath(path: string): boolean {
-  return /^\/v1\/repos\/[^/]+\/[^/]+\/linear-key$/.test(path);
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/linear-(?:key|workspace-probe)$/.test(path);
 }
 
 async function authenticateRequestIdentity(c: ProtectedRouteContext): Promise<AuthIdentity | null> {
