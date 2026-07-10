@@ -31,18 +31,21 @@ async function linearGraphQl<T>(apiKey: string, query: string, variables: Record
 }
 
 type LinearProjectNode = { id: string; name: string };
+type LinearProjectMilestoneNode = { id: string; name: string };
 type ListProjectsResponse = {
   projects: { nodes: LinearProjectNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 };
+type ListProjectMilestonesResponse = {
+  projectMilestones: { nodes: LinearProjectMilestoneNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+};
 
 /**
- * GraphQL implementation of {@link ProjectTrackerAdapter} for Linear (#3186). Only the Project half maps
- * naturally -- Linear's milestone-equivalent (`ProjectMilestone`) is scoped WITHIN a project rather than a
- * flat, listable workspace collection the way GitHub milestones are, so `listOpenMilestones` stays inert here
- * (a milestone-level match still surfaces through {@link findLinearNativeLink}'s `issue.projectMilestone`
- * read when Linear's own GitHub integration has already linked the PR). `attachToProject`/`attachToMilestone`
- * are also inert: writing to Linear requires resolving or creating a Linear Issue for this PR first, which is
- * a materially bigger design question deferred beyond #3186's suggest-only scope.
+ * GraphQL implementation of {@link ProjectTrackerAdapter} for Linear (#3186). Lists open workspace projects and
+ * project-milestones for fuzzy fallback matching when Linear's own GitHub integration has not already linked
+ * the PR via {@link findLinearNativeLink}. A confirmed native link still wins over any fuzzy guess.
+ * `ProjectMilestone` has no open/completed status filter like projects do — `includeArchived: false` is the
+ * workspace-level equivalent of "open". `attachToProject`/`attachToMilestone` stay inert: writing to Linear
+ * requires resolving or creating a Linear Issue for this PR first, deferred beyond #3186's suggest-only scope.
  */
 export class LinearAdapter implements ProjectTrackerAdapter {
   async listOpenProjects(ctx: ProjectTrackerContext): Promise<ProjectTrackerRef[]> {
@@ -68,9 +71,27 @@ export class LinearAdapter implements ProjectTrackerAdapter {
     return projects.map((project) => ({ id: project.id, title: project.name }));
   }
 
-  // Inert -- see the class doc comment above.
-  async listOpenMilestones(): Promise<ProjectTrackerRef[]> {
-    return [];
+  async listOpenMilestones(ctx: ProjectTrackerContext): Promise<ProjectTrackerRef[]> {
+    const apiKey = await getDecryptedRepositoryLinearKey(ctx.env, ctx.repoFullName);
+    if (!apiKey) return [];
+    const milestones: LinearProjectMilestoneNode[] = [];
+    let after: string | null = null;
+    for (let page = 1; page <= LINEAR_LIST_PAGE_LIMIT; page += 1) {
+      const data: ListProjectMilestonesResponse = await linearGraphQl(
+        apiKey,
+        `query($after: String) {
+          projectMilestones(first: 100, after: $after, includeArchived: false) {
+            nodes { id name }
+            pageInfo { hasNextPage endCursor }
+          }
+        }`,
+        { after },
+      );
+      milestones.push(...data.projectMilestones.nodes);
+      if (!data.projectMilestones.pageInfo.hasNextPage) break;
+      after = data.projectMilestones.pageInfo.endCursor;
+    }
+    return milestones.map((milestone) => ({ id: milestone.id, title: milestone.name }));
   }
 
   // Inert -- see the class doc comment above.
