@@ -14,6 +14,7 @@ const FLAG: Record<ConvergedFeatureKey, string> = {
   safety: "GITTENSORY_REVIEW_SAFETY",
   grounding: "GITTENSORY_REVIEW_GROUNDING",
   e2eTests: "GITTENSORY_REVIEW_E2E_TESTS",
+  improvementSignal: "GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL",
 };
 
 function env(overrides: Record<string, string | undefined>): Env {
@@ -28,6 +29,7 @@ function manifestWith(features: Partial<Record<ConvergedFeatureKey, boolean>>): 
     safety: null,
     grounding: null,
     e2eTests: null,
+    improvementSignal: null,
   } as FocusManifest["features"];
   return { features: { ...base, ...features, present: Object.keys(features).length > 0 } };
 }
@@ -100,6 +102,35 @@ describe("resolveConvergedFeature — grounding remains allowlist-bound", () => 
     expect(resolveConvergedFeature(e, manifestWith({}), "grounding", REPO)).toBe(true);
     expect(resolveConvergedFeature(e, manifestWith({ grounding: true }), "grounding", REPO)).toBe(true);
     expect(resolveConvergedFeature(e, manifestWith({ grounding: false }), "grounding", REPO)).toBe(false);
+  });
+});
+
+describe("resolveConvergedFeature — improvementSignal is a plain symmetric override (#4738)", () => {
+  // The full resolution matrix the #4738 acceptance criteria calls out explicitly: env off; env on + no
+  // override; env on + repo true; env on + repo false. improvementSignal has no safety/grounding-style
+  // asymmetry, so this mirrors the generic "standard mode" shape rag/reputation/unifiedComment/e2eTests use.
+  it("is off when the global env flag is off, regardless of a per-repo override or the allowlist (env off)", () => {
+    const e = env({ GITTENSORY_REVIEW_REPOS: REPO }); // GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL unset
+    expect(resolveConvergedFeature(e, manifestWith({ improvementSignal: true }), "improvementSignal", REPO)).toBe(false);
+  });
+
+  it("falls back to the GITTENSORY_REVIEW_REPOS allowlist when the flag is on but the manifest sets nothing (env on + no override)", () => {
+    const allowlisted = env({ GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL: "true", GITTENSORY_REVIEW_REPOS: REPO });
+    expect(resolveConvergedFeature(allowlisted, manifestWith({}), "improvementSignal", REPO)).toBe(true);
+    expect(resolveConvergedFeature(allowlisted, null, "improvementSignal", REPO)).toBe(true); // null manifest tolerated
+
+    const notAllowlisted = env({ GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL: "true", GITTENSORY_REVIEW_REPOS: "other/repo" });
+    expect(resolveConvergedFeature(notAllowlisted, manifestWith({}), "improvementSignal", REPO)).toBe(false);
+  });
+
+  it("honors an explicit per-repo override of true even when the repo is NOT allowlisted (env on + repo true)", () => {
+    const e = env({ GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL: "true", GITTENSORY_REVIEW_REPOS: "other/repo" });
+    expect(resolveConvergedFeature(e, manifestWith({ improvementSignal: true }), "improvementSignal", REPO)).toBe(true);
+  });
+
+  it("honors an explicit per-repo override of false even when the repo IS allowlisted (env on + repo false)", () => {
+    const e = env({ GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL: "true", GITTENSORY_REVIEW_REPOS: REPO });
+    expect(resolveConvergedFeature(e, manifestWith({ improvementSignal: false }), "improvementSignal", REPO)).toBe(false);
   });
 });
 

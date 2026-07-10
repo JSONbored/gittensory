@@ -21,6 +21,7 @@
 import { isConvergenceRepoAllowed } from "./cutover-gate";
 import { isE2eTestGenerationEnabled } from "./e2e-test-gen-wire";
 import { isGroundingEnabled } from "./grounding-wire";
+import { isImprovementSignalEnabled } from "./improvement-signal-wire";
 import { isRagEnabled } from "./rag-wire";
 import { isReputationEnabled } from "./reputation-wire";
 import { isSafetyEnabled } from "./safety";
@@ -36,6 +37,7 @@ const FEATURE_GLOBAL_FLAG: Record<ConvergedFeatureKey, (env: Env) => boolean> = 
   safety: isSafetyEnabled,
   grounding: isGroundingEnabled,
   e2eTests: isE2eTestGenerationEnabled,
+  improvementSignal: isImprovementSignalEnabled,
 };
 
 /**

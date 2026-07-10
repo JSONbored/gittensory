@@ -1102,14 +1102,17 @@ settings:
 #     auto_pause_after_reviewed_commits: 3
 
 # Per-repo activation overrides for the converged review features that ship behind a deployment-wide
-# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding/e2eTests). Each key is
-# `true` (force on for this repo, subject to the env flag still being enabled), `false` (force off), or omitted
-# (falls back to the GITTENSORY_REVIEW_REPOS allowlist default -- an operator who sets nothing keeps today's
-# behavior). Exception: `safety` is force-on-only -- an untrusted repo-controlled `false` is treated as "no
-# opinion" rather than an active force-off (#2269), since a lower-trust actor must never be able to silently
-# defeat the operator's own security-hardening enablement. `e2eTests` (#4190) is a plain symmetric override
-# like rag/reputation/unifiedComment -- generating AI test content carries no security-hardening rationale to
-# protect from a repo-controlled override, so there's no force-on/force-off asymmetry here.
+# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding/e2eTests/improvementSignal).
+# Each key is `true` (force on for this repo, subject to the env flag still being enabled), `false` (force off),
+# or omitted (falls back to the GITTENSORY_REVIEW_REPOS allowlist default -- an operator who sets nothing keeps
+# today's behavior). Exception: `safety` is force-on-only -- an untrusted repo-controlled `false` is treated as
+# "no opinion" rather than an active force-off (#2269), since a lower-trust actor must never be able to silently
+# defeat the operator's own security-hardening enablement. `e2eTests` (#4190) and `improvementSignal` (#4738,
+# foundation phase of the #4737 PR-improvement-signal epic) are plain symmetric overrides like
+# rag/reputation/unifiedComment -- neither AI-generated test content nor a read-only advisory quality-delta
+# signal carries a security-hardening rationale to protect from a repo-controlled override, so there's no
+# force-on/force-off asymmetry for either. `improvementSignal` is activation wiring only for now -- no tier
+# reads the resolved value yet.
 # features:
 #   rag: true
 #   reputation: false
@@ -1117,6 +1120,7 @@ settings:
 #   safety: true
 #   grounding: true
 #   e2eTests: false
+#   improvementSignal: false
 
 # Registry-review lane (#2435): lets a self-hosted maintainer point gittensory at their OWN structured
 # registry (e.g. a subnet/plugin/package catalog) without a gittensory code change -- reviewing additions

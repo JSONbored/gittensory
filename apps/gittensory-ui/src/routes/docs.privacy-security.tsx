@@ -96,6 +96,7 @@ GITTENSORY_REVIEW_FIX_HANDOFF="true"             # machine-readable fix-handoff 
 GITTENSORY_REVIEW_PLANNER="true"                 # @gittensory plan on-demand implementation plan
 GITTENSORY_REVIEW_SCREENSHOTS="true"             # before/after visual capture for UI changes
 GITTENSORY_REVIEW_E2E_TESTS="true"               # AI-generated E2E test coverage (needs features.e2eTests too)
+GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL="true"      # read-only PR quality-delta signal (activation only, no-op for now)
 
 # Global (cron / endpoint) flags, not scoped by GITTENSORY_REVIEW_REPOS.
 GITTENSORY_REVIEW_CONTINUOUS="true"              # fleet-wide default: re-review on every push (else one-shot)

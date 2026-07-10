@@ -139,6 +139,13 @@ function Tuning() {
           <code>.gittensory.yml</code> before the feature is active for it. Per-PR.
         </li>
         <li>
+          <code>GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL</code> — master kill-switch for the read-only,
+          advisory PR quality-delta signal (the positive-axis counterpart to the slop risk score).
+          Off by default; config-as-code activation only for now — no tier reads the resolved value
+          yet, so turning this on has no visible effect until a later release wires real behavior
+          behind it. Per-PR.
+        </li>
+        <li>
           <code>GITTENSORY_REVIEW_CONTINUOUS</code> — fleet-wide default AI review re-trigger
           cadence. Off by default (one-shot): AI-generated content (main review, slop advisory,
           linked-issue satisfaction) is produced once per PR and never regenerated automatically

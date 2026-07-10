@@ -218,8 +218,12 @@ export type CopycatGateMode = "off" | "warn" | "label" | "block";
 // `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189 E2E-test-generation epic) fits this shape
 // exactly as a plain symmetric override — unlike `safety`/`grounding` it has no force-on-only or force-off-only
 // floor/ceiling, since AI-generated test content carries no security-hardening or full-file-fetch rationale to
-// protect from a repo-controlled override.
-export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests"] as const;
+// protect from a repo-controlled override. `improvementSignal` (#4738, foundation phase of the #4737 PR-
+// improvement-signal epic) is likewise a plain symmetric override: it is a READ-ONLY advisory quality-delta
+// signal, not a security control, so a repo-level `false` behaves like any other plain override with no
+// floor/ceiling. This is activation wiring only -- no tier reads the resolved value yet (sibling sub-issues
+// #4739-#4746 build the deterministic/LLM/panel behavior that will gate on it).
+export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests", "improvementSignal"] as const;
 export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
 
 /** Per-repo activation overrides for the converged review features (`features:` block). `true`/`false` force the
@@ -963,6 +967,7 @@ const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
   safety: null,
   grounding: null,
   e2eTests: null,
+  improvementSignal: null,
 };
 
 const EMPTY_CONTENT_LANE_CONFIG: FocusManifestContentLaneConfig = {

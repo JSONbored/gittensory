@@ -276,6 +276,12 @@ declare global {
      *  E2E test coverage feature. Default OFF — unset/false the feature is never active for any repo regardless
      *  of a per-repo `features.e2eTests` override. */
     GITTENSORY_REVIEW_E2E_TESTS?: string;
+    /** Convergence (improvementSignal, #4738, foundation phase of the #4737 epic): master kill-switch for the
+     *  read-only, ADVISORY PR quality-delta signal (the positive-axis counterpart to slop.ts's risk score).
+     *  This is config-as-code activation ONLY — no tier reads this flag yet; sibling sub-issues (#4739-#4746)
+     *  build the deterministic/LLM/panel behavior that will gate on it. Default OFF — unset/false the feature
+     *  is never active for any repo regardless of a per-repo `features.improvementSignal` override. */
+    GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL?: string;
     /** #one-shot-review-cadence: the operator's FLEET-WIDE default for AI review re-trigger cadence, consulted
      *  only when a repo's `.gittensory.yml review.auto_review.cadence` is unset (a per-repo value always wins
      *  regardless of this flag — see resolveAiReviewCadence). Default OFF (unset/false) ⇒ "one_shot": the
