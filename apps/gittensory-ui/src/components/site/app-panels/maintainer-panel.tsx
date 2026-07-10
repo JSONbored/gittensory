@@ -20,6 +20,8 @@ import {
 import { ActivationPreview } from "@/components/site/app-panels/activation-preview";
 import { AiReviewSettings } from "@/components/site/app-panels/ai-review-settings";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
+import { QueueHealthCard } from "@/components/site/app-panels/queue-health-card";
+import type { QueueHealthCardModel } from "@/components/site/app-panels/queue-health-card-model";
 import { StatCard } from "@/components/site/primitives";
 import { RefreshMeta } from "@/components/site/refresh-meta";
 import { EmptyState, LoadingState, StateBoundary } from "@/components/site/state-views";
@@ -77,6 +79,7 @@ type MaintainerDashboard = {
     slop?: { risk: number; band: string } | null;
   }>;
   settingsPreview: { removed: string[]; added: string[] };
+  queueHealthCard: QueueHealthCardModel;
 };
 
 type TrustChecklistStatus = "ready" | "needs_attention" | "blocked";
@@ -225,6 +228,8 @@ function MaintainerDashboardView() {
               />
             ))}
           </section>
+
+          {data.queueHealthCard ? <QueueHealthCard card={data.queueHealthCard} /> : null}
 
           <section className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-token border-hairline bg-card p-5">

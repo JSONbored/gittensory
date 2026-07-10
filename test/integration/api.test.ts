@@ -2210,6 +2210,7 @@ describe("api routes", () => {
     const body = (await res.json()) as {
       metrics: Array<{ label: string; value: number }>;
       qualityDashboard: { generatedAt: string; stale: boolean; repoQuality: Array<{ repoFullName: string; queueBand: string }>; topContributors: Array<{ login: string; band: string }>; qualitySignals: { openPrs: number }; summary: string };
+      queueHealthCard: { generatedAt: string; stale: boolean; pending: number; inFlight: number; stuck: number; dlq: number; queueDepthTrend: number[]; summary: string };
     };
     expect(body.metrics.find((metric) => metric.label === "Open PRs cached")?.value).toBe(8);
     // Quality dashboard (#557): shaped, scoped, public-safe trend/outcome data with bands not raw scores.
@@ -2222,6 +2223,16 @@ describe("api routes", () => {
     expect(body.qualityDashboard.summary).toContain("open PR(s)");
     expect(JSON.stringify(body.qualityDashboard)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
     expect(JSON.stringify(body.qualityDashboard)).not.toMatch(/"burdenScore"|"credibility"/);
+    // Queue-health trend card (#2201): shaped snapshot counts + queue-depth series for the maintainer dashboard.
+    expect(body.queueHealthCard.generatedAt).toEqual(expect.any(String));
+    expect(typeof body.queueHealthCard.stale).toBe("boolean");
+    expect(body.queueHealthCard.pending).toBeGreaterThanOrEqual(0);
+    expect(body.queueHealthCard.inFlight).toBeGreaterThanOrEqual(0);
+    expect(body.queueHealthCard.stuck).toBeGreaterThanOrEqual(0);
+    expect(body.queueHealthCard.dlq).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(body.queueHealthCard.queueDepthTrend)).toBe(true);
+    expect(body.queueHealthCard.summary.length).toBeGreaterThan(0);
+    expect(JSON.stringify(body.queueHealthCard)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
   });
 
   it("counts cached open PRs from sync states beyond the latest 500 rows", async () => {

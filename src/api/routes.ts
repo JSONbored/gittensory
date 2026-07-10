@@ -263,6 +263,7 @@ import { getPublicStats, isPublicStatsEnabled } from "../review/public-stats";
 import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
 import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
+import { buildMaintainerQueueHealthCard } from "../services/maintainer-queue-health-card";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
@@ -1390,9 +1391,17 @@ export function createApp() {
     const qualityRepoNames = new Set(qualityRepos.map((repo) => repo.fullName.toLowerCase()));
     const scopedSyncCompletions = allSyncStates.filter((state) => qualityRepoNames.has(state.repoFullName.toLowerCase())).map((state) => state.lastCompletedAt);
     const qualityStale = isMaintainerQualityDataStale({ lastCompletedAts: scopedSyncCompletions, repoCount: qualityRepos.length, nowMs: Date.parse(nowIso()) });
-    const qualityDashboard = buildMaintainerQualityDashboard({ repos: qualityRepoInputs, generatedAt: nowIso(), stale: qualityStale, repoTotal: repositories.length });
+    const generatedAt = nowIso();
+    const qualityDashboard = buildMaintainerQualityDashboard({ repos: qualityRepoInputs, generatedAt, stale: qualityStale, repoTotal: repositories.length });
+    const queueHealthHistories = await Promise.all(qualityRepos.map((repo) => listSignalSnapshots(c.env, "queue-health", repo.fullName)));
+    const queueHealthCard = buildMaintainerQueueHealthCard({
+      generatedAt,
+      stale: qualityStale,
+      histories: queueHealthHistories,
+      highRiskDuplicates: qualityDashboard.repoQuality.reduce((sum, repo) => sum + repo.highRiskDuplicates, 0),
+    });
     return c.json({
-      generatedAt: nowIso(),
+      generatedAt,
       installations,
       health: health.map(enrichInstallationHealth),
       metrics: [
@@ -1413,6 +1422,7 @@ export function createApp() {
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
       qualityDashboard,
+      queueHealthCard,
     });
   });
 
