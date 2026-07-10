@@ -227,10 +227,10 @@ describe("config/examples review templates (#1682)", () => {
     expect(resolveAutonomy(def.settings.autonomy, "review")).toBe("observe");
     // Explicit per-action levels parse; each set action resolves to its level, unset actions stay "observe" —
     // the parity the config-generator's autonomy-level dial emits into.
-    const on = parseFocusManifest({ settings: { autonomy: { review: "suggest", merge: "auto" } } });
-    expect(on.settings.autonomy).toEqual({ review: "suggest", merge: "auto" });
+    const on = parseFocusManifest({ settings: { autonomy: { review: "auto_with_approval", merge: "auto" } } });
+    expect(on.settings.autonomy).toEqual({ review: "auto_with_approval", merge: "auto" });
     expect(isAgentConfigured(on.settings.autonomy)).toBe(true);
-    expect(resolveAutonomy(on.settings.autonomy, "review")).toBe("suggest");
+    expect(resolveAutonomy(on.settings.autonomy, "review")).toBe("auto_with_approval");
     expect(resolveAutonomy(on.settings.autonomy, "merge")).toBe("auto");
     expect(resolveAutonomy(on.settings.autonomy, "close")).toBe("observe"); // unset action ⇒ default
   });
@@ -248,7 +248,7 @@ describe("config/examples review templates (#1682)", () => {
       "    - dist/**",
       "settings:",
       "  autonomy:",
-      "    review: suggest",
+      "    review: auto_with_approval",
     ].join("\n");
     const imported = parseFocusManifestContent(yml, "repo_file");
     expect(imported.warnings).toEqual([]);
@@ -257,6 +257,6 @@ describe("config/examples review templates (#1682)", () => {
     expect(imported.gate.linkedIssue).toBe("block");
     expect(imported.review.inlineComments).toBe(true);
     expect(imported.review.excludePaths).toEqual(["dist/**"]);
-    expect(resolveAutonomy(imported.settings.autonomy, "review")).toBe("suggest");
+    expect(resolveAutonomy(imported.settings.autonomy, "review")).toBe("auto_with_approval");
   });
 });
