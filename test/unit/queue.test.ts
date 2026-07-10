@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { clearInstallationTokenCacheForTest } from "../../src/github/app";
+import { clearReviewSuppressionCacheForTest } from "../../src/review/review-memory-wire";
 import { PR_PANEL_COMMENT_MARKER } from "../../src/github/comments";
 import * as backfillModule from "../../src/github/backfill";
 import * as rateLimitModule from "../../src/github/rate-limit";
@@ -106,6 +107,7 @@ describe("queue processors", () => {
   // stay deterministic regardless of when CI runs.
   beforeEach(() => {
     clearInstallationTokenCacheForTest();
+    clearReviewSuppressionCacheForTest();
     vi.mocked(fetchPullRequestFreshness).mockReset();
     vi.mocked(fetchPullRequestFreshness).mockImplementation(async (_env, args) => ({
       status: "current",
@@ -3977,6 +3979,49 @@ describe("queue processors", () => {
       expect(audit?.detail).toContain("D1 write error");
     });
 
+    it("INVARIANT (#4507): a real agent-regate-pr pass with reputation ON makes only ONE reputation-scan D1 read set, not two", async () => {
+      // JSONbored/gittensory is in createTestEnv's default GITTENSORY_REVIEW_REPOS allowlist, so the outer
+      // maybePublishPrPublicSurface scope's own preComputedReputationSkip gate condition is true here — this
+      // exercises the REAL caller-scope computation (processors.ts's outer webhook-processing code), not just
+      // the two consumer functions called directly.
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }) } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+        GITTENSORY_REVIEW_REPUTATION: "true",
+      });
+      await seedRegateChurnRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 62, title: "Reputation PR", state: "open", user: { login: "contributor" }, head: { sha: "a62" }, labels: [], body: "Closes #1" });
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 62, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/62/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        if (url.endsWith("/pulls/62")) return Response.json({ number: 62, title: "Reputation PR", state: "open", user: { login: "contributor" }, head: { sha: "a62" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a62/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a62/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/issues/62/comments")) return method === "POST" ? Response.json({ id: 62 }, { status: 201 }) : Response.json([]);
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      const spy = vi.spyOn(env.DB, "prepare");
+      const before = spy.mock.calls.length;
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "reputation-single-read", repoFullName: "JSONbored/gittensory", prNumber: 62, installationId: 123 });
+      // Before #4507, the outer caller-scope computation AND runAiReviewForAdvisory's own internal check each
+      // independently scanned review_targets for this submitter — 2 full sets (6 prepares), not 1 (3).
+      const reputationPrepares = spy.mock.calls
+        .slice(before)
+        .map(([sql]) => String(sql))
+        .filter((sql) => sql.includes("submitter_stats") || sql.includes("terminal_at IS NOT NULL") || sql.includes("created_at >= datetime"));
+      spy.mockRestore();
+      expect(reputationPrepares).toHaveLength(3); // submitter_stats + review_targets quality scan + cadence scan, ONCE
+    });
+
     it("swallows a failing hit/skip audit write without throwing (cache-hit path)", async () => {
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -7438,15 +7483,22 @@ describe("queue processors", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9403, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9403);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
-    // PR 1: missing its current Gate check -- the one priority repair.
+    // PR 1: missing its current Gate check -- the one priority repair. Make it newer-by-regate than the
+    // ordinary stale PRs below, reproducing the backlog bug where a max=1 staleness slice could drop the repair.
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Repair 1", state: "open", user: { login: "c" }, head: { sha: "repair-1" }, labels: [], body: "" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 1, "repair-1");
+    await env.DB.prepare("update pull_requests set last_regated_at = ? where repo_full_name = ? and number = ?")
+      .bind("2026-05-28T01:59:00.000Z", "owner/agent-repo", 1)
+      .run();
     // PRs 2-5: ordinary, already-current, stale-by-time PRs -- a normal (no-backlog) sweep would pick these up
     // too, but while the backlog is draining they must sit out so the sweep only carries the priority repair.
     for (const number of [2, 3, 4, 5]) {
       const headSha = `stale-${number}`;
       await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number, title: `Stale ${number}`, state: "open", user: { login: "c" }, head: { sha: headSha }, labels: [], body: "" });
       await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", number, headSha);
+      await env.DB.prepare("update pull_requests set last_regated_at = ? where repo_full_name = ? and number = ?")
+        .bind(`2026-05-28T01:0${number}:00.000Z`, "owner/agent-repo", number)
+        .run();
       await upsertCheckSummary(env, {
         id: `gate-current-${number}`,
         repoFullName: "owner/agent-repo",
@@ -25956,6 +26008,7 @@ describe("queue processors", () => {
           const method = init?.method ?? "GET";
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+          if (url.endsWith("/pulls/4207") && method === "GET") return Response.json({ head: { ref: "feature/checkout-retry", sha: "commit-ok-head-sha", repo: { full_name: repoFullName } } });
           if (url.endsWith("/git/commits/commit-ok-head-sha") && method === "GET") return Response.json({ tree: { sha: "base-tree-sha" } });
           if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
           if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "committed-sha-123" });
@@ -26023,7 +26076,7 @@ describe("queue processors", () => {
           const method = init?.method ?? "GET";
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
-          if (url.endsWith("/git/commits/declined-head-sha") && method === "GET") return new Response("forbidden", { status: 403 });
+          if (url.endsWith("/pulls/4209") && method === "GET") return new Response("forbidden", { status: 403 });
           if (url.includes("/issues/4209/comments") && method === "GET") return Response.json([]);
           if (url.includes("/issues/4209/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42090 }); }
           return new Response("not found", { status: 404 });
@@ -26089,7 +26142,7 @@ describe("queue processors", () => {
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
           // Neither a 403/404 (no write access) nor a 422/409 (branch moved) -- a genuinely unexpected 500,
           // which commitE2eTestToPrBranch maps to status: "error" rather than "declined".
-          if (url.endsWith("/git/commits/error-mapped-head-sha") && method === "GET") return new Response("server exploded", { status: 500 });
+          if (url.endsWith("/pulls/4213") && method === "GET") return new Response("server exploded", { status: 500 });
           if (url.includes("/issues/4213/comments") && method === "GET") return Response.json([]);
           if (url.includes("/issues/4213/comments") && method === "POST") { postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? ""); return Response.json({ id: 42130 }); }
           return new Response("not found", { status: 404 });
@@ -26127,6 +26180,7 @@ describe("queue processors", () => {
           const method = init?.method ?? "GET";
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
           if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "admin" });
+          if (url.endsWith("/pulls/4214") && method === "GET") return Response.json({ head: { ref: "feature/checkout-retry", sha: "no-author-head-sha", repo: { full_name: repoFullName } } });
           if (url.endsWith("/git/commits/no-author-head-sha") && method === "GET") return Response.json({ tree: { sha: "base-tree-sha" } });
           if (url.endsWith("/git/trees") && method === "POST") return Response.json({ sha: "new-tree-sha" });
           if (url.endsWith("/git/commits") && method === "POST") return Response.json({ sha: "no-author-commit-sha" });

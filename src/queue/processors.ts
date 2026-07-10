@@ -73,7 +73,6 @@ import {
   getGateBlockOutcome,
   hasActiveReviewForHeadSha,
   isDbFrozenForRepo,
-  listReviewSuppressions,
   markGateOutcomeOverridden,
   markPullRequestLinkedIssueHardRuleViolated,
   startActiveReviewTracking,
@@ -503,7 +502,7 @@ import {
   buildRepoCultureProfileContext,
   isRepoCultureProfileEnabled,
 } from "../review/repo-culture-profile-wire";
-import { applyReviewMemorySuppression, shouldApplyReviewMemory } from "../review/review-memory-wire";
+import { applyReviewMemorySuppression, getCachedReviewSuppressions, invalidateReviewSuppressionCache, shouldApplyReviewMemory } from "../review/review-memory-wire";
 import {
   buildReviewEnrichment,
   isEnrichmentEnabled,
@@ -570,6 +569,7 @@ import {
 } from "../review/outcomes-wire";
 import { neutralHoldReasonCode, nativeGateActionFromConclusion, recordNativeGateDecision } from "../review/parity-wire";
 import { recordContributorGateDecision } from "../review/contributor-calibration";
+import { recordPredictedGateCalibration } from "../review/predicted-gate-calibration-ledger";
 import type { SubmissionOutcome } from "../review/submitter-reputation";
 import type {
   AdvisoryFinding,
@@ -1029,10 +1029,16 @@ const PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES: Partial<
   },
 };
 
+// #4583: surfaces the AI test-generation command right where a maintainer already sees the missing-coverage
+// finding, mirroring CodeRabbit's inline "Generate unit tests" walkthrough checkbox instead of requiring the
+// maintainer to already know the `@gittensory generate-tests` command exists from documentation alone.
+const E2E_TEST_GEN_CTA = "Maintainers can also comment `@gittensory generate-tests` for an AI-generated Playwright test.";
+
 export function publicSafeManifestPolicyFinding(
   finding: FocusManifestFinding,
+  options: { e2eTestGenAvailable?: boolean } = {},
 ): AdvisoryFinding {
-  return {
+  const base: AdvisoryFinding = {
     code: finding.code,
     severity: finding.severity,
     title: finding.title,
@@ -1043,6 +1049,16 @@ export function publicSafeManifestPolicyFinding(
     // private blocked-path globs / test expectations; codes absent from the table keep their already-generic text.
     ...PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES[finding.code],
   };
+  // Only appended when e2eTests is actually enabled for this repo (the SAME resolveConvergedFeature check the
+  // #4196 auto-trigger already gates on), so an unconfigured repo is never told about a command that would just
+  // bounce with "not enabled" -- and only for the missing-tests finding, the one case where the command is a
+  // directly relevant next step rather than noise on an unrelated finding. base.action is always defined here
+  // (PUBLIC_MANIFEST_POLICY_FINDING_OVERRIDES.manifest_missing_tests always sets one), the same always-populated
+  // guarantee the v8-ignore above already documents for this code path.
+  if (finding.code === "manifest_missing_tests" && options.e2eTestGenAvailable) {
+    return { ...base, action: `${base.action} ${E2E_TEST_GEN_CTA}` };
+  }
+  return base;
 }
 
 export async function processJob(env: Env, message: JobMessage): Promise<void> {
@@ -1923,17 +1939,22 @@ async function sweepRepoRegate(
   }
   // With an active backlog (regateBacklog > 0), a priority repair PR earns an EXCEPTION to the "yield to
   // backlog" rule above, not a license for the whole sweep to also drag along a full SWEEP_MAX_PRS batch of
-  // ordinary stale PRs -- selectRegateCandidates sorts priority PRs first, so capping max to exactly
-  // priorityPullNumbers.length restricts the candidate set to repairs only. No backlog pressure ⇒ a normal,
-  // full-size sweep as before.
+  // ordinary stale PRs. Repair priority only affects selectRegateCandidates eligibility, not final ordering, so
+  // the backlog path must narrow the input pool to priority repairs before applying the normal stale ordering cap.
+  // No backlog pressure ⇒ a normal, full-size sweep as before.
+  const priorityPullNumberSet = new Set(priorityPullNumbers);
   const repairCandidateLimit =
     priorityPullNumbers.length > 0
       ? regateBacklog > 0
         ? priorityPullNumbers.length
         : Math.max(SWEEP_MAX_PRS, priorityPullNumbers.length)
       : null;
+  const candidatePullRequests =
+    regateBacklog > 0 && priorityPullNumbers.length > 0
+      ? openPullRequests.filter((pr) => priorityPullNumberSet.has(pr.number))
+      : openPullRequests;
   const candidates = selectRegateCandidates({
-    pulls: openPullRequests,
+    pulls: candidatePullRequests,
     now: nowIso(),
     priorityPullNumbers,
     priorityBypassesFreshness: priorityPullNumbers.length > 0,
@@ -2004,7 +2025,6 @@ async function sweepRepoRegate(
   // isScheduledRegateSweepJob (queue-common.ts) misclassifies it as background maintenance and it inherits the
   // exact starvation this priority mechanism exists to avoid. Ordinary stale candidates keep the sweep prefix
   // unchanged.
-  const priorityPullNumberSet = new Set(priorityPullNumbers);
   for (const [index, pr] of candidates.entries()) {
     const others = openPullRequests.filter(
       (other) => other.number !== pr.number,
@@ -3307,6 +3327,16 @@ async function runAgentMaintenancePlanAndExecute(
   // above -- see src/review/contributor-calibration.ts's doc comment. Currently write-only; nothing reads
   // contributor_gate_history yet.
   await recordContributorGateDecision(env, {
+    login: pr.authorLogin,
+    project: repoFullName,
+    pullNumber: pr.number,
+    headSha: pr.headSha,
+    decision: disposition.actionClass,
+  });
+  // #4517: pair this REAL decision against a recent predict_gate call from the same login/repo, if one
+  // exists -- see src/review/predicted-gate-calibration-ledger.ts's doc comment. Cold start (no prior
+  // prediction) records nothing.
+  await recordPredictedGateCalibration(env, {
     login: pr.authorLogin,
     project: repoFullName,
     pullNumber: pr.number,
@@ -6976,11 +7006,20 @@ export async function shouldStartAiReviewForAdvisory(
     author: string | null;
     confirmedContributor: boolean;
     skipAiReview?: boolean | undefined;
+    // #4507: the caller's own already-computed shouldSkipAiForReputation result, from the SAME gate condition
+    // this function uses below (isReputationEnabled && isConvergenceRepoAllowed) -- threaded in so this call makes
+    // no second REPUTATION_WINDOW_ROW_CAP-bounded review_targets scan when the caller already ran one this pass.
+    // Absent (every existing/direct caller) ⇒ computed here exactly as before.
+    preComputedReputationSkip?: boolean | undefined;
   },
 ): Promise<boolean> {
   if (!shouldRequirePublicAiReviewForAdvisory(env, args)) return false;
   if (args.settings.aiReviewAllAuthors) return true;
-  return !(isReputationEnabled(env) && isConvergenceRepoAllowed(env, args.repoFullName) && (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author })));
+  if (!(isReputationEnabled(env) && isConvergenceRepoAllowed(env, args.repoFullName))) return true;
+  const reputationSkip =
+    args.preComputedReputationSkip ??
+    (await shouldSkipAiForReputation(env, { project: args.repoFullName, submitter: args.author }));
+  return !reputationSkip;
 }
 
 export function maybeAddRequiredAutoReviewSkipHold(
@@ -7240,6 +7279,15 @@ export async function runAiReviewForAdvisory(
     // default, and every existing caller) ⇒ this function claims + releases its own lock exactly as before —
     // byte-identical to today.
     preAcquiredAiReviewLock?: TransientLockClaim | undefined;
+    // #4507: the caller's own already-computed shouldSkipAiForReputation result, threaded in exactly like
+    // preAcquiredAiReviewLock above, so this function's OWN reputationActive gate (below) reuses it instead of
+    // re-deriving a second REPUTATION_WINDOW_ROW_CAP-bounded review_targets scan -- but ONLY when it's actually
+    // present. Absent (the caller's own plain-allowlist gate condition didn't apply, or a direct/test caller
+    // that doesn't thread it) ⇒ this function computes its own, independently authoritative check exactly as
+    // before -- correctly handling a per-repo manifest override that disagrees with the allowlist (the
+    // divergent-config case where only one of the two call sites' gates evaluates true in practice, so the
+    // other's threaded value is never populated to begin with).
+    preComputedReputationSkip?: boolean | undefined;
   },
 ): Promise<
   | {
@@ -7322,10 +7370,11 @@ export async function runAiReviewForAdvisory(
   if (
     reputationActive &&
     !args.settings.aiReviewAllAuthors &&
-    (await shouldSkipAiForReputation(env, {
-      project: args.repoFullName,
-      submitter: args.author,
-    }))
+    (args.preComputedReputationSkip ??
+      (await shouldSkipAiForReputation(env, {
+        project: args.repoFullName,
+        submitter: args.author,
+      })))
   )
     return undefined;
   // Per-(repo, PR, head SHA, mode) advisory lock (#confirmed-bug, mirrors #2129/#2368's claimPrActuationLock):
@@ -9432,9 +9481,14 @@ async function maybePublishPrPublicSurface(
       // Keep deterministic manifest policy findings independent from AI-review eligibility: ignored authors
       // suppress review/public output only, never maintainer-configured gate blockers or their downstream triggers.
       const policyFindings = guidance.findings;
+      // Computed once and reused below for the #4196 auto-trigger check -- same feature gate, one call. Also
+      // feeds #4583's inline CTA so the missing-tests finding surfaces `@gittensory generate-tests` right in
+      // ORB's own comment (mirrors CodeRabbit's inline walkthrough checkbox) only when the command would
+      // actually work for this repo, never as noise on a repo that hasn't opted in.
+      const e2eTestGenAvailable = resolveConvergedFeature(env, manifest, "e2eTests", repoFullName);
       for (const finding of policyFindings) {
         if (!policyCodes.has(finding.code)) continue;
-        advisory.findings.push(publicSafeManifestPolicyFinding(finding));
+        advisory.findings.push(publicSafeManifestPolicyFinding(finding, { e2eTestGenAvailable }));
       }
       // E2E test-generation auto-trigger (#4196, part of the #4189 epic): promotes the deterministic
       // manifest_missing_tests finding above from advisory-only text into an actual trigger for #4192/#4194's
@@ -9444,7 +9498,7 @@ async function maybePublishPrPublicSurface(
       // tests" from scratch, per the issue's own requirement -- this is why the auto-trigger lives inside this
       // exact manifestPolicyGateMode-gated block instead of a parallel code path: that is the only place this
       // finding is computed at all today.
-      if (pr.headSha && policyFindings.some((finding) => finding.code === "manifest_missing_tests") && resolveConvergedFeature(env, manifest, "e2eTests", repoFullName)) {
+      if (pr.headSha && policyFindings.some((finding) => finding.code === "manifest_missing_tests") && e2eTestGenAvailable) {
         const e2eTargetKey = `${repoFullName}#${pr.number}`;
         // Double-generation guard: an unchanged head SHA re-entering this pass (a re-review/sweep tick, not a
         // new push) must never re-spend an LLM call or repost a duplicate suggestion. A genuinely NEW push
@@ -9627,6 +9681,16 @@ async function maybePublishPrPublicSurface(
       skipAiReview: webhook.skipAiReview,
       autoReviewSkipReason,
     });
+    // #4507: computed ONCE here (the same isReputationEnabled/isConvergenceRepoAllowed gate
+    // shouldStartAiReviewForAdvisory uses internally) and threaded into both shouldStartAiReviewForAdvisory below
+    // and runAiReviewForAdvisory further down, instead of each independently re-deriving it -- a second
+    // REPUTATION_WINDOW_ROW_CAP-bounded review_targets scan for the identical (repo, submitter) within the same
+    // pass. undefined when this pass's gate condition doesn't apply; both downstream call sites then fall back to
+    // their own fresh (and, for runAiReviewForAdvisory, manifest-override-aware) check.
+    const preComputedReputationSkip =
+      isReputationEnabled(env) && isConvergenceRepoAllowed(env, repoFullName)
+        ? await shouldSkipAiForReputation(env, { project: repoFullName, submitter: author })
+        : undefined;
     const aiReviewWillRun =
       !authorBlacklisted &&
       !isFrozenForManualReview &&
@@ -9638,6 +9702,7 @@ async function maybePublishPrPublicSurface(
         author,
         confirmedContributor,
         skipAiReview: webhook.skipAiReview,
+        preComputedReputationSkip,
       }));
     aiReviewExpected = aiReviewWillRun;
     if (isFrozenForManualReview) {
@@ -10066,6 +10131,7 @@ async function maybePublishPrPublicSurface(
               // losing) against itself, and does not release it before the cache write below runs.
               preAcquiredAiReviewLock: aiReviewLock,
               deliveryId: webhook.deliveryId,
+              preComputedReputationSkip,
             });
             // `persistable === false` (only the lock-contention placeholder — see runAiReviewForAdvisory's return
             // type doc comment) is excluded from EVERY write, not just the durable one: it describes a transient
@@ -10325,6 +10391,14 @@ async function maybePublishPrPublicSurface(
       /* v8 ignore else */
       if (contributorDecision !== null) {
         await recordContributorGateDecision(env, {
+          login: pr.authorLogin,
+          project: repoFullName,
+          pullNumber: pr.number,
+          headSha: pr.headSha,
+          decision: contributorDecision,
+        });
+        // #4517: same pairing as the other recordContributorGateDecision call site above.
+        await recordPredictedGateCalibration(env, {
           login: pr.authorLogin,
           project: repoFullName,
           pullNumber: pr.number,
@@ -10978,7 +11052,10 @@ async function maybePublishPrPublicSurface(
       let renderedGate = commentGate;
       if (reviewMemoryEnabledForReview && commentGate.warnings.length > 0) {
         try {
-          const suppressionSignals = await listReviewSuppressions(env, repoFullName);
+          // #4508: cached (short in-isolate TTL, invalidated on write) — the 3 independent
+          // maybePublishPrPublicSurface call sites (auto re-review, webhook-triggered review, manual panel
+          // retrigger) no longer each force a fresh D1 read for the same repo within a short window.
+          const suppressionSignals = await getCachedReviewSuppressions(env, repoFullName, Date.now());
           const { findings: suppressedWarnings, suppressedCount, demotedCount } = applyReviewMemorySuppression(
             commentGate.warnings,
             suppressionSignals,
@@ -11579,7 +11656,7 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   const reviewManifest = await loadRepoFocusManifest(env, req.repoFullName).catch(() => null);
   const reviewMemoryEnabled = shouldApplyReviewMemory(env, resolveReviewMemoryManifestToggle(reviewManifest));
   let recordedSuppressionCount = 0;
-  if (reviewMemoryEnabled && selection.findings.length > 0) { const { fingerprint } = await import("../review/review-memory-match"); const { recordReviewSuppression } = await import("../db/repositories"); const suppressionWrites = selection.findings.map((finding) => ({ category: finding.code, pathGlob: "", patternHash: fingerprint({ category: finding.code, message: `${finding.title} ${finding.detail}` }) })); await Promise.all(suppressionWrites.map((write) => recordReviewSuppression(env, { repoFullName: req.repoFullName, category: write.category, pathGlob: write.pathGlob, patternHash: write.patternHash, createdBy: req.actor }))); recordedSuppressionCount = suppressionWrites.length; await recordAuditEvent(env, { eventType: "github_app.review_memory_recorded", actor: req.actor, targetKey, outcome: "completed", detail: `Recorded ${recordedSuppressionCount} review-memory suppression signal(s).`, metadata: { deliveryId, repoFullName: req.repoFullName, recordedSuppressionCount, scope: findingRef.scope, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); await recordGithubProductUsage(env, "review_memory_recorded", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { recordedSuppressionCount, scope: findingRef.scope, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); }
+  if (reviewMemoryEnabled && selection.findings.length > 0) { const { fingerprint } = await import("../review/review-memory-match"); const { recordReviewSuppression } = await import("../db/repositories"); const suppressionWrites = selection.findings.map((finding) => ({ category: finding.code, pathGlob: "", patternHash: fingerprint({ category: finding.code, message: `${finding.title} ${finding.detail}` }) })); await Promise.all(suppressionWrites.map((write) => recordReviewSuppression(env, { repoFullName: req.repoFullName, category: write.category, pathGlob: write.pathGlob, patternHash: write.patternHash, createdBy: req.actor }))); recordedSuppressionCount = suppressionWrites.length; invalidateReviewSuppressionCache(req.repoFullName); /* #4508: this repo's cached suppression list is stale as of this write -- the very next render must see it, not wait out the TTL. */ await recordAuditEvent(env, { eventType: "github_app.review_memory_recorded", actor: req.actor, targetKey, outcome: "completed", detail: `Recorded ${recordedSuppressionCount} review-memory suppression signal(s).`, metadata: { deliveryId, repoFullName: req.repoFullName, recordedSuppressionCount, scope: findingRef.scope, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); await recordGithubProductUsage(env, "review_memory_recorded", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "completed", metadata: { recordedSuppressionCount, scope: findingRef.scope, ...(findingRef.scope === "single" ? { findingCode: findingRef.findingCode } : {}) } }); }
   const resolvedLabel = findingRef.scope === "whole_pr" ? "all current advisory findings" : `\`${findingRef.findingCode}\``;
   const confirmation = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **Review finding resolved by @${req.actor}**`, `> Marked ${resolvedLabel} as resolved for this PR. The Gate check-run is unchanged.`, ...(recordedSuppressionCount > 0 ? ["", `Recorded ${recordedSuppressionCount} review-memory suppression signal(s) for future reviews.`] : []), "", "---", gittensoryFooter()].join("\n"));
   await createOrUpdateAgentCommandComment(env, req.installationId, req.repoFullName, req.pr.number, confirmation, mode);

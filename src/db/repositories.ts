@@ -180,7 +180,16 @@ import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
 import { errorMessage, jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN } from "../signals/redaction";
 
-const MAX_STORED_BODY_CHARS = 4000;
+// GitHub's own documented issue/PR body character limit -- this is a defensive backstop, never an
+// intended-to-fire cap. (2026-07-10 incident: the prior 4000-char value silently truncated any body over
+// that length before every body-content-dependent check ever saw it -- screenshotTableGate's viewport/theme
+// matrix parser, linked-issue-satisfaction, slop keyword matching, etc. -- with zero indication anything was
+// cut. Confirmed live on metagraphed#4682: a genuinely complete 12-image Phase C2 table (5160 real chars) got
+// closed for "missing before/after screenshot table" because only the first ~4000 chars (one row) were ever
+// stored. A cap this repo's own contributor-facing evidence format was never sized against is not a safety
+// margin, it's a landmine -- 65536 matches what GitHub itself would already reject, so this can now only ever
+// bind on content GitHub was never going to accept in the first place.)
+const MAX_STORED_BODY_CHARS = 65536;
 const SIGNAL_FRESHNESS_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_SIGNAL_FRESHNESS_TARGETS = 200;
 const MAX_SIGNAL_FRESHNESS_TARGET_KEY_CHARS = 256;
@@ -343,6 +352,7 @@ export async function upsertPullRequestFromGitHub(
   const existingPayload = preserveSparseBody ? parseJson<{ body?: string | null }>(existingClaimRow.payloadJson, {}) : undefined;
   const existingBody = existingPayload?.body ?? null;
   const body = preserveSparseBody ? existingBody : record.body;
+  logIfBodyTruncated("pull_request", repoFullName, pr.number, preserveSparseBody ? existingBody : pr.body);
   const payload = preserveSparseBody ? compactGitHubPayload({ ...pr, body: existingBody }) : compactGitHubPayload(pr);
   const linkedIssues = preserveSparseBody ? parseLinkedIssuesJson(existingClaimRow.linkedIssuesJson) : record.linkedIssues;
   const linkedIssuesJson = preserveSparseBody ? existingClaimRow.linkedIssuesJson : jsonString(linkedIssues);
@@ -436,6 +446,7 @@ export async function upsertIssueFromGitHub(env: Env, repoFullName: string, issu
   const record = toIssueRecord(repoFullName, issue);
   const db = getDb(env.DB);
   const lastSeenOpenAt = issue.state === "open" ? (options.seenOpenAt ?? nowIso()) : null;
+  logIfBodyTruncated("issue", repoFullName, issue.number, issue.body);
   await db
     .insert(issues)
     .values({
@@ -6089,6 +6100,27 @@ function mergeableBooleanState(value: boolean | null | undefined): string | unde
 function truncateBody(body: string | null | undefined): string | null {
   if (!body) return body ?? null;
   return body.length > MAX_STORED_BODY_CHARS ? body.slice(0, MAX_STORED_BODY_CHARS) : body;
+}
+
+/** Structured, greppable trace the instant a body-content check (screenshotTableGate, linked-issue
+ *  satisfaction, slop keyword matching, ...) could see a truncated body instead of the real one -- the #4682
+ *  incident's entire failure mode was that this was previously SILENT (no log, no audit row, nothing), so a
+ *  4000-char cap quietly corrupted every check reading `pr.body`/`issue.body` for months before anyone
+ *  noticed. MAX_STORED_BODY_CHARS now matches GitHub's own issue/PR body limit, so this should never actually
+ *  fire in practice -- if it ever does, that fact belongs in the logs immediately, not rediscovered later via
+ *  manual DB archaeology. */
+function logIfBodyTruncated(kind: "pull_request" | "issue", repoFullName: string, number: number, body: string | null | undefined): void {
+  if (!body || body.length <= MAX_STORED_BODY_CHARS) return;
+  console.log(
+    JSON.stringify({
+      event: "github_app.body_truncated_on_store",
+      kind,
+      repoFullName,
+      number,
+      originalLength: body.length,
+      storedLength: MAX_STORED_BODY_CHARS,
+    }),
+  );
 }
 
 function toIssueRecordFromRow(row: typeof issues.$inferSelect): IssueRecord {
