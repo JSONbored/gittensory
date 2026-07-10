@@ -11,10 +11,6 @@
 import type { RepoProfile, RepoProfileCommands, RepoProfileFileNamingStyle, RepoProfileTestFileConvention } from "./repo-profile";
 import type { GeneratedDocMarkers } from "./generated-doc-refresh";
 
-/** Bumped whenever the RENDERED CONTENT's structure changes in a way #3004's diff-aware refresh needs to know
- *  about (new section, reordered section, changed marker) -- not on copy-only wording tweaks. */
-export const REPO_DOC_TEMPLATE_VERSION = 2;
-
 /** HTML-comment marker pair bracketing the machine-generated section of every AGENTS.md this engine writes.
  *  Content outside this pair (added by a maintainer before the start marker or after the end marker) is treated
  *  as permanently manual and is never touched by a refresh (#3004) -- see generated-doc-refresh.ts. */

@@ -57,7 +57,6 @@ import type {
   AnalyzerDescriptor,
   AnalyzerFn,
   AnalyzerName,
-  AnalyzerRegistry,
   AnyAnalyzerDescriptor,
 } from "./types.js";
 import { DEFAULT_MAX_FINDINGS, DEFAULT_MAX_LINE_CHARS } from "./limits.js";
@@ -1631,8 +1630,6 @@ export const ANALYZER_NAMES = ANALYZER_DESCRIPTORS.map(
 export const ANALYZERS = Object.fromEntries(
   ANALYZER_DESCRIPTORS.map((analyzer) => [analyzer.name, analyzer.run]),
 ) as Record<AnalyzerName, AnalyzerFn>;
-
-export const ANALYZER_REGISTRY: AnalyzerRegistry = ANALYZERS;
 
 export const ANALYZER_DESCRIPTORS_BY_NAME = Object.fromEntries(
   ANALYZER_DESCRIPTORS.map((analyzer) => [analyzer.name, analyzer]),

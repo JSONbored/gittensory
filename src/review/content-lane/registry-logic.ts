@@ -31,13 +31,6 @@ export function isInternalAutomationBranch(ref: string | undefined): boolean {
 export const ARTIFACT_PATTERN = /^public\/metagraph\/[a-z0-9/_-]+\.json$/i;
 export const DEFAULT_PUBLIC_API_BASE = "https://api.metagraph.sh/api/v1";
 
-export const ISSUE_SUBMISSION_LABELS = new Set([
-  "interface-submission",
-  "endpoint-submission",
-  "provider-submission",
-  "status-report",
-]);
-
 const REVIEWER_CLOSE_REASONS = new Set([
   "malformed-json",
   "unsafe-url",
@@ -81,8 +74,6 @@ const REVIEWER_SAFE_KINDS = new Set([
   "docs",
   "data-artifact",
 ]);
-export const AI_REVIEW_VERDICTS = new Set(["merged", "closed", "manual-review"]);
-
 /** Live verdict vocabulary → core verdict. */
 export type MetaVerdict = "merged" | "closed" | "manual-review";
 export function toCoreVerdict(v: MetaVerdict): Verdict {

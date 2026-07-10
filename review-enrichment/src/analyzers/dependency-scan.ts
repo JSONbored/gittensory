@@ -432,16 +432,3 @@ export async function scanDependencyChanges(
   }
   return findings;
 }
-
-/** Analyzer entrypoint: changed deps → OSV → only the deps that carry vulnerabilities. */
-export async function scanDependencies(
-  req: EnrichRequest,
-  fetchImpl: typeof fetch = fetch,
-  options: ScanOptions = {},
-): Promise<DependencyFinding[]> {
-  return scanDependencyChanges(
-    extractDependencyChanges(req.files ?? [], options.limits),
-    fetchImpl,
-    options,
-  );
-}

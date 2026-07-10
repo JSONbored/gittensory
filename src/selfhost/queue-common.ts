@@ -598,10 +598,6 @@ export function githubWebhookRateLimitDelayMs(
   return githubObservedRateLimitDelayMs(observation, LOW_REST_RATE_LIMIT_REMAINING, nowMs);
 }
 
-export function githubRateLimitAdmissionRemainingFloor(kind: "background" | "webhook"): number {
-  return kind === "webhook" ? LOW_REST_RATE_LIMIT_REMAINING : MAINTENANCE_RESERVED_HEADROOM;
-}
-
 function githubWebhookPriority(payload: string): number {
   try {
     const message = JSON.parse(payload) as {

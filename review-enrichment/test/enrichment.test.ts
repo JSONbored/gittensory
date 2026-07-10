@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   extractDependencyChanges,
   queryOsv,
-  scanDependencies,
 } from "../dist/analyzers/dependency-scan.js";
 import {
   extractLockfileChanges,
@@ -191,20 +190,6 @@ test("queryOsv: CVSS numeric score bucketed when no database_specific", async ()
     okFetch([{ id: "Y", severity: [{ type: "CVSS_V3", score: "9.8" }] }]),
   );
   assert.equal(cves[0].severity, "critical");
-});
-
-test("scanDependencies: only deps with vulns are returned", async () => {
-  const findings = await scanDependencies(
-    {
-      repoFullName: "o/r",
-      prNumber: 1,
-      files: [{ path: "package.json", patch: '+    "lodash": "4.17.20",' }],
-    },
-    okBatchFetch([{ id: "GHSA-x", database_specific: { severity: "CRITICAL" } }]),
-  );
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].direction, "add");
-  assert.equal(findings[0].cves[0].severity, "critical");
 });
 
 test("extractLockfileChanges: package-lock version drift with file line, skipping direct manifest deps", () => {
@@ -1666,28 +1651,6 @@ test("extractDependencyChanges: caps manifest files and patch lines", () => {
     changes.map((change) => change.package),
     ["first"],
   );
-});
-
-test("scanDependencies: caps OSV queries and forwards abort signals", async () => {
-  const seenSignals = [];
-  const files = Array.from({ length: 3 }, (_, index) => ({
-    path: "package.json",
-    patch: `+    "pkg-${index}": "1.0.0",`,
-  }));
-
-  const controller = new AbortController();
-  const findings = await scanDependencies(
-    { repoFullName: "o/r", prNumber: 1, files },
-    async (_url, init) => {
-      seenSignals.push(init.signal);
-      return { ok: true, json: async () => ({ results: [{ vulns: [] }, { vulns: [] }] }) };
-    },
-    { signal: controller.signal, limits: { maxDependencyQueries: 2 } },
-  );
-
-  assert.equal(findings.length, 0);
-  assert.equal(seenSignals.length, 1);
-  assert.ok(seenSignals.every((signal) => signal instanceof AbortSignal));
 });
 
 test("buildBrief: timeout aborts dependency scan so OSV work stops", async () => {

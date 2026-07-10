@@ -28,11 +28,6 @@ export const DEFAULT_TYPE_LABELS: PrTypeLabelSet = {
   priority: "gittensor:priority",
 };
 
-/** Every label name in the built-in default set, generic over however many categories
- *  `DEFAULT_TYPE_LABELS` carries (#label-modularity) -- never hardcode `.bug`/`.feature`/`.priority`
- *  property access here, a configured set can carry more or fewer categories than the default. */
-export const ALL_TYPE_LABELS: readonly string[] = Object.values(DEFAULT_TYPE_LABELS);
-
 export const MAX_TYPE_LABEL_CATEGORIES = 32;
 export const MAX_TYPE_LABEL_NAME_LENGTH = 50;
 

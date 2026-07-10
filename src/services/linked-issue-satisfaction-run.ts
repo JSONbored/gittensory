@@ -177,5 +177,3 @@ async function record(
     metadata: { repoFullName: input.repoFullName, pullNumber: input.prNumber, ...(metadata ?? {}) },
   });
 }
-
-export const __linkedIssueSatisfactionRunInternals = { runWorkersSatisfactionOpinion };

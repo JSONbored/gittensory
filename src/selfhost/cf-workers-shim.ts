@@ -9,10 +9,3 @@ export class DurableObject<E = unknown> {
     protected env?: E,
   ) {}
 }
-export class WorkerEntrypoint<E = unknown> {
-  constructor(
-    protected ctx?: unknown,
-    protected env?: E,
-  ) {}
-}
-export class RpcTarget {}
