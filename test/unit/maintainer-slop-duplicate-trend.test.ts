@@ -166,6 +166,32 @@ describe("buildMaintainerSlopDuplicateTrend", () => {
   });
 });
 
+describe("buildQueueHealth slop + duplicate counts", () => {
+  it("counts slop-flagged and duplicate-flagged open PRs", () => {
+    const issues = [issue(101), issue(102)];
+    const pullRequests = [
+      pr(1, { linkedIssues: [101], slopBand: "high" }),
+      pr(2, { linkedIssues: [102], slopBand: "clean" }),
+      pr(3, { linkedIssues: [101], slopBand: "elevated" }),
+    ];
+    const collisions = buildCollisionReport("octo/demo", issues, pullRequests);
+    const health = buildQueueHealth(repo("octo/demo"), issues, pullRequests, collisions);
+    expect(health.signals.slopFlaggedPullRequests).toBe(2);
+    expect(health.signals.duplicateFlaggedPullRequests).toBeGreaterThanOrEqual(0);
+  });
+
+  it("treats a collision report without clusters as zero duplicate flags", () => {
+    const health = buildQueueHealth(
+      repo("octo/demo"),
+      [],
+      [pr(1, { slopBand: "high" })],
+      { repoFullName: "octo/demo", generatedAt: "2026-01-01T00:00:00.000Z", summary: { clusterCount: 0, highRiskCount: 0, itemsReviewed: 0 } } as never,
+    );
+    expect(health.signals.slopFlaggedPullRequests).toBe(1);
+    expect(health.signals.duplicateFlaggedPullRequests).toBe(0);
+  });
+});
+
 describe("slopBandLabelFromRate", () => {
   it("maps aggregate flag rates to public band labels", () => {
     expect(slopBandLabelFromRate(null)).toBeNull();

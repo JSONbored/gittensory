@@ -961,8 +961,9 @@ export function buildQueueHealth(
   const slopFlaggedPullRequests = openPullRequests.filter(
     (pr) => pr.slopBand === "elevated" || pr.slopBand === "high",
   ).length;
+  const clusterList = collisions.clusters ?? [];
   const highRiskDuplicatePrNumbers = new Set(
-    collisions.clusters
+    clusterList
       .filter(
         (cluster) =>
           cluster.risk === "high" &&
