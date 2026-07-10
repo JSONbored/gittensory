@@ -16,7 +16,12 @@ import {
   resolveProjectV2Fields,
   type ProjectTrackerRef,
 } from "../../src/integrations/project-tracker-adapter";
+import { upsertRepositoryLinearKey } from "../../src/db/repositories";
+import { LinearAdapter } from "../../src/integrations/linear-adapter";
 import { createTestEnv } from "../helpers/d1";
+
+const LINEAR_TEST_SECRET = "example-unit-test-encryption-secret-32-bytes-long";
+const LINEAR_PR_URL = "https://github.com/JSONbored/gittensory/pull/4";
 
 function generateRsaPrivateKeyPem(): string {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -748,17 +753,21 @@ describe("auto-apply threshold helpers (#3185)", () => {
   it("filters fuzzy matches below the configured threshold before attach", () => {
     const matches = {
       milestone: { item: { id: "14", title: "Self-host reliability roadmap" }, source: "fuzzy" as const, score: 0.66, shared: 3 },
-      project: null,
+      project: { item: { id: "PVT_1", title: "Self-host reliability roadmap" }, source: "fuzzy" as const, score: 0.66, shared: 3 },
     };
     expect(filterMatchesForAutoApply(matches, 65).milestone).not.toBeNull();
+    expect(filterMatchesForAutoApply(matches, 65).project).not.toBeNull();
     expect(filterMatchesForAutoApply(matches, 67).milestone).toBeNull();
-    expect(filterMatchesForAutoApply({ ...matches, milestone: { ...matches.milestone!, source: "native" } }, 100).milestone).not.toBeNull();
+    expect(filterMatchesForAutoApply(matches, 67).project).toBeNull();
+    expect(filterMatchesForAutoApply({ ...matches, milestone: { ...matches.milestone, source: "native" } }, 100).milestone).not.toBeNull();
+    expect(filterMatchesForAutoApply({ milestone: null, project: matches.project }, 67).project).toBeNull();
   });
 });
 
 describe("maybeAutoApplyProjectOrMilestoneMatch (#3185)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("PATCHes the milestone and posts a confirmation comment when a match clears the threshold", async () => {
@@ -822,6 +831,273 @@ describe("maybeAutoApplyProjectOrMilestoneMatch (#3185)", () => {
         65,
       ),
     ).resolves.toEqual({ applied: false });
+  });
+
+  it("auto-applies a project match when no milestone matches", async () => {
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) return Response.json([]);
+      if (url.includes("/pulls/4") && method === "GET") return Response.json({ number: 4, node_id: "PR_kwABC" });
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        if (body.query?.includes("addProjectV2ItemById")) {
+          return Response.json({ data: { addProjectV2ItemById: { item: { id: "ITEM_1" } } } });
+        }
+        return Response.json({
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "some-org/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/some-org/gittensory/pull/4",
+      65,
+    );
+    expect(result).toEqual({ applied: true });
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain(PROJECT_TRACKER_AUTO_APPLY_COMMENT_MARKER);
+    expect(posted[0]).toContain("Added this PR to the");
+    expect(posted[0]).toContain("project");
+    expect(posted[0]).not.toContain("Attached this PR to the");
+  });
+
+  it("auto-applies both milestone and project when each independently matches", async () => {
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) return Response.json([{ number: 14, title: "Self-host reliability roadmap" }]);
+      if (url.includes("/pulls/4") && method === "GET") return Response.json({ number: 4, node_id: "PR_kwABC" });
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        if (body.query?.includes("addProjectV2ItemById")) {
+          return Response.json({ data: { addProjectV2ItemById: { item: { id: "ITEM_1" } } } });
+        }
+        return Response.json({
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4") && method === "PATCH") return Response.json({ number: 4, milestone: { number: 14 } });
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "some-org/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/some-org/gittensory/pull/4",
+      65,
+    );
+    expect(result).toEqual({ applied: true });
+    expect(posted[0]).toContain("milestone");
+    expect(posted[0]).toContain("project");
+  });
+
+  it("returns applied:false when the configured threshold blocks the fuzzy match", async () => {
+    let posted = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) return Response.json([{ number: 14, title: "Self-host reliability roadmap" }]);
+      if (url.endsWith("/graphql")) return Response.json(noOpenProjectsGraphQlBody());
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        posted = true;
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "unrelated typo fix",
+      null,
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
+      100,
+    );
+    expect(result).toEqual({ applied: false });
+    expect(posted).toBe(false);
+  });
+
+  it("is idempotent when the auto-apply marker comment already exists", async () => {
+    let patched = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) return Response.json([{ number: 14, title: "Self-host reliability roadmap" }]);
+      if (url.endsWith("/graphql")) return Response.json(noOpenProjectsGraphQlBody());
+      if (url.includes("/issues/4/comments") && method === "GET") {
+        return Response.json([{ body: PROJECT_TRACKER_AUTO_APPLY_COMMENT_MARKER, user: { type: "Bot", login: "gittensory[bot]" } }]);
+      }
+      if (url.includes("/issues/4") && method === "PATCH") {
+        patched = true;
+        return Response.json({ number: 4, milestone: { number: 14 } });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/JSONbored/gittensory/pull/4",
+      65,
+    );
+    expect(result).toEqual({ applied: false });
+    expect(patched).toBe(false);
+  });
+
+  it("swallows a project attach failure and still succeeds when the milestone attach worked", async () => {
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones")) return Response.json([{ number: 14, title: "Self-host reliability roadmap" }]);
+      if (url.includes("/pulls/4") && method === "GET") return Response.json({ number: 4, node_id: "PR_kwABC" });
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        if (body.query?.includes("addProjectV2ItemById")) return new Response("boom", { status: 500 });
+        return Response.json({
+          data: { repositoryOwner: { __typename: "Organization", projectsV2: { nodes: [{ id: "PVT_1", title: "Self-host reliability roadmap", closed: false, public: true }], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4") && method === "PATCH") return Response.json({ number: 4, milestone: { number: 14 } });
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "some-org/gittensory" },
+      4,
+      "Improve self-host reliability roadmap convergence",
+      "Follow-up on the self-host reliability roadmap work",
+      "github",
+      "https://github.com/some-org/gittensory/pull/4",
+      65,
+    );
+    expect(result).toEqual({ applied: true });
+    expect(posted[0]).toContain("milestone");
+    expect(posted[0]).not.toContain("project");
+  });
+
+  it("routes linear backends through Linear adapters (inert attach, applied:false)", async () => {
+    const env = createTestEnv({
+      TOKEN_ENCRYPTION_SECRET: LINEAR_TEST_SECRET,
+      GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(),
+      GITHUB_APP_SLUG: "gittensory",
+    });
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    let posted = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) {
+          return Response.json({ data: { attachmentsForURL: { nodes: [{ issue: { project: { id: "proj-1", name: "Self-host reliability roadmap" }, projectMilestone: { id: "mile-1", name: "Stealth Launch M3" } } }] } } });
+        }
+        return Response.json({ data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        posted = true;
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "any title",
+      null,
+      "linear",
+      LINEAR_PR_URL,
+      65,
+    );
+    expect(result).toEqual({ applied: false });
+    expect(posted).toBe(false);
+  });
+
+  it("redacts tracker titles in the auto-apply confirmation comment on linear backends", async () => {
+    vi.spyOn(LinearAdapter.prototype, "attachToMilestone").mockResolvedValue({ attached: true });
+    vi.spyOn(LinearAdapter.prototype, "attachToProject").mockResolvedValue({ attached: true });
+    const env = createTestEnv({
+      TOKEN_ENCRYPTION_SECRET: LINEAR_TEST_SECRET,
+      GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(),
+      GITHUB_APP_SLUG: "gittensory",
+    });
+    await upsertRepositoryLinearKey(env, { repoFullName: "JSONbored/gittensory", key: "lin_api_test_key" });
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url === "https://api.linear.app/graphql") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+        if (body.query.includes("attachmentsForURL")) {
+          return Response.json({ data: { attachmentsForURL: { nodes: [{ issue: { project: { id: "proj-1", name: "Self-host reliability roadmap" }, projectMilestone: { id: "mile-1", name: "Stealth Launch M3" } } }] } } });
+        }
+        return Response.json({ data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { body?: string };
+        posted.push(body.body ?? "");
+        return Response.json({ id: 1 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await maybeAutoApplyProjectOrMilestoneMatch(
+      { env, installationId: 123, repoFullName: "JSONbored/gittensory" },
+      4,
+      "any title",
+      null,
+      "linear",
+      LINEAR_PR_URL,
+      65,
+    );
+    expect(result).toEqual({ applied: true });
+    expect(posted[0]).toContain("Attached this PR to the milestone.");
+    expect(posted[0]).toContain("Added this PR to the project.");
+    expect(posted[0]).not.toContain("Self-host reliability roadmap");
+    expect(posted[0]).not.toContain("Stealth Launch M3");
   });
 });
 
