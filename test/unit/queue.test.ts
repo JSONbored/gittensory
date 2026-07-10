@@ -57,7 +57,7 @@ import {
   listReviewSuppressions,
   setGlobalAgentFrozen,
 } from "../../src/db/repositories";
-import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, enrichOpenPullRequestsWithChangedFiles, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock, SWEEP_FANOUT_RESOLUTION_CONCURRENCY } from "../../src/queue/processors";
+import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, enrichOpenPullRequestsWithChangedFiles, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock, reviewDurationMsSince, SWEEP_FANOUT_RESOLUTION_CONCURRENCY } from "../../src/queue/processors";
 import type { PullRequestRecord } from "../../src/types";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { fingerprint as reviewMemoryFingerprint } from "../../src/review/review-memory-match";
@@ -4026,6 +4026,136 @@ describe("queue processors", () => {
         .filter((sql) => sql.includes("submitter_stats") || sql.includes("terminal_at IS NOT NULL") || sql.includes("created_at >= datetime"));
       spy.mockRestore();
       expect(reputationPrepares).toHaveLength(3); // submitter_stats + review_targets quality scan + cadence scan, ONCE
+    });
+
+    it("INVARIANT (#4446): a real agent-regate-pr pass with AI review persists a non-negative reviewDurationMs onto the publish audit event", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }) } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 63, title: "Turnaround PR", state: "open", user: { login: "contributor" }, head: { sha: "a63" }, labels: [], body: "Closes #1" });
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 63, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/63/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        if (url.endsWith("/pulls/63")) return Response.json({ number: 63, title: "Turnaround PR", state: "open", user: { login: "contributor" }, head: { sha: "a63" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a63/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a63/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/issues/63/comments")) return method === "POST" ? Response.json({ id: 63 }, { status: 201 }) : Response.json([]);
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "turnaround-capture", repoFullName: "JSONbored/gittensory", prNumber: 63, installationId: 123 });
+
+      const published = await env.DB.prepare("select metadata_json from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#63")
+        .first<{ metadata_json: string }>();
+      const metadata = JSON.parse(published?.metadata_json ?? "{}");
+      expect(typeof metadata.reviewDurationMs).toBe("number");
+      expect(metadata.reviewDurationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it("REGRESSION (#4446): reviewDurationMs is correctly ABSENT (not a bogus 0) when no active-review-tracking row exists for this exact headSha", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }) } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env, { aiReviewMode: "off" }); // AI review never runs -> startActiveReviewTracking never fires
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 64, title: "No AI review PR", state: "open", user: { login: "contributor" }, head: { sha: "a64" }, labels: [], body: "Closes #1" });
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 64, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/64/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        if (url.endsWith("/pulls/64")) return Response.json({ number: 64, title: "No AI review PR", state: "open", user: { login: "contributor" }, head: { sha: "a64" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a64/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a64/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/issues/64/comments")) return method === "POST" ? Response.json({ id: 64 }, { status: 201 }) : Response.json([]);
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "turnaround-absent", repoFullName: "JSONbored/gittensory", prNumber: 64, installationId: 123 });
+
+      const published = await env.DB.prepare("select metadata_json from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#64")
+        .first<{ metadata_json: string }>();
+      const metadata = JSON.parse(published?.metadata_json ?? "{}");
+      expect(metadata.reviewDurationMs).toBeUndefined();
+    });
+
+    it("swallows a failing getActiveReviewStartedAt lookup without throwing, publishing with no reviewDurationMs (#4446)", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI: { run: async () => ({ response: JSON.stringify({ assessment: "Looks fine.", blockers: [], nits: [], suggestions: [] }) }) } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      await seedRegateChurnRepo(env);
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 65, title: "Lookup failure PR", state: "open", user: { login: "contributor" }, head: { sha: "a65" }, labels: [], body: "Closes #1" });
+      await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 65, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/pulls/65/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        if (url.endsWith("/pulls/65")) return Response.json({ number: 65, title: "Lookup failure PR", state: "open", user: { login: "contributor" }, head: { sha: "a65" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+        if (url.includes("/commits/a65/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/commits/a65/status")) return Response.json({ state: "success", statuses: [] });
+        if (url.includes("/issues/65/comments")) return method === "POST" ? Response.json({ id: 65 }, { status: 201 }) : Response.json([]);
+        if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+        if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+        return Response.json({});
+      });
+      const lookupSpy = vi.spyOn(repositoriesModule, "getActiveReviewStartedAt").mockRejectedValueOnce(new Error("D1 read error"));
+
+      await expect(
+        processJob(env, { type: "agent-regate-pr", deliveryId: "turnaround-lookup-fail", repoFullName: "JSONbored/gittensory", prNumber: 65, installationId: 123 }),
+      ).resolves.toBeUndefined(); // the publish still completes — a lookup failure is best-effort, never fatal
+      lookupSpy.mockRestore();
+
+      const published = await env.DB.prepare("select metadata_json from audit_events where event_type = ? and target_key = ?")
+        .bind("github_app.pr_public_surface_published", "JSONbored/gittensory#65")
+        .first<{ metadata_json: string }>();
+      const metadata = JSON.parse(published?.metadata_json ?? "{}");
+      expect(metadata.reviewDurationMs).toBeUndefined();
+    });
+
+    describe("reviewDurationMsSince (#4446, pure)", () => {
+      it("returns undefined for a null startedAt (no active-review-tracking row)", () => {
+        expect(reviewDurationMsSince(null, 1_000_000)).toBeUndefined();
+      });
+
+      it("returns the elapsed ms for a valid past startedAt", () => {
+        expect(reviewDurationMsSince(new Date(1_000_000).toISOString(), 1_005_000)).toBe(5_000);
+      });
+
+      it("returns 0 for a startedAt exactly equal to now", () => {
+        const now = new Date(1_000_000).toISOString();
+        expect(reviewDurationMsSince(now, 1_000_000)).toBe(0);
+      });
+
+      it("REGRESSION: returns undefined (not a negative number) for a startedAt in the FUTURE relative to now (clock skew)", () => {
+        expect(reviewDurationMsSince(new Date(2_000_000).toISOString(), 1_000_000)).toBeUndefined();
+      });
+
+      it("REGRESSION: returns undefined (not NaN) for an unparseable startedAt string", () => {
+        expect(reviewDurationMsSince("not-a-real-timestamp", 1_000_000)).toBeUndefined();
+      });
     });
 
     it("swallows a failing hit/skip audit write without throwing (cache-hit path)", async () => {

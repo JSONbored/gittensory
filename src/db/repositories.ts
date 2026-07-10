@@ -5298,6 +5298,22 @@ export async function hasActiveReviewForHeadSha(env: Env, repoFullName: string, 
   return row !== undefined && row.status === "active" && row.headSha === headSha;
 }
 
+// Review turnaround-time tracking (#4446): reuses the SAME startedAt startActiveReviewTracking already records
+// for review-evasion protection -- reads it (for the exact headSha this pass is publishing) rather than
+// duplicating a second "when did this review start" clock. Not gated on status === "active": the publish site
+// this feeds reads it BEFORE terminalizeActiveReviewTracking runs later in the same pass (see processors.ts),
+// but staying permissive here means a future reordering degrades to "no duration" rather than a silent wrong
+// number. A DIFFERENT headSha (a newer pass already raced in) or no row at all correctly returns null -- the
+// caller's duration computation is skipped entirely rather than measuring the wrong pass's window.
+export async function getActiveReviewStartedAt(env: Env, repoFullName: string, pullNumber: number, headSha: string): Promise<string | null> {
+  const row = await getDb(env.DB)
+    .select({ headSha: activeReviewTracking.headSha, startedAt: activeReviewTracking.startedAt })
+    .from(activeReviewTracking)
+    .where(and(eq(activeReviewTracking.repoFullName, boundedString(repoFullName, 200)), eq(activeReviewTracking.pullNumber, pullNumber)))
+    .get();
+  return row !== undefined && row.headSha === headSha ? row.startedAt : null;
+}
+
 // Review-evasion protection: guarded status transition -- terminalize the active-review row for
 // repoFullName#pullNumber ONLY if it is still 'active' (and, when given, still pinned to headSha), the same
 // CAS shape as claimPendingAgentActionDecision, so a stale/already-terminalized row is never double-processed.

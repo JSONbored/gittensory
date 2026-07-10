@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getActiveReviewStartedAt,
   getContributorScoringProfile,
   getOpenUpstreamDriftReportByFingerprint,
   hasActiveReviewForHeadSha,
@@ -396,5 +397,39 @@ describe("active-review tracking (#review-evasion-protection)", () => {
     await startActiveReviewTracking(env, { repoFullName: "owner/repo", pullNumber: 1, headSha: "sha1", deliveryId: "delivery-1" });
     const row = await rawRow(env, "owner/repo", 1);
     expect(row?.author_login).toBeNull();
+  });
+
+  describe("getActiveReviewStartedAt (#4446)", () => {
+    it("returns null when no row exists at all", async () => {
+      const env = createTestEnv();
+      expect(await getActiveReviewStartedAt(env, "owner/repo", 1, "sha1")).toBeNull();
+    });
+
+    it("returns the row's startedAt for the exact matching headSha", async () => {
+      const env = createTestEnv();
+      await startActiveReviewTracking(env, { repoFullName: "owner/repo", pullNumber: 1, headSha: "sha1", deliveryId: "delivery-1" });
+      const row = await rawRow(env, "owner/repo", 1);
+      expect(await getActiveReviewStartedAt(env, "owner/repo", 1, "sha1")).toBe(row?.started_at);
+    });
+
+    it("REGRESSION: returns null for a DIFFERENT headSha than the tracked row -- never measures the wrong pass's window", async () => {
+      const env = createTestEnv();
+      await startActiveReviewTracking(env, { repoFullName: "owner/repo", pullNumber: 1, headSha: "sha1", deliveryId: "delivery-1" });
+      expect(await getActiveReviewStartedAt(env, "owner/repo", 1, "sha-different")).toBeNull();
+    });
+
+    it("returns null for a different PR number, even under the same repo", async () => {
+      const env = createTestEnv();
+      await startActiveReviewTracking(env, { repoFullName: "owner/repo", pullNumber: 1, headSha: "sha1", deliveryId: "delivery-1" });
+      expect(await getActiveReviewStartedAt(env, "owner/repo", 2, "sha1")).toBeNull();
+    });
+
+    it("still returns startedAt for a matching headSha AFTER the row has been terminalized -- not gated on status === 'active'", async () => {
+      const env = createTestEnv();
+      await startActiveReviewTracking(env, { repoFullName: "owner/repo", pullNumber: 1, headSha: "sha1", deliveryId: "delivery-1" });
+      const row = await rawRow(env, "owner/repo", 1);
+      await terminalizeActiveReviewTracking(env, "owner/repo", 1);
+      expect(await getActiveReviewStartedAt(env, "owner/repo", 1, "sha1")).toBe(row?.started_at);
+    });
   });
 });

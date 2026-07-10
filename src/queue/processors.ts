@@ -72,6 +72,7 @@ import {
   recordGateBlockOutcome,
   getGateBlockOutcome,
   hasActiveReviewForHeadSha,
+  getActiveReviewStartedAt,
   isDbFrozenForRepo,
   markGateOutcomeOverridden,
   markPullRequestLinkedIssueHardRuleViolated,
@@ -8654,6 +8655,15 @@ async function resolveManifestPassedValidationCount(
   return liveCi.ciState === "passed" ? 1 : 0;
 }
 
+// review turnaround-time (#4446): elapsed ms between startedAt and "now", clamped to a sane non-negative
+// finite value -- a clock-skew or malformed-timestamp edge case (a future startedAt, or an unparseable one)
+// degrades to undefined rather than ever letting a negative or NaN duration reach the public payload.
+export function reviewDurationMsSince(startedAt: string | null, nowMs: number): number | undefined {
+  if (!startedAt) return undefined;
+  const ms = nowMs - Date.parse(startedAt);
+  return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+}
+
 async function maybePublishPrPublicSurface(
   env: Env,
   installationId: number,
@@ -9246,6 +9256,17 @@ async function maybePublishPrPublicSurface(
       )
       .then((effort) => effort.minutes)
       .catch(() => undefined);
+    // review turnaround-time (#4446): reuses the SAME startedAt startActiveReviewTracking already records for
+    // review-evasion protection -- persisted onto this SAME published event, mirroring reviewEffortMinutes'
+    // exact precedent above (a raw per-PR number in audit metadata; the daily rollup job aggregates it later).
+    // Read before terminalizeActiveReviewTracking runs later in this same pass, matched to the EXACT headSha
+    // being published so a race with a newer pass degrades to "no duration" (undefined), never a wrong number.
+    // Fail-safe: a lookup error must never block the publish audit itself.
+    const reviewDurationMsForStats = pr.headSha
+      ? await getActiveReviewStartedAt(env, repoFullName, pr.number, pr.headSha)
+          .then((startedAt) => reviewDurationMsSince(startedAt, Date.now()))
+          .catch(() => undefined)
+      : undefined;
     await recordAuditEvent(env, {
       eventType: "github_app.pr_public_surface_published",
       actor: author,
@@ -9263,6 +9284,7 @@ async function maybePublishPrPublicSurface(
         failedOutputs,
         gateCheckFinalized: gateFinalized,
         ...(reviewEffortMinutesForStats !== undefined ? { reviewEffortMinutes: reviewEffortMinutesForStats } : {}),
+        ...(reviewDurationMsForStats !== undefined ? { reviewDurationMs: reviewDurationMsForStats } : {}),
       },
     });
     await recordGithubProductUsage(env, "pr_public_surface_published", {
