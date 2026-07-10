@@ -226,7 +226,7 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
   if (selfHostedReviews && isHourly) {
     const maintainerRecapOverride = await resolveMaintainerRecapManifestOverride(env);
     if (isRecapEnabled(env, maintainerRecapOverride) && shouldFireMaintainerRecap(env, hour, scheduledAt.getUTCDay(), maintainerRecapOverride)) {
-      jobs.push({ type: "generate-maintainer-recap", requestedBy: "schedule" });
+      jobs.push({ type: "generate-maintainer-recap", requestedBy: "schedule", scheduledPeriodKey: scheduledAt.toISOString().slice(0, 10) });
     }
   }
   if (isFullSyncWindow) {

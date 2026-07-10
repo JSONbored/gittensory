@@ -839,7 +839,7 @@ describe("worker entrypoint", () => {
     expect((await sentFor("false")).some((m) => m.type === "generate-maintainer-recap")).toBe(false);
     // Flag ON, on the default weekly cadence tick → exactly one recap job.
     const on = await sentFor("true");
-    expect(on.filter((m) => m.type === "generate-maintainer-recap")).toEqual([{ type: "generate-maintainer-recap", requestedBy: "schedule" }]);
+    expect(on.filter((m) => m.type === "generate-maintainer-recap")).toEqual([{ type: "generate-maintainer-recap", requestedBy: "schedule", scheduledPeriodKey: "2026-06-01" }]);
   });
 
   it("does NOT enqueue the maintainer recap digest outside its configured cadence even when GITTENSORY_MAINTAINER_RECAP is ON", async () => {
@@ -872,7 +872,7 @@ describe("worker entrypoint", () => {
     const waitUntil: Promise<unknown>[] = [];
     await worker.scheduled(controllerFor("2026-06-02T14:00:00.000Z"), env, executionContext(waitUntil)); // Tuesday — not the weekly default day
     await Promise.all(waitUntil);
-    expect(sent.filter((m) => m.type === "generate-maintainer-recap")).toEqual([{ type: "generate-maintainer-recap", requestedBy: "schedule" }]);
+    expect(sent.filter((m) => m.type === "generate-maintainer-recap")).toEqual([{ type: "generate-maintainer-recap", requestedBy: "schedule", scheduledPeriodKey: "2026-06-02" }]);
   });
 });
 

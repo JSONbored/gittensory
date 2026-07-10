@@ -281,6 +281,25 @@ describe("runMaintainerRecapJob — cross-repo digest (#1963, #2248)", () => {
     vi.useRealTimers();
   });
 
+  it("REGRESSION: a failed repo scan does not mark an unsent period complete (#2249)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T14:00:00.000Z"));
+    const env = createTestEnv({ DISCORD_WEBHOOK_URL: HOOK });
+    await seedRegisteredRepo(env, "owner/alpha");
+    await seedMergedPr(env, "owner/alpha", 1);
+    const posted = stubDiscordFetch();
+    const realDb = env.DB;
+    env.DB = null as unknown as typeof env.DB;
+
+    await expect(runMaintainerRecapJob(env)).rejects.toThrow();
+    env.DB = realDb;
+    const retry = ranRecap(await runMaintainerRecapJob(env));
+
+    expect(retry.delivery.discord).toEqual({ sent: true });
+    expect(posted).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
   it("a tick on a DIFFERENT UTC date gets its own fresh claim and sends again (#2249)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T14:00:00.000Z"));
@@ -296,6 +315,21 @@ describe("runMaintainerRecapJob — cross-repo digest (#1963, #2248)", () => {
     expect(first.delivery.discord).toEqual({ sent: true });
     expect(second.delivery.discord).toEqual({ sent: true });
     expect(posted).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it("uses the scheduled period key instead of processing time for delayed queue jobs (#2249)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T00:05:00.000Z"));
+    const env = createTestEnv({ DISCORD_WEBHOOK_URL: HOOK });
+    stubDiscordFetch();
+
+    await runMaintainerRecapJob(env, undefined, undefined, "2026-07-09");
+
+    const row = await env.DB.prepare("select target_key from audit_events where event_type = ? order by created_at desc limit 1")
+      .bind("maintainer_recap_generated")
+      .first<{ target_key: string }>();
+    expect(row!.target_key).toBe("maintainer-recap:2026-07-09");
     vi.useRealTimers();
   });
 

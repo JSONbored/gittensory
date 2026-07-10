@@ -2536,23 +2536,29 @@ export async function claimRegateFanoutSlot(env: Env, now: string, windowMs: num
   }
 }
 
-/** Atomic per-period dedup for the cross-repo maintainer recap digest (#2249): claim `periodKey` (the current
- *  UTC date, "YYYY-MM-DD") as the singleton's last-sent period. Mirrors {@link claimRegateFanoutSlot}: the
- *  conditional UPDATE matches only when the stored period is unset or DIFFERENT from `periodKey`, so a retried
- *  cron tick or a redelivered (at-least-once) queue message for the SAME period gets 0 changes and skips
- *  before any repo scan or Discord send. Fail-open on a driver error (return true → the digest still runs,
- *  degrading to the pre-dedup behaviour rather than silently going dark). */
-export async function claimMaintainerRecapPeriod(env: Env, periodKey: string): Promise<boolean> {
+/** Read the last successfully generated maintainer recap period (#2249). Fail-open on a driver error
+ *  (`null` → the digest still runs), matching the notification job's availability-first posture. */
+export async function getLastMaintainerRecapPeriodKey(env: Env): Promise<string | null> {
   try {
-    const result = await env.DB.prepare(
-      "UPDATE global_agent_controls SET last_recap_period_key = ?1 WHERE id = 'singleton' AND (last_recap_period_key IS NULL OR last_recap_period_key != ?1)",
-    )
+    const row = await env.DB.prepare("SELECT last_recap_period_key FROM global_agent_controls WHERE id = 'singleton'").first<{
+      last_recap_period_key: string | null;
+    }>();
+    return row?.last_recap_period_key ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Mark a maintainer recap period as successfully generated only after the scan, delivery attempt, and
+ *  generated-audit ledger write have all completed. A failed marker write is fail-open: the next retry may
+ *  re-send, which is safer than suppressing a digest that may never have been delivered. */
+export async function markMaintainerRecapPeriodSent(env: Env, periodKey: string): Promise<void> {
+  try {
+    await env.DB.prepare("UPDATE global_agent_controls SET last_recap_period_key = ?1 WHERE id = 'singleton'")
       .bind(periodKey)
       .run();
-    /* v8 ignore next -- D1 update metadata normally includes changes; the ?? 0 fallback protects driver anomalies. */
-    return Number(result.meta.changes ?? 0) === 1;
   } catch {
-    return true;
+    // Fail open: do not fail a successfully generated digest solely because the dedup marker could not persist.
   }
 }
 

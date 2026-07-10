@@ -3,7 +3,7 @@
 // single-repo ReviewRecap job, which is manually-triggerable only (review-recap.ts). Flag-gated and OFF by
 // default, mirroring isOpsEnabled: flag-OFF, the cron enqueues no job and this module's exports are never
 // invoked, so the deploy is byte-identical to today.
-import { claimMaintainerRecapPeriod, listRepositories, recordAuditEvent } from "../db/repositories";
+import { getLastMaintainerRecapPeriodKey, listRepositories, markMaintainerRecapPeriodSent, recordAuditEvent } from "../db/repositories";
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
@@ -151,10 +151,9 @@ export type MaintainerRecapJobSkipped = { skipped: true; reason: "already_sent_t
  * dual-channel (Discord + Slack) delivery. A per-repo aggregator failure is logged and that repo is skipped --
  * one repo's D1 hiccup must not blank the whole digest (mirrors ops-wire.ts's runOpsAlerts).
  *
- * Idempotent per UTC calendar date (#2249): claims the day via claimMaintainerRecapPeriod BEFORE doing any
- * repo scan or send, so a retried cron tick / redelivered (at-least-once) queue message for a period already
- * claimed short-circuits to `{ skipped: true, reason: "already_sent_this_period" }` without re-scanning repos
- * or re-delivering.
+ * Idempotent per scheduled UTC calendar date (#2249): the queue message carries the intended fire date, and
+ * only a successfully generated + audited digest advances the last-sent marker. A retried cron tick for an
+ * already completed period still short-circuits without re-scanning repos or re-delivering.
  *
  * Records a `maintainer_recap_generated` audit event once the report is built (#2251), mirroring
  * generateWeeklyValueReport's own audit call -- gives operators a ledger trail ("did the digest run today?")
@@ -165,10 +164,11 @@ export async function runMaintainerRecapJob(
   env: Env,
   windowDays?: number,
   manifestOverride?: MaintainerRecapManifestOverride | undefined,
+  scheduledPeriodKey?: string | undefined,
 ): Promise<MaintainerRecapJobSkipped | RunMaintainerRecapResult> {
-  const periodKey = computeRecapPeriodKey(new Date());
-  const claimed = await claimMaintainerRecapPeriod(env, periodKey);
-  if (!claimed) return { skipped: true, reason: "already_sent_this_period" };
+  const periodKey = scheduledPeriodKey ?? computeRecapPeriodKey(new Date());
+  const lastSentPeriodKey = await getLastMaintainerRecapPeriodKey(env);
+  if (lastSentPeriodKey === periodKey) return { skipped: true, reason: "already_sent_this_period" };
 
   const resolvedWindowDays = windowDays ?? DEFAULT_RECAP_WINDOW_DAYS;
   const repoNames = await recapScanRepos(env);
@@ -207,6 +207,7 @@ export async function runMaintainerRecapJob(
         channelsAttempted: [...RECAP_CHANNELS_ATTEMPTED],
       },
     });
+    await markMaintainerRecapPeriodSent(env, periodKey);
   }
   return result;
 }

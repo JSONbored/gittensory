@@ -165,6 +165,7 @@ export type JobMessage =
       type: "generate-maintainer-recap";
       requestedBy: "schedule" | "api" | "test";
       windowDays?: number;
+      scheduledPeriodKey?: string;
     }
   | {
       // Scheduled re-gate sweep (#777). No `repoFullName` = fan-out: enqueue one per agent-configured repo.
