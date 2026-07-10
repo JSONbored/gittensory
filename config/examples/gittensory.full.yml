@@ -85,6 +85,9 @@ preferredLabels:
 
 # How strongly a linked issue is expected on a PR.
 # Values: required | preferred | optional. Default: optional.
+# `required` also auto-promotes gate.linkedIssue to `block` if it's still `off` (same convergence as the
+# dashboard "Require linked issue" toggle) -- this alone is enough to make a missing issue a real gate
+# blocker, no need to separately configure gate.linkedIssue too.
 linkedIssuePolicy: optional
 
 # Test paths/areas expected to change alongside code. When code changes without
@@ -158,7 +161,8 @@ gate:
   # Default: advisory (a missing issue is surfaced in the review panel but never blocks the gate; issues
   # aren't always available, e.g. small/self-evident fixes). Set `block` here, or turn on the dashboard
   # "Require linked issue" toggle, to make a missing issue an explicit opt-in blocker.
-  # (If the dashboard toggle is on but this is still `off`, it is auto-promoted to `block`.)
+  # (If the dashboard toggle is on, OR the top-level linkedIssuePolicy: required below is set, and this is
+  # still `off`, it is auto-promoted to `block` — all three knobs converge on this one gate.)
   # This is UNRELATED to closing a PR that links an INELIGIBLE issue (owner-assigned, wrong label, etc.) —
   # that is a separate, deterministic rule, not this gate.
   linkedIssue: advisory

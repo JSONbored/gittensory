@@ -3079,6 +3079,30 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.linkedIssueGateMode).toBe("block");
   });
 
+  it("promotes yml linkedIssuePolicy: required to linkedIssueGateMode block when the gate mode is still off (#4618)", () => {
+    const eff = resolveEffectiveSettings(
+      { requireLinkedIssue: false, linkedIssueGateMode: "off" } as RepositorySettings,
+      parseFocusManifest({ linkedIssuePolicy: "required" }),
+    );
+    expect(eff.linkedIssueGateMode).toBe("block");
+  });
+
+  it("linkedIssuePolicy: preferred does NOT promote linkedIssueGateMode -- only required does (#4618)", () => {
+    const eff = resolveEffectiveSettings(
+      { requireLinkedIssue: false, linkedIssueGateMode: "off" } as RepositorySettings,
+      parseFocusManifest({ linkedIssuePolicy: "preferred" }),
+    );
+    expect(eff.linkedIssueGateMode).toBe("off");
+  });
+
+  it("linkedIssuePolicy: required does NOT downgrade an explicit gate.linkedIssue: advisory override (gate: wins, #4618)", () => {
+    const eff = resolveEffectiveSettings(
+      { requireLinkedIssue: false, linkedIssueGateMode: "off" } as RepositorySettings,
+      parseFocusManifest({ linkedIssuePolicy: "required", gate: { linkedIssue: "advisory" } }),
+    );
+    expect(eff.linkedIssueGateMode).toBe("advisory");
+  });
+
   it("REGRESSION: downgrades a pre-existing DB qualityGateMode: block to advisory, even with no gate.readiness.mode override (#2267)", () => {
     // Simulates a repo whose DB row already has quality_gate_mode = "block" from before the write-time guards
     // (the settings.qualityGateMode parser, the settings-write API routes) existed — the dashboard/API path's

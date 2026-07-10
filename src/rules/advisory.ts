@@ -946,10 +946,19 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // when the maintainer configured an enforced check). The advisory variant (`pre_merge_check_failed`) is a plain
   // warning and is never blocked here. No AI judgment is involved, so this can never cause an AI false-close.
   if (code === "pre_merge_check_required") return true;
-  // Focus-manifest policy (#555): linked-issue/test policy findings block ONLY when the maintainer opts into
-  // manifestPolicy: block. Path holds are intentionally separate and configured via hardGuardrailGlobs.
-  if (code === "manifest_linked_issue_required" || code === "manifest_missing_tests") {
+  // Focus-manifest missing-tests policy (#555): blocks ONLY when the maintainer opts into manifestPolicy:
+  // block. Path holds are intentionally separate and configured via hardGuardrailGlobs.
+  if (code === "manifest_missing_tests") {
     return gateMode(policy.manifestPolicyGateMode ?? "off") === "block";
+  }
+  // Focus-manifest linked-issue policy (#555, #4618): blocks when EITHER the manifest-policy gate OR the
+  // linked-issue gate is opted into block. resolveEffectiveSettings promotes linkedIssueGateMode to "block"
+  // whenever the yml-only `linkedIssuePolicy: required` knob is set (mirroring the requireLinkedIssue
+  // promotion), so this finding's own escalation must honor that gate too -- not just manifestPolicyGateMode
+  // -- or the promotion would have no actual blocking effect and the config-surface-reduction fix would be a
+  // no-op.
+  if (code === "manifest_linked_issue_required") {
+    return gateMode(policy.manifestPolicyGateMode ?? "off") === "block" || gateMode(policy.linkedIssueGateMode ?? "advisory") === "block";
   }
   // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to
   // advisory — the finding surfaces in the panel without ever closing the PR unless explicitly configured.

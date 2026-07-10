@@ -590,7 +590,11 @@ export function resolveEffectiveSettings(
   applyGateConfigOverrides(effective, manifest.gate);
   // The dashboard "Require linked issue" toggle must not silently diverge from gate blocking: when the
   // boolean is on but linkedIssueGateMode is still off, treat it as a block requirement (#797).
-  if (effective.requireLinkedIssue && effective.linkedIssueGateMode === "off") {
+  // #4618: the yml-only top-level `linkedIssuePolicy: required` knob gets the same promotion -- previously a
+  // self-hoster who set ONLY this (never touching the differently-worded `gate.linkedIssue: block`) got an
+  // advisory `manifest_linked_issue_required` nudge but no real gate blocker, a silent no-op that could only
+  // be discovered by cross-referencing a completely different section of the config file.
+  if ((effective.requireLinkedIssue || manifest.linkedIssuePolicy === "required") && effective.linkedIssueGateMode === "off") {
     effective.linkedIssueGateMode = "block";
   }
   // Readiness/quality can never hard-block a PR (buildQualityGateWarning is always advisory-severity;

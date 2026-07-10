@@ -674,6 +674,50 @@ describe("focus-manifest policy gate (#555)", () => {
     });
   }
 
+  describe("manifest_linked_issue_required also escalates via linkedIssueGateMode (#4618)", () => {
+    // #4618: resolveEffectiveSettings promotes linkedIssueGateMode to "block" whenever the yml-only
+    // linkedIssuePolicy: required knob is set (mirroring the requireLinkedIssue promotion). That promotion
+    // is a no-op unless this finding's own escalation actually honors linkedIssueGateMode too -- it must NOT
+    // require manifestPolicyGateMode: block as well, or a self-hoster who only ever sets linkedIssuePolicy
+    // still gets no real blocker. manifest_missing_tests is unaffected -- it stays keyed to manifestPolicyGateMode alone.
+    it("blocks a confirmed contributor via linkedIssueGateMode: block ALONE, with manifestPolicyGateMode entirely omitted (exercises its ?? 'off' fallback)", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_linked_issue_required"), { linkedIssueGateMode: "block", confirmedContributor: true });
+      expect(result.conclusion).toBe("failure");
+      expect(result.blockers.map((finding) => finding.code)).toContain("manifest_linked_issue_required");
+    });
+
+    it("still blocks via manifestPolicyGateMode: block ALONE, with linkedIssueGateMode advisory (back-compat)", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_linked_issue_required"), { manifestPolicyGateMode: "block", linkedIssueGateMode: "advisory", confirmedContributor: true });
+      expect(result.conclusion).toBe("failure");
+      expect(result.blockers.map((finding) => finding.code)).toContain("manifest_linked_issue_required");
+    });
+
+    it("stays advisory-only when BOTH gates are off/advisory", () => {
+      expect(evaluateGateCheck(manifestAdvisory("manifest_linked_issue_required"), { manifestPolicyGateMode: "off", linkedIssueGateMode: "advisory", confirmedContributor: true }).conclusion).toBe("success");
+    });
+
+    it("manifest_missing_tests is NOT escalated by linkedIssueGateMode -- only manifestPolicyGateMode governs it", () => {
+      const result = evaluateGateCheck(manifestAdvisory("manifest_missing_tests"), { manifestPolicyGateMode: "off", linkedIssueGateMode: "block", confirmedContributor: true });
+      expect(result.conclusion).toBe("success");
+    });
+
+    it("manifest_missing_tests stays non-blocking under the manifestPolicyGateMode ?? 'off' fallback when the policy field is entirely omitted", () => {
+      expect(evaluateGateCheck(manifestAdvisory("manifest_missing_tests"), { confirmedContributor: true }).conclusion).toBe("success");
+    });
+
+    it("manifest_linked_issue_required stays non-blocking under the linkedIssueGateMode ?? 'advisory' fallback when that field is entirely omitted (manifestPolicyGateMode off)", () => {
+      expect(evaluateGateCheck(manifestAdvisory("manifest_linked_issue_required"), { manifestPolicyGateMode: "off", confirmedContributor: true }).conclusion).toBe("success");
+    });
+
+    it("end-to-end: linkedIssuePolicy: required alone (no gate.linkedIssue, no manifestPolicy) produces a real gate blocker", () => {
+      const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "off", manifestPolicyGateMode: "off" }), parseFocusManifest({ linkedIssuePolicy: "required" }));
+      expect(eff.linkedIssueGateMode).toBe("block");
+      const result = evaluateGateCheck(manifestAdvisory("manifest_linked_issue_required"), gateCheckPolicy(eff, null, true));
+      expect(result.conclusion).toBe("failure");
+      expect(result.blockers.map((finding) => finding.code)).toContain("manifest_linked_issue_required");
+    });
+  });
+
   it("ignores legacy manifest_blocked_path findings even when manifestPolicy:block is enabled", () => {
     const advisory: Advisory = {
       ...missingIssueAdvisory(),
