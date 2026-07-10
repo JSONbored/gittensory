@@ -5820,119 +5820,104 @@ async function maybeCloseIssueOverContributorCap(
   }
 }
 
-async function processGitHubWebhook(
+/**
+ * Handles the `installation` webhook's `deleted` action: marks the installation deleted and acks the
+ * delivery. Returns `true` when handled (the caller must return immediately without further processing),
+ * `false` otherwise. Extracted from processGitHubWebhook (#4607) — pure code motion, no behavior change.
+ */
+async function maybeHandleInstallationDeletedWebhookEvent(
   env: Env,
   deliveryId: string,
   eventName: string,
   payload: GitHubWebhookPayload,
+): Promise<boolean> {
+  if (
+    eventName === "installation" &&
+    payload.action === "deleted" &&
+    payload.installation?.id
+  ) {
+    await markInstallationDeleted(env, payload.installation.id);
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Dual-app safety (#selfhost-app-id): acks and skips a delivery whose installation belongs to a DIFFERENT
+ * gittensory App than this backend's own (cloud + self-host installed on the same account), so neither
+ * backend acts on the other's installation. Returns `true` when handled (the caller must return
+ * immediately), `false` otherwise. Extracted from processGitHubWebhook (#4607) — pure code motion, no
+ * behavior change.
+ */
+async function maybeHandleForeignAppInstallationWebhookEvent(
+  env: Env,
+  deliveryId: string,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+  installationAppId: number | null,
+): Promise<boolean> {
+  // Dual-app safety (#selfhost-app-id): if this delivery's installation belongs to a DIFFERENT gittensory App
+  // (cloud + self-host installed on the same account), ack it without processing so neither backend acts on the
+  // other's installation. FAIL-OPEN — an unknown/own-matching app_id always processes, so the LIVE single-app
+  // path is byte-identical. Signature verification (per-App secret) is the primary isolation; this is the
+  // belt-and-suspenders for a shared-endpoint/secret misconfig.
+  if (isForeignAppInstallation(env.GITHUB_APP_ID, installationAppId)) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "foreign_app",
+      status: "processed",
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Handles the `installation_repositories` webhook event: upserts added repos, marks removed repos, and
+ * records product-usage telemetry for both. Extracted from processGitHubWebhook (#4607) — pure code
+ * motion, no behavior change.
+ */
+async function handleInstallationRepositoriesWebhookEvent(
+  env: Env,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+  installationActor: string | undefined,
 ): Promise<void> {
-  try {
-    if (
-      eventName === "installation" &&
-      payload.action === "deleted" &&
-      payload.installation?.id
-    ) {
-      await markInstallationDeleted(env, payload.installation.id);
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    const installationAppId = await upsertInstallation(env, payload);
-    // Dual-app safety (#selfhost-app-id): if this delivery's installation belongs to a DIFFERENT gittensory App
-    // (cloud + self-host installed on the same account), ack it without processing so neither backend acts on the
-    // other's installation. FAIL-OPEN — an unknown/own-matching app_id always processes, so the LIVE single-app
-    // path is byte-identical. Signature verification (per-App secret) is the primary isolation; this is the
-    // belt-and-suspenders for a shared-endpoint/secret misconfig.
-    if (isForeignAppInstallation(env.GITHUB_APP_ID, installationAppId)) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "foreign_app",
-        status: "processed",
-      });
-      return;
-    }
-    const installationActor =
-      payload.installation?.account?.login ??
-      (payload.installation?.id
-        ? (await getInstallation(env, payload.installation.id))?.accountLogin
-        : undefined);
-    if (eventName === "installation_repositories" && payload.installation?.id) {
-      const addedRepos =
-        payload.repositories_added
-          ?.map((repo) => repo.full_name)
-          .filter(Boolean) ?? [];
-      const removedRepos =
-        payload.repositories_removed
-          ?.map((repo) => repo.full_name)
-          .filter(Boolean) ?? [];
-      for (const repo of payload.repositories_added ?? [])
-        await upsertRepositoryFromGitHub(env, repo, payload.installation.id);
-      await markRepositoriesRemovedFromInstallation(
-        env,
-        payload.installation.id,
-        removedRepos,
-      );
-      await Promise.all([
-        ...addedRepos.slice(0, 50).map((repoFullName) =>
-          recordGithubProductUsage(
-            env,
-            "github_installation_repository_added",
-            {
-              actor: installationActor,
-              repoFullName,
-              targetKey: payload.installation?.id
-                ? `installation:${payload.installation.id}`
-                : repoFullName,
-              outcome: "completed",
-              metadata: {
-                action: payload.action,
-                repoCount: addedRepos.length,
-                truncatedRepos: Math.max(addedRepos.length - 50, 0),
-              },
-            },
-          ),
-        ),
-        ...removedRepos.slice(0, 50).map((repoFullName) =>
-          recordGithubProductUsage(
-            env,
-            "github_installation_repository_removed",
-            {
-              actor: installationActor,
-              repoFullName,
-              targetKey: payload.installation?.id
-                ? `installation:${payload.installation.id}`
-                : repoFullName,
-              outcome: "completed",
-              metadata: {
-                action: payload.action,
-                repoCount: removedRepos.length,
-                truncatedRepos: Math.max(removedRepos.length - 50, 0),
-              },
-            },
-          ),
-        ),
-      ]);
-    }
-
-    if (eventName === "installation" && payload.action === "created") {
-      const installedRepos =
-        payload.repositories?.map((repo) => repo.full_name).filter(Boolean) ??
-        (payload.repository?.full_name ? [payload.repository.full_name] : []);
-      await Promise.all(
-        installedRepos.slice(0, 50).map((repoFullName) =>
-          recordGithubProductUsage(env, "github_installation_created", {
+  if (eventName === "installation_repositories" && payload.installation?.id) {
+    const addedRepos =
+      payload.repositories_added
+        ?.map((repo) => repo.full_name)
+        .filter(Boolean) ?? [];
+    const removedRepos =
+      payload.repositories_removed
+        ?.map((repo) => repo.full_name)
+        .filter(Boolean) ?? [];
+    for (const repo of payload.repositories_added ?? [])
+      await upsertRepositoryFromGitHub(env, repo, payload.installation.id);
+    await markRepositoriesRemovedFromInstallation(
+      env,
+      payload.installation.id,
+      removedRepos,
+    );
+    await Promise.all([
+      ...addedRepos.slice(0, 50).map((repoFullName) =>
+        recordGithubProductUsage(
+          env,
+          "github_installation_repository_added",
+          {
             actor: installationActor,
             repoFullName,
             targetKey: payload.installation?.id
@@ -5941,13 +5926,875 @@ async function processGitHubWebhook(
             outcome: "completed",
             metadata: {
               action: payload.action,
-              repoCount: installedRepos.length,
-              truncatedRepos: Math.max(installedRepos.length - 50, 0),
+              repoCount: addedRepos.length,
+              truncatedRepos: Math.max(addedRepos.length - 50, 0),
             },
-          }),
+          },
         ),
+      ),
+      ...removedRepos.slice(0, 50).map((repoFullName) =>
+        recordGithubProductUsage(
+          env,
+          "github_installation_repository_removed",
+          {
+            actor: installationActor,
+            repoFullName,
+            targetKey: payload.installation?.id
+              ? `installation:${payload.installation.id}`
+              : repoFullName,
+            outcome: "completed",
+            metadata: {
+              action: payload.action,
+              repoCount: removedRepos.length,
+              truncatedRepos: Math.max(removedRepos.length - 50, 0),
+            },
+          },
+        ),
+      ),
+    ]);
+  }
+}
+
+/**
+ * Handles the `installation` webhook's `created` action: records product-usage telemetry for the newly
+ * installed repos. Extracted from processGitHubWebhook (#4607) — pure code motion, no behavior change.
+ */
+async function handleInstallationCreatedWebhookEvent(
+  env: Env,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+  installationActor: string | undefined,
+): Promise<void> {
+  if (eventName === "installation" && payload.action === "created") {
+    const installedRepos =
+      payload.repositories?.map((repo) => repo.full_name).filter(Boolean) ??
+      (payload.repository?.full_name ? [payload.repository.full_name] : []);
+    await Promise.all(
+      installedRepos.slice(0, 50).map((repoFullName) =>
+        recordGithubProductUsage(env, "github_installation_created", {
+          actor: installationActor,
+          repoFullName,
+          targetKey: payload.installation?.id
+            ? `installation:${payload.installation.id}`
+            : repoFullName,
+          outcome: "completed",
+          metadata: {
+            action: payload.action,
+            repoCount: installedRepos.length,
+            truncatedRepos: Math.max(installedRepos.length - 50, 0),
+          },
+        }),
+      ),
+    );
+  }
+}
+
+/**
+ * Handles the `reaction` webhook event via the agent-command-feedback-reaction pipeline. Returns `true`
+ * when handled (the caller must return immediately), `false` otherwise. Extracted from
+ * processGitHubWebhook (#4607) — pure code motion, no behavior change.
+ */
+async function maybeHandleReactionWebhookEvent(
+  env: Env,
+  deliveryId: string,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): Promise<boolean> {
+  if (
+    eventName === "reaction" &&
+    (await maybeProcessAgentCommandFeedbackReaction(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Handles the `issue_comment` webhook event's command/mention dispatch chain — panel retrigger, panel
+ * generate-tests, gate-override, resolve/explain/generate-tests/review/pause/resume/configuration/plan
+ * mention commands, review-nag cooldown throttling, monitored-mention throttling, and the general
+ * @gittensory mention command — in the SAME priority order as before, stopping at the first handler that
+ * claims the comment. Returns `true` when any handler claimed it (the caller must return immediately),
+ * `false` otherwise. Extracted from processGitHubWebhook (#4607) — pure code motion, no behavior change;
+ * every branch, condition, and comment is preserved verbatim and in the same order.
+ */
+async function maybeHandleIssueCommentCommandWebhookEvent(
+  env: Env,
+  deliveryId: string,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): Promise<boolean> {
+  if (
+    eventName === "issue_comment" &&
+    (await maybeProcessPrPanelRetrigger(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  if (
+    eventName === "issue_comment" &&
+    (await maybeProcessPrPanelGenerateTests(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  if (
+    eventName === "issue_comment" &&
+    (await maybeProcessGateOverrideCommand(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  if (eventName === "issue_comment" && (await maybeProcessResolveCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return true; }
+  if (eventName === "issue_comment" && (await maybeProcessExplainCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return true; }
+  if (eventName === "issue_comment" && (await maybeProcessGenerateTestsCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return true; }
+  if (eventName === "issue_comment" && (await maybeProcessReviewCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return true; }
+  if (eventName === "issue_comment" && (await maybeProcessPauseCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return true; }
+  if (eventName === "issue_comment" && (await maybeProcessResumeCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return true; }
+  if (
+    eventName === "issue_comment" &&
+    (await maybeProcessConfigurationCommand(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  if (
+    eventName === "issue_comment" &&
+    (await maybeProcessPlanCommand(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  // Review-nag cooldown (#2463) runs BEFORE the mention-command dispatch below: a throttled ping must
+  // short-circuit ahead of the normal answer-card reply, not alongside it.
+  if (
+    eventName === "issue_comment" &&
+    (await maybeThrottleReviewNagPing(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  // Maintainer-mention nag moderation (#label-scoping): independent of the @gittensory ping above — a
+  // mention of a configured maintainer login is never a bot command, so this must run regardless of whether
+  // the comment also contains an @gittensory mention/command.
+  if (
+    eventName === "issue_comment" &&
+    (await maybeThrottleMonitoredMentions(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+
+  if (
+    eventName === "issue_comment" &&
+    (await maybeProcessGittensoryMentionCommand(env, deliveryId, payload))
+  ) {
+    await recordWebhookEvent(env, {
+      deliveryId,
+      eventName,
+      action: payload.action,
+      installationId: payload.installation?.id,
+      repositoryFullName: payload.repository?.full_name,
+      payloadHash: "processed",
+      status: "processed",
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Handles a webhook payload that carries a `pull_request` object: PR-outcome/reversal signal recording,
+ * reviews-cache invalidation, mergeable-state cache invalidation, review-evasion-tracking invalidation,
+ * one-shot reopen-reclose enforcement, draft-dodge / review-evasion (draft-conversion, repeated-cycling)
+ * enforcement, the readiness → gate → auto-maintain pipeline, reputation recording, and RAG /
+ * sibling-regate enqueueing. Returns `true` when the caller (processGitHubWebhook) must return
+ * immediately — currently only the one-shot disallowed-reopen reclose path — `false` otherwise (fall
+ * through to issue handling, matching the original control flow). Extracted from processGitHubWebhook
+ * (#4607) — pure code motion, no behavior change; every branch, condition, and comment is preserved
+ * verbatim and in the same order.
+ */
+async function handlePullRequestWebhookEvent(
+  env: Env,
+  deliveryId: string,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+  installationId: number | null,
+): Promise<boolean> {
+  if (payload.repository?.full_name && payload.pull_request) {
+    const repoFullName = payload.repository.full_name;
+    const payloadPullRequest = payload.pull_request;
+    // Accuracy/eval feedback loop (#self-improve / GAP-4). Independent of the review path + best-effort:
+    //   • pr_outcome — on `closed`, record the REALIZED merge-vs-close ground truth so computeGateEval can
+    //     score the gate's prediction against what the human actually did.
+    //   • reversal — on `reopened` of a bot-CLOSED PR (contributor dispute) / a merged "Reverts #N" PR,
+    //     record the human override so reversalRate/calibration are no longer blind. Both fail safe.
+    await recordPrOutcome(env, eventName, payload).catch((error) => {
+      /* v8 ignore next -- best-effort: outcome recording never blocks the webhook. */
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "pr_outcome_record_failed",
+          deliveryId,
+          repository: repoFullName,
+          error: errorMessage(error),
+        }),
+      );
+    });
+    await recordReversalSignals(env, eventName, payload).catch((error) => {
+      /* v8 ignore next -- best-effort: reversal recording never blocks the webhook. */
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "reversal_record_failed",
+          deliveryId,
+          repository: repoFullName,
+          error: errorMessage(error),
+        }),
+      );
+    });
+    // Reviews-cache invalidation (#2537): a `pull_request_review` webhook (submitted/dismissed/edited) is
+    // the ONLY event that can change the set of reviews GitHub reports for this PR, so it is the sole signal
+    // fetchAndStorePullRequestDetails's reviewsUpToDate check needs to know the cached reviews are stale.
+    // Independent of, and does not gate, any downstream processing below — best-effort like the outcome/
+    // reversal recording above, so a transient D1 failure here never blocks the webhook.
+    if (
+      eventName === "pull_request_review" &&
+      (payload.action === "submitted" || payload.action === "dismissed" || payload.action === "edited")
+    ) {
+      await markPullRequestReviewsInvalidated(env, repoFullName, payloadPullRequest.number).catch((error) => {
+        /* v8 ignore next -- best-effort: cache-invalidation stamping never blocks the webhook. */
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            event: "pull_request_reviews_invalidate_failed",
+            deliveryId,
+            repository: repoFullName,
+            pullNumber: payloadPullRequest.number,
+            error: errorMessage(error),
+          }),
+        );
+      });
+    }
+    const pr = await upsertPullRequestFromGitHub(
+      env,
+      repoFullName,
+      payload.pull_request,
+    );
+    // #2537: the durable PR-state cache (mergeable_state/state) goes stale exactly when GitHub recomputes them —
+    // synchronize (new head → new mergeable_state recompute), closed (state flips), reopened (state flips back).
+    // Clear explicitly (null, not omitted — PARTIAL-UPDATE CONTRACT) so the next cached read is a forced live
+    // miss; other pull_request actions (labeled, edited, etc.) don't change these fields and are left untouched
+    // to avoid spurious cache churn / extra writes on high-frequency low-signal actions.
+    if (eventName === "pull_request" && (payload.action === "synchronize" || payload.action === "closed" || payload.action === "reopened")) {
+      await invalidatePrStateCache(env, repoFullName, pr.number).catch(() => undefined);
+    }
+    // Review-evasion protection (#review-evasion-protection): a head change (synchronize) invalidates any
+    // active-review tracking for the OLD head immediately -- a fresh pass starts its own tracking later in
+    // this same handler. Best-effort; the guarded CAS update is a safe no-op when nothing is active. The
+    // "closed" case is handled AFTER the self-close/converted_to_draft evasion checks below, not here --
+    // those checks must read the row before this general cleanup would otherwise clear it out from under
+    // them.
+    if (eventName === "pull_request" && payload.action === "synchronize") {
+      await terminalizeActiveReviewTracking(env, repoFullName, pr.number).catch(() => undefined);
+    }
+    // Reopen-prevention (#one-shot-reopen): a CONTRIBUTOR may not reopen a PR that gittensory or a maintainer
+    // closed — closes are one-shot (resubmit, don't reopen). If a non-maintainer reopened a PR whose last close
+    // was by the bot / repo owner / admin, re-close it and skip the re-review. Self-closes (the contributor
+    // closed their own PR) stay reopenable; the bot's own nightly-re-review reopens are exempt. A contended
+    // actuation lock is retryable (#2135/#2447): this pass must not evaluate/mutate the PR concurrently, but
+    // ordinary maintenance can now hold the same lock and may not enforce this one-shot reopen event.
+    // Deliberately UNCAUGHT here: every step inside maybeRecloseDisallowedReopen already fails safe on its own
+    // (the lock claim/release fail open; recloseDisallowedReopenIfNeeded's own operations all .catch()), so a
+    // swallowing catch at this call site could only ever mask a genuinely unexpected error into a silent
+    // "allowed" — which would re-permit exactly the disallowed reopen this guard exists to stop. Let it
+    // propagate and retry instead, same reasoning as the draft-dodge sibling's uncaught getInstallation read.
+    const reopenOutcome: ReopenRecloseOutcome =
+      payload.action === "reopened" && installationId
+        ? await maybeRecloseDisallowedReopen(
+            env,
+            deliveryId,
+            installationId,
+            repoFullName,
+            pr,
+            payload,
+          )
+        : "allowed";
+    if (reopenOutcome === "reclosed") {
+      // Stamp the delivery processed like every other owning path — the early return otherwise leaves the
+      // webhook_events row stuck at "queued"/its body hash, mis-reporting the delivery as un-acked (#review-audit).
+      await recordWebhookEvent(env, {
+        deliveryId,
+        eventName,
+        action: payload.action,
+        installationId: payload.installation?.id,
+        repositoryFullName: payload.repository?.full_name,
+        payloadHash: "processed",
+        status: "processed",
+      });
+      return true;
+    }
+    // Resolve settings first so the self-authored + open-reference live-fetch fallbacks only fire when their
+    // respective gates are in block mode.
+    const settings = await resolveRepositorySettings(env, repoFullName);
+    const [repo, cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
+      await Promise.all([
+        getRepository(env, repoFullName),
+        listOtherOpenPullRequests(env, repoFullName, pr.number),
+        resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings),
+      ]);
+    // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the
+    // advisory (and the disposition) elect the cluster winner, so the real lowest-OPEN PR is never auto-closed.
+    const otherOpenPullRequests = await reconcileLiveDuplicateSiblings(
+      env,
+      installationId,
+      repoFullName,
+      pr,
+      cachedOtherOpenPullRequests,
+    );
+    const advisory = buildPullRequestAdvisory(repo, pr, {
+      otherOpenPullRequests,
+      requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
+      duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
+      confirmedNoOpenLinkedIssue,
+      linkedIssueAuthorLogins,
+    });
+    await persistAdvisory(env, advisory);
+    // Auto-project/milestone matching (#3183): independent of the gate/disposition entirely -- a missed or
+    // wrong match must never affect CI/merge, so this is a best-effort side comment, never a blocker. All the
+    // "should this run at all" gating + error logging lives in maybeSuggestMilestoneMatchForPr itself, so
+    // this call site stays a single unconditional call with no logic of its own.
+    await maybeSuggestMilestoneMatchForPr({
+      env,
+      installationId,
+      repoFullName,
+      pullNumber: pr.number,
+      prState: pr.state,
+      prTitle: pr.title,
+      prBody: pr.body,
+      prUrl: pr.htmlUrl,
+      mode: settings.autoProjectMilestoneMatch,
+      backend: settings.autoProjectMilestoneMatchBackend,
+      deliveryId,
+      eventName,
+      action: payload.action,
+    });
+    // Review-evasion protection (#review-evasion-protection): a contributor closing their OWN PR while
+    // gittensory has an ACTIVE review pass running is dodging the one-shot review, not making an ordinary
+    // close. Runs regardless of the general draft-dodge/reopen-reclose gates above -- it is its own
+    // independent enforcement, config-gated on settings.reviewEvasionProtection (close by default, #4011).
+    if (payload.action === "closed" && installationId) {
+      await maybeCloseReviewEvasionSelfClose(
+        env,
+        deliveryId,
+        installationId,
+        repoFullName,
+        pr,
+        payload,
+        settings,
       );
     }
+    // Draft-dodge guard (#converted-to-draft): a contributor converting an OPEN PR to draft cannot use
+    // draft state to keep a gate-rejected PR alive. When a prior gate failure exists for the PR's current
+    // headSha (and the block has not been maintainer-overridden), close the PR immediately — the gate
+    // verdict stands and does not reset on draft conversion. Skipped when the agent is unconfigured or
+    // paused (the gate doesn't act on paused repos) and for owner / automation PRs.
+    if (
+      payload.action === "converted_to_draft" &&
+      installationId &&
+      pr.headSha &&
+      pr.state === "open" &&
+      isAgentConfigured(settings.autonomy) &&
+      !settings.agentPaused &&
+      !isProtectedAutomationAuthor(pr.authorLogin)
+    ) {
+      // Deliberately UNCAUGHT here: closeDraftDodgeAttemptIfBlocked catches every operation that should
+      // fail safely, but leaves the write-permission-readiness getInstallation read (#2134) uncaught on
+      // purpose so a transient D1 failure propagates and the queue retries instead of misrecording a
+      // permission denial.
+      await maybeCloseDraftDodgeAttempt(
+        env,
+        deliveryId,
+        installationId,
+        repoFullName,
+        pr,
+        settings,
+      );
+    }
+    // Review-evasion protection: the active-review sibling of the draft-dodge guard above -- fires
+    // regardless of whether a PRIOR gate failure exists (draft-dodge's own trigger), as long as a review
+    // pass is CURRENTLY active for this head. Naturally near-mutually-exclusive with draft-dodge in
+    // practice: the same pass that records a gate-block-outcome also terminalizes the active-review row it
+    // was tracking, so by the time draft-dodge's prior-gate-failure condition is true, this guard's
+    // active-review condition is normally already false.
+    if (payload.action === "converted_to_draft" && installationId) {
+      await maybeCloseReviewEvasionDraftConversion(
+        env,
+        deliveryId,
+        installationId,
+        repoFullName,
+        pr,
+        payload,
+        settings,
+      );
+    }
+    // Review-evasion protection: repeated ready<->draft cycling (#gaming-tactic-draft-cycle). Only counts a
+    // conversion PERFORMED BY THE PR'S OWN AUTHOR -- a maintainer/third-party converting the PR to draft is an
+    // unrelated action and must never contribute to (or be conflated with) the author's own cycling pattern;
+    // counting it here would let one maintainer draft-toggle plus the author's own first-ever (legitimate)
+    // conversion reach count>=2 and wrongly close that first conversion as "repeated" cycling. Always counts
+    // (cheap, no side effects) so the count is accurate from the very first converted_to_draft event this repo
+    // ever sees, even before reviewEvasionProtection is turned on for it -- only the ENFORCEMENT is gated on
+    // that setting. Runs after both guards above so a PR already closed by either of them fails this guard's
+    // own freshness re-check instead of being redundantly re-closed.
+    if (payload.action === "converted_to_draft" && installationId) {
+      const draftConverter = (payload.sender?.login ?? "").toLowerCase();
+      const draftAuthor = (pr.authorLogin ?? "").toLowerCase();
+      const isAuthorDraftConversion = draftConverter.length > 0 && draftConverter === draftAuthor;
+      const draftConversionCount = isAuthorDraftConversion
+        ? await bumpPullRequestDraftConversionCount(env, repoFullName, pr.number).catch(
+            /* v8 ignore next -- fail-safe: a counter-write failure only means this ONE cycle isn't detected. */
+            () => 0,
+          )
+        : 0;
+      await maybeCloseRepeatedDraftCycling(
+        env,
+        deliveryId,
+        installationId,
+        repoFullName,
+        pr,
+        payload,
+        settings,
+        draftConversionCount,
+      );
+    }
+    // Review-evasion protection: the "closed" half of the active-review-tracking cleanup (the
+    // "synchronize" half runs earlier, alongside invalidatePrStateCache). Deliberately placed AFTER the
+    // self-close-evasion check above so that check reads the tracking row before this general cleanup
+    // would otherwise clear it out from under it -- a normal close and this repo's own evasion-enforcement
+    // close (which already terminalizes internally, scoped to its own head) both land here too; the
+    // guarded CAS update is a safe no-op in both of those already-terminal cases.
+    if (eventName === "pull_request" && payload.action === "closed") {
+      await terminalizeActiveReviewTracking(env, repoFullName, pr.number).catch(() => undefined);
+    }
+    if (
+      installationId &&
+      shouldProcessPullRequestPublicSurface(eventName, payload.action)
+    ) {
+      if (
+        shouldCollectSlopEvidence(settings) ||
+        settings.manifestPolicyGateMode !== "off" ||
+        isAgentConfigured(settings.autonomy) ||
+        (await shouldRefreshFilesForPreMergeChecks(env, repoFullName))
+      ) {
+        await refreshPullRequestDetails(env, repoFullName, pr.number);
+      }
+      // Operator review flow: rebase-if-behind → wait for ALL CI → only THEN review/act. When deferred (a
+      // rebase fired a synchronize, or CI is still running) skip the review+maintain now; the synchronize /
+      // CI-completion webhook (sweep backstop) re-runs this once the head is current and CI has settled. gate
+      // stays undefined so the reputation/RAG steps below no-op until the terminal decision.
+      let gate:
+        | Awaited<ReturnType<typeof maybePublishPrPublicSurface>>
+        | undefined;
+      const liveFacts = createLiveGithubFacts();
+      if (
+        await withReviewPipelineSpan(
+          "selfhost.review.readiness",
+          {
+            installationId,
+            repoFullName,
+            pullNumber: pr.number,
+            operation: "readiness",
+          },
+          () =>
+            prReadyForReview(
+              env,
+              installationId,
+              repoFullName,
+              pr,
+              settings,
+              deliveryId,
+              liveFacts,
+            ),
+        )
+      ) {
+        gate = await withReviewPipelineSpan(
+          "selfhost.review.public_surface",
+          {
+            installationId,
+            repoFullName,
+            pullNumber: pr.number,
+            operation: "public_surface",
+          },
+          () =>
+            maybePublishPrPublicSurface(
+              env,
+              installationId,
+              repoFullName,
+              pr,
+              repo,
+              settings,
+              advisory,
+              otherOpenPullRequests,
+              {
+                deliveryId,
+                authorType: payloadPullRequest.user?.type,
+                action: payload.action,
+                baseSha: payloadPullRequest.base?.sha ?? null,
+                liveFacts,
+              },
+            ),
+        ).catch((error) => {
+          if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
+          console.error(
+            JSON.stringify({
+              level: "warn",
+              event: "pr_public_surface_failed",
+              deliveryId,
+              repository: payload.repository?.full_name,
+              pullNumber: pr.number,
+              error: errorMessage(error),
+            }),
+          );
+          return undefined;
+        });
+        // #778 maintainer auto-maintain: act on the PR's state (label/review/merge/close) per the repo's
+        // autonomy config, after the gate has run. The function self-guards on agent config; best-effort here
+        // so it never blocks the gate or public surface.
+        await withReviewPipelineSpan(
+          "selfhost.review.maintenance",
+          {
+            installationId,
+            repoFullName,
+            pullNumber: pr.number,
+            operation: "maintenance",
+            decisionOutcome: gate?.conclusion,
+          },
+          () =>
+            maybeRunAgentMaintenance(env, {
+              installationId,
+              repoFullName,
+              repo,
+              pr,
+              settings,
+              otherOpenPullRequests,
+              deliveryId,
+              gate,
+              liveFacts,
+            }),
+        ).catch((error) => {
+          /* v8 ignore next -- best-effort: auto-maintain failures are logged, never surfaced to the gate. */
+          console.error(
+            JSON.stringify({
+              level: "warn",
+              event: "agent_maintenance_failed",
+              deliveryId,
+              repository: repoFullName,
+              pullNumber: pr.number,
+              error: errorMessage(error),
+            }),
+          );
+        });
+      }
+      // Reputation (convergence, flag-gated by GITTENSORY_REVIEW_REPUTATION). After the gate decides, record this
+      // submitter's terminal outcome (merged / closed / manual) so the INTERNAL reputation stays current. The
+      // outcome is derived ONLY from the PR's realized terminal state + the gate verdict (no PR content);
+      // nothing is ever surfaced publicly. Flag-OFF (default) is an immediate no-op (nothing recorded), so the
+      // path is byte-identical. Best-effort: a record failure must never affect the gate or the public surface.
+      const reputationOutcome = (await convergedFeatureActive(
+        env,
+        repoFullName,
+        "reputation",
+      ))
+        ? reputationOutcomeFromTerminalState(pr, payload.pull_request, gate)
+        : undefined;
+      if (reputationOutcome) {
+        await recordReputationOutcome(env, {
+          project: repoFullName,
+          submitter: pr.authorLogin ?? null,
+          outcome: reputationOutcome,
+        }).catch((error) => {
+          /* v8 ignore next -- best-effort: a reputation-record failure is logged, never surfaced to the gate. */
+          console.error(
+            JSON.stringify({
+              level: "warn",
+              event: "reputation_record_failed",
+              deliveryId,
+              repository: repoFullName,
+              pullNumber: pr.number,
+              error: errorMessage(error),
+            }),
+          );
+        });
+      }
+      // RAG incremental index (convergence, flag-gated by GITTENSORY_REVIEW_RAG + the per-repo cutover allowlist).
+      // When a PR MERGES into an allowlisted repo, its changes have landed on the default branch — enqueue an
+      // incremental re-index of just the changed files (reindexChangedPaths) so the index stays fresh without a
+      // full re-crawl. Enqueued (not run inline) so the webhook stays fast + the index work is its own retryable
+      // job. Flag-OFF (default) is a no-op (the job is never enqueued AND the processor no-ops). Best-effort.
+      await maybeEnqueueRagReindexForMergedPr(
+        env,
+        repoFullName,
+        pr.number,
+        payload.action,
+        payload.pull_request.merged_at,
+        installationId,
+      ).catch((error) => {
+        /* v8 ignore next -- best-effort: a RAG re-index enqueue failure is logged, never surfaced to the gate. */
+        console.error(
+          JSON.stringify({
+            level: "warn",
+            event: "rag_reindex_enqueue_failed",
+            deliveryId,
+            repository: repoFullName,
+            pullNumber: pr.number,
+            error: errorMessage(error),
+          }),
+        );
+      });
+      // Event-driven sibling re-gate (#4005): a merge can invalidate every OTHER open PR's gate verdict, and
+      // otherwise nothing re-checks them until the next bounded sweep tick reaches each one. Enqueued (not run
+      // inline), same shape as the RAG re-index just above. Best-effort.
+      await maybeEnqueueSiblingRegateForMergedPr(
+        env,
+        deliveryId,
+        repoFullName,
+        payload.action,
+        payload.pull_request.merged_at,
+        installationId,
+        settings,
+        otherOpenPullRequests,
+      ).catch((error) => {
+        /* v8 ignore next -- best-effort: a sibling re-gate enqueue failure is logged, never surfaced to the gate. */
+        console.error(
+          JSON.stringify({
+            level: "warn",
+            event: "sibling_regate_enqueue_failed",
+            deliveryId,
+            repository: repoFullName,
+            pullNumber: pr.number,
+            error: errorMessage(error),
+          }),
+        );
+      });
+    }
+  }
+  return false;
+}
+
+/**
+ * Handles a webhook payload that carries a non-PR `issue` object: issue advisory persistence, issue-side
+ * slop triage, account-age visibility labeling, the per-contributor open-issue cap, and (#699 path B)
+ * detecting issue-watch notification events for a newly opened issue. Returns the detected issue-watch
+ * notification events (empty when the payload doesn't carry a qualifying issue, or the issue wasn't just
+ * opened), matching the original `issueWatchEvents` local's lifecycle exactly. Extracted from
+ * processGitHubWebhook (#4607) — pure code motion, no behavior change.
+ */
+async function handleIssueWebhookEvent(
+  env: Env,
+  deliveryId: string,
+  payload: GitHubWebhookPayload,
+  installationId: number | null,
+): Promise<DetectedNotificationEvent[]> {
+  let issueWatchEvents: DetectedNotificationEvent[] = [];
+  if (
+    payload.repository?.full_name &&
+    payload.issue &&
+    !payload.issue.pull_request
+  ) {
+    const issue = await upsertIssueFromGitHub(
+      env,
+      payload.repository.full_name,
+      payload.issue,
+    );
+    const repo = await getRepository(env, payload.repository.full_name);
+    const advisory = buildIssueAdvisory(repo, issue);
+    // Issue-side slop triage (#533): opt-in via slopGateMode, advisory-only (issues have no gate, and
+    // the issue advisory is maintainer-facing — never a public comment). Flags clearly low-effort issues.
+    const issueSettings = await resolveRepositorySettings(
+      env,
+      payload.repository.full_name,
+    );
+    if (issueSettings.slopGateMode !== "off") {
+      advisory.findings.push(
+        ...buildIssueSlopAssessment({ title: issue.title, body: issue.body })
+          .findings,
+      );
+    }
+    await persistAdvisory(env, advisory);
+    // Account-age visibility (#2561 issue-path parity): label newly opened issues from below-threshold
+    // accounts when review_state_label autonomy is auto — same contract as the PR maintenance path.
+    if (payload.action === "opened" && installationId && issue.authorLogin) {
+      const repoOwner = repoOwnerLoginFromFullName(payload.repository.full_name);
+      const authorLogin = issue.authorLogin;
+      const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
+      const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
+      const authorIsAutomationBot = isProtectedAutomationAuthor(authorLogin);
+      const accountAgeThresholdDays = issueSettings.accountAgeThresholdDays;
+      if (
+        !authorIsOwner &&
+        !authorIsAdmin &&
+        !authorIsAutomationBot &&
+        typeof accountAgeThresholdDays === "number"
+      ) {
+        if (await isBelowAccountAgeThreshold(env, installationId, authorLogin, accountAgeThresholdDays)) {
+          if (resolveAutonomy(issueSettings.autonomy, "review_state_label") === "auto") {
+            const newAccountMode = resolveAgentActionMode({
+              globalPaused: isGlobalAgentPause(env) || (await isDbFrozenForRepo(env, issueSettings.agentGlobalFreezeOverride)),
+              agentPaused: issueSettings.agentPaused,
+              agentDryRun: issueSettings.agentDryRun,
+            });
+            await ensurePullRequestLabel(
+              env,
+              installationId,
+              payload.repository.full_name,
+              issue.number,
+              issueSettings.newAccountLabel!,
+              { createMissingLabel: issueSettings.createMissingLabel, mode: newAccountMode },
+            ).catch(
+              /* v8 ignore next -- fail-safe: a label-application failure must never block the rest of the handler */
+              () => undefined,
+            );
+          }
+        }
+      }
+    }
+    // Per-contributor open-issue cap (#2270, anti-abuse): the first issue-side auto-close path. Best-effort —
+    // a failure here must never affect the advisory/notification handling above or the webhook overall.
+    if (payload.action === "opened" && installationId) {
+      await maybeCloseIssueOverContributorCap(env, {
+        installationId,
+        repoFullName: payload.repository.full_name,
+        issue,
+        settings: issueSettings,
+        deliveryId,
+      }).catch((error) => {
+        /* v8 ignore next -- best-effort: an issue-cap enforcement failure is logged, never surfaced to the webhook. */
+        console.error(
+          JSON.stringify({
+            level: "warn",
+            event: "contributor_issue_cap_failed",
+            deliveryId,
+            repository: payload.repository?.full_name,
+            issueNumber: issue.number,
+            error: errorMessage(error),
+          }),
+        );
+      });
+    }
+    // #699 path B: a newly opened grabbable, high-multiplier issue notifies the miners watching this repo
+    // (fanned out through the same #535 pipeline below).
+    if (payload.action === "opened")
+      issueWatchEvents = await detectIssueWatchEvents(
+        env,
+        payload.repository.full_name,
+        issue,
+      );
+  }
+  return issueWatchEvents;
+}
+
+async function processGitHubWebhook(
+  env: Env,
+  deliveryId: string,
+  eventName: string,
+  payload: GitHubWebhookPayload,
+): Promise<void> {
+  try {
+    if (
+      await maybeHandleInstallationDeletedWebhookEvent(env, deliveryId, eventName, payload)
+    )
+      return;
+
+    const installationAppId = await upsertInstallation(env, payload);
+    if (
+      await maybeHandleForeignAppInstallationWebhookEvent(
+        env,
+        deliveryId,
+        eventName,
+        payload,
+        installationAppId,
+      )
+    )
+      return;
+    const installationActor =
+      payload.installation?.account?.login ??
+      (payload.installation?.id
+        ? (await getInstallation(env, payload.installation.id))?.accountLogin
+        : undefined);
+    await handleInstallationRepositoriesWebhookEvent(env, eventName, payload, installationActor);
+    await handleInstallationCreatedWebhookEvent(env, eventName, payload, installationActor);
 
     const installationId = getInstallationId(payload);
     if (payload.repositories) {
@@ -5965,160 +6812,12 @@ async function processGitHubWebhook(
         installationId ?? undefined,
       );
 
-    if (
-      eventName === "reaction" &&
-      (await maybeProcessAgentCommandFeedbackReaction(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
+    if (await maybeHandleReactionWebhookEvent(env, deliveryId, eventName, payload)) return;
 
     if (
-      eventName === "issue_comment" &&
-      (await maybeProcessPrPanelRetrigger(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
+      await maybeHandleIssueCommentCommandWebhookEvent(env, deliveryId, eventName, payload)
+    )
       return;
-    }
-
-    if (
-      eventName === "issue_comment" &&
-      (await maybeProcessPrPanelGenerateTests(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    if (
-      eventName === "issue_comment" &&
-      (await maybeProcessGateOverrideCommand(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    if (eventName === "issue_comment" && (await maybeProcessResolveCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
-    if (eventName === "issue_comment" && (await maybeProcessExplainCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
-    if (eventName === "issue_comment" && (await maybeProcessGenerateTestsCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
-    if (eventName === "issue_comment" && (await maybeProcessReviewCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
-    if (eventName === "issue_comment" && (await maybeProcessPauseCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
-    if (eventName === "issue_comment" && (await maybeProcessResumeCommand(env, deliveryId, payload))) { await recordWebhookEvent(env, { deliveryId, eventName, action: payload.action, installationId: payload.installation?.id, repositoryFullName: payload.repository?.full_name, payloadHash: "processed", status: "processed" }); return; }
-    if (
-      eventName === "issue_comment" &&
-      (await maybeProcessConfigurationCommand(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    if (
-      eventName === "issue_comment" &&
-      (await maybeProcessPlanCommand(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    // Review-nag cooldown (#2463) runs BEFORE the mention-command dispatch below: a throttled ping must
-    // short-circuit ahead of the normal answer-card reply, not alongside it.
-    if (
-      eventName === "issue_comment" &&
-      (await maybeThrottleReviewNagPing(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    // Maintainer-mention nag moderation (#label-scoping): independent of the @gittensory ping above — a
-    // mention of a configured maintainer login is never a bot command, so this must run regardless of whether
-    // the comment also contains an @gittensory mention/command.
-    if (
-      eventName === "issue_comment" &&
-      (await maybeThrottleMonitoredMentions(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
-
-    if (
-      eventName === "issue_comment" &&
-      (await maybeProcessGittensoryMentionCommand(env, deliveryId, payload))
-    ) {
-      await recordWebhookEvent(env, {
-        deliveryId,
-        eventName,
-        action: payload.action,
-        installationId: payload.installation?.id,
-        repositoryFullName: payload.repository?.full_name,
-        payloadHash: "processed",
-        status: "processed",
-      });
-      return;
-    }
 
     // CI-completion re-review — THE auto-merge / close-on-red trigger. A check_run/check_suite completion
     // carries no `payload.pull_request`, so it must be handled BEFORE the pull_request block: it wakes the
@@ -6148,560 +6847,12 @@ async function processGitHubWebhook(
     )
       return;
 
-    if (payload.repository?.full_name && payload.pull_request) {
-      const repoFullName = payload.repository.full_name;
-      const payloadPullRequest = payload.pull_request;
-      // Accuracy/eval feedback loop (#self-improve / GAP-4). Independent of the review path + best-effort:
-      //   • pr_outcome — on `closed`, record the REALIZED merge-vs-close ground truth so computeGateEval can
-      //     score the gate's prediction against what the human actually did.
-      //   • reversal — on `reopened` of a bot-CLOSED PR (contributor dispute) / a merged "Reverts #N" PR,
-      //     record the human override so reversalRate/calibration are no longer blind. Both fail safe.
-      await recordPrOutcome(env, eventName, payload).catch((error) => {
-        /* v8 ignore next -- best-effort: outcome recording never blocks the webhook. */
-        console.warn(
-          JSON.stringify({
-            level: "warn",
-            event: "pr_outcome_record_failed",
-            deliveryId,
-            repository: repoFullName,
-            error: errorMessage(error),
-          }),
-        );
-      });
-      await recordReversalSignals(env, eventName, payload).catch((error) => {
-        /* v8 ignore next -- best-effort: reversal recording never blocks the webhook. */
-        console.warn(
-          JSON.stringify({
-            level: "warn",
-            event: "reversal_record_failed",
-            deliveryId,
-            repository: repoFullName,
-            error: errorMessage(error),
-          }),
-        );
-      });
-      // Reviews-cache invalidation (#2537): a `pull_request_review` webhook (submitted/dismissed/edited) is
-      // the ONLY event that can change the set of reviews GitHub reports for this PR, so it is the sole signal
-      // fetchAndStorePullRequestDetails's reviewsUpToDate check needs to know the cached reviews are stale.
-      // Independent of, and does not gate, any downstream processing below — best-effort like the outcome/
-      // reversal recording above, so a transient D1 failure here never blocks the webhook.
-      if (
-        eventName === "pull_request_review" &&
-        (payload.action === "submitted" || payload.action === "dismissed" || payload.action === "edited")
-      ) {
-        await markPullRequestReviewsInvalidated(env, repoFullName, payloadPullRequest.number).catch((error) => {
-          /* v8 ignore next -- best-effort: cache-invalidation stamping never blocks the webhook. */
-          console.warn(
-            JSON.stringify({
-              level: "warn",
-              event: "pull_request_reviews_invalidate_failed",
-              deliveryId,
-              repository: repoFullName,
-              pullNumber: payloadPullRequest.number,
-              error: errorMessage(error),
-            }),
-          );
-        });
-      }
-      const pr = await upsertPullRequestFromGitHub(
-        env,
-        repoFullName,
-        payload.pull_request,
-      );
-      // #2537: the durable PR-state cache (mergeable_state/state) goes stale exactly when GitHub recomputes them —
-      // synchronize (new head → new mergeable_state recompute), closed (state flips), reopened (state flips back).
-      // Clear explicitly (null, not omitted — PARTIAL-UPDATE CONTRACT) so the next cached read is a forced live
-      // miss; other pull_request actions (labeled, edited, etc.) don't change these fields and are left untouched
-      // to avoid spurious cache churn / extra writes on high-frequency low-signal actions.
-      if (eventName === "pull_request" && (payload.action === "synchronize" || payload.action === "closed" || payload.action === "reopened")) {
-        await invalidatePrStateCache(env, repoFullName, pr.number).catch(() => undefined);
-      }
-      // Review-evasion protection (#review-evasion-protection): a head change (synchronize) invalidates any
-      // active-review tracking for the OLD head immediately -- a fresh pass starts its own tracking later in
-      // this same handler. Best-effort; the guarded CAS update is a safe no-op when nothing is active. The
-      // "closed" case is handled AFTER the self-close/converted_to_draft evasion checks below, not here --
-      // those checks must read the row before this general cleanup would otherwise clear it out from under
-      // them.
-      if (eventName === "pull_request" && payload.action === "synchronize") {
-        await terminalizeActiveReviewTracking(env, repoFullName, pr.number).catch(() => undefined);
-      }
-      // Reopen-prevention (#one-shot-reopen): a CONTRIBUTOR may not reopen a PR that gittensory or a maintainer
-      // closed — closes are one-shot (resubmit, don't reopen). If a non-maintainer reopened a PR whose last close
-      // was by the bot / repo owner / admin, re-close it and skip the re-review. Self-closes (the contributor
-      // closed their own PR) stay reopenable; the bot's own nightly-re-review reopens are exempt. A contended
-      // actuation lock is retryable (#2135/#2447): this pass must not evaluate/mutate the PR concurrently, but
-      // ordinary maintenance can now hold the same lock and may not enforce this one-shot reopen event.
-      // Deliberately UNCAUGHT here: every step inside maybeRecloseDisallowedReopen already fails safe on its own
-      // (the lock claim/release fail open; recloseDisallowedReopenIfNeeded's own operations all .catch()), so a
-      // swallowing catch at this call site could only ever mask a genuinely unexpected error into a silent
-      // "allowed" — which would re-permit exactly the disallowed reopen this guard exists to stop. Let it
-      // propagate and retry instead, same reasoning as the draft-dodge sibling's uncaught getInstallation read.
-      const reopenOutcome: ReopenRecloseOutcome =
-        payload.action === "reopened" && installationId
-          ? await maybeRecloseDisallowedReopen(
-              env,
-              deliveryId,
-              installationId,
-              repoFullName,
-              pr,
-              payload,
-            )
-          : "allowed";
-      if (reopenOutcome === "reclosed") {
-        // Stamp the delivery processed like every other owning path — the early return otherwise leaves the
-        // webhook_events row stuck at "queued"/its body hash, mis-reporting the delivery as un-acked (#review-audit).
-        await recordWebhookEvent(env, {
-          deliveryId,
-          eventName,
-          action: payload.action,
-          installationId: payload.installation?.id,
-          repositoryFullName: payload.repository?.full_name,
-          payloadHash: "processed",
-          status: "processed",
-        });
-        return;
-      }
-      // Resolve settings first so the self-authored + open-reference live-fetch fallbacks only fire when their
-      // respective gates are in block mode.
-      const settings = await resolveRepositorySettings(env, repoFullName);
-      const [repo, cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
-        await Promise.all([
-          getRepository(env, repoFullName),
-          listOtherOpenPullRequests(env, repoFullName, pr.number),
-          resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings),
-        ]);
-      // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the
-      // advisory (and the disposition) elect the cluster winner, so the real lowest-OPEN PR is never auto-closed.
-      const otherOpenPullRequests = await reconcileLiveDuplicateSiblings(
-        env,
-        installationId,
-        repoFullName,
-        pr,
-        cachedOtherOpenPullRequests,
-      );
-      const advisory = buildPullRequestAdvisory(repo, pr, {
-        otherOpenPullRequests,
-        requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
-        duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
-        confirmedNoOpenLinkedIssue,
-        linkedIssueAuthorLogins,
-      });
-      await persistAdvisory(env, advisory);
-      // Auto-project/milestone matching (#3183): independent of the gate/disposition entirely -- a missed or
-      // wrong match must never affect CI/merge, so this is a best-effort side comment, never a blocker. All the
-      // "should this run at all" gating + error logging lives in maybeSuggestMilestoneMatchForPr itself, so
-      // this call site stays a single unconditional call with no logic of its own.
-      await maybeSuggestMilestoneMatchForPr({
-        env,
-        installationId,
-        repoFullName,
-        pullNumber: pr.number,
-        prState: pr.state,
-        prTitle: pr.title,
-        prBody: pr.body,
-        prUrl: pr.htmlUrl,
-        mode: settings.autoProjectMilestoneMatch,
-        backend: settings.autoProjectMilestoneMatchBackend,
-        deliveryId,
-        eventName,
-        action: payload.action,
-      });
-      // Review-evasion protection (#review-evasion-protection): a contributor closing their OWN PR while
-      // gittensory has an ACTIVE review pass running is dodging the one-shot review, not making an ordinary
-      // close. Runs regardless of the general draft-dodge/reopen-reclose gates above -- it is its own
-      // independent enforcement, config-gated on settings.reviewEvasionProtection (close by default, #4011).
-      if (payload.action === "closed" && installationId) {
-        await maybeCloseReviewEvasionSelfClose(
-          env,
-          deliveryId,
-          installationId,
-          repoFullName,
-          pr,
-          payload,
-          settings,
-        );
-      }
-      // Draft-dodge guard (#converted-to-draft): a contributor converting an OPEN PR to draft cannot use
-      // draft state to keep a gate-rejected PR alive. When a prior gate failure exists for the PR's current
-      // headSha (and the block has not been maintainer-overridden), close the PR immediately — the gate
-      // verdict stands and does not reset on draft conversion. Skipped when the agent is unconfigured or
-      // paused (the gate doesn't act on paused repos) and for owner / automation PRs.
-      if (
-        payload.action === "converted_to_draft" &&
-        installationId &&
-        pr.headSha &&
-        pr.state === "open" &&
-        isAgentConfigured(settings.autonomy) &&
-        !settings.agentPaused &&
-        !isProtectedAutomationAuthor(pr.authorLogin)
-      ) {
-        // Deliberately UNCAUGHT here: closeDraftDodgeAttemptIfBlocked catches every operation that should
-        // fail safely, but leaves the write-permission-readiness getInstallation read (#2134) uncaught on
-        // purpose so a transient D1 failure propagates and the queue retries instead of misrecording a
-        // permission denial.
-        await maybeCloseDraftDodgeAttempt(
-          env,
-          deliveryId,
-          installationId,
-          repoFullName,
-          pr,
-          settings,
-        );
-      }
-      // Review-evasion protection: the active-review sibling of the draft-dodge guard above -- fires
-      // regardless of whether a PRIOR gate failure exists (draft-dodge's own trigger), as long as a review
-      // pass is CURRENTLY active for this head. Naturally near-mutually-exclusive with draft-dodge in
-      // practice: the same pass that records a gate-block-outcome also terminalizes the active-review row it
-      // was tracking, so by the time draft-dodge's prior-gate-failure condition is true, this guard's
-      // active-review condition is normally already false.
-      if (payload.action === "converted_to_draft" && installationId) {
-        await maybeCloseReviewEvasionDraftConversion(
-          env,
-          deliveryId,
-          installationId,
-          repoFullName,
-          pr,
-          payload,
-          settings,
-        );
-      }
-      // Review-evasion protection: repeated ready<->draft cycling (#gaming-tactic-draft-cycle). Only counts a
-      // conversion PERFORMED BY THE PR'S OWN AUTHOR -- a maintainer/third-party converting the PR to draft is an
-      // unrelated action and must never contribute to (or be conflated with) the author's own cycling pattern;
-      // counting it here would let one maintainer draft-toggle plus the author's own first-ever (legitimate)
-      // conversion reach count>=2 and wrongly close that first conversion as "repeated" cycling. Always counts
-      // (cheap, no side effects) so the count is accurate from the very first converted_to_draft event this repo
-      // ever sees, even before reviewEvasionProtection is turned on for it -- only the ENFORCEMENT is gated on
-      // that setting. Runs after both guards above so a PR already closed by either of them fails this guard's
-      // own freshness re-check instead of being redundantly re-closed.
-      if (payload.action === "converted_to_draft" && installationId) {
-        const draftConverter = (payload.sender?.login ?? "").toLowerCase();
-        const draftAuthor = (pr.authorLogin ?? "").toLowerCase();
-        const isAuthorDraftConversion = draftConverter.length > 0 && draftConverter === draftAuthor;
-        const draftConversionCount = isAuthorDraftConversion
-          ? await bumpPullRequestDraftConversionCount(env, repoFullName, pr.number).catch(
-              /* v8 ignore next -- fail-safe: a counter-write failure only means this ONE cycle isn't detected. */
-              () => 0,
-            )
-          : 0;
-        await maybeCloseRepeatedDraftCycling(
-          env,
-          deliveryId,
-          installationId,
-          repoFullName,
-          pr,
-          payload,
-          settings,
-          draftConversionCount,
-        );
-      }
-      // Review-evasion protection: the "closed" half of the active-review-tracking cleanup (the
-      // "synchronize" half runs earlier, alongside invalidatePrStateCache). Deliberately placed AFTER the
-      // self-close-evasion check above so that check reads the tracking row before this general cleanup
-      // would otherwise clear it out from under it -- a normal close and this repo's own evasion-enforcement
-      // close (which already terminalizes internally, scoped to its own head) both land here too; the
-      // guarded CAS update is a safe no-op in both of those already-terminal cases.
-      if (eventName === "pull_request" && payload.action === "closed") {
-        await terminalizeActiveReviewTracking(env, repoFullName, pr.number).catch(() => undefined);
-      }
-      if (
-        installationId &&
-        shouldProcessPullRequestPublicSurface(eventName, payload.action)
-      ) {
-        if (
-          shouldCollectSlopEvidence(settings) ||
-          settings.manifestPolicyGateMode !== "off" ||
-          isAgentConfigured(settings.autonomy) ||
-          (await shouldRefreshFilesForPreMergeChecks(env, repoFullName))
-        ) {
-          await refreshPullRequestDetails(env, repoFullName, pr.number);
-        }
-        // Operator review flow: rebase-if-behind → wait for ALL CI → only THEN review/act. When deferred (a
-        // rebase fired a synchronize, or CI is still running) skip the review+maintain now; the synchronize /
-        // CI-completion webhook (sweep backstop) re-runs this once the head is current and CI has settled. gate
-        // stays undefined so the reputation/RAG steps below no-op until the terminal decision.
-        let gate:
-          | Awaited<ReturnType<typeof maybePublishPrPublicSurface>>
-          | undefined;
-        const liveFacts = createLiveGithubFacts();
-        if (
-          await withReviewPipelineSpan(
-            "selfhost.review.readiness",
-            {
-              installationId,
-              repoFullName,
-              pullNumber: pr.number,
-              operation: "readiness",
-            },
-            () =>
-              prReadyForReview(
-                env,
-                installationId,
-                repoFullName,
-                pr,
-                settings,
-                deliveryId,
-                liveFacts,
-              ),
-          )
-        ) {
-          gate = await withReviewPipelineSpan(
-            "selfhost.review.public_surface",
-            {
-              installationId,
-              repoFullName,
-              pullNumber: pr.number,
-              operation: "public_surface",
-            },
-            () =>
-              maybePublishPrPublicSurface(
-                env,
-                installationId,
-                repoFullName,
-                pr,
-                repo,
-                settings,
-                advisory,
-                otherOpenPullRequests,
-                {
-                  deliveryId,
-                  authorType: payloadPullRequest.user?.type,
-                  action: payload.action,
-                  baseSha: payloadPullRequest.base?.sha ?? null,
-                  liveFacts,
-                },
-              ),
-          ).catch((error) => {
-            if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
-            console.error(
-              JSON.stringify({
-                level: "warn",
-                event: "pr_public_surface_failed",
-                deliveryId,
-                repository: payload.repository?.full_name,
-                pullNumber: pr.number,
-                error: errorMessage(error),
-              }),
-            );
-            return undefined;
-          });
-          // #778 maintainer auto-maintain: act on the PR's state (label/review/merge/close) per the repo's
-          // autonomy config, after the gate has run. The function self-guards on agent config; best-effort here
-          // so it never blocks the gate or public surface.
-          await withReviewPipelineSpan(
-            "selfhost.review.maintenance",
-            {
-              installationId,
-              repoFullName,
-              pullNumber: pr.number,
-              operation: "maintenance",
-              decisionOutcome: gate?.conclusion,
-            },
-            () =>
-              maybeRunAgentMaintenance(env, {
-                installationId,
-                repoFullName,
-                repo,
-                pr,
-                settings,
-                otherOpenPullRequests,
-                deliveryId,
-                gate,
-                liveFacts,
-              }),
-          ).catch((error) => {
-            /* v8 ignore next -- best-effort: auto-maintain failures are logged, never surfaced to the gate. */
-            console.error(
-              JSON.stringify({
-                level: "warn",
-                event: "agent_maintenance_failed",
-                deliveryId,
-                repository: repoFullName,
-                pullNumber: pr.number,
-                error: errorMessage(error),
-              }),
-            );
-          });
-        }
-        // Reputation (convergence, flag-gated by GITTENSORY_REVIEW_REPUTATION). After the gate decides, record this
-        // submitter's terminal outcome (merged / closed / manual) so the INTERNAL reputation stays current. The
-        // outcome is derived ONLY from the PR's realized terminal state + the gate verdict (no PR content);
-        // nothing is ever surfaced publicly. Flag-OFF (default) is an immediate no-op (nothing recorded), so the
-        // path is byte-identical. Best-effort: a record failure must never affect the gate or the public surface.
-        const reputationOutcome = (await convergedFeatureActive(
-          env,
-          repoFullName,
-          "reputation",
-        ))
-          ? reputationOutcomeFromTerminalState(pr, payload.pull_request, gate)
-          : undefined;
-        if (reputationOutcome) {
-          await recordReputationOutcome(env, {
-            project: repoFullName,
-            submitter: pr.authorLogin ?? null,
-            outcome: reputationOutcome,
-          }).catch((error) => {
-            /* v8 ignore next -- best-effort: a reputation-record failure is logged, never surfaced to the gate. */
-            console.error(
-              JSON.stringify({
-                level: "warn",
-                event: "reputation_record_failed",
-                deliveryId,
-                repository: repoFullName,
-                pullNumber: pr.number,
-                error: errorMessage(error),
-              }),
-            );
-          });
-        }
-        // RAG incremental index (convergence, flag-gated by GITTENSORY_REVIEW_RAG + the per-repo cutover allowlist).
-        // When a PR MERGES into an allowlisted repo, its changes have landed on the default branch — enqueue an
-        // incremental re-index of just the changed files (reindexChangedPaths) so the index stays fresh without a
-        // full re-crawl. Enqueued (not run inline) so the webhook stays fast + the index work is its own retryable
-        // job. Flag-OFF (default) is a no-op (the job is never enqueued AND the processor no-ops). Best-effort.
-        await maybeEnqueueRagReindexForMergedPr(
-          env,
-          repoFullName,
-          pr.number,
-          payload.action,
-          payload.pull_request.merged_at,
-          installationId,
-        ).catch((error) => {
-          /* v8 ignore next -- best-effort: a RAG re-index enqueue failure is logged, never surfaced to the gate. */
-          console.error(
-            JSON.stringify({
-              level: "warn",
-              event: "rag_reindex_enqueue_failed",
-              deliveryId,
-              repository: repoFullName,
-              pullNumber: pr.number,
-              error: errorMessage(error),
-            }),
-          );
-        });
-        // Event-driven sibling re-gate (#4005): a merge can invalidate every OTHER open PR's gate verdict, and
-        // otherwise nothing re-checks them until the next bounded sweep tick reaches each one. Enqueued (not run
-        // inline), same shape as the RAG re-index just above. Best-effort.
-        await maybeEnqueueSiblingRegateForMergedPr(
-          env,
-          deliveryId,
-          repoFullName,
-          payload.action,
-          payload.pull_request.merged_at,
-          installationId,
-          settings,
-          otherOpenPullRequests,
-        ).catch((error) => {
-          /* v8 ignore next -- best-effort: a sibling re-gate enqueue failure is logged, never surfaced to the gate. */
-          console.error(
-            JSON.stringify({
-              level: "warn",
-              event: "sibling_regate_enqueue_failed",
-              deliveryId,
-              repository: repoFullName,
-              pullNumber: pr.number,
-              error: errorMessage(error),
-            }),
-          );
-        });
-      }
-    }
-
-    let issueWatchEvents: DetectedNotificationEvent[] = [];
     if (
-      payload.repository?.full_name &&
-      payload.issue &&
-      !payload.issue.pull_request
-    ) {
-      const issue = await upsertIssueFromGitHub(
-        env,
-        payload.repository.full_name,
-        payload.issue,
-      );
-      const repo = await getRepository(env, payload.repository.full_name);
-      const advisory = buildIssueAdvisory(repo, issue);
-      // Issue-side slop triage (#533): opt-in via slopGateMode, advisory-only (issues have no gate, and
-      // the issue advisory is maintainer-facing — never a public comment). Flags clearly low-effort issues.
-      const issueSettings = await resolveRepositorySettings(
-        env,
-        payload.repository.full_name,
-      );
-      if (issueSettings.slopGateMode !== "off") {
-        advisory.findings.push(
-          ...buildIssueSlopAssessment({ title: issue.title, body: issue.body })
-            .findings,
-        );
-      }
-      await persistAdvisory(env, advisory);
-      // Account-age visibility (#2561 issue-path parity): label newly opened issues from below-threshold
-      // accounts when review_state_label autonomy is auto — same contract as the PR maintenance path.
-      if (payload.action === "opened" && installationId && issue.authorLogin) {
-        const repoOwner = repoOwnerLoginFromFullName(payload.repository.full_name);
-        const authorLogin = issue.authorLogin;
-        const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
-        const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
-        const authorIsAutomationBot = isProtectedAutomationAuthor(authorLogin);
-        const accountAgeThresholdDays = issueSettings.accountAgeThresholdDays;
-        if (
-          !authorIsOwner &&
-          !authorIsAdmin &&
-          !authorIsAutomationBot &&
-          typeof accountAgeThresholdDays === "number"
-        ) {
-          if (await isBelowAccountAgeThreshold(env, installationId, authorLogin, accountAgeThresholdDays)) {
-            if (resolveAutonomy(issueSettings.autonomy, "review_state_label") === "auto") {
-              const newAccountMode = resolveAgentActionMode({
-                globalPaused: isGlobalAgentPause(env) || (await isDbFrozenForRepo(env, issueSettings.agentGlobalFreezeOverride)),
-                agentPaused: issueSettings.agentPaused,
-                agentDryRun: issueSettings.agentDryRun,
-              });
-              await ensurePullRequestLabel(
-                env,
-                installationId,
-                payload.repository.full_name,
-                issue.number,
-                issueSettings.newAccountLabel!,
-                { createMissingLabel: issueSettings.createMissingLabel, mode: newAccountMode },
-              ).catch(
-                /* v8 ignore next -- fail-safe: a label-application failure must never block the rest of the handler */
-                () => undefined,
-              );
-            }
-          }
-        }
-      }
-      // Per-contributor open-issue cap (#2270, anti-abuse): the first issue-side auto-close path. Best-effort —
-      // a failure here must never affect the advisory/notification handling above or the webhook overall.
-      if (payload.action === "opened" && installationId) {
-        await maybeCloseIssueOverContributorCap(env, {
-          installationId,
-          repoFullName: payload.repository.full_name,
-          issue,
-          settings: issueSettings,
-          deliveryId,
-        }).catch((error) => {
-          /* v8 ignore next -- best-effort: an issue-cap enforcement failure is logged, never surfaced to the webhook. */
-          console.error(
-            JSON.stringify({
-              level: "warn",
-              event: "contributor_issue_cap_failed",
-              deliveryId,
-              repository: payload.repository?.full_name,
-              issueNumber: issue.number,
-              error: errorMessage(error),
-            }),
-          );
-        });
-      }
-      // #699 path B: a newly opened grabbable, high-multiplier issue notifies the miners watching this repo
-      // (fanned out through the same #535 pipeline below).
-      if (payload.action === "opened")
-        issueWatchEvents = await detectIssueWatchEvents(
-          env,
-          payload.repository.full_name,
-          issue,
-        );
-    }
+      await handlePullRequestWebhookEvent(env, deliveryId, eventName, payload, installationId)
+    )
+      return;
+
+    const issueWatchEvents = await handleIssueWebhookEvent(env, deliveryId, payload, installationId);
 
     const trustedReviewEvents = await filterTrustedReviewNotificationEvents(
       env,
