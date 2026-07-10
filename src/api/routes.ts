@@ -263,6 +263,7 @@ import { getPublicStats, isPublicStatsEnabled } from "../review/public-stats";
 import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
 import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
+import { buildMaintainerSlopDuplicateTrend } from "../services/maintainer-slop-duplicate-trend";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
@@ -1390,9 +1391,35 @@ export function createApp() {
     const qualityRepoNames = new Set(qualityRepos.map((repo) => repo.fullName.toLowerCase()));
     const scopedSyncCompletions = allSyncStates.filter((state) => qualityRepoNames.has(state.repoFullName.toLowerCase())).map((state) => state.lastCompletedAt);
     const qualityStale = isMaintainerQualityDataStale({ lastCompletedAts: scopedSyncCompletions, repoCount: qualityRepos.length, nowMs: Date.parse(nowIso()) });
-    const qualityDashboard = buildMaintainerQualityDashboard({ repos: qualityRepoInputs, generatedAt: nowIso(), stale: qualityStale, repoTotal: repositories.length });
+    const generatedAt = nowIso();
+    const queueHealthHistories = await Promise.all(
+      qualityRepos.map((repo) => listSignalSnapshots(c.env, "queue-health", repo.fullName)),
+    );
+    const slopDuplicateTrend = buildMaintainerSlopDuplicateTrend({
+      repos: qualityRepoInputs.map((input, index) => {
+        const collisions = buildCollisionReport(input.repo.fullName, input.issues, input.pullRequests);
+        const currentQueueHealth = buildQueueHealth(input.repo, input.issues, input.pullRequests, collisions);
+        return {
+          repoFullName: input.repo.fullName,
+          queueHealthSnapshots: queueHealthHistories[index],
+          currentQueueHealth,
+        };
+      }),
+      generatedAt,
+      stale: qualityStale,
+      nowMs: Date.parse(generatedAt),
+    });
+    const qualityDashboard = {
+      ...buildMaintainerQualityDashboard({
+        repos: qualityRepoInputs,
+        generatedAt,
+        stale: qualityStale,
+        repoTotal: repositories.length,
+      }),
+      slopDuplicateTrend,
+    };
     return c.json({
-      generatedAt: nowIso(),
+      generatedAt,
       installations,
       health: health.map(enrichInstallationHealth),
       metrics: [

@@ -2209,7 +2209,7 @@ describe("api routes", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       metrics: Array<{ label: string; value: number }>;
-      qualityDashboard: { generatedAt: string; stale: boolean; repoQuality: Array<{ repoFullName: string; queueBand: string }>; topContributors: Array<{ login: string; band: string }>; qualitySignals: { openPrs: number }; summary: string };
+      qualityDashboard: { generatedAt: string; stale: boolean; repoQuality: Array<{ repoFullName: string; queueBand: string }>; topContributors: Array<{ login: string; band: string }>; qualitySignals: { openPrs: number }; slopDuplicateTrend: { generatedAt: string; stale: boolean; weeks: Array<{ weekStart: string }>; summary: string }; summary: string };
     };
     expect(body.metrics.find((metric) => metric.label === "Open PRs cached")?.value).toBe(8);
     // Quality dashboard (#557): shaped, scoped, public-safe trend/outcome data with bands not raw scores.
@@ -2219,6 +2219,8 @@ describe("api routes", () => {
     expect(body.qualityDashboard.repoQuality.every((entry) => ["low", "medium", "high", "critical"].includes(entry.queueBand))).toBe(true);
     expect(body.qualityDashboard.topContributors.every((entry) => ["strong", "developing", "early"].includes(entry.band))).toBe(true);
     expect(body.qualityDashboard.qualitySignals.openPrs).toBeGreaterThanOrEqual(0);
+    expect(body.qualityDashboard.slopDuplicateTrend.generatedAt).toEqual(expect.any(String));
+    expect(body.qualityDashboard.slopDuplicateTrend.weeks.length).toBeGreaterThan(0);
     expect(body.qualityDashboard.summary).toContain("open PR(s)");
     expect(JSON.stringify(body.qualityDashboard)).not.toMatch(FORBIDDEN_PUBLIC_REPORT_TERMS);
     expect(JSON.stringify(body.qualityDashboard)).not.toMatch(/"burdenScore"|"credibility"/);

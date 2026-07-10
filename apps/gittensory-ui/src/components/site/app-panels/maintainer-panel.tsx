@@ -20,6 +20,8 @@ import {
 import { ActivationPreview } from "@/components/site/app-panels/activation-preview";
 import { AiReviewSettings } from "@/components/site/app-panels/ai-review-settings";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
+import { SlopDuplicateTrendCard } from "@/components/site/app-panels/slop-duplicate-trend-card";
+import type { MaintainerSlopDuplicateTrend } from "@/components/site/app-panels/slop-duplicate-trend-card-model";
 import { StatCard } from "@/components/site/primitives";
 import { EmptyState, LoadingState, StateBoundary } from "@/components/site/state-views";
 import { apiFetch } from "@/lib/api/request";
@@ -76,6 +78,9 @@ type MaintainerDashboard = {
     slop?: { risk: number; band: string } | null;
   }>;
   settingsPreview: { removed: string[]; added: string[] };
+  qualityDashboard?: {
+    slopDuplicateTrend: MaintainerSlopDuplicateTrend;
+  } | null;
 };
 
 type TrustChecklistStatus = "ready" | "needs_attention" | "blocked";
@@ -219,6 +224,10 @@ function MaintainerDashboardView() {
               />
             ))}
           </section>
+
+          {data.qualityDashboard?.slopDuplicateTrend ? (
+            <SlopDuplicateTrendCard trend={data.qualityDashboard.slopDuplicateTrend} />
+          ) : null}
 
           <section className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-token border-hairline bg-card p-5">

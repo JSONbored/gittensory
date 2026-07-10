@@ -1,4 +1,5 @@
 import { buildCollisionReport, buildQueueHealth, type QueueHealth } from "../signals/engine";
+import type { MaintainerSlopDuplicateTrend } from "./maintainer-slop-duplicate-trend";
 import type { IssueRecord, PullRequestRecord, RepositoryRecord } from "../types";
 
 // ─── Maintainer quality dashboard (#557) ─────────────────────────────────────────────────────────
@@ -46,6 +47,8 @@ export type MaintainerQualityDashboard = {
   topContributors: MaintainerTopContributor[];
   /** Aggregate counts across the SHAPED repos' open PRs — observable facts, not private scores. */
   qualitySignals: { openPrs: number; duplicatePrRisk: number; missingLinkedIssue: number };
+  /** Weekly slop-flag + duplicate-flag rates from queue-health snapshots (#2202). Attached at API compose time. */
+  slopDuplicateTrend?: MaintainerSlopDuplicateTrend;
   summary: string;
 };
 
