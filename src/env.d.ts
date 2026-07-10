@@ -191,6 +191,12 @@ declare global {
     /** Comma-separated GitHub logins assigned to filed upstream-drift issues (default: the gittensory
      *  maintainer). Lets a self-host operator route drift issues to their own team. */
     GITTENSORY_DRIFT_ISSUE_ASSIGNEES?: string;
+    /** Comma-separated GitHub bot logins ADDITIONALLY trusted to author review-thread blockers via scanner
+     *  comments (src/github/backfill.ts isTrustedScannerReviewThreadAuthor), merged with the built-in baseline
+     *  (superagent[bot], superagent-security[bot], superagent-security-dev[bot], brin[bot]). Lets a self-host
+     *  operator running a different third-party scanner (CodeQL, Snyk, Semgrep, SonarCloud, DeepSource, etc.)
+     *  get the same review-thread trust as the built-in scanners (#4614). */
+    TRUSTED_SCANNER_BOT_LOGINS?: string;
     /** Self-host default Discord webhook URL — per-action notifications (merged/closed/manual) for any repo
      *  not in the built-in per-repo map. Lets a self-host operator wire one channel without a source edit. */
     DISCORD_WEBHOOK_URL?: string;

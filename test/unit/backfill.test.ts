@@ -5590,6 +5590,97 @@ describe("GitHub backfill", () => {
       expect(blockers.map((blocker) => blocker.path)).toEqual(["src/superagent.ts", "src/superagent-security.ts", "src/superagent-security-dev.ts", "src/brin.ts"]);
     });
 
+    it("trusts self-host-configured TRUSTED_SCANNER_BOT_LOGINS additively alongside the built-in defaults (#4614)", async () => {
+      // Whitespace + case variation + an empty entry between commas -- exercises the trim/lowercase/filter
+      // handling, not just a bare exact match.
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token", TRUSTED_SCANNER_BOT_LOGINS: " CodeQL[bot] ,,Snyk-Security[bot]" });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString() !== "https://api.github.com/graphql") return new Response("not found", { status: 404 });
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/codeql-finding.ts",
+                      line: 5,
+                      comments: { nodes: [{ body: "**P1:** Configured CodeQL blocker", author: { login: "codeql[bot]" }, authorAssociation: "NONE" }] },
+                    },
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/snyk-finding.ts",
+                      line: 15,
+                      comments: { nodes: [{ body: "**P1:** Configured Snyk blocker", author: { login: "snyk-security[bot]" }, authorAssociation: "NONE" }] },
+                    },
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/superagent-still-trusted.ts",
+                      line: 25,
+                      comments: { nodes: [{ body: "**P1:** Built-in default still trusted", author: { login: "superagent-security[bot]" }, authorAssociation: "NONE" }] },
+                    },
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/unconfigured-scanner.ts",
+                      line: 35,
+                      comments: { nodes: [{ body: "**P1:** Unconfigured scanner stays untrusted", author: { login: "semgrep[bot]" }, authorAssociation: "NONE" }] },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        });
+      });
+
+      const blockers = await fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1900, "public-token");
+
+      expect(blockers.map((blocker) => blocker.title)).toEqual(["Configured CodeQL blocker", "Configured Snyk blocker", "Built-in default still trusted"]);
+      expect(blockers.map((blocker) => blocker.authorLogin)).toEqual(["codeql[bot]", "snyk-security[bot]", "superagent-security[bot]"]);
+    });
+
+    it("ignores a whitespace-only TRUSTED_SCANNER_BOT_LOGINS override and keeps only the built-in defaults trusted", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token", TRUSTED_SCANNER_BOT_LOGINS: "   " });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        if (input.toString() !== "https://api.github.com/graphql") return new Response("not found", { status: 404 });
+        return Response.json({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/codeql-finding.ts",
+                      line: 5,
+                      comments: { nodes: [{ body: "**P1:** Not configured, must not block", author: { login: "codeql[bot]" }, authorAssociation: "NONE" }] },
+                    },
+                    {
+                      isResolved: false,
+                      isOutdated: false,
+                      path: "src/superagent-still-trusted.ts",
+                      line: 25,
+                      comments: { nodes: [{ body: "**P1:** Built-in default still trusted", author: { login: "superagent-security[bot]" }, authorAssociation: "NONE" }] },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        });
+      });
+
+      const blockers = await fetchLiveReviewThreadBlockers(env, "JSONbored/gittensory", 1901, "public-token");
+
+      expect(blockers.map((blocker) => blocker.authorLogin)).toEqual(["superagent-security[bot]"]);
+    });
+
     it("paginates review threads so blockers beyond the first page cannot hide", async () => {
       const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       const queries: string[] = [];

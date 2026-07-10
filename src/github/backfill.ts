@@ -3800,7 +3800,7 @@ async function isAuthorizedReviewThreadAuthor(
   association: string | null | undefined,
 ): Promise<boolean> {
   if (isOwnReviewThreadAuthor(login)) return false;
-  if (isTrustedScannerReviewThreadAuthor(login)) return true;
+  if (isTrustedScannerReviewThreadAuthor(env, login)) return true;
   if (isMaintainerReviewThreadAuthor(association)) return true;
   return isVerifiedMemberReviewThreadAuthor(env, repoFullName, token, memberPermissionCache, admissionKey, login, association);
 }
@@ -3843,10 +3843,23 @@ function isVerifiedMemberReviewThreadAuthor(
   return verified;
 }
 
-// External scanner GitHub App bot logins allowed to create review-thread blockers.
+// External scanner GitHub App bot logins allowed to create review-thread blockers -- built-in baseline. A
+// self-hoster running a different scanner (CodeQL, Snyk, Semgrep, SonarCloud, DeepSource, etc.) can trust it
+// too via TRUSTED_SCANNER_BOT_LOGINS (comma-separated logins), ADDITIVE to this baseline -- same shape as
+// resolveDriftAssignees in src/upstream/ruleset.ts -- instead of that scanner's comments silently falling
+// through every trust check and never blocking (#4614).
 const TRUSTED_SCANNER_REVIEW_THREAD_AUTHORS = new Set(["superagent[bot]", "superagent-security[bot]", "superagent-security-dev[bot]", "brin[bot]"]);
-function isTrustedScannerReviewThreadAuthor(login: string | null | undefined): boolean {
-  return typeof login === "string" && TRUSTED_SCANNER_REVIEW_THREAD_AUTHORS.has(login.toLowerCase());
+function isTrustedScannerReviewThreadAuthor(env: Env, login: string | null | undefined): boolean {
+  if (typeof login !== "string") return false;
+  const normalized = login.toLowerCase();
+  if (TRUSTED_SCANNER_REVIEW_THREAD_AUTHORS.has(normalized)) return true;
+  const raw = env.TRUSTED_SCANNER_BOT_LOGINS;
+  if (typeof raw !== "string" || !raw.trim()) return false;
+  return raw
+    .split(",")
+    .map((extra) => extra.trim().toLowerCase())
+    .filter((extra) => extra.length > 0)
+    .includes(normalized);
 }
 
 // Match only OUR OWN app bot login (a `gittensory` / `gittensory-orb[bot]` PREFIX), never a third-party slug
