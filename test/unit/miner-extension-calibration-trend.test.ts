@@ -9,6 +9,20 @@ const panelRegistryScript = readFileSync("apps/gittensory-miner-extension/panel-
 const NOW = Date.parse("2026-07-10T00:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
 
+type MockNode = {
+  tagName: string;
+  className: string;
+  hidden: boolean;
+  textContent: string;
+  dataset: Record<string, string>;
+  children: MockNode[];
+  attributes: Record<string, string>;
+  appendChild: (child: MockNode) => void;
+  append: (...children: MockNode[]) => void;
+  setAttribute: (name: string, value: string) => void;
+  querySelector: (selector: string) => MockNode | null;
+};
+
 function snapshot(daysAgo: number, combinedAccuracy: number) {
   return {
     observedAt: new Date(NOW - daysAgo * DAY).toISOString(),
@@ -16,26 +30,26 @@ function snapshot(daysAgo: number, combinedAccuracy: number) {
   };
 }
 
-function createMockNode(tagName = "DIV") {
-  const node = {
+function createMockNode(tagName = "DIV"): MockNode {
+  const node: MockNode = {
     tagName,
     className: "",
     hidden: false,
     textContent: "",
-    dataset: {} as Record<string, string>,
-    children: [] as Array<ReturnType<typeof createMockNode>>,
-    attributes: {} as Record<string, string>,
-    appendChild(child: ReturnType<typeof createMockNode>) {
+    dataset: {},
+    children: [],
+    attributes: {},
+    appendChild(child) {
       node.children.push(child);
       if (child.textContent) node.textContent += child.textContent;
     },
-    append(...children: Array<ReturnType<typeof createMockNode>>) {
+    append(...children) {
       for (const child of children) node.appendChild(child);
     },
-    setAttribute(name: string, value: string) {
+    setAttribute(name, value) {
       node.attributes[name] = value;
     },
-    querySelector(selector: string) {
+    querySelector(selector) {
       const match = selector.match(/\.([^\s#]+)/);
       if (!match) return null;
       return findByClass(node, match[1]!) ?? null;
@@ -44,7 +58,7 @@ function createMockNode(tagName = "DIV") {
   return node;
 }
 
-function findByClass(node: ReturnType<typeof createMockNode>, className: string) {
+function findByClass(node: MockNode, className: string): MockNode | null {
   if (node.className.includes(className) || node.attributes.class === className) return node;
   for (const child of node.children) {
     const found = findByClass(child, className);
@@ -75,12 +89,12 @@ function loadCalibrationInternals() {
     },
     panel: vmContext.__gittensoryMinerCalibrationTrendInternals as {
       buildSparklinePath: (values: number[]) => { linePath: string; areaPath: string };
-      renderCalibrationTrendPanel: (container: ReturnType<typeof createMockNode>, view: unknown) => void;
+      renderCalibrationTrendPanel: (container: MockNode, view: unknown) => void;
       projectCalibrationTrendFromSnapshots: (snapshots: unknown[], options?: { nowMs?: number }) => { status: string };
     },
     registry: vmContext.__gittensoryMinerPanelRegistryInternals as {
       registerMinerExtensionPanel: (registration: unknown) => void;
-      mountMinerExtensionPanels: (container: ReturnType<typeof createMockNode>, context: unknown) => Promise<void>;
+      mountMinerExtensionPanels: (container: MockNode, context: unknown) => Promise<void>;
     },
   };
 }
@@ -133,7 +147,7 @@ describe("miner extension calibration trend (#4268)", () => {
     registry.registerMinerExtensionPanel({
       id: "test-panel",
       matches: (context: { watched?: boolean }) => context.watched === true,
-      async mount(container: ReturnType<typeof createMockNode>) {
+      async mount(container: MockNode) {
         mounted.push("mounted");
         const node = createMockNode("P");
         node.textContent = "panel";
