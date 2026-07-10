@@ -1202,10 +1202,13 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     expect(sizeHoldLines.warnings.some((w) => w.code === "oversized_pr")).toBe(true);
 
     const policy = { linkedIssueGateMode: "advisory" as const, duplicatePrGateMode: "advisory" as const, aiReviewGateMode: "advisory" as const, manifestPolicyGateMode: "off" as const, selfAuthoredLinkedIssueGateMode: "advisory" as const, lockfileIntegrityGateMode: "off" as const, claGateMode: "off" as const };
-    const blockPolicy = { linkedIssueGateMode: "block" as const, duplicatePrGateMode: "block" as const, aiReviewGateMode: "block" as const, manifestPolicyGateMode: "block" as const, selfAuthoredLinkedIssueGateMode: "block" as const, lockfileIntegrityGateMode: "block" as const, claGateMode: "block" as const };
+    const blockPolicy = { linkedIssueGateMode: "block" as const, duplicatePrGateMode: "block" as const, aiReviewGateMode: "block" as const, manifestPolicyGateMode: "block" as const, selfAuthoredLinkedIssueGateMode: "block" as const, lockfileIntegrityGateMode: "block" as const, claGateMode: "block" as const, linkedIssueSatisfactionGateMode: "block" as const };
     const finding = (code: string) => ({ code, severity: "warning" as const, title: code, detail: code });
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("missing_linked_issue"), policy)).toBe(false);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("missing_linked_issue"), blockPolicy)).toBe(true);
+    // #4518: linked_issue_scope_mismatch defaults to advisory (unset field), same as missing_linked_issue.
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("linked_issue_scope_mismatch"), policy)).toBe(false);
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("linked_issue_scope_mismatch"), blockPolicy)).toBe(true);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("duplicate_pr_risk"), policy)).toBe(false);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("duplicate_pr_risk"), blockPolicy)).toBe(true);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("ai_consensus_defect"), policy)).toBe(false);

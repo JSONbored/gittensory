@@ -52,9 +52,13 @@ describe("predicted-gate engine branch coverage (#2283)", () => {
       selfAuthoredLinkedIssueGateMode: "block" as const,
       lockfileIntegrityGateMode: "block" as const,
       claGateMode: "block" as const,
+      linkedIssueSatisfactionGateMode: "block" as const,
     };
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("missing_linked_issue"), advisory)).toBe(false);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("missing_linked_issue"), block)).toBe(true);
+    // #4518: linked_issue_scope_mismatch defaults to advisory (unset field), same as missing_linked_issue.
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("linked_issue_scope_mismatch"), advisory)).toBe(false);
+    expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("linked_issue_scope_mismatch"), block)).toBe(true);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("duplicate_pr_risk"), advisory)).toBe(false);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("duplicate_pr_risk"), block)).toBe(true);
     expect(gateAdvisoryInternals.isConfiguredGateBlocker(finding("ai_consensus_defect"), advisory)).toBe(false);
