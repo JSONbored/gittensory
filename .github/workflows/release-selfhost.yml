@@ -39,12 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # Environment gate. Only the trusted orb-beta-release automation may use `release-beta` (no
-    # required reviewers): it dispatches this workflow as github-actions[bot], asks to create the
-    # GitHub Release, and the validation below requires that exact beta tag to already point at this
-    # commit. Human workflow_dispatch runs and direct beta tag pushes stay on `release`, which requires
-    # reviewer approval under repo Settings > Environments. This expression reads only event fields
-    # because a job's `environment:` is resolved before any step runs.
-    environment: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && inputs.create_github_release && contains(inputs.version, '-beta.') && 'release-beta' || 'release' }}
+    # required reviewers): it dispatches this workflow as github-actions[bot] on a tag ref, asks to
+    # create the GitHub Release, and the validation below requires that exact beta tag to already point
+    # at this commit. Human workflow_dispatch runs, branch dispatches, and direct beta tag pushes stay on
+    # `release`, which requires reviewer approval under repo Settings > Environments. This expression
+    # reads only event fields because a job's `environment:` is resolved before any step runs.
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && github.ref_type == 'tag' && inputs.create_github_release && contains(inputs.version, '-beta.') && 'release-beta' || 'release' }}
     env:
       SENTRY_ORG: jsonbored
       SENTRY_PROJECT: gittensory

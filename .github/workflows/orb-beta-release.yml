@@ -71,6 +71,10 @@ jobs:
           VERSION: ${{ steps.report.outputs.version }}
         run: |
           set -euo pipefail
+          if git ls-remote --exit-code --heads origin "$TAG" >/dev/null 2>&1; then
+            echo "::error::Branch $TAG already exists; refusing to create or dispatch an ambiguous release ref."
+            exit 1
+          fi
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             echo "Tag $TAG already exists; skipping (a previous run likely already tagged it, or it collides with an already-published version)."
             echo "created=false" >> "$GITHUB_OUTPUT"
@@ -89,21 +93,19 @@ jobs:
       # steps.tag.outputs.created (not just due) so a no-op tag step -- for any reason -- never triggers a
       # rebuild/republish of an existing GHCR image tag with different content.
       #
-      # Dispatch against the TAG, not `main`: `main` is a floating ref, and this repo merges fast enough
-      # that a commit can land in the gap between the "Tag the new beta" step above pushing $TAG and this
-      # step's dispatch actually being processed by GitHub. `--ref main` would then resolve `github.sha`
-      # inside release-selfhost.yml to that NEWER commit, while $TAG (pushed moments ago, immutable) still
-      # points at the older one it was actually cut for -- tripping that workflow's own
-      # TAG_SHA-must-equal-RELEASE_SHA fail-safe and aborting the release. Dispatching against $TAG instead
-      # makes `github.sha` resolve to exactly the commit the tag points to, by construction, so the two can
-      # never disagree regardless of how many commits land on main afterward.
+      # Dispatch against the fully qualified TAG ref, not `main`: `main` is a floating ref, and this repo
+      # merges fast enough that a commit can land in the gap between the tag push above and this dispatch.
+      # `--ref main` would then resolve `github.sha` inside release-selfhost.yml to that NEWER commit, while
+      # $TAG (pushed moments ago, immutable) still points at the older one it was actually cut for -- tripping
+      # that workflow's own TAG_SHA-must-equal-RELEASE_SHA fail-safe and aborting the release. `refs/tags/$TAG`
+      # preserves that race fix without letting a same-named branch shadow the tag namespace.
       - name: Dispatch the ORB release build
         if: steps.report.outputs.due == 'true' && steps.tag.outputs.created == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.report.outputs.tag }}
           VERSION: ${{ steps.report.outputs.version }}
-        run: gh workflow run release-selfhost.yml --ref "$TAG" -f "version=${VERSION}" -f create_github_release=true
+        run: gh workflow run release-selfhost.yml --ref "refs/tags/$TAG" -f "version=${VERSION}" -f create_github_release=true
 
       - name: Summarize
         if: always()
