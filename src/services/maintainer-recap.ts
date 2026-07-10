@@ -12,7 +12,7 @@
 // calibration ledgers (blocked-then-merged false positives, maintainer overrides, recommendation reversals).
 import { PUBLIC_LOCAL_PATH_SCRUB_PATTERN, PUBLIC_UNSAFE_PATTERN } from "../signals/redaction";
 import { deliverRecapToDiscord, deliverRecapToSlack } from "./notify-discord";
-import type { GatePrecisionReport } from "./gate-precision";
+import { GATE_FALSE_POSITIVE_MIN_SAMPLE, type GatePrecisionReport } from "./gate-precision";
 import type { OutcomeCalibration } from "./outcome-calibration";
 import { buildCohortRecapSection } from "./maintainer-recap-cohort";
 import type { ContributorCohort } from "./contributor-cohort";
@@ -63,12 +63,16 @@ function foldCohortSlice(
   if (gate) {
     target.blocked += gate.blocked;
     target.gateFalsePositives += gate.blockedThenMerged;
+    // Reuse gate-precision's MIN_SAMPLE-gated rate instead of re-deriving a noisy small-sample percentage.
+    target.gateFalsePositiveRate = gate.falsePositiveRate;
   }
 }
 
-function finalizeCohortRate(slice: MaintainerRecapCohortSlice): MaintainerRecapCohortSlice {
+function finalizeFleetCohortRate(slice: MaintainerRecapCohortSlice): MaintainerRecapCohortSlice {
   slice.gateFalsePositiveRate =
-    slice.blocked > 0 ? Math.round((slice.gateFalsePositives / slice.blocked) * 100) / 100 : null;
+    slice.blocked >= GATE_FALSE_POSITIVE_MIN_SAMPLE
+      ? Math.round((slice.gateFalsePositives / slice.blocked) * 100) / 100
+      : null;
   return slice;
 }
 
@@ -81,8 +85,8 @@ function buildRepoCohorts(
   foldCohortSlice(miner, "miner", gatePrecision, calibration);
   foldCohortSlice(human, "human", gatePrecision, calibration);
   const cohorts: Partial<Record<ContributorCohort, MaintainerRecapCohortSlice>> = {};
-  if (miner.reviewed > 0 || miner.blocked > 0) cohorts.miner = finalizeCohortRate(miner);
-  if (human.reviewed > 0 || human.blocked > 0) cohorts.human = finalizeCohortRate(human);
+  if (miner.reviewed > 0 || miner.blocked > 0) cohorts.miner = miner;
+  if (human.reviewed > 0 || human.blocked > 0) cohorts.human = human;
   return Object.keys(cohorts).length > 0 ? cohorts : undefined;
 }
 
@@ -110,8 +114,8 @@ function foldFleetCohorts(
     }
   }
   const cohorts: Partial<Record<ContributorCohort, MaintainerRecapCohortSlice>> = {};
-  if (miner.reviewed > 0 || miner.blocked > 0) cohorts.miner = finalizeCohortRate(miner);
-  if (human.reviewed > 0 || human.blocked > 0) cohorts.human = finalizeCohortRate(human);
+  if (miner.reviewed > 0 || miner.blocked > 0) cohorts.miner = finalizeFleetCohortRate(miner);
+  if (human.reviewed > 0 || human.blocked > 0) cohorts.human = finalizeFleetCohortRate(human);
   return Object.keys(cohorts).length > 0 ? cohorts : undefined;
 }
 

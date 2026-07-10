@@ -24,7 +24,8 @@ import {
 } from "./contributor-cohort";
 
 // Below this per-gate-type blocked sample the false-positive rate is too noisy to judge.
-const MIN_SAMPLE = 5;
+export const GATE_FALSE_POSITIVE_MIN_SAMPLE = 5;
+const MIN_SAMPLE = GATE_FALSE_POSITIVE_MIN_SAMPLE;
 
 export type GatePrecisionPerType = {
   gateType: string;

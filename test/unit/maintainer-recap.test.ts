@@ -247,6 +247,26 @@ describe("buildMaintainerRecap (#2239)", () => {
     expect(report.repos[0]?.cohorts?.miner?.merged).toBe(2);
     expect(JSON.stringify(report)).not.toMatch(/login|author/i);
   });
+
+  it("carries upstream null cohort gate rates for small blocked samples instead of recomputing", () => {
+    const report = buildMaintainerRecap({
+      generatedAt: GEN,
+      repos: [repoInput("owner/repo-a", { cohort: { miner: { reviewed: 2, merged: 1, closed: 1, blocked: 1, blockedThenMerged: 1 } } })],
+    });
+    expect(report.repos[0]?.cohorts?.miner).toMatchObject({ blocked: 1, gateFalsePositives: 1, gateFalsePositiveRate: null });
+    expect(report.cohorts?.miner?.gateFalsePositiveRate).toBeNull();
+  });
+
+  it("computes fleet cohort gate rates only once aggregated blocked count reaches MIN_SAMPLE", () => {
+    const report = buildMaintainerRecap({
+      generatedAt: GEN,
+      repos: [
+        repoInput("owner/repo-a", { cohort: { miner: { reviewed: 2, merged: 1, closed: 1, blocked: 3, blockedThenMerged: 1 } } }),
+        repoInput("owner/repo-b", { cohort: { miner: { reviewed: 2, merged: 1, closed: 1, blocked: 2, blockedThenMerged: 1 } } }),
+      ],
+    });
+    expect(report.cohorts?.miner).toMatchObject({ blocked: 5, gateFalsePositives: 2, gateFalsePositiveRate: 0.4 });
+  });
 });
 
 function envWithBothWebhooks(): Env {
