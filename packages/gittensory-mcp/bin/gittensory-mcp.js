@@ -223,6 +223,15 @@ const findOpportunitiesShape = {
   limit: z.number().int().min(1).max(50).optional(),
 };
 
+const issueRagShape = {
+  owner: z.string(),
+  repo: z.string(),
+  title: z.string(),
+  body: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  topK: z.number().int().min(1).max(12).optional(),
+};
+
 const lintPrTextShape = {
   commitMessages: z.array(z.string()).max(50).optional(),
   prBody: z.string().optional(),
@@ -387,6 +396,10 @@ const STDIO_TOOL_DESCRIPTORS = [
   {
     name: "gittensory_find_opportunities",
     description: "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list filtered by your MinerGoalSpec (lane, min rank score, languages). Metadata-only, no GitHub writes.",
+  },
+  {
+    name: "gittensory_retrieve_issue_context",
+    description: "Repo-scoped issue-centric RAG retrieval for the miner analyze phase. Returns related file paths and retrieval scores from issue title/body/labels — metadata only, never source text.",
   },
   {
     name: "gittensory_lint_pr_text",
@@ -605,6 +618,25 @@ server.registerTool(
       ...(limit != null ? { limit } : {}),
     };
     return toolResult("Gittensory cross-repo opportunities.", await apiPost("/v1/opportunities/find", body));
+  },
+);
+
+server.registerTool(
+  "gittensory_retrieve_issue_context",
+  {
+    description: stdioToolDescription("gittensory_retrieve_issue_context"),
+    inputSchema: issueRagShape,
+  },
+  async ({ owner, repo, title, body, labels, topK }) => {
+    const payload = {
+      owner,
+      repo,
+      title,
+      ...(body ? { body } : {}),
+      ...(labels && labels.length > 0 ? { labels } : {}),
+      ...(topK != null ? { topK } : {}),
+    };
+    return toolResult("Gittensory issue-centric RAG context.", await apiPost("/v1/issue-rag/retrieve", payload));
   },
 );
 
