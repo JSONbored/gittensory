@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import { runDenyCheck } from "../lib/deny-check.js";
+import { runDiscover } from "../lib/discover-cli.js";
+import { runFeasibilityCli } from "../lib/feasibility-cli.js";
 import { runGovernorCli } from "../lib/governor-ledger-cli.js";
 import { runLedgerCli } from "../lib/event-ledger-cli.js";
 import { runManagePoll } from "../lib/manage-poll.js";
@@ -59,6 +61,10 @@ if (cliArgs[0] === "governor") {
   process.exit(await runGovernorCli(cliArgs[1], cliArgs.slice(2)));
 }
 
+if (cliArgs[0] === "feasibility") {
+  process.exit(runFeasibilityCli(cliArgs.slice(1)));
+}
+
 const packageName = "@jsonbored/gittensory-miner";
 const packageVersion = resolveMinerVersion(process.env);
 const upgradeCommand = resolveUpgradeCommand(packageName);
@@ -105,6 +111,12 @@ if (cliArgs[0] === "state") {
 
 if (cliArgs[0] === "manage" && cliArgs[1] === "poll") {
   const exitCode = await runManagePoll(cliArgs.slice(2));
+  await awaitOpportunisticUpdateCheck(updateCheck);
+  process.exit(exitCode);
+}
+
+if (cliArgs[0] === "discover") {
+  const exitCode = await runDiscover(cliArgs.slice(1));
   await awaitOpportunisticUpdateCheck(updateCheck);
   process.exit(exitCode);
 }

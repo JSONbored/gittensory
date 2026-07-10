@@ -43,6 +43,7 @@ describe("runAiSlopForAdvisory routes through AI_ADVISORY (#4364)", () => {
       files,
       deterministicBand: "clean",
       confirmedContributor: true,
+      commitThresholdReached: false,
     });
     expect(advisoryRun).toHaveBeenCalled();
     expect(frontierRun).not.toHaveBeenCalled();
@@ -67,6 +68,7 @@ describe("runAiSlopForAdvisory routes through AI_ADVISORY (#4364)", () => {
       files,
       deterministicBand: "clean",
       confirmedContributor: true,
+      commitThresholdReached: false,
     });
     expect(frontierRun).toHaveBeenCalled();
     expect(advisoryRun).not.toHaveBeenCalled();
@@ -86,6 +88,7 @@ describe("runAiSlopForAdvisory routes through AI_ADVISORY (#4364)", () => {
       files,
       deterministicBand: "clean",
       confirmedContributor: true,
+      commitThresholdReached: false,
     });
     expect(frontierRun).toHaveBeenCalled();
     expect(advisoryRun).not.toHaveBeenCalled();

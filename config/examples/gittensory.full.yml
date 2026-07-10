@@ -1143,3 +1143,13 @@ settings:
 # reviewRecap:
 #   enabled: true    # Bool. Default: false (no recap is ever built or posted).
 #   cadenceDays: 7   # Positive integer. Days of activity each recap covers. Default: 7 (weekly).
+
+# Cross-repo maintainer recap digest (#1963, #2250): config-as-code override for the CRON-scheduled digest
+# that folds gate-precision + outcome-calibration across every scanned repo into one report (distinct from
+# the single-repo reviewRecap above). Operator-level, not per-repo -- only meaningful on the gittensory
+# self-repo's own manifest (the repo this instance identifies as); a present block there wins over the
+# GITTENSORY_MAINTAINER_RECAP / GITTENSORY_RECAP_CADENCE env vars, which stay the fallback when absent.
+# maintainerRecap:
+#   enabled: true         # Bool. Default: false (env vars decide instead).
+#   cadence: weekly        # daily | weekly. Default: weekly. Invalid values fall back to weekly.
+#   channel: discord       # discord (only supported channel today). Invalid values fall back to discord.
