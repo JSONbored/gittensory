@@ -6764,9 +6764,11 @@ function githubTotalsResponse(counts: { openIssues: number; openPullRequests: nu
 }
 
 describe("isOwnReviewThreadAuthor", () => {
+  const env = createTestEnv(); // GITHUB_APP_SLUG defaults to "gittensory" (test/helpers/d1.ts)
+
   it("matches our own gittensory app bot logins by prefix", () => {
     for (const login of ["gittensory[bot]", "gittensory-orb[bot]", "gittensory-review[bot]", "GITTENSORY[bot]", "gittensory", "gittensory-orb"]) {
-      expect(isOwnReviewThreadAuthor(login)).toBe(true);
+      expect(isOwnReviewThreadAuthor(env, login)).toBe(true);
     }
   });
 
@@ -6774,13 +6776,34 @@ describe("isOwnReviewThreadAuthor", () => {
     // A `\b` boundary also fires after a hyphen, so the unanchored regex misclassified these external bots as
     // our own author and dropped their review-thread comments as self-authored non-blockers (fail-open).
     for (const login of ["evil-gittensory[bot]", "x-gittensory[bot]", "not-gittensory", "gittensory-fork"]) {
-      expect(isOwnReviewThreadAuthor(login)).toBe(false);
+      expect(isOwnReviewThreadAuthor(env, login)).toBe(false);
     }
   });
 
   it("treats an absent login as not our own author", () => {
-    expect(isOwnReviewThreadAuthor(null)).toBe(false);
-    expect(isOwnReviewThreadAuthor(undefined)).toBe(false);
-    expect(isOwnReviewThreadAuthor("")).toBe(false);
+    expect(isOwnReviewThreadAuthor(env, null)).toBe(false);
+    expect(isOwnReviewThreadAuthor(env, undefined)).toBe(false);
+    expect(isOwnReviewThreadAuthor(env, "")).toBe(false);
+  });
+
+  it("derives the match from GITHUB_APP_SLUG (#4615), not a hardcoded literal", () => {
+    const renamed = createTestEnv({ GITHUB_APP_SLUG: "acme-review" });
+    expect(isOwnReviewThreadAuthor(renamed, "acme-review[bot]")).toBe(true);
+    expect(isOwnReviewThreadAuthor(renamed, "acme-review-orb[bot]")).toBe(true);
+    expect(isOwnReviewThreadAuthor(renamed, "acme-review")).toBe(true);
+    // The OLD slug no longer matches once an operator renames their App -- proves the literal is gone.
+    expect(isOwnReviewThreadAuthor(renamed, "gittensory[bot]")).toBe(false);
+  });
+
+  it("a slug containing regex metacharacters is escaped, not interpreted (defensive)", () => {
+    const weird = createTestEnv({ GITHUB_APP_SLUG: "acme.bot" });
+    expect(isOwnReviewThreadAuthor(weird, "acme.bot[bot]")).toBe(true);
+    expect(isOwnReviewThreadAuthor(weird, "acmexbot[bot]")).toBe(false); // "." must not act as a wildcard
+  });
+
+  it("fails closed when GITHUB_APP_SLUG is blank (misconfiguration)", () => {
+    const blank = createTestEnv({ GITHUB_APP_SLUG: "" });
+    expect(isOwnReviewThreadAuthor(blank, "gittensory[bot]")).toBe(false);
+    expect(isOwnReviewThreadAuthor(blank, "")).toBe(false);
   });
 });

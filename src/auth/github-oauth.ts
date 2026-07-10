@@ -241,9 +241,12 @@ function normalizeReturnTo(env: Env, value: string | undefined): string {
   if (!value) return fallback;
   try {
     const url = new URL(value, siteOrigin);
+    // siteOrigin already IS "https://gittensory.aethereal.dev" when PUBLIC_SITE_ORIGIN is unset (the fallback
+    // two lines up), so a separate hardcoded entry here was dead weight once a self-hoster sets their own
+    // PUBLIC_SITE_ORIGIN -- it kept accepting the cloud origin as a valid redirect target even for a self-host
+    // instance that never uses it (#4615). Rely solely on siteOrigin.
     const allowedOrigins = new Set([
       siteOrigin.replace(/\/$/, ""),
-      "https://gittensory.aethereal.dev",
       "http://localhost:3000",
       "http://localhost:4173",
       "http://localhost:5173",

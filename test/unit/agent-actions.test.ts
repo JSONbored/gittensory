@@ -9,6 +9,7 @@ import type { GateCheckConclusion } from "../../src/rules/advisory";
 // actually manifest in this test file's own module graph, not just incidentally in other suites. Importing
 // agent-actions.ts alone (above) never exercises the OTHER direction of the cycle -- this import does.
 import { DEFAULT_ISSUE_DISCOVERY_SHARE } from "../../src/scoring/model";
+import { createTestEnv } from "../helpers/d1";
 
 function input(overrides: Partial<AgentActionPlanInput> & { conclusion: GateCheckConclusion }): AgentActionPlanInput {
   return {
@@ -1453,6 +1454,26 @@ describe("isProtectedAutomationAuthor", () => {
     expect(isProtectedAutomationAuthor("some-contributor")).toBe(false);
     expect(isProtectedAutomationAuthor(null)).toBe(false);
     expect(isProtectedAutomationAuthor(undefined)).toBe(false);
+  });
+
+  it("extends the base allowlist via PROTECTED_AUTOCLOSE_AUTHORS_EXTRA (#4615), additively", () => {
+    const env = createTestEnv({ PROTECTED_AUTOCLOSE_AUTHORS_EXTRA: "mergify[bot], Snyk-Bot" });
+    expect(isProtectedAutomationAuthor("mergify[bot]", env)).toBe(true);
+    expect(isProtectedAutomationAuthor("snyk-bot", env)).toBe(true); // case-insensitive
+    expect(isProtectedAutomationAuthor("github-actions[bot]", env)).toBe(true); // base set still honored
+    expect(isProtectedAutomationAuthor("some-other-bot[bot]", env)).toBe(false);
+  });
+
+  it("ignores a blank/whitespace-only PROTECTED_AUTOCLOSE_AUTHORS_EXTRA (never shrinks the base set)", () => {
+    const blank = createTestEnv({ PROTECTED_AUTOCLOSE_AUTHORS_EXTRA: "  ,  ," });
+    expect(isProtectedAutomationAuthor("github-actions[bot]", blank)).toBe(true);
+    expect(isProtectedAutomationAuthor("mergify[bot]", blank)).toBe(false);
+  });
+
+  it("behaves exactly as before when no env (or no override) is passed", () => {
+    expect(isProtectedAutomationAuthor("github-actions[bot]", createTestEnv())).toBe(true);
+    expect(isProtectedAutomationAuthor("mergify[bot]", createTestEnv())).toBe(false);
+    expect(isProtectedAutomationAuthor("github-actions[bot]", undefined)).toBe(true);
   });
 });
 

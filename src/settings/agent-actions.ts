@@ -57,8 +57,20 @@ export const AGENT_LABEL_MIGRATION_COLLISION = "migration-collision";
 // or slop heuristic — the maintainer owns its lifecycle. (reviewbot wrongly auto-closed such an accumulator,
 // awesome-claude #4192.) Still eligible for auto-merge when clean + passing.
 const PROTECTED_AUTOCLOSE_AUTHORS = new Set(["github-actions[bot]", "dependabot[bot]", "renovate[bot]"]);
-export function isProtectedAutomationAuthor(login: string | null | undefined): boolean {
-  return login != null && PROTECTED_AUTOCLOSE_AUTHORS.has(login.toLowerCase());
+
+// A self-hoster running a different automation stack (mergify[bot], snyk-bot, allcontributors[bot], ...) can
+// extend the base allowlist with a comma-separated PROTECTED_AUTOCLOSE_AUTHORS_EXTRA env var instead of
+// forking the code (#4615). Additive only -- an unset/blank value never shrinks the base set below.
+function protectedAutocloseAuthors(env: Env | undefined): Set<string> {
+  const extra = env?.PROTECTED_AUTOCLOSE_AUTHORS_EXTRA
+    ?.split(",")
+    .map((login) => login.trim().toLowerCase())
+    .filter(Boolean);
+  return extra && extra.length > 0 ? new Set([...PROTECTED_AUTOCLOSE_AUTHORS, ...extra]) : PROTECTED_AUTOCLOSE_AUTHORS;
+}
+
+export function isProtectedAutomationAuthor(login: string | null | undefined, env?: Env): boolean {
+  return login != null && protectedAutocloseAuthors(env).has(login.toLowerCase());
 }
 
 export type PlannedAgentAction = {

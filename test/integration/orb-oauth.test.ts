@@ -34,6 +34,24 @@ describe("GET /v1/orb/oauth/callback (post-install landing)", () => {
     const res = await app.request("/v1/orb/ingest", { method: "POST" }, createTestEnv());
     expect([400, 413]).toContain(res.status); // reached the (exempt) ingest handler, failed only on the empty body
   });
+
+  it("the dashboard link follows a self-hoster's PUBLIC_SITE_ORIGIN, not a hardcoded gittensory.aethereal.dev (#4615)", async () => {
+    const res = await app.request(
+      "/v1/orb/oauth/callback",
+      {},
+      createTestEnv({ PUBLIC_SITE_ORIGIN: "https://my-instance.example.com/" }),
+    );
+    const html = await res.text();
+    expect(html).toContain('href="https://my-instance.example.com"'); // trailing slash stripped, matching footer.ts's siteOrigin normalization
+    expect(html).not.toContain("gittensory.aethereal.dev");
+  });
+
+  it("falls back to the public gittensory dashboard when PUBLIC_SITE_ORIGIN is unset (cloud default)", async () => {
+    const env = createTestEnv();
+    delete (env as Partial<Env>).PUBLIC_SITE_ORIGIN;
+    const res = await app.request("/v1/orb/oauth/callback", {}, env);
+    expect(await res.text()).toContain('href="https://gittensory.aethereal.dev"');
+  });
 });
 
 describe("verifyInstallationAdmin (the privilege-escalation gate)", () => {

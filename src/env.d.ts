@@ -177,6 +177,10 @@ declare global {
     SCORING_TIME_DECAY_ENABLED?: string;
     /** #776 agent-layer GLOBAL kill-switch — when truthy, halts ALL agent actions across every repo. */
     AGENT_ACTIONS_PAUSED?: string;
+    /** #4615: comma-separated logins ADDED to the built-in auto-close protection allowlist
+     *  (github-actions[bot]/dependabot[bot]/renovate[bot] — settings/agent-actions.ts), for a self-hoster
+     *  running a different automation stack (e.g. mergify[bot], snyk-bot). Additive only. */
+    PROTECTED_AUTOCLOSE_AUTHORS_EXTRA?: string;
     /** Self-host instance-wide write switch: "dry-run" | "disabled" forces EVERY installation write to be
      *  suppressed regardless of per-repo mode (the cloud→self-host parallel-run kill switch). Unset = live. */
     SELFHOST_DEPLOYMENT_MODE?: string;

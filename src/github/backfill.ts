@@ -3799,7 +3799,7 @@ async function isAuthorizedReviewThreadAuthor(
   login: string | null | undefined,
   association: string | null | undefined,
 ): Promise<boolean> {
-  if (isOwnReviewThreadAuthor(login)) return false;
+  if (isOwnReviewThreadAuthor(env, login)) return false;
   if (isTrustedScannerReviewThreadAuthor(env, login)) return true;
   if (isMaintainerReviewThreadAuthor(association)) return true;
   return isVerifiedMemberReviewThreadAuthor(env, repoFullName, token, memberPermissionCache, admissionKey, login, association);
@@ -3862,12 +3862,22 @@ function isTrustedScannerReviewThreadAuthor(env: Env, login: string | null | und
     .includes(normalized);
 }
 
-// Match only OUR OWN app bot login (a `gittensory` / `gittensory-orb[bot]` PREFIX), never a third-party slug
-// that merely ENDS in `-gittensory[bot]`. Anchored to `^`: a `\b` boundary also fires after a hyphen, so the
-// prior `\bgittensory…` misclassified e.g. `evil-gittensory[bot]` as our own author and dropped its
-// review-thread comment as a self-authored non-blocker (fail-open) instead of evaluating it as external.
-export function isOwnReviewThreadAuthor(login: string | null | undefined): boolean {
-  return /^gittensory[-\w]*\[bot\]$/i.test(login ?? "") || /^(gittensory|gittensory-orb)$/i.test(login ?? "");
+// Match only OUR OWN app bot login (a `${GITHUB_APP_SLUG}` / `${GITHUB_APP_SLUG}-orb[bot]` PREFIX), never a
+// third-party slug that merely ENDS in `-${GITHUB_APP_SLUG}[bot]`. Anchored to `^`: a `\b` boundary also fires
+// after a hyphen, so the prior `\bgittensory…` misclassified e.g. `evil-gittensory[bot]` as our own author and
+// dropped its review-thread comment as a self-authored non-blocker (fail-open) instead of evaluating it as
+// external. Derived from `env.GITHUB_APP_SLUG` (#4615) rather than a hardcoded "gittensory" literal -- every
+// other "is this our own bot" check in the codebase already does this (self-authored.ts, pr-actions.ts,
+// comments.ts, processors.ts) -- so a self-hoster who renamed their App still recognizes its own comments.
+export function isOwnReviewThreadAuthor(env: Env, login: string | null | undefined): boolean {
+  const slug = env.GITHUB_APP_SLUG.trim().toLowerCase();
+  if (!slug) return false;
+  const escapedSlug = escapeRegExpForOwnAuthorSlug(slug);
+  return new RegExp(`^${escapedSlug}[-\\w]*\\[bot\\]$`, "i").test(login ?? "") || new RegExp(`^(${escapedSlug}|${escapedSlug}-orb)$`, "i").test(login ?? "");
+}
+
+function escapeRegExpForOwnAuthorSlug(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** The deterministic linked-issue facts the hard-rule evaluator needs (labels / assignees / open-state), plus

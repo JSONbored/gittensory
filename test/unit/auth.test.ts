@@ -689,6 +689,27 @@ describe("private-beta auth and rate limiting", () => {
     await expect(createSessionFromGitHubToken(env, "github-token")).resolves.toMatchObject({ login: "jsonbored", scopes: [] });
   });
 
+  it("a self-hoster's PUBLIC_SITE_ORIGIN is the sole allowed returnTo origin -- the cloud origin is no longer a bonus entry (#4615)", async () => {
+    const env = createTestEnv({
+      GITHUB_OAUTH_CLIENT_ID: "client-id",
+      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+      PUBLIC_SITE_ORIGIN: "https://my-instance.example.com",
+    });
+
+    // The self-hoster's own origin is accepted.
+    const own = await startGitHubWebOAuth(env, "https://my-instance.example.com/v1/auth/github/start", "https://my-instance.example.com/app/workbench");
+    expect(own.returnTo).toBe("https://my-instance.example.com/app/workbench");
+
+    // The cloud gittensory.aethereal.dev origin is no longer accepted for THIS instance -- it falls back to
+    // this instance's own /app, proving the dead literal is gone rather than merely redundant.
+    const cloud = await startGitHubWebOAuth(env, "https://my-instance.example.com/v1/auth/github/start", "https://gittensory.aethereal.dev/app/workbench");
+    expect(cloud.returnTo).toBe("https://my-instance.example.com/app");
+
+    // Localhost dev origins remain accepted regardless of PUBLIC_SITE_ORIGIN.
+    const local = await startGitHubWebOAuth(env, "https://my-instance.example.com/v1/auth/github/start", "http://localhost:5173/app");
+    expect(local.returnTo).toBe("http://localhost:5173/app");
+  });
+
   it("verifies the GitHub token audience before minting a session on the token-exchange path", async () => {
     const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "client-id", GITHUB_OAUTH_CLIENT_SECRET: "client-secret" });
     const introspect = (appClientId: string | undefined) =>
