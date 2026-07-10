@@ -16,6 +16,10 @@ import type { GateEvalReport } from "@/components/site/app-panels/gate-precision
 import { CycleTimeCard } from "@/components/site/app-panels/cycle-time-card";
 import type { CycleTimeAggregate } from "@/components/site/app-panels/cycle-time-card-model";
 import { AnalyticsCardShell } from "@/components/site/app-panels/analytics-card-shell";
+import {
+  AcceptanceRateCard,
+  type FindingAcceptance,
+} from "@/components/site/app-panels/acceptance-rate-card";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { exportOperatorDashboardCsv } from "@/lib/csv-export";
 
@@ -108,6 +112,7 @@ type OperatorDashboard = {
   upstreamDrift?: { status?: string; openReportCount?: number } | null;
   gateEval?: GateEvalReport;
   cycleTime?: CycleTimeAggregate;
+  acceptance?: FindingAcceptance;
 };
 
 function ProductAnalytics() {
@@ -208,6 +213,8 @@ function ProductAnalytics() {
               emptyHint="Percentiles appear once the gate has resolved paired PRs in the analytics window."
             />
           )}
+
+          <AcceptanceRateCard acceptance={data.acceptance} />
 
           {data.usageSummary ? (
             <ProductUsageBreakdownPanel
