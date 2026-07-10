@@ -13,6 +13,9 @@ import {
 import { createTestEnv } from "../helpers/d1";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { inlineFindingCategory } from "../../src/review/inline-comments-select";
+import { isPublicSafeText } from "../../src/signals/redaction";
+import { sanitizePublicComment as sanitizePublicCommentQueueIntelligence } from "../../src/queue-intelligence";
+import { sanitizePublicComment as sanitizePublicCommentGithubCommands } from "../../src/github/commands";
 
 const {
   parseModelReview,
@@ -21,6 +24,7 @@ const {
   coerceAiText,
   composeAdvisoryNotes,
   composeInlineFindings,
+  composeImprovementSignal,
   consensusDefectOf,
   combineReviews,
   dualAiReviewersDisagree,
@@ -56,6 +60,10 @@ type ModelReviewShape = {
   suggestions: string[];
   inlineFindings: InlineFinding[];
   confidence: number;
+  valueAssessment?: {
+    magnitude: "unclear" | "minor" | "moderate" | "significant";
+    rationale: string;
+  };
 };
 const reviewWithFindings = (
   inlineFindings: InlineFinding[],
@@ -590,6 +598,69 @@ describe("review.security_focus shapes the reviewer system prompt (#review-secur
     const securityOnly = await runSecurityFocus(true, null);
     expect(securityOnly).toContain("SECURITY FOCUS");
     expect(securityOnly).not.toMatch(/CHILL|ASSERTIVE/);
+  });
+});
+
+describe("review.improvement_signal shapes the reviewer system prompt (#4743)", () => {
+  const systemPromptOf = (run: ReturnType<typeof vi.fn>): string =>
+    (run.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> })
+      ?.messages?.[0]?.content ?? "";
+  const runImprovementSignal = async (improvementSignal: boolean | undefined) => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await runGittensoryAiReview(env, { ...baseInput, improvementSignal });
+    return systemPromptOf(run);
+  };
+
+  it("true appends the VALUE ASSESSMENT instruction, naming the field and distinguishing it from confidence and from risk", async () => {
+    const system = await runImprovementSignal(true);
+    expect(system).toContain("VALUE ASSESSMENT");
+    expect(system).toContain('"valueAssessment"');
+    expect(system).toContain('"unclear"');
+    expect(system).toContain('"significant"');
+    // Explicitly distinguished from confidence (defect-certainty) and from risk (the separate slop.ts tier).
+    expect(system).toContain("NOT your confidence");
+    expect(system).toContain("NOT a risk or safety judgment");
+    // Steers the model away from the sanitizer's forbidden vocabulary and toward safe wording (#542).
+    expect(system).toContain('Never use the word "score"');
+    expect(system).toContain("improvement, value, or gain");
+    // Grounds the judgment in what the model actually receives (diff only, never full pre-change files).
+    expect(system).toContain("never claim to have compared whole files you cannot see");
+  });
+
+  it("absent / false leaves the prompt byte-identical (no VALUE ASSESSMENT suffix, zero extra output tokens)", async () => {
+    const withFalse = await runImprovementSignal(false);
+    const withUndefined = await runImprovementSignal(undefined);
+    expect(withFalse).not.toContain("VALUE ASSESSMENT");
+    expect(withUndefined).not.toContain("VALUE ASSESSMENT");
+    expect(withFalse).toBe(withUndefined);
+  });
+
+  it("composes alongside every other suffix (inline findings, security focus, profile) without truncating them", async () => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    await runGittensoryAiReview(env, {
+      ...baseInput,
+      improvementSignal: true,
+      inlineFindings: true,
+      securityFocus: true,
+      profile: "assertive",
+    });
+    const system = systemPromptOf(run);
+    expect(system).toContain("VALUE ASSESSMENT");
+    expect(system).toContain("INLINE FINDINGS");
+    expect(system).toContain("SECURITY FOCUS");
+    expect(system).toContain("ASSERTIVE");
   });
 });
 
@@ -3433,6 +3504,328 @@ describe("pure helpers", () => {
     });
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.inlineFindings).toEqual([]);
+  });
+
+  it("parseModelReview parses a well-formed valueAssessment for each of the 4 fixed magnitude bands (#4743)", () => {
+    for (const magnitude of ["unclear", "minor", "moderate", "significant"] as const) {
+      const json = JSON.stringify({
+        assessment: "ok",
+        blockers: [],
+        nits: [],
+        suggestions: [],
+        valueAssessment: {
+          magnitude,
+          rationale: "This tightens an existing helper without changing its behavior.",
+        },
+      });
+      expect(parseModelReview(json)?.valueAssessment).toEqual({
+        magnitude,
+        rationale: "This tightens an existing helper without changing its behavior.",
+      });
+    }
+  });
+
+  it("parseModelReview drops an invalid/unrecognized magnitude — never fabricates a fallback band (#4743)", () => {
+    const json = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: { magnitude: "huge", rationale: "This is a big improvement." },
+    });
+    expect(parseModelReview(json)?.valueAssessment).toBeUndefined();
+    // The rest of the review still parses fine — an invalid valueAssessment drops ONLY that field.
+    expect(parseModelReview(json)?.assessment).toBe("ok");
+  });
+
+  it("parseModelReview drops a valueAssessment with a blank or non-string rationale, keeping the rest of the review (#4743)", () => {
+    const blank = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: { magnitude: "minor", rationale: "   " },
+    });
+    expect(parseModelReview(blank)?.valueAssessment).toBeUndefined();
+    expect(parseModelReview(blank)?.assessment).toBe("ok");
+
+    const nonStringRationale = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: { magnitude: "minor", rationale: 42 },
+    });
+    expect(parseModelReview(nonStringRationale)?.valueAssessment).toBeUndefined();
+  });
+
+  it("parseModelReview defaults valueAssessment to undefined when absent, non-object, or null (#4743)", () => {
+    const absent = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+    });
+    expect(parseModelReview(absent)?.valueAssessment).toBeUndefined();
+
+    const nonObject = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: "significant",
+    });
+    expect(parseModelReview(nonObject)?.valueAssessment).toBeUndefined();
+
+    const nullValue = JSON.stringify({
+      assessment: "ok",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: null,
+    });
+    expect(parseModelReview(nullValue)?.valueAssessment).toBeUndefined();
+  });
+
+  describe("composeImprovementSignal (#4743, dual-review combination)", () => {
+    const withValue = (
+      magnitude: "unclear" | "minor" | "moderate" | "significant",
+      rationale: string,
+    ): ModelReviewShape => ({
+      assessment: "",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      inlineFindings: [],
+      confidence: 1,
+      valueAssessment: { magnitude, rationale },
+    });
+    const noValue = (): ModelReviewShape => ({
+      assessment: "",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      inlineFindings: [],
+      confidence: 1,
+    });
+
+    it("returns null when no reviewer emitted a valueAssessment, and for an empty review list", () => {
+      expect(composeImprovementSignal([])).toBeNull();
+      expect(composeImprovementSignal([noValue(), noValue()])).toBeNull();
+    });
+
+    it("a single opinion (one reviewer, or the other lacks a valueAssessment) is used as-is, regardless of slot order", () => {
+      const solo = withValue(
+        "significant",
+        "This closes a real gap with a focused, well-tested change.",
+      );
+      const expected = {
+        magnitude: "significant",
+        rationale: "This closes a real gap with a focused, well-tested change.",
+      };
+      expect(composeImprovementSignal([solo])).toEqual(expected);
+      expect(composeImprovementSignal([solo, noValue()])).toEqual(expected);
+      expect(composeImprovementSignal([noValue(), solo])).toEqual(expected);
+    });
+
+    it("dual review: takes the MORE CONSERVATIVE (lower) of the two magnitudes, carrying THAT opinion's own rationale (documented #dual-ai-combiner behavior)", () => {
+      const bigger = withValue("significant", "Reviewer A sees a major improvement.");
+      const smaller = withValue("minor", "Reviewer B sees only a small, incremental gain.");
+      const expected = {
+        magnitude: "minor",
+        rationale: "Reviewer B sees only a small, incremental gain.",
+      };
+      expect(composeImprovementSignal([bigger, smaller])).toEqual(expected);
+      // Order-independent: the lower magnitude wins regardless of which slot it occupies.
+      expect(composeImprovementSignal([smaller, bigger])).toEqual(expected);
+    });
+
+    it("dual review tie (equal magnitudes): keeps the first reviewer's rationale deterministically", () => {
+      const a = withValue("moderate", "Reviewer A's take.");
+      const b = withValue("moderate", "Reviewer B's take.");
+      expect(composeImprovementSignal([a, b])).toEqual({
+        magnitude: "moderate",
+        rationale: "Reviewer A's take.",
+      });
+    });
+
+    it("drops the whole judgment (fail-safe, never a partial/redacted note) when the chosen rationale is not public-safe", () => {
+      const unsafe = withValue("moderate", "This raises the trust score meaningfully.");
+      expect(composeImprovementSignal([unsafe])).toBeNull();
+      // A dual review where the CONSERVATIVE (chosen) opinion is unsafe drops the whole judgment even though the
+      // other opinion alone would have been safe — never silently falls back to the other reviewer's band instead.
+      const safeButNotChosen = withValue("significant", "This is a well-targeted, valuable change.");
+      expect(composeImprovementSignal([safeButNotChosen, unsafe])).toBeNull();
+    });
+  });
+
+  it("runGittensoryAiReview surfaces the composed valueAssessment only when improvementSignal was resolved on (#4743)", async () => {
+    const json = JSON.stringify({
+      assessment: "Looks fine.",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: {
+        magnitude: "moderate",
+        rationale: "This consolidates duplicated logic into one helper.",
+      },
+    });
+    const run = vi.fn(async () => ({ response: json }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    const result = await runGittensoryAiReview(env, {
+      ...baseInput,
+      improvementSignal: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok")
+      expect(result.valueAssessment).toEqual({
+        magnitude: "moderate",
+        rationale: "This consolidates duplicated logic into one helper.",
+      });
+  });
+
+  it("runGittensoryAiReview never surfaces a valueAssessment when improvementSignal is off, even if the model emitted one anyway (#4743)", async () => {
+    const json = JSON.stringify({
+      assessment: "Looks fine.",
+      blockers: [],
+      nits: [],
+      suggestions: [],
+      valueAssessment: {
+        magnitude: "significant",
+        rationale: "Unsolicited but present in the model output.",
+      },
+    });
+    const runFor = async (improvementSignal: boolean | undefined) => {
+      const run = vi.fn(async () => ({ response: json }));
+      const env = createTestEnv({
+        AI: { run } as unknown as Ai,
+        AI_SUMMARIES_ENABLED: "true",
+        AI_PUBLIC_COMMENTS_ENABLED: "true",
+        AI_DAILY_NEURON_BUDGET: "100000",
+      });
+      return runGittensoryAiReview(env, { ...baseInput, improvementSignal });
+    };
+    const withFalse = await runFor(false);
+    const withUndefined = await runFor(undefined);
+    expect(withFalse.status).toBe("ok");
+    expect(withUndefined.status).toBe("ok");
+    if (withFalse.status === "ok") expect(withFalse.valueAssessment).toBeNull();
+    if (withUndefined.status === "ok") expect(withUndefined.valueAssessment).toBeNull();
+  });
+
+  it("runGittensoryAiReview leaves valueAssessment null when improvementSignal is on but the model omitted the field", async () => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    const result = await runGittensoryAiReview(env, {
+      ...baseInput,
+      improvementSignal: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") expect(result.valueAssessment).toBeNull();
+  });
+
+  it("runGittensoryAiReview dual-review (block mode) combines two valueAssessments into the more conservative band end-to-end (#4743, #dual-ai-combiner)", async () => {
+    const responseFor = (magnitude: string, rationale: string) => ({
+      response: JSON.stringify({
+        assessment: "ok",
+        blockers: [],
+        nits: [],
+        suggestions: [],
+        valueAssessment: { magnitude, rationale },
+      }),
+    });
+    const run = vi.fn(async (model: string) =>
+      model === BEST_REVIEW_MODELS[1]
+        ? responseFor("minor", "Secondary reviewer sees only a small gain.")
+        : responseFor("significant", "Primary reviewer sees a big win."),
+    );
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    const result = await runGittensoryAiReview(env, {
+      ...baseInput,
+      mode: "block",
+      improvementSignal: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok")
+      expect(result.valueAssessment).toEqual({
+        magnitude: "minor",
+        rationale: "Secondary reviewer sees only a small gain.",
+      });
+  });
+
+  describe("valueAssessment rationale is sanitizer-safe by construction (#4743)", () => {
+    // Representative rationale strings a compliant model could plausibly emit for a range of PR shapes, per the
+    // VALUE ASSESSMENT prompt instructions (one specific sentence, "improvement/value/gain" framing, never
+    // "score" or its sibling forbidden terms). These must survive every independently-implemented public-comment
+    // sanitizer layer this repo relies on (#542) — a hit on any one silently drops the WHOLE note, not just the
+    // offending phrase (see `toPublicSafe`), so the prompt's own wording is the first line of defense, never the
+    // sanitizer alone.
+    const representativeRationales = [
+      "This fixes a real null-dereference bug without touching unrelated code, a clear improvement.",
+      "This consolidates three near-duplicate helpers into one, reducing future maintenance burden.",
+      "This is a minor, low-risk documentation correction with limited value beyond readability.",
+      "This adds a complete, well-tested feature that directly addresses the linked issue's stated need.",
+      "The diff is too mechanical, a bulk rename, to judge its value from the shown hunks alone.",
+      "This is a routine dependency bump with modest value beyond staying current.",
+      "This adds meaningful test coverage for an existing gap, a solid but incremental gain.",
+      "This flips a single configuration default, a small but well-targeted improvement.",
+    ];
+
+    it("every representative rationale passes isPublicSafeText (src/signals/redaction.ts)", () => {
+      for (const rationale of representativeRationales) {
+        expect(isPublicSafeText(rationale)).toBe(true);
+      }
+    });
+
+    it("every representative rationale passes queue-intelligence.ts's sanitizePublicComment (throws on a hit — must not throw, and must return the text unchanged)", () => {
+      for (const rationale of representativeRationales) {
+        expect(() => sanitizePublicCommentQueueIntelligence(rationale)).not.toThrow();
+        expect(sanitizePublicCommentQueueIntelligence(rationale)).toBe(rationale);
+      }
+    });
+
+    it("every representative rationale passes github/commands.ts's sanitizePublicComment unchanged (redacts matches in place — must not redact anything here)", () => {
+      for (const rationale of representativeRationales) {
+        expect(sanitizePublicCommentGithubCommands(rationale)).toBe(rationale);
+      }
+    });
+
+    it("composeImprovementSignal accepts every representative rationale end-to-end without dropping the judgment", () => {
+      for (const rationale of representativeRationales) {
+        const review: ModelReviewShape = {
+          assessment: "",
+          blockers: [],
+          nits: [],
+          suggestions: [],
+          inlineFindings: [],
+          confidence: 1,
+          valueAssessment: { magnitude: "moderate", rationale },
+        };
+        expect(composeImprovementSignal([review])).toEqual({ magnitude: "moderate", rationale });
+      }
+    });
+
+    it("negative control: a rationale that ignores the prompt's guidance and uses forbidden vocabulary DOES trip every sanitizer (proves the assertions above are meaningful, not vacuous)", () => {
+      const unsafe = "This raises the trust score and improves the reward payout.";
+      expect(isPublicSafeText(unsafe)).toBe(false);
+      expect(() => sanitizePublicCommentQueueIntelligence(unsafe)).toThrow();
+      expect(sanitizePublicCommentGithubCommands(unsafe)).not.toBe(unsafe);
+    });
   });
 
   it("composeAdvisoryNotes renders only the sections that have public-safe content", () => {

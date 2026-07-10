@@ -320,6 +320,21 @@ export type GittensoryAiReviewInput = {
    */
   findingCategories?: boolean | undefined;
   /**
+   * `improvementSignal` converged feature (#4743, LLM tier of epic #4737; config-as-code foundation in #4738) —
+   * when true, the reviewer is ALSO asked for an ordinal "does this change plausibly move the codebase forward"
+   * judgment (`valueAssessment` on `ModelReview`), a genuinely different axis from `confidence`/blockers (see
+   * `ModelReview.valueAssessment`'s doc comment). The CALLER resolves the feature (expected shape:
+   * `resolveConvergedFeature(env, manifest, "improvementSignal", repoFullName)`, #4738) and passes the resolved
+   * boolean here — mirroring `inlineFindings`/`findingCategories`/`securityFocus` above, all of which are
+   * caller-resolved rather than looked up internally, so a manifest already loaded once upstream for several
+   * flags is never re-fetched per-flag inside this module. (The one exception, `safety`, resolves internally via
+   * `convergedFeatureActive` because it is security-critical and has no upstream caller today; `improvementSignal`
+   * is a read-only advisory signal, not a security control, so it follows the majority pattern instead.) Absent/
+   * false (the default, and the only reachable value until a caller starts resolving the feature) ⇒ no instruction
+   * is appended and the model is never asked — byte-identical prompt, zero extra output tokens spent.
+   */
+  improvementSignal?: boolean | undefined;
+  /**
    * This PR's changed file paths (#2558) — reused to splice a concise "changed code files with zero
    * test-path evidence" section into the user prompt via the engine's own deterministic classifier
    * (src/signals/test-evidence.ts), so the reviewer can name specific untested files instead of guessing
@@ -363,6 +378,11 @@ export type GittensoryAiReviewResult =
       estimatedNeurons: number;
       reviewerCount: number;
       inlineFindings: InlineFinding[];
+      /** Combined improvement/value judgment (#4743), public-safe and ready to render. ALWAYS present (`null`
+       *  when `input.improvementSignal` is falsy, when neither reviewer emitted a usable judgment, or when the
+       *  only candidate(s) failed the public-safe check) — see {@link composeImprovementSignal} for how a dual
+       *  review's two opinions combine into one. ADVISORY ONLY, never a gate input. */
+      valueAssessment: { magnitude: ImprovementMagnitude; rationale: string } | null;
       reviewDiagnostics?: AiReviewDiagnostic[] | undefined;
     };
 
@@ -385,6 +405,15 @@ export type InlineFinding = {
   category?: FindingCategory | undefined;
 };
 
+/**
+ * Ordinal improvement/value band (#4743) — deliberately NOT a percentage or any fake-precise number, same
+ * house convention as `SlopBand` (`signals/slop.ts`: `clean/low/elevated/high`): a small named ordinal an LLM
+ * (or a human) can honestly stand behind. Ascending order least → most valuable: unclear < minor < moderate <
+ * significant. This is the LLM-JUDGED tier's axis only — the deterministic structural-improvement tier (sibling
+ * sub-issues of #4737) is a separate system with its own scoring.
+ */
+export type ImprovementMagnitude = "unclear" | "minor" | "moderate" | "significant";
+
 export type ModelReview = {
   assessment: string;
   // blockers = concrete must-fix defects in the diff (drive the consensus defect / gate); nits = non-blocking
@@ -403,6 +432,20 @@ export type ModelReview = {
   // Line-anchored findings for inline PR review comments (#inline-comments). ALWAYS present (parseModelReview
   // sets []); populated only when the caller asked for them (input.inlineFindings) AND the model emitted any.
   inlineFindings: InlineFinding[];
+  /**
+   * Ordinal improvement/value judgment (#4743) — a DIFFERENT axis from `confidence` above, not a rename of it.
+   * `confidence` is calibrated DEFECT-CERTAINTY: "how sure am I that MY OWN blockers are real." `valueAssessment`
+   * instead asks "does this change plausibly move the codebase forward, given the diff and its stated intent" —
+   * is it well-targeted and worth making. A defect-free change can still be low-value; a genuinely valuable change
+   * can still carry a real bug — the two axes are independent by design. This is also NOT a risk/safety judgment
+   * (that is the separate deterministic `signals/slop.ts` tier, which this call never touches, and which remains
+   * the ONLY thing allowed to gate). ADVISORY ONLY, same as `assessment`/`nits`/`suggestions` — never a gate input.
+   * Gated behind the `improvementSignal` converged feature: the prompt only asks for this field when the caller
+   * has resolved the feature on (`input.improvementSignal`, see its doc comment), so this is `undefined` both when
+   * the feature is off AND when it is on but the model omitted/mis-emitted the field — parseModelReview never
+   * fabricates a value or a fallback band.
+   */
+  valueAssessment?: { magnitude: ImprovementMagnitude; rationale: string } | undefined;
 };
 
 export type AiReviewDiagnostic = {
@@ -698,12 +741,32 @@ export function parseModelReview(text: string): ModelReview | null {
             })
             .slice(0, 20)
         : [];
+    // Fail-safe (#4743): a malformed/absent valueAssessment degrades to `undefined`, never a fabricated band —
+    // an invalid `magnitude` (not one of the 4 fixed literals) or a blank `rationale` drops the WHOLE field
+    // rather than keeping a half-valid judgment (mirrors toInlineFindings' item-level all-or-nothing discipline).
+    const toValueAssessment = (
+      value: unknown,
+    ): { magnitude: ImprovementMagnitude; rationale: string } | undefined => {
+      if (!value || typeof value !== "object") return undefined;
+      const o = value as Record<string, unknown>;
+      const magnitude = o.magnitude;
+      if (
+        magnitude !== "unclear" &&
+        magnitude !== "minor" &&
+        magnitude !== "moderate" &&
+        magnitude !== "significant"
+      )
+        return undefined;
+      const rationale = typeof o.rationale === "string" ? o.rationale.trim() : "";
+      return rationale ? { magnitude, rationale } : undefined;
+    };
     const assessment =
       typeof obj.assessment === "string" ? obj.assessment.trim() : "";
     const blockers = toList(obj.blockers);
     const nits = toList(obj.nits);
     const suggestions = toList(obj.suggestions);
     const inlineFindings = toInlineFindings(obj.inlineFindings);
+    const valueAssessment = toValueAssessment(obj.valueAssessment);
     // Calibrated reviewer confidence (#8): clamp the model's `confidence` to [0,1]; an absent/garbage value falls
     // back to 1.0 (parseReviewConfidence) so the gate degrades to the historical always-block behavior.
     const confidence = parseReviewConfidence(obj.confidence);
@@ -715,7 +778,15 @@ export function parseModelReview(text: string): ModelReview | null {
       suggestions.length === 0
     )
       return null;
-    return { assessment, blockers, nits, suggestions, inlineFindings, confidence };
+    return {
+      assessment,
+      blockers,
+      nits,
+      suggestions,
+      inlineFindings,
+      confidence,
+      ...(valueAssessment ? { valueAssessment } : {}),
+    };
   } catch {
     return null;
   }
@@ -860,10 +931,21 @@ const INLINE_FINDINGS_SUFFIX =
 const FINDING_CATEGORY_SUFFIX =
   ' Each inlineFindings item must ALSO include "category": one of exactly "security", "correctness", "performance", "maintainability", "tests", "style" — the KIND of issue, not its severity.';
 
+// `improvementSignal` converged feature (#4743, LLM tier of epic #4737) → an appended instruction asking for an
+// ADDITIONAL, genuinely different axis: not "is this correct/safe" (blockers/nits/confidence above) and not "is
+// this risky" (the separate deterministic signals/slop.ts tier, never touched by this call) but "does this change
+// plausibly move the codebase forward." Absent/off (default) appends nothing (byte-identical prompt, zero extra
+// output tokens). Deliberately steers the model toward "improvement"/"value"/"gain" wording and away from
+// "score" and its sibling forbidden terms (#542) so the sanitizer is defended-in-depth rather than the only guard
+// (see the public-safe test suite asserting representative rationale text never trips it).
+const IMPROVEMENT_SIGNAL_SUFFIX =
+  '\n\nVALUE ASSESSMENT: ALSO include an additional top-level field "valueAssessment" in the SAME JSON object — an object of the shape {"magnitude": one of exactly "unclear", "minor", "moderate", or "significant", "rationale": ONE specific sentence}. This is a DIFFERENT question from everything above: does this change, as shown in the diff, plausibly move the codebase forward given its stated title, description, and intent — is it well-targeted and worth making? It is NOT your confidence that the change is bug-free (that is the separate "confidence" field above — a defect-free change can still be low-value, and a genuinely valuable change can still carry a real bug) and it is NOT a risk or safety judgment (a separate deterministic system handles that; do not hedge on risk here). You see only the unified diff, never the full pre-change files, so base this on the before/after hunk shape visible in the diff plus the stated intent — never claim to have compared whole files you cannot see. Use "unclear" when the diff is too small, too mechanical, or too disconnected from its stated intent to judge either way — never guess. Never use the word "score" (or reward, ranking, payout, wallet, hotkey, coldkey, trust, farming, or reviewability) to describe this judgment; describe it only in terms of improvement, value, or gain.';
+
 /** The effective reviewer SYSTEM prompt. Appends the grounding-discipline suffix when the caller supplied one
  *  (flag GITTENSORY_REVIEW_GROUNDING on), the `review.profile` tone suffix when set, the `review.security_focus`
- *  prioritization suffix when on, then the inline-findings instruction when the caller asked for them; all absent
- *  (default) → the base prompt, byte-identical to today. */
+ *  prioritization suffix when on, then the inline-findings instruction when the caller asked for them, then the
+ *  improvement-signal instruction when the caller resolved that feature on; all absent (default) → the base
+ *  prompt, byte-identical to today. */
 function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   const groundingSuffix = input.grounding?.systemSuffix ?? "";
   // Review-enrichment brief (#1472): the REES supplies a one-line discipline suffix ("treat a listed CVE/secret as
@@ -884,7 +966,9 @@ function buildSystemPrompt(input: GittensoryAiReviewInput): string {
   const inlineSuffix = input.inlineFindings ? INLINE_FINDINGS_SUFFIX : "";
   // review.finding_categories (#1958) only makes sense layered on top of inlineFindings itself being requested.
   const categorySuffix = input.inlineFindings && input.findingCategories ? FINDING_CATEGORY_SUFFIX : "";
-  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${securityFocusSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}${categorySuffix}`;
+  // improvementSignal (#4743): caller-resolved, exactly like inlineFindings/findingCategories above.
+  const improvementSignalSuffix = input.improvementSignal ? IMPROVEMENT_SIGNAL_SUFFIX : "";
+  return `${REVIEW_SYSTEM_PROMPT}${groundingSuffix}${enrichmentSuffix}${profileSuffix}${securityFocusSuffix}${pathSuffix}${repoInstructionsSuffix}${inlineSuffix}${categorySuffix}${improvementSignalSuffix}`;
 }
 
 function buildRepoInstructionsSystemAppend(repoInstructions: string | null | undefined): string {
@@ -1421,6 +1505,49 @@ export function composeInlineFindings(reviews: ModelReview[]): InlineFinding[] {
     }
   }
   return [...byLine.values()];
+}
+
+/** Ascending order for {@link ImprovementMagnitude} (#4743) — used ONLY to pick the more conservative (lower)
+ *  of two dual-review opinions in {@link composeImprovementSignal}. Never itself surfaced, never a gate input. */
+const IMPROVEMENT_MAGNITUDE_ORDER: Record<ImprovementMagnitude, number> = {
+  unclear: 0,
+  minor: 1,
+  moderate: 2,
+  significant: 3,
+};
+
+/**
+ * Compose the public-safe, combined improvement/value judgment from one or two model reviews (#4743) — the
+ * ordinal-value counterpart of {@link composeAdvisoryNotes}. ADVISORY ONLY, never a gate input (see
+ * `signals/slop.ts` for the one deterministic system allowed to gate).
+ *
+ * Dual-review combination (documented behavior, #dual-ai-combiner): when BOTH reviewers emitted a
+ * `valueAssessment`, this takes the MORE CONSERVATIVE (lower) of the two magnitudes rather than averaging or
+ * surfacing both — consistent with this signal's "advisory, never overstate" posture: overclaiming a change's
+ * value is the riskier direction to err toward (it could nudge a maintainer to wave through something that
+ * is not actually well-targeted), while understating it costs nothing since a human still makes the final call.
+ * The rationale carried is always the ONE from whichever reviewer supplied the chosen (lower, or tied) band, so
+ * the cited reason matches the surfaced magnitude — never a blended sentence attributed to no one. A single
+ * opinion (one reviewer configured, `mode: "advisory"` which never runs a second opinion, or the other
+ * reviewer's call failing/omitting the field) is used as-is. Null when no reviewer emitted a usable judgment, or
+ * when the chosen one's rationale fails the public-safe check (dropped whole, never partially redacted — same
+ * fail-safe discipline as `consensusDefectOf`/`synthesizeDefect`).
+ */
+export function composeImprovementSignal(
+  reviews: ReadonlyArray<ModelReview>,
+): { magnitude: ImprovementMagnitude; rationale: string } | null {
+  const opinions = reviews
+    .map((review) => review.valueAssessment)
+    .filter((v): v is { magnitude: ImprovementMagnitude; rationale: string } => Boolean(v));
+  if (opinions.length === 0) return null;
+  const chosen = opinions.reduce((lowest, candidate) =>
+    IMPROVEMENT_MAGNITUDE_ORDER[candidate.magnitude] < IMPROVEMENT_MAGNITUDE_ORDER[lowest.magnitude]
+      ? candidate
+      : lowest,
+  );
+  const rationale = toPublicSafe(chosen.rationale);
+  if (!rationale) return null; // unsafe rationale → drop the whole judgment, fail-safe (never a partial note)
+  return { magnitude: chosen.magnitude, rationale };
 }
 
 /** A CONSENSUS defect = BOTH reviews independently name at least one concrete blocker (the severity-disciplined
@@ -2181,6 +2308,12 @@ export async function runGittensoryAiReview(
   const inlineFindings = input.inlineFindings
     ? composeInlineFindings(reviewsForNotes)
     : [];
+  // Improvement/value judgment (#4743): only propagate model output when the resolved feature gate asked for it —
+  // same authorization discipline as inlineFindings above, and null (not computed) rather than a fallback band
+  // when the feature is off, so no extra work happens on the disabled path.
+  const valueAssessment = input.improvementSignal
+    ? composeImprovementSignal(reviewsForNotes)
+    : null;
 
   await record(
     env,
@@ -2219,6 +2352,7 @@ export async function runGittensoryAiReview(
     estimatedNeurons,
     reviewerCount: Math.max(reviewsForNotes.length, fallbackNotes.length),
     inlineFindings,
+    valueAssessment,
     reviewDiagnostics,
   };
 }
@@ -2325,6 +2459,7 @@ export const __aiReviewInternals = {
   coerceAiText,
   composeAdvisoryNotes,
   composeInlineFindings,
+  composeImprovementSignal,
   consensusDefectOf,
   combineReviews,
   dualAiReviewersDisagree,
