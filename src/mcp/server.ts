@@ -13,6 +13,13 @@ import {
   runFindOpportunities,
   validateFindOpportunitiesInput,
 } from "./find-opportunities";
+import { loadPrAiReviewFindings, assertContributorOwnsPullRequest } from "./pr-ai-review-findings";
+import {
+  MAX_ISSUE_RAG_OWNER_LENGTH,
+  MAX_ISSUE_RAG_REPO_LENGTH,
+  runIssueRagRetrieval,
+  validateIssueRagInput,
+} from "./issue-rag";
 import {
   authenticatePrivateToken,
   extractBearerToken,
@@ -37,7 +44,7 @@ import {
   getPendingAgentAction,
   getPullRequest,
   getRepository,
-  isGlobalAgentFrozen,
+  isDbFrozenForRepo,
   getRepoQueueTrendSnapshot,
   listAgentAuditEvents,
   listCheckSummaries,
@@ -95,6 +102,7 @@ import { loadMaintainerNoiseReport, maintainerNoiseSummary } from "../services/m
 import { loadLabelAudit, labelAuditSummary } from "../services/label-audit";
 import { loadMaintainerLaneReport, maintainerLaneSummary } from "../services/maintainer-lane";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
+import { loadGatePrecisionReport } from "../services/gate-precision";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
   applyMcpPlanningChoices,
@@ -154,7 +162,7 @@ import { loadUpstreamStatus } from "../upstream/ruleset";
 import { simulateOpenPrPressure, type OpenPrPressureInput } from "../services/open-pr-pressure-scenarios";
 import { buildFindingTaxonomyDocument, FINDING_TAXONOMY_URI } from "../review/finding-taxonomy";
 import { buildEnrichmentAnalyzersTaxonomyDocument, ENRICHMENT_ANALYZERS_URI } from "../review/enrichment-analyzers-taxonomy";
-import { buildSlopRulesDocument, SLOP_RULES_URI } from "../review/slop-rules-taxonomy";
+import { recordPredictedGateCall } from "../review/predicted-gate-calls";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -246,6 +254,15 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+};
+
+const issueRagShape = {
+  owner: z.string().max(MAX_ISSUE_RAG_OWNER_LENGTH),
+  repo: z.string().max(MAX_ISSUE_RAG_REPO_LENGTH),
+  title: z.string().max(PREFLIGHT_LIMITS.titleChars),
+  body: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  labels: z.array(z.string().max(PREFLIGHT_LIMITS.labelChars)).max(PREFLIGHT_LIMITS.labels).optional(),
+  topK: z.number().int().min(1).max(12).optional(),
 };
 
 const findOpportunitiesShape = {
@@ -424,6 +441,7 @@ export const rawPlanStepSchema = z
     actionClass: z.string().min(1).max(60).optional(),
     dependsOn: z.array(z.string().min(1).max(100)).max(50).optional(),
     maxAttempts: z.number().int().min(1).max(10).optional(),
+    codingAgentMode: z.enum(["paused", "dry_run", "live"]).optional(),
   })
   .strict();
 const planStepSchema = z
@@ -778,6 +796,18 @@ const maintainerMeasurementReportOutputSchema = {
   status: z.string().optional(),
 };
 
+// #2220 - gate-precision measurement surfaced over MCP. Mirrors the
+// maintainerMeasurementReportOutputSchema pattern: report fields optional, structured sub-reports as
+// z.unknown() (buildGatePrecisionReport is the single source of truth for their shape).
+const gatePrecisionOutputSchema = {
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  windowDays: z.number().nullable().optional(),
+  perGateType: z.array(z.unknown()).optional(),
+  overall: z.unknown().optional(),
+  signals: z.array(z.string()).optional(),
+};
+
 const contributorProfileOutputSchema = {
   login: z.string().optional(),
   github: z.unknown().optional(),
@@ -825,6 +855,33 @@ const prOutcomeOutputSchema = {
   login: z.string().optional(),
   count: z.number().optional(),
   outcomes: z.unknown().optional(),
+};
+
+const loginRepoPullShape = {
+  login: z.string().min(1),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  pullNumber: z.number().int().positive(),
+};
+
+const prAiReviewFindingsOutputSchema = {
+  status: z.enum(["ready", "not_found", "ai_review_off"]),
+  repoFullName: z.string().optional(),
+  pullNumber: z.number().optional(),
+  login: z.string().optional(),
+  headSha: z.string().nullable().optional(),
+  findings: z
+    .array(
+      z.object({
+        category: z.string(),
+        path: z.string(),
+        severity: z.enum(["blocker", "nit"]),
+        line: z.number(),
+        body: z.string(),
+      }),
+    )
+    .optional(),
+  categoryCounts: z.record(z.string(), z.number()).optional(),
 };
 
 const predictGateShape = {
@@ -1042,6 +1099,26 @@ const checkBeforeStartOutputSchema = {
   report: z.unknown().optional(),
 };
 
+const issueRagOutputSchema = {
+  status: z.string().optional(),
+  repoFullName: z.string().optional(),
+  reason: z.string().optional(),
+  telemetry: z
+    .object({
+      attempted: z.boolean().optional(),
+      injected: z.boolean().optional(),
+      candidates: z.number().optional(),
+      kept: z.number().optional(),
+      topScore: z.number().optional(),
+      minScore: z.number().optional(),
+      reranked: z.boolean().optional(),
+      injectedChars: z.number().optional(),
+      retrievedPathCount: z.number().optional(),
+      retrievedPaths: z.array(z.string()).optional(),
+    })
+    .optional(),
+};
+
 const findOpportunitiesOutputSchema = {
   status: z.string().optional(),
   ranked: z
@@ -1166,15 +1243,49 @@ const variantsOutputSchema = {
   variants: z.array(z.unknown()).optional(),
 };
 
-// #2224 - pure, read-only open-PR pressure simulator surfaced over MCP. queueHealth/roleContext use the same
-// permissive z.unknown() convention as the other engine-shaped MCP inputs (the simulator is the single source
-// of truth for their structure); the tool reveals nothing beyond a computation on the caller-supplied context.
+const SIMULATE_OPEN_PR_PRESSURE_MAX_COUNT = 1_000_000;
+const simulateOpenPrPressureCountSchema = z.number().int().min(0).max(SIMULATE_OPEN_PR_PRESSURE_MAX_COUNT);
+const simulateOpenPrPressureQueueHealthSchema = z
+  .object({
+    repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+    generatedAt: z.string().min(1).max(100),
+    burdenScore: z.number().finite(),
+    level: z.enum(["low", "medium", "high", "critical"]),
+    summary: z.string().max(1_000),
+    signals: z
+      .object({
+        openIssues: simulateOpenPrPressureCountSchema,
+        openPullRequests: simulateOpenPrPressureCountSchema,
+        unlinkedPullRequests: simulateOpenPrPressureCountSchema,
+        stalePullRequests: simulateOpenPrPressureCountSchema,
+        draftPullRequests: simulateOpenPrPressureCountSchema,
+        maintainerAuthoredPullRequests: simulateOpenPrPressureCountSchema,
+        collisionClusters: simulateOpenPrPressureCountSchema,
+        ageBuckets: z
+          .object({
+            under7Days: simulateOpenPrPressureCountSchema,
+            days7To30: simulateOpenPrPressureCountSchema,
+            over30Days: simulateOpenPrPressureCountSchema,
+          })
+          .passthrough(),
+        likelyReviewablePullRequests: simulateOpenPrPressureCountSchema,
+        cachedOpenPullRequests: simulateOpenPrPressureCountSchema.optional(),
+        likelyReviewablePullRequestsSource: z.enum(["cache", "sampled_cache", "authoritative"]).optional(),
+      })
+      .passthrough(),
+    findings: z.array(z.unknown()).max(100),
+  })
+  .passthrough()
+  .nullable();
+
+// #2224 - pure, read-only open-PR pressure simulator surfaced over MCP. The simulator only reads
+// bounded queue counts and maintainer-lane state, so validate those fields at the MCP boundary.
 const simulateOpenPrPressureShape = {
-  repoFullName: z.string(),
-  generatedAt: z.string(),
-  queueHealth: z.unknown(),
-  roleContext: z.unknown(),
-  contributorOpenPrCount: z.number().optional(),
+  repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+  generatedAt: z.string().min(1).max(100),
+  queueHealth: simulateOpenPrPressureQueueHealthSchema,
+  roleContext: z.object({ maintainerLane: z.boolean() }).passthrough(),
+  contributorOpenPrCount: simulateOpenPrPressureCountSchema.optional(),
 };
 const simulateOpenPrPressureOutputSchema = {
   repoFullName: z.string().optional(),
@@ -1405,6 +1516,17 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_gate_precision",
+      {
+        description:
+          "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged / overridden counts and false-positive rates with low-sample guards. Maintainer-authenticated; measurement only.",
+        inputSchema: ownerRepoWindowShape,
+        outputSchema: gatePrecisionOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getGatePrecision(input)),
+    );
+
+    server.registerTool(
       "gittensory_get_fleet_analytics",
       {
         description:
@@ -1546,6 +1668,17 @@ export class GittensoryMcp {
     );
 
     server.registerTool(
+      "gittensory_get_pr_ai_review_findings",
+      {
+        description:
+          "Return a submitted pull request's real AI-review inline findings as structured JSON (category, path, severity, line, body) — the same categorization the PR comment uses. Post-submission only; self-scoped to the authenticated login's own PRs on repos you can access.",
+        inputSchema: loginRepoPullShape,
+        outputSchema: prAiReviewFindingsOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getPrAiReviewFindings(input)),
+    );
+
+    server.registerTool(
       "gittensory_list_notifications",
       {
         description:
@@ -1669,6 +1802,17 @@ export class GittensoryMcp {
         outputSchema: findOpportunitiesOutputSchema,
       },
       async (input) => this.toolResult(await this.findOpportunities(input)),
+    );
+
+    server.registerTool(
+      "gittensory_retrieve_issue_context",
+      {
+        description:
+          "Metadata-only, repo-scoped issue-centric RAG retrieval for the miner analyze phase. Composes an embeddable query from issue title/body/labels and returns retrieved file paths plus retrieval scores — never chunk bodies or source text. Requires hosted Vectorize/D1; degrades to empty paths when unavailable.",
+        inputSchema: issueRagShape,
+        outputSchema: issueRagOutputSchema,
+      },
+      async (input) => this.toolResult(await this.retrieveIssueContext(input)),
     );
 
     server.registerTool(
@@ -2184,26 +2328,6 @@ export class GittensoryMcp {
       }),
     );
 
-    // #2237 — read-only catalog of the deterministic slop rule codes + score bands for MCP discovery.
-    server.registerResource(
-      "gittensory_slop_rules",
-      SLOP_RULES_URI,
-      {
-        title: "Gittensory Slop Rules",
-        description: "Deterministic slop-signal catalog: rule codes with their point weights (PR + issue) and the clean/low/elevated/high score bands.",
-        mimeType: "application/json",
-      },
-      async () => ({
-        contents: [
-          {
-            uri: SLOP_RULES_URI,
-            mimeType: "application/json",
-            text: JSON.stringify(buildSlopRulesDocument(), null, 2),
-          },
-        ],
-      }),
-    );
-
     return server;
   }
 
@@ -2517,6 +2641,28 @@ export class GittensoryMcp {
     };
   }
 
+  private async retrieveIssueContext(input: z.infer<z.ZodObject<typeof issueRagShape>>): Promise<ToolPayload> {
+    const validated = validateIssueRagInput(input);
+    if (!validated.ok) {
+      return {
+        summary: "Invalid issue-context retrieval request.",
+        data: { status: "invalid_request", repoFullName: "", reason: validated.reason, telemetry: { attempted: false, injected: false, retrievedPaths: [] } },
+      };
+    }
+    await this.requireRepoAccess(validated.value.repoFullName);
+    const result = await runIssueRagRetrieval(this.env, validated.value);
+    const pathCount = result.telemetry.retrievedPathCount;
+    return {
+      summary:
+        result.status === "query_too_short"
+          ? "Issue query is below the retrieval floor; no RAG context was fetched."
+          : result.telemetry.injected
+            ? `Gittensory retrieved metadata-only context for ${pathCount} related path${pathCount === 1 ? "" : "s"}.`
+            : "Gittensory found no issue-centric RAG context for this request.",
+      data: result as unknown as Record<string, unknown>,
+    };
+  }
+
   /** Cross-repo search requires unscoped MCP read (wildcard allowlist) or operator/session authority. */
   private async requireDiscoveryAccess(): Promise<void> {
     if (this.identity.kind === "session") {
@@ -2583,6 +2729,20 @@ export class GittensoryMcp {
     const report = await buildRepoOutcomeCalibration(this.env, fullName, input.windowDays);
     return {
       summary: outcomeCalibrationSummary(fullName, report.slop),
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #2220 - surface the existing gate-precision measurement over MCP. Same per-repo read gate as
+  // getOutcomeCalibration (requireRepoAccess); loadGatePrecisionReport is measurement-only and already
+  // scoped to the single repo, so nothing cross-repo is revealed. The options object is spread-omitted
+  // when windowDays is absent to satisfy exactOptionalPropertyTypes.
+  private async getGatePrecision(input: { owner: string; repo: string; windowDays?: number | undefined }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const report = await loadGatePrecisionReport(this.env, fullName, input.windowDays === undefined ? {} : { windowDays: input.windowDays });
+    return {
+      summary: `Gittensory gate precision for ${fullName}: ${report.overall.blocked} gate blocks, overall false-positive rate ${report.overall.falsePositiveRate ?? "n/a (below sample threshold)"}.`,
       data: report as unknown as Record<string, unknown>,
     };
   }
@@ -2798,6 +2958,13 @@ export class GittensoryMcp {
       confirmedContributor,
       ...(input.changedPaths === undefined ? {} : { changedPaths: input.changedPaths }),
     });
+    // #predicted-live-gate-agreement: record this call so a later real gate decision for the same
+    // (repo, login) can be paired against it (src/review/predicted-gate-agreement.ts). Shared by BOTH
+    // predictGate and explainGateDisposition (this function backs both tools) -- a caller that invokes both
+    // for what is really one logical check records two rows, a small, acceptable volume over-count rather
+    // than threading a request-scoped dedup key through a read-only prediction path. Best-effort; never
+    // blocks or fails the tool response.
+    await recordPredictedGateCall(this.env, { login: input.login, project: repoFullName, verdict });
     return { repoFullName, verdict };
   }
 
@@ -2836,6 +3003,43 @@ export class GittensoryMcp {
     return {
       summary: `Gittensory post-merge outcomes for ${login}: ${outcomes.length} merged PR(s).`,
       data: { login: login.toLowerCase(), count: outcomes.length, outcomes } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getPrAiReviewFindings(input: z.infer<z.ZodObject<typeof loginRepoPullShape>>): Promise<ToolPayload> {
+    this.requireContributorAccess(input.login);
+    const repoFullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(repoFullName);
+    const pullRequest = await getPullRequest(this.env, repoFullName, input.pullNumber);
+    if (!pullRequest) {
+      return {
+        summary: `No pull request ${repoFullName}#${input.pullNumber}.`,
+        data: {
+          status: "not_found",
+          repoFullName,
+          pullNumber: input.pullNumber,
+          login: input.login.toLowerCase(),
+          findings: [],
+          categoryCounts: {},
+        },
+      };
+    }
+    assertContributorOwnsPullRequest(pullRequest.authorLogin, input.login);
+    const payload = await loadPrAiReviewFindings(this.env, {
+      repoFullName,
+      pullNumber: input.pullNumber,
+      login: input.login,
+    });
+    const findingCount = payload.status === "ready" ? payload.findings.length : 0;
+    const summary =
+      payload.status === "ready"
+        ? `${findingCount} AI-review finding(s) on ${repoFullName}#${input.pullNumber}.`
+        : payload.status === "ai_review_off"
+          ? `AI review is off for ${repoFullName}; no findings to return for #${input.pullNumber}.`
+          : `No published AI review findings for ${repoFullName}#${input.pullNumber}.`;
+    return {
+      summary,
+      data: payload as unknown as Record<string, unknown>,
     };
   }
 
@@ -3059,7 +3263,7 @@ export class GittensoryMcp {
     const autonomy = settings.autonomy;
     const actingActionClasses = AGENT_ACTION_CLASSES.filter((actionClass) => isActingAutonomyLevel(resolveAutonomy(autonomy, actionClass)));
     const installation = repo?.installationId ? await getInstallation(this.env, repo.installationId) : null;
-    const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env) || (await isGlobalAgentFrozen(this.env)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
+    const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env) || (await isDbFrozenForRepo(this.env, settings.agentGlobalFreezeOverride)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
     const permissionReadiness = resolveAgentPermissionReadiness({ autonomy, installationPermissions: installation?.permissions ?? null });
     return {
       summary: `Agent automation for ${fullName}: mode=${mode}, ${actingActionClasses.length} acting class(es), ${pendingActionCount} pending approval(s).`,

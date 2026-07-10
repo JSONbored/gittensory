@@ -11,12 +11,28 @@ declare global {
      *  local/openai-compatible endpoint (ollama). Built at boot from AI_EMBED_BASE_URL/AI_EMBED_MODEL. Absent ⇒
      *  `createReviewAdapters` falls back to `env.AI` (byte-identical to before). */
     AI_EMBED?: Ai;
+    /** Self-host (visual-vision, #4111/#4335): a DEDICATED vision-capable provider, separate from both the
+     *  review chain and the embed provider — a local/openai-compatible endpoint (ollama + a vision-language
+     *  model). Built at boot from AI_VISION_BASE_URL/AI_VISION_MODEL. Absent ⇒ visual-vision advisory falls
+     *  back to requiring a maintainer BYOK key (the only option before this binding existed). */
+    AI_VISION?: Ai;
+    /** Self-host (advisory-tier, #4364): a DEDICATED local-inference provider shared by every capability that is
+     *  NEVER gate-blocking (slop advisory, e2e test-gen, issue planner, AI summaries) — separate from the review
+     *  chain, the embed provider, and the vision provider, since none of these need frontier-model accuracy.
+     *  Built at boot from AI_ADVISORY_BASE_URL/AI_ADVISORY_MODEL. Which capability actually routes through it is
+     *  config-driven (`.gittensory.yml`, global default + per-repo override), not hardcoded here. Absent ⇒ every
+     *  advisory capability falls back to `env.AI` (byte-identical to before this binding existed). */
+    AI_ADVISORY?: Ai;
     /** Self-host RAG vector adapter. Cloudflare no longer binds Vectorize for hosted reviews; the Node runtime
      *  injects Qdrant/sqlite/pg adapters here when configured. Absent ⇒ no RAG, review proceeds with no retrieved
      *  context. */
     VECTORIZE?: Vectorize;
     /** Self-host RAG vector width. Must match the configured embedding model and vector backend. */
     QDRANT_DIM?: string;
+    /** Self-host RAG embed batch size (items per embed-provider call). Defaults to the shipped
+     *  Workers-AI-safe constant (96) when unset — this override exists for self-host operators tuning
+     *  throughput on their own hardware (e.g. GPU-accelerated Ollama), not to change the hosted default. */
+    AI_EMBED_BATCH?: string;
     /** Optional self-host review audit + visual-capture blob store. The Node runtime injects a filesystem-backed
      *  store when REVIEW_AUDIT_DIR is set, or an S3-compatible-bucket-backed store (an operator's own Cloudflare
      *  R2 bucket, or any other S3-compatible provider) when REVIEW_AUDIT_S3_BUCKET + _ENDPOINT +
@@ -109,11 +125,18 @@ declare global {
      *  admin/bot contributor may have open ACROSS EVERY repo this install gates, combined. Purely an
      *  install-scoped aggregate over this same database (no cross-instance networking) -- catches an actor
      *  spreading low-volume spam/farming PRs across several gated repos in one self-hosted install, which no
-     *  single repo's own contributorOpenPrCap/contributorOpenIssueCap can see. Unset/invalid (the default) = no
-     *  cap, byte-identical to today. Checked IN ADDITION TO (not instead of) the existing per-repo caps, in the
+     *  single repo's own contributorOpenPrCap/contributorOpenIssueCap can see. Unset/invalid falls back to a
+     *  real default (20) rather than "no cap" (#4511) -- set to the literal string "off" for the old
+     *  unconditional-no-cap behavior. Checked IN ADDITION TO (not instead of) the existing per-repo caps, in the
      *  same contributor_cap short-circuit (src/settings/agent-actions.ts). A positive integer string (e.g. "20");
      *  see src/settings/global-contributor-cap.ts for parsing. */
     GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP?: string;
+    /** Same shape as {@link GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP}, but for a CONFIRMED official Gittensor miner
+     *  specifically (#4511) -- a verified miner identity gets this cap instead of the human one, since a
+     *  legitimate fleet spread across many repos in one install is expected to run more concurrent open items
+     *  than a single human contributor. Unset/invalid falls back to a higher real default (50); "off" exempts
+     *  confirmed miners from the install-wide cap entirely while humans stay capped. */
+    GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP_MINER?: string;
     /** Install-wide default for the per-repo contributorCapCancelCi setting (#2462): "true"/"1"/"yes"/"on"
      *  (case-insensitive) enables cancelling in-flight CI runs on a contributor_cap close for every repo that
      *  hasn't explicitly configured its own value. Unset/blank/anything else = off (the existing behavior). A
@@ -322,6 +345,17 @@ declare global {
      *  recording are wired, reading a promoted override into the live gate is a noted follow-up that must not
      *  risk loosening the gate. See src/review/selftune-wire.ts. */
     GITTENSORY_REVIEW_SELFTUNE?: string;
+    /** Maintainer recap digest (#1963, #2248): when truthy, a cross-repo RecapReport -- gittensory's OWN
+     *  gate-precision + outcome-calibration data folded across every scanned repo (buildMaintainerRecap,
+     *  #2239) -- is delivered to Discord on a cron cadence. GITTENSORY_RECAP_CADENCE ("daily" | "weekly",
+     *  default "weekly"; an invalid value falls back to "weekly") picks how often; GITTENSORY_RECAP_HOUR
+     *  (0-23, default 14) and GITTENSORY_RECAP_DAY (0-6, Sunday=0, default 1/Monday, only consulted when
+     *  weekly) pick when, so the tick fires at most once per period. Default OFF -- unset/false means the
+     *  cron enqueues NO recap job, byte-identical to today. See src/review/maintainer-recap-wire.ts. */
+    GITTENSORY_MAINTAINER_RECAP?: string;
+    GITTENSORY_RECAP_CADENCE?: string;
+    GITTENSORY_RECAP_HOUR?: string;
+    GITTENSORY_RECAP_DAY?: string;
     /** #1941: route the live CI aggregate (the gate's check/status read) through ONE GraphQL statusCheckRollup
      *  query instead of the paginated /check-runs + /status + /check-suites REST reads, moving that hot path onto
      *  the separate GraphQL rate-limit bucket. Default OFF (byte-identical, proven REST aggregate); when ON the

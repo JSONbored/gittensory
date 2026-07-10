@@ -1,5 +1,5 @@
 // Tests for MinerGoalSpec file discovery (#2294). The tolerant parser itself is covered by
-// miner-goal-spec-parse.test.ts / miner-goal-spec-parser.test.ts; this covers only the discovery order. Pure —
+// miner-goal-spec-parser.test.ts; this covers only the discovery order. Pure —
 // the existence check is injected, so no filesystem is touched. Runs against compiled dist/.
 import { test } from "node:test";
 import assert from "node:assert/strict";

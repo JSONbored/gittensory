@@ -30,16 +30,13 @@ concurrency:
   group: mcp-release-please
   cancel-in-progress: false
 
-# Deliberately no `environment: release` on the job below. The approval boundary lives at the
-# actual npm publish step (npm-publish.yml / publish-engine.yml's `publish` job), not here --
-# gating this job too would pause EVERY cron tick for manual approval, including the near-all
-# no-op runs that just check for new commits, defeating unattended automation entirely. This was
-# tried (#4182) and reverted for exactly that reason. release-please creating a tag/
-# GitHub Release unattended is accepted as within the automation's scope ("fully unattended
-# through npm publish"); only the registry-affecting, irreversible step is gated.
+# The release-please action can create public tags and GitHub Releases before it dispatches
+# the package publish workflows. Keep the whole job behind the protected release environment
+# so those release artifacts have the same approval boundary as the npm publish jobs.
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 15
     permissions:
       contents: write
@@ -72,6 +69,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          trusted_sync_script="${RUNNER_TEMP}/sync-release-lockfile-versions.mjs"
+          cp scripts/sync-release-lockfile-versions.mjs "$trusted_sync_script"
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           gh auth setup-git
           for component in mcp engine; do
@@ -82,7 +81,7 @@ jobs:
             fi
             git fetch origin "$branch"
             git checkout -B "sync-check-${component}" "origin/$branch"
-            node scripts/sync-release-lockfile-versions.mjs packages/gittensory-mcp packages/gittensory-engine
+            node "$trusted_sync_script" packages/gittensory-mcp packages/gittensory-engine
             if git diff --quiet package-lock.json; then
               echo "package-lock.json already in sync on $branch."
             else

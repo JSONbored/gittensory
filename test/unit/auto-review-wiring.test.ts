@@ -353,7 +353,7 @@ describe("review.auto_review wiring (#1954)", () => {
         headSha: "sha5",
       }),
     ).resolves.toEqual({ skipReason: "review paused (commit threshold)", reviewManifest: manifest });
-    expect(countSpy).toHaveBeenCalledWith(expect.anything(), "acme/widgets", 5, "sha5");
+    expect(countSpy).toHaveBeenCalledWith(expect.anything(), "acme/widgets", 5);
     expect(auditSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ detail: "review paused (commit threshold)" }),

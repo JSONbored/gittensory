@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { buildFeasibilityVerdict } from "@jsonbored/gittensory-engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -195,6 +196,13 @@ const checkBeforeStartShape = {
   plannedPaths: z.array(z.string()).optional(),
 };
 
+const feasibilityGateShape = {
+  claimStatus: z.enum(["unclaimed", "claimed", "solved", "unknown"]),
+  duplicateClusterRisk: z.enum(["none", "low", "medium", "high"]),
+  issueStatus: z.enum(["ready", "needs_proof", "hold", "do_not_use", "duplicate", "invalid", "missing"]),
+  found: z.boolean().optional(),
+};
+
 const findOpportunitiesShape = {
   targets: z
     .array(
@@ -213,6 +221,15 @@ const findOpportunitiesShape = {
     })
     .optional(),
   limit: z.number().int().min(1).max(50).optional(),
+};
+
+const issueRagShape = {
+  owner: z.string(),
+  repo: z.string(),
+  title: z.string(),
+  body: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  topK: z.number().int().min(1).max(12).optional(),
 };
 
 const lintPrTextShape = {
@@ -381,6 +398,10 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Cross-repo discovery: find high-fit contribution opportunities across registered Gittensor repos. Returns a ranked, public-safe list filtered by your MinerGoalSpec (lane, min rank score, languages). Metadata-only, no GitHub writes.",
   },
   {
+    name: "gittensory_retrieve_issue_context",
+    description: "Repo-scoped issue-centric RAG retrieval for the miner analyze phase. Returns related file paths and retrieval scores from issue title/body/labels — metadata only, never source text.",
+  },
+  {
     name: "gittensory_lint_pr_text",
     description: "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. No source upload.",
   },
@@ -407,6 +428,16 @@ const STDIO_TOOL_DESCRIPTORS = [
   {
     name: "gittensory_get_upstream_drift",
     description: "Return the latest cached Gittensor upstream ruleset drift status (stale/drift warnings) for MCP planning.",
+  },
+  {
+    name: "gittensory_get_label_audit",
+    description:
+      "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private Gittensory API.",
+  },
+  {
+    name: "gittensory_get_burden_forecast",
+    description:
+      "Return the repo's cached maintainer burden forecast (projected review load, queue-growth risk, and stale-PR signals) with a freshness marker, from the private Gittensory API.",
   },
   {
     name: "gittensory_preview_local_pr_score",
@@ -487,6 +518,10 @@ const STDIO_TOOL_DESCRIPTORS = [
   {
     name: "gittensory_local_status_structured",
     description: "Return local Gittensory MCP status with a validated structured output schema.",
+  },
+  {
+    name: "gittensory_feasibility_gate",
+    description: "Pure local go/raise/avoid feasibility verdict from claim status, duplicate-cluster risk, and issue quality/lifecycle status — the same discriminants the analyze-phase feasibility gate branches on. No API round-trip.",
   },
 ];
 
@@ -587,6 +622,25 @@ server.registerTool(
 );
 
 server.registerTool(
+  "gittensory_retrieve_issue_context",
+  {
+    description: stdioToolDescription("gittensory_retrieve_issue_context"),
+    inputSchema: issueRagShape,
+  },
+  async ({ owner, repo, title, body, labels, topK }) => {
+    const payload = {
+      owner,
+      repo,
+      title,
+      ...(body ? { body } : {}),
+      ...(labels && labels.length > 0 ? { labels } : {}),
+      ...(topK != null ? { topK } : {}),
+    };
+    return toolResult("Gittensory issue-centric RAG context.", await apiPost("/v1/issue-rag/retrieve", payload));
+  },
+);
+
+server.registerTool(
   "gittensory_lint_pr_text",
   {
     description: stdioToolDescription("gittensory_lint_pr_text"),
@@ -670,8 +724,7 @@ server.registerTool(
 server.registerTool(
   "gittensory_get_label_audit",
   {
-    description:
-      "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private Gittensory API.",
+    description: stdioToolDescription("gittensory_get_label_audit"),
     inputSchema: ownerRepoShape,
   },
   async ({ owner, repo }) => {
@@ -681,6 +734,24 @@ server.registerTool(
       repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
       generatedAt: intelligence?.generatedAt,
       labelAudit: intelligence?.labelAudit ?? null,
+    });
+  },
+);
+
+server.registerTool(
+  "gittensory_get_burden_forecast",
+  {
+    description: stdioToolDescription("gittensory_get_burden_forecast"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const intelligence = await apiGet(`${prefix}/intelligence`);
+    return toolResult("Gittensory burden forecast.", {
+      repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
+      generatedAt: intelligence?.generatedAt,
+      burdenForecast: intelligence?.burdenForecast ?? null,
+      burdenForecastFreshness: intelligence?.burdenForecastFreshness ?? null,
     });
   },
 );
@@ -1115,6 +1186,19 @@ server.registerTool(
     };
     return { content: [{ type: "text", text: `Gittensory local MCP status.\n\n${JSON.stringify(data, null, 2)}` }], structuredContent: data };
   },
+);
+
+server.registerTool(
+  "gittensory_feasibility_gate",
+  {
+    description: stdioToolDescription("gittensory_feasibility_gate"),
+    inputSchema: feasibilityGateShape,
+  },
+  ({ claimStatus, duplicateClusterRisk, issueStatus, found }) =>
+    toolResult(
+      "Gittensory feasibility gate.",
+      buildFeasibilityVerdict({ claimStatus, duplicateClusterRisk, issueStatus, found }),
+    ),
 );
 
 // ── Resources: decision-pack, doctor, compatibility, changelog (#292) ─────────

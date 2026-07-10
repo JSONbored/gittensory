@@ -18,16 +18,25 @@ export type CombineStrategy = "single" | "consensus" | "synthesis";
 
 export type OnMerge = "either" | "both";
 
-// #4110: `request_changes`/`comment` were REMOVED (see src/types.ts's mirror of this type for why) -- `"close"`
-// is the only value this gate has ever enforced.
-export type ScreenshotTableGateAction = "close";
+// #4110: `request_changes`/`comment` were REMOVED (see src/types.ts's mirror of this type for why).
+// `"advisory"` (#4535) is a NEW, actually-wired value -- see src/types.ts's mirror for the full rationale.
+export type ScreenshotTableGateAction = "close" | "advisory";
 
 export type ScreenshotTableGateConfig = {
   enabled: boolean;
   whenLabels: string[];
   whenPaths: string[];
   action: ScreenshotTableGateAction;
+  // Full replacement for the rejection reason -- see src/types.ts's mirror of this type for the full
+  // rationale (unset ⇒ auto-generated message + skillFileUrl; set ⇒ used verbatim, skillFileUrl ignored).
   message?: string | undefined;
+  // Viewport x theme completeness matrix (#4535) -- see src/types.ts's mirror of this type for the full
+  // rationale.
+  requireViewports: string[];
+  requireThemes: string[];
+  // Contributor skill-file link appended to the auto-generated message (#4540 follow-up) -- see
+  // src/types.ts's mirror of this type for the full rationale.
+  skillFileUrl?: string | undefined;
 };
 
 export type CommandAuthorizationRole = "maintainer" | "collaborator" | "pr_author" | "confirmed_miner";
@@ -50,6 +59,10 @@ export type LinkedIssueLabelPropagationMapping = {
    *  see `review/linked-issue-label-propagation-fetch.ts`'s `isRepoMaintainerLogin` (app-side only, not
    *  duplicated into this engine package since it needs GitHub/fetch/Env access). */
   trustMaintainerAuthoredIssue?: boolean | undefined;
+  /** Like `trustMaintainerAuthoredIssue`, but for a mapping that DOES carry real reward weight
+   *  (#priority-reward-maintainer-trust) -- e.g. `gittensor:priority`. Mirrors `src/types.ts`'s copy of
+   *  this type; see that copy's doc comment for the full rationale. */
+  trustMaintainerAuthoredIssueForReward?: boolean | undefined;
 };
 
 export type LinkedIssueLabelPropagationMode = "exclusive_type_label";
@@ -80,6 +93,21 @@ export type UnlinkedIssueGuardrailMode = "hold" | "off";
 export type UnlinkedIssueGuardrailConfig = {
   mode: UnlinkedIssueGuardrailMode;
   minConfidence: number;
+};
+
+/** Per-capability opt-in to the local-inference AI_ADVISORY binding (#4364): each of these four ADVISORY-ONLY
+ *  (never gate-blocking) capabilities independently decides whether it routes through env.AI_ADVISORY (when
+ *  configured) instead of the shared frontier env.AI chain. Config-as-code only -- no DB column, resolved
+ *  purely from `.gittensory.yml` `settings.advisoryAiRouting` (global default in the shared/root manifest,
+ *  per-repo override), the same "config-as-code only" shape as unlinkedIssueGuardrail above. Every field
+ *  defaults to false: an operator must deliberately opt EACH capability in, and even then a repo only
+ *  actually routes through AI_ADVISORY when the binding itself is configured (env.AI_ADVISORY unset ⇒ every
+ *  capability stays on env.AI regardless of this config, byte-identical to before this existed). */
+export type AdvisoryAiRoutingConfig = {
+  slop: boolean;
+  e2eTestGen: boolean;
+  planner: boolean;
+  summaries: boolean;
 };
 
 export type ContributorBlacklistEntry = {
@@ -315,6 +343,11 @@ export type RepositorySettings = {
    *  `.gittensory.yml settings.unlinkedIssueGuardrail` in private/global or per-repo config. Defaults
    *  all-off so a self-hoster opts into their own credibility-gate-farming defense. */
   unlinkedIssueGuardrail?: UnlinkedIssueGuardrailConfig | undefined;
+  /** Per-capability local-inference routing (#4364). Config-as-code only; set with `.gittensory.yml
+   *  settings.advisoryAiRouting` in shared/global or per-repo config (global default + per-repo override,
+   *  the same deep-merge precedence every other settings field uses). Defaults all-false so every advisory
+   *  capability stays on the shared frontier env.AI chain until an operator opts each one in. */
+  advisoryAiRouting?: AdvisoryAiRoutingConfig | undefined;
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;
@@ -461,6 +494,11 @@ export type RepositorySettings = {
   /** Per-repo dry-run/shadow mode (#776): when true, the action layer records what it WOULD do without
    *  performing any GitHub mutation. Default false. */
   agentDryRun?: boolean | undefined;
+  /** Per-repo override of the global DB-backed agent freeze (#4372): when true, this repo's actions execute
+   *  even while `global_agent_controls.frozen` is set, so an operator can re-activate one repo at a time
+   *  without lifting the fleet-wide brake. Never overrides the `AGENT_ACTIONS_PAUSED` env var, and
+   *  {@link agentPaused} on this same repo still wins over it. Default false. */
+  agentGlobalFreezeOverride?: boolean | undefined;
   /** Moderation-rules engine (#selfhost-mod-engine): whether the whole layer runs on THIS repo. `"inherit"`
    *  (the DB default) defers to `global_moderation_config.enabled`; `"off"`/`"enabled"` force this repo
    *  regardless of the global default. Always populated by the DB layer; optional so existing settings

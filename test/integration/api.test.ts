@@ -907,6 +907,20 @@ describe("api routes", () => {
     const settingsMalformed = await app.request("/v1/repos/entrius/allways-ui/settings", { method: "PUT", headers: apiHeaders(env), body: "{" }, env);
     expect(settingsMalformed.status).toBe(400);
 
+    // REGRESSION (#4372 security finding): agentGlobalFreezeOverride is an operator-only emergency lever
+    // (set via the private .gittensory.yml, never the maintainer-facing settings API) — a maintainer PUT
+    // must silently strip it, not persist it, even when explicitly sent alongside otherwise-valid fields.
+    const freezeOverrideAttempt = await app.request(
+      "/v1/repos/entrius/allways-ui/settings",
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ firstTimeContributorGrace: false, agentGlobalFreezeOverride: true }) },
+      env,
+    );
+    expect(freezeOverrideAttempt.status).toBe(200);
+    const freezeOverrideBody = (await freezeOverrideAttempt.json()) as Record<string, unknown>;
+    expect(freezeOverrideBody.agentGlobalFreezeOverride).not.toBe(true);
+    const freezeOverrideRefetch = await app.request("/v1/repos/entrius/allways-ui/settings", { headers: apiHeaders(env) }, env);
+    await expect(freezeOverrideRefetch.json()).resolves.toMatchObject({ agentGlobalFreezeOverride: false });
+
     const registrationReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(registrationReadiness.status).toBe(200);
     await expect(registrationReadiness.json()).resolves.toMatchObject({
@@ -1250,6 +1264,17 @@ describe("api routes", () => {
     await expect(invalidFindOpportunities.json()).resolves.toMatchObject({
       status: "invalid_request",
       reason: "targets_or_search_query_required",
+    });
+
+    const invalidIssueRag = await app.request(
+      "/v1/issue-rag/retrieve",
+      { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ owner: "acme", repo: "widgets", title: "" }) },
+      env,
+    );
+    expect(invalidIssueRag.status).toBe(400);
+    await expect(invalidIssueRag.json()).resolves.toMatchObject({
+      status: "invalid_request",
+      reason: "title_required",
     });
 
     const { token: minerSessionToken } = await createSessionForGitHubUser(env, { login: "ordinary-mcp-user", id: 4243 });
@@ -5154,6 +5179,7 @@ describe("api routes", () => {
     expect(toolNames).toContain("gittensory_explain_repo_decision");
     expect(toolNames).toContain("gittensory_preflight_pr");
     expect(toolNames).toContain("gittensory_find_opportunities");
+    expect(toolNames).toContain("gittensory_retrieve_issue_context");
     expect(toolNames).toContain("gittensory_preflight_local_diff");
     expect(toolNames).toContain("gittensory_preview_local_pr_score");
     expect(toolNames).toContain("gittensory_explain_score_breakdown");

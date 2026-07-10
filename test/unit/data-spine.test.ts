@@ -304,6 +304,12 @@ describe("data spine repositories", () => {
     await upsertRepositorySettings(env, { repoFullName: "owner/saferepo", agentPaused: false });
     expect((await getRepositorySettings(env, "owner/saferepo")).agentPaused).toBe(false); // update persists
     expect(await getRepositorySettings(env, "owner/defaultpack")).toMatchObject({ agentPaused: false, agentDryRun: false }); // defaults
+    // #4372 per-repo global-freeze-override round-trip (insert + update) and default false.
+    await upsertRepositorySettings(env, { repoFullName: "owner/saferepo", agentGlobalFreezeOverride: true });
+    expect((await getRepositorySettings(env, "owner/saferepo")).agentGlobalFreezeOverride).toBe(true);
+    await upsertRepositorySettings(env, { repoFullName: "owner/saferepo", agentGlobalFreezeOverride: false });
+    expect((await getRepositorySettings(env, "owner/saferepo")).agentGlobalFreezeOverride).toBe(false); // update persists
+    expect((await getRepositorySettings(env, "owner/defaultpack")).agentGlobalFreezeOverride).toBe(false); // default
     // #2270 per-contributor open PR/issue caps: no row and no cap set both default to null (disabled).
     expect(await getRepositorySettings(env, "missing/repo")).toMatchObject({ contributorOpenPrCap: null, contributorOpenIssueCap: null });
     expect(await getRepositorySettings(env, "owner/defaultpack")).toMatchObject({ contributorOpenPrCap: null, contributorOpenIssueCap: null });
@@ -467,7 +473,9 @@ describe("data spine repositories", () => {
 
     expect(await getPullRequest(env, "owner/repo", 1)).toMatchObject({ labels: ["bug"], linkedIssues: [10, 11] });
     expect(await getIssue(env, "owner/repo", 10)).toMatchObject({ labels: ["bug"], linkedPrs: [1, 2] });
-    expect((await getIssue(env, "owner/repo", 11))?.body).toHaveLength(4000);
+    // #4682 regression: the stored-body cap is GitHub's own 65536-char issue/PR limit, not the old 4000 --
+    // a 5000-char body (well within a real screenshot-evidence table's length) must round-trip in full.
+    expect((await getIssue(env, "owner/repo", 11))?.body).toHaveLength(5000);
     expect(await countOpenIssues(env, "owner/repo")).toBe(2);
     expect(await listOpenIssues(env, "owner/repo")).toEqual(expect.arrayContaining([expect.objectContaining({ number: 10 }), expect.objectContaining({ number: 11 })]));
     expect(await listIssueSignalSample(env, "owner/repo", 1)).toHaveLength(1);
