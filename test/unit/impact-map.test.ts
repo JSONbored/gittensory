@@ -309,6 +309,31 @@ describe("computeImpactMap", () => {
     expect(queryCalls).toBe(1);
   });
 
+  it("a throwing cache READ degrades to a fresh embed+query (fail-safe, never blocks the impact-map computation)", async () => {
+    const throwingStorage: StorageAdapter = {
+      prepare: () => ({
+        bind: () => ({
+          first: async () => {
+            throw new Error("cache read boom");
+          },
+          all: async () => ({ results: [] }),
+          run: async () => undefined,
+        }),
+      }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+    const infra: RagInfra = {
+      storage: throwingStorage,
+      vector: vectorStub([{ id: "src/review/caller.ts::0", score: 0.9, metadata: { path: "src/review/caller.ts" } }]),
+      inference: ai1024,
+    };
+    const symbols: FileChangedSymbols[] = [{ path: "src/review/impact-map.ts", symbols: ["computeImpactMap"] }];
+    // The chunk-text lookup (repo_chunks) ALSO throws via this stub, which retrieveContextWithMetrics itself
+    // already degrades fail-safe -- the cache-read throw specifically is what this test targets, so the
+    // resulting entry is empty (no chunk text survives), but the computation must complete, not throw.
+    await expect(computeImpactMap(symbols, { infra, project: "acme", repo: "widgets" })).resolves.toEqual([]);
+  });
+
   it("a genuinely different query (different changed symbols) still triggers a fresh embed+query, never masked by another file's cached entry", async () => {
     let queryCalls = 0;
     const countingVector: VectorAdapter = {

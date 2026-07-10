@@ -146,9 +146,11 @@ export async function computeImpactMap(
       // nothing else memoizing it (impact-map is a dynamic feature that bypasses the durable ai_review cache).
       const fingerprint = await impactMapQueryFingerprint({ queryText, excludePaths, topK: IMPACT_MAP_TOP_K, minScore: IMPACT_MAP_MIN_SCORE, reranker: "bm25" });
       const cached = await getCachedImpactMapQuery(ragContext.infra.storage, ragContext.project, ragContext.repo, fingerprint);
-      const result =
-        cached ??
-        (await retrieveContextWithMetrics(ragContext.infra, {
+      let result: RagRetrievalResult;
+      if (cached !== null) {
+        result = cached;
+      } else {
+        result = await retrieveContextWithMetrics(ragContext.infra, {
           project: ragContext.project,
           repo: ragContext.repo,
           queryText,
@@ -156,8 +158,9 @@ export async function computeImpactMap(
           minScore: IMPACT_MAP_MIN_SCORE,
           excludePaths,
           reranker: "bm25",
-        }));
-      if (!cached) await putCachedImpactMapQuery(ragContext.infra.storage, ragContext.project, ragContext.repo, fingerprint, result);
+        });
+        await putCachedImpactMapQuery(ragContext.infra.storage, ragContext.project, ragContext.repo, fingerprint, result);
+      }
       affectedModules = result.metrics.paths.slice(0, MAX_AFFECTED_MODULES_PER_ENTRY);
       // Defense in depth: retrieveContextWithMetrics is itself fail-safe (its own try/catch degrades a
       // throwing vector/inference adapter to an empty result internally — never throws out to us), but this
