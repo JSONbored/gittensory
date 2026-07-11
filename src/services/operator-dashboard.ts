@@ -4,6 +4,7 @@ import {
   getCommandUsefulnessSummary,
   getLatestScoringModelSnapshot,
   getProductUsageRollupStatus,
+  listAllPullRequests,
   listInstallationHealth,
   listInstallations,
   listLatestGitHubRateLimitObservations,
@@ -32,6 +33,7 @@ import { computeCycleTimeAggregate, type CycleTimeAggregate } from "../review/st
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
 import { buildRecommendationQualityReport, type RecommendationQualityReport } from "./recommendation-quality-report";
+import { buildSlopOutcomeCalibration, type SlopOutcomeCalibration } from "./outcome-calibration";
 import { buildWeeklyValueReport } from "./weekly-value-report";
 
 export type OperatorDashboardMetric = {
@@ -71,6 +73,9 @@ export type OperatorDashboardPayload = {
   calibration: Calibration;
   // Agent reversal health (#2193): how often humans reopened/reverted bot auto-actions (ops.ts AgentHealth).
   agentHealth: AgentHealth;
+  // Slop-band calibration (#2196): org-wide per-band merge/close rates over resolved PRs carrying a persisted
+  // slop band — is the deterministic slop score predictive? Bands only, never raw scores. Fails safe to empty.
+  slopCalibration: SlopOutcomeCalibration;
 };
 
 const USAGE_WINDOW_DAYS = 7;
@@ -98,6 +103,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     cycleTime,
     calibration,
     agentHealth,
+    slopCalibration,
   ] = await Promise.all([
     listRepositories(env),
     listInstallations(env),
@@ -121,6 +127,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     computeCycleTimeAggregate(env, { days: 90, nowMs: Date.now() }),
     computeCalibration(env, operatorAgentConfig(env)),
     computeAgentHealth(env, operatorAgentConfig(env)),
+    buildOrgSlopCalibration(env),
   ]);
   const weeklyValueReport = buildWeeklyValueReport({
     generatedAt: nowIso(),
@@ -224,7 +231,19 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     cycleTime,
     calibration,
     agentHealth,
+    slopCalibration,
   };
+}
+
+/** #2196: org-wide slop-band calibration from persisted slop bands on resolved PRs. `listAllPullRequests` can
+ *  throw (unlike the sibling reads, which fail safe internally), so this wraps it and degrades to an empty
+ *  calibration on any read error — one DB hiccup must never fail the whole dashboard build. */
+async function buildOrgSlopCalibration(env: Env): Promise<SlopOutcomeCalibration> {
+  try {
+    return buildSlopOutcomeCalibration(await listAllPullRequests(env));
+  } catch {
+    return buildSlopOutcomeCalibration([]);
+  }
 }
 
 function operatorAgentConfig(env: Env): { slug: string; secrets: Record<string, never> } {
@@ -235,7 +254,7 @@ function operatorAgentConfig(env: Env): { slug: string; secrets: Record<string, 
   return { slug, secrets: {} };
 }
 
-export const __operatorDashboardInternals = { operatorAgentConfig };
+export const __operatorDashboardInternals = { operatorAgentConfig, buildOrgSlopCalibration };
 
 export function latestUsageRollup(rollups: ProductUsageDailyRollupRecord[]): ProductUsageDailyRollupRecord | null {
   if (rollups.length === 0) return null;
