@@ -131,7 +131,7 @@ function matchesAnyPrefix(file, prefixes) {
   return prefixes.some((prefix) => (prefix.endsWith("/") ? file.startsWith(prefix) : file === prefix));
 }
 
-function inferReleaseType(commits) {
+export function inferReleaseType(commits) {
   if (commits.length === 0) return null;
   let type = "patch";
   for (const commit of commits) {
@@ -188,5 +188,34 @@ export function buildOrbReleaseReport({ tags, manifestVersion, commits }) {
     latestStableTag: stableTag?.tag ?? null,
     latestTag: anyTag?.tag ?? null,
     commits: commitsSinceLastTag,
+    commitsSinceStable,
+  };
+}
+
+/**
+ * Decide whether a STABLE (non-beta) ORB release is due, and what its version would be -- the
+ * `.github/workflows/orb-stable-release-pr.yml` counterpart to {@link buildOrbReleaseReport}'s beta-channel
+ * logic. Unlike the beta report, this never reads `orb-manifest.json`'s declared target: the whole point of the
+ * standing Release PR this powers is to PROPOSE the next stable version (inferred purely from conventional
+ * commits since the last stable tag) for a maintainer to review by merging -- the PR diff writing that proposal
+ * into orb-manifest.json is itself the human-reviewable gate, so there's nothing left here to compare it
+ * against.
+ */
+export function buildOrbStableReleaseReport({ tags, commitsSinceStable }) {
+  const stableTag = latestStableOrbTag(tags);
+  const stableVersion = stableTag?.version ?? "0.0.0";
+
+  const relevantCommits = selectImageRelevantCommits(commitsSinceStable ?? []);
+  const releaseType = inferReleaseType(relevantCommits);
+  const nextVersion = releaseType ? bumpVersion(stableVersion, releaseType) : stableVersion;
+  const due = relevantCommits.length > 0;
+
+  return {
+    due,
+    stableVersion,
+    nextVersion,
+    releaseType,
+    latestStableTag: stableTag?.tag ?? null,
+    commits: relevantCommits,
   };
 }

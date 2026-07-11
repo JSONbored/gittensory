@@ -1,0 +1,84 @@
+# Fires when a maintainer merges the standing `release-orb-stable` PR opened/refreshed by
+# orb-stable-release-pr.yml -- that merge (a real human GitHub-UI action, not a bot-authored push, so none of
+# the GITHUB_TOKEN recursion-prevention caveats orb-beta-release.yml/mcp-release-please.yml document apply
+# here) is the single deliberate "ship it" gesture for the STABLE channel. Tags `orb-vX.Y.Z` from the
+# now-merged orb-manifest.json version and dispatches release-selfhost.yml exactly like the beta workflow does,
+# except the version has no `-beta.` suffix so release-selfhost.yml's own environment expression routes it to
+# the human-gated `release` environment (reviewer approval required) rather than `release-beta` -- promoting to
+# stable still gets a second, independent approval beyond this PR merge.
+name: orb-stable-release-tag
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write # create + push the stable tag
+  actions: write # dispatch release-selfhost.yml for the new tag
+
+concurrency:
+  group: orb-stable-release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag-stable:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'release-orb-stable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the released version
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync("orb-manifest.json", "utf8")).version)')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=orb-v${version}" >> "$GITHUB_OUTPUT"
+
+      # Same idempotency guard as orb-beta-release.yml's own tagging step: refuse an ambiguous branch collision,
+      # skip (rather than fail) if the tag already exists -- e.g. a second merge to the same target version,
+      # which the due-check on the next scheduled run would already have prevented from being proposed again,
+      # but this stays a hard backstop independent of that.
+      - name: Tag the stable release
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin "$TAG" >/dev/null 2>&1; then
+            echo "::error::Branch $TAG already exists; refusing to create or dispatch an ambiguous release ref."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists; skipping (a previous run likely already tagged it)."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "gittensory-orb ${VERSION}"
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            gh auth setup-git
+            git push origin "$TAG"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Dispatched against the fully qualified TAG ref, not `main`, for the same race-safety reason
+      # orb-beta-release.yml's identical step documents: main can move between the tag push above and this
+      # dispatch, and release-selfhost.yml's own TAG_SHA-must-equal-RELEASE_SHA fail-safe would abort if the two
+      # diverged.
+      - name: Dispatch the ORB release build
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh workflow run release-selfhost.yml --ref "refs/tags/$TAG" -f "version=${VERSION}" -f create_github_release=true

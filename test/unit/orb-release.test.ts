@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   bumpVersion,
   buildOrbReleaseReport,
+  buildOrbStableReleaseReport,
   compareSemver,
+  inferReleaseType,
   isImageRelevantCommit,
   latestOrbTag,
   latestStableOrbTag,
@@ -202,5 +204,89 @@ describe("buildOrbReleaseReport", () => {
     });
     expect(report.due).toBe(true);
     expect(report.nextTag).toBe("orb-v0.5.0-beta.1");
+  });
+
+  it("also exposes the raw image-relevant commits since the last STABLE tag, independent of the beta-vs-any-tag commits field", () => {
+    const relevant = commit("fix(queue): x", ["src/queue/processors.ts"]);
+    const excluded = commit("feat(ui): x", ["apps/gittensory-ui/src/x.tsx"]);
+    const report = buildOrbReleaseReport({
+      tags: ["orb-v0.3.0"],
+      manifestVersion: "0.4.0",
+      commits: { sinceStable: [relevant, excluded], sinceLastTag: [relevant] },
+    });
+    expect(report.commitsSinceStable).toEqual([relevant]);
+  });
+});
+
+describe("inferReleaseType", () => {
+  it("returns null for an empty commit list", () => {
+    expect(inferReleaseType([])).toBeNull();
+  });
+
+  it("returns patch when no commit is a feat or breaking change", () => {
+    expect(inferReleaseType([commit("fix(queue): x", ["src/queue/processors.ts"])])).toBe("patch");
+  });
+
+  it("returns minor when any commit is a feat", () => {
+    expect(inferReleaseType([commit("fix(queue): x", ["src/x.ts"]), commit("feat(review): x", ["src/y.ts"])])).toBe("minor");
+  });
+
+  it("returns major when a commit subject has the `!` breaking marker, even ahead of a feat", () => {
+    expect(inferReleaseType([commit("feat(review)!: x", ["src/x.ts"])])).toBe("major");
+  });
+
+  it("returns major when a commit body has a BREAKING CHANGE: footer, even without the `!` marker", () => {
+    expect(inferReleaseType([commit("fix(review): x", ["src/x.ts"], { body: "fix(review): x\n\nBREAKING CHANGE: removes the old field" })])).toBe("major");
+  });
+});
+
+describe("buildOrbStableReleaseReport", () => {
+  it("is not due when there are no image-relevant commits since the last stable tag", () => {
+    const report = buildOrbStableReleaseReport({ tags: ["orb-v0.3.0", "orb-v0.4.0-beta.27"], commitsSinceStable: [] });
+    expect(report).toMatchObject({ due: false, stableVersion: "0.3.0", nextVersion: "0.3.0", releaseType: null });
+  });
+
+  it("is not due when the only commits since stable are UI/MCP-only (excluded)", () => {
+    const report = buildOrbStableReleaseReport({
+      tags: ["orb-v0.3.0"],
+      commitsSinceStable: [commit("feat(ui): x", ["apps/gittensory-ui/src/x.tsx"])],
+    });
+    expect(report.due).toBe(false);
+  });
+
+  it("proposes a patch bump when only fixes landed", () => {
+    const report = buildOrbStableReleaseReport({
+      tags: ["orb-v0.3.0"],
+      commitsSinceStable: [commit("fix(queue): x", ["src/queue/processors.ts"])],
+    });
+    expect(report).toMatchObject({ due: true, nextVersion: "0.3.1", releaseType: "patch" });
+  });
+
+  it("proposes a minor bump when a feat landed", () => {
+    const report = buildOrbStableReleaseReport({
+      tags: ["orb-v0.3.0"],
+      commitsSinceStable: [commit("fix(queue): x", ["src/x.ts"]), commit("feat(review): x", ["src/y.ts"])],
+    });
+    expect(report).toMatchObject({ due: true, nextVersion: "0.4.0", releaseType: "minor" });
+  });
+
+  it("proposes a major bump when a breaking change landed", () => {
+    const report = buildOrbStableReleaseReport({
+      tags: ["orb-v0.3.0"],
+      commitsSinceStable: [commit("feat(review)!: x", ["src/x.ts"])],
+    });
+    expect(report).toMatchObject({ due: true, nextVersion: "1.0.0", releaseType: "major" });
+  });
+
+  it("handles a brand-new repo with zero stable tags yet (baseline 0.0.0)", () => {
+    const report = buildOrbStableReleaseReport({ tags: [], commitsSinceStable: [commit("feat(review): first cut", ["src/review/x.ts"])] });
+    expect(report.latestStableTag).toBeNull();
+    expect(report.stableVersion).toBe("0.0.0");
+    expect(report.nextVersion).toBe("0.1.0");
+  });
+
+  it("defaults commitsSinceStable to empty when omitted", () => {
+    const report = buildOrbStableReleaseReport({ tags: ["orb-v0.3.0"] });
+    expect(report).toMatchObject({ due: false, commits: [] });
   });
 });

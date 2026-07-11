@@ -1,0 +1,144 @@
+# Automated ORB (self-host container image, ghcr.io/jsonbored/gittensory-selfhost) STABLE-channel Release PR --
+# the release-please-equivalent for ORB, whose cross-cutting image-relevant scoping (src/** shared with
+# UI/MCP-only subtrees it must exclude -- see orb-release-core.mjs's IMAGE_RELEVANT_PREFIXES/EXCLUDED_PREFIXES)
+# doesn't fit release-please's directory-component model the way packages/gittensory-mcp and
+# packages/gittensory-engine do (see mcp-release-please.yml). Same UX contract as those, hand-rolled: on the
+# same schedule (or on demand), (re)compute the next stable version from conventional commits since the last
+# STABLE orb-v tag (scripts/check-orb-stable-release-due.mjs / orb-release-core.mjs's buildOrbStableReleaseReport)
+# and keep a standing `release-orb-stable` branch + PR in sync with that proposal. Nothing ships until a
+# maintainer reviews and merges it -- see orb-stable-release-tag.yml for what happens then. Never touches the
+# daily fully-unattended beta channel (orb-beta-release.yml).
+name: orb-stable-release-pr
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 16 */2 * *"
+
+permissions:
+  contents: write # push the release-orb-stable branch
+  pull-requests: write # create/update the Release PR
+
+concurrency:
+  group: orb-stable-release-pr
+  cancel-in-progress: false
+
+jobs:
+  refresh-release-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.18.0
+
+      - name: Check whether a stable ORB release is due
+        id: report
+        run: |
+          set -euo pipefail
+          node scripts/check-orb-stable-release-due.mjs --json --output orb-stable-release-due.json
+          node <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("orb-stable-release-due.json", "utf8"));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `due=${report.due}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `next_version=${report.nextVersion}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `release_type=${report.releaseType}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `commit_count=${report.commits.length}\n`);
+          NODE
+
+      # Bumps orb-manifest.json's version to the proposal -- this diff, sitting in an open PR nobody has merged
+      # yet, IS the human-reviewable gate: nothing downstream (tagging, publishing) happens until a maintainer
+      # merges it. Never writes directly to main.
+      - name: Update orb-manifest.json
+        if: steps.report.outputs.due == 'true'
+        env:
+          NEXT_VERSION: ${{ steps.report.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const manifest = JSON.parse(fs.readFileSync("orb-manifest.json", "utf8"));
+          manifest.version = process.env.NEXT_VERSION;
+          fs.writeFileSync("orb-manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Render release notes
+        if: steps.report.outputs.due == 'true'
+        run: |
+          set -euo pipefail
+          node <<'NODE' > release-orb-stable-body.md
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("orb-stable-release-due.json", "utf8"));
+          const lines = [
+            `Proposes cutting **orb-v${report.nextVersion}** (a \`${report.releaseType}\` release) from the current` ,
+            `stable release **${report.latestStableTag ?? "(none yet)"}**.`,
+            "",
+            "Merging this PR tags `orb-v" + report.nextVersion + "` and dispatches the image build/publish --" ,
+            "which still requires a `release` environment approval before anything reaches GHCR (see" ,
+            "`.github/workflows/release-selfhost.yml`). The daily beta channel is unaffected either way.",
+            "",
+            "## Image-relevant commits since the last stable release",
+            "",
+            ...report.commits.map((c) => `- ${c.subject} (${c.sha.slice(0, 7)})`),
+          ];
+          console.log(lines.join("\n"));
+          NODE
+
+      # Standing branch, force-pushed each run so it always reflects the CURRENT proposal (mirrors how a
+      # release-please Release PR keeps rebasing itself as new commits land) -- never a growing pile of stale
+      # commits from prior runs.
+      - name: Push the release-orb-stable branch
+        if: steps.report.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.report.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B release-orb-stable
+          git add orb-manifest.json
+          git commit -m "chore(release): cut orb-v${NEXT_VERSION}"
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          gh auth setup-git
+          git push --force origin release-orb-stable
+
+      - name: Create or refresh the Release PR
+        if: steps.report.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.report.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          title="chore(release): cut orb-v${NEXT_VERSION}"
+          existing="$(gh pr list --head release-orb-stable --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file release-orb-stable-body.md
+          else
+            gh pr create --head release-orb-stable --base main --title "$title" --body-file release-orb-stable-body.md
+          fi
+
+      - name: Summarize
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          if (!fs.existsSync("orb-stable-release-due.json")) process.exit(0);
+          const report = JSON.parse(fs.readFileSync("orb-stable-release-due.json", "utf8"));
+          const lines = [
+            "## ORB Stable Release PR",
+            "",
+            `- Due: \`${report.due}\``,
+            `- Current stable: \`${report.latestStableTag ?? "none"}\``,
+            `- Proposed next version: \`${report.nextVersion}\` (\`${report.releaseType ?? "n/a"}\`)`,
+            `- Image-relevant commits since stable: \`${report.commits.length}\``,
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          NODE

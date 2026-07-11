@@ -26,6 +26,16 @@ export type OrbReleaseReport = {
   latestStableTag: string | null;
   latestTag: string | null;
   commits: OrbReleaseCommit[];
+  commitsSinceStable: OrbReleaseCommit[];
+};
+
+export type OrbStableReleaseReport = {
+  due: boolean;
+  stableVersion: string;
+  nextVersion: string;
+  releaseType: "major" | "minor" | "patch" | null;
+  latestStableTag: string | null;
+  commits: OrbReleaseCommit[];
 };
 
 export function parseConventionalSubject(subject: string): {
@@ -43,8 +53,10 @@ export function latestStableOrbTag(tags: string[]): { tag: string; version: stri
 export function latestOrbTag(tags: string[]): { tag: string; version: string } | null;
 export function isImageRelevantCommit(commit: OrbReleaseCommit): boolean;
 export function selectImageRelevantCommits<T extends OrbReleaseCommit>(commits: T[]): T[];
+export function inferReleaseType(commits: OrbReleaseCommit[]): "major" | "minor" | "patch" | null;
 export function buildOrbReleaseReport(input: {
   tags: string[];
   manifestVersion: string | null;
   commits: { sinceStable: OrbReleaseCommit[]; sinceLastTag: OrbReleaseCommit[] };
 }): OrbReleaseReport;
+export function buildOrbStableReleaseReport(input: { tags: string[]; commitsSinceStable?: OrbReleaseCommit[] }): OrbStableReleaseReport;
