@@ -345,6 +345,19 @@ export {
   type AgentSdkQueryOptions,
   type CreateAgentSdkDriverOptions,
 } from "./miner/agent-sdk-driver.js";
+export {
+  LOCAL_WRITE_BOUNDARY,
+  buildApplyLabelsSpec,
+  buildCreateBranchSpec,
+  buildDeleteBranchSpec,
+  buildFileIssueSpec,
+  buildFollowUpIssueSpec,
+  buildOpenPrSpec,
+  buildPostEligibilityCommentSpec,
+  buildTestGenSpec,
+  type LocalWriteActionSpec,
+  type LocalWriteJsonValue,
+} from "./miner/local-write-tools.js";
 export * from "./plan-export.js";
 export { countPlanStepsByStatus } from "./plan-step-stats.js";
 export { countPlanSteps } from "./plan-step-count.js";

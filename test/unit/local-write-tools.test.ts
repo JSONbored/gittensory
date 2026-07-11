@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// src/mcp/local-write-tools.ts is now a thin re-export of packages/gittensory-engine/src/miner/local-write-
+// tools.ts (#2337 -- moved to the shared engine so the miner CLI's own driving loop can import it directly with
+// no network round-trip). Without this redirect, the package-specifier re-export resolves through the engine's
+// published dist/ output, not its .ts source, so v8 coverage cannot attribute hits back to the source file --
+// same fix as miner-coding-agent-house-rules.test.ts / miner-harness-submission-trigger.test.ts already apply.
+vi.mock("@jsonbored/gittensory-engine", async () => {
+  return import("../../packages/gittensory-engine/src/index");
+});
+
 import {
   LOCAL_WRITE_BOUNDARY,
   buildApplyLabelsSpec,
