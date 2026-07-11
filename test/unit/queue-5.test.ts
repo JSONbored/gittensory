@@ -1265,6 +1265,51 @@ describe("queue processors", () => {
       const suppressed = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'github_app.command_redelivery_suppressed'").first<{ n: number }>();
       expect(suppressed?.n).toBe(1);
     });
+
+    it("#4595: a full @gittensory chat dispatch reaches generateChatQaAnswer end-to-end (proves the wiring, not the AI happy path already covered by ai-chat-qa.test.ts/github-commands.test.ts)", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI_ADVISORY: { run: async () => ({ response: "The PR is blocked because CI is failing." }) } as unknown as Ai,
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 307, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      // advisoryAiRouting is config-as-code only (never DB-writable via upsertRepositorySettings) — enable
+      // chatQa the real way, through the repo's published `.gittensory.yml` raw-fetch, same as production.
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+          return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "maintain" });
+        if (url.includes("/issues/307/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/307/comments") && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      await processJob(env, { type: "github-webhook", deliveryId: "chat-full-dispatch", eventName: "issue_comment", payload: mentionPayload(307, "@gittensory chat why is this blocked?") });
+      expect(seen.comments).toHaveLength(1);
+      expect(seen.comments[0]).toContain("Grounded chat Q&A");
+      // A brand-new synthetic PR has no pre-existing decision-pack snapshot, so the bundle is naturally
+      // "needs_snapshot_refresh" here -- that's fine: this test's job is proving processors.ts actually reaches
+      // and calls generateChatQaAnswer for a real "chat" webhook (chatQa enabled, not the "disabled" text), not
+      // exercising the AI happy path (already covered directly in ai-chat-qa.test.ts and github-commands.test.ts).
+      expect(seen.comments[0]).toContain("The cached contribution-context snapshot is still refreshing");
+      expect(seen.comments[0]).not.toContain("not enabled on this instance");
+    });
+
+    it("#4595: chat declines gracefully end-to-end (never posts model text) when chatQa is off, the default", async () => {
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 308, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      stubCommandRateLimitFetch(308, seen);
+      await processJob(env, { type: "github-webhook", deliveryId: "chat-default-off", eventName: "issue_comment", payload: mentionPayload(308, "@gittensory chat why is this blocked?") });
+      expect(seen.comments).toHaveLength(1);
+      expect(seen.comments[0]).toContain("not enabled on this instance");
+    });
   });
 
   it("denies a maintainer Q&A command from an org member without real repo permission (#788)", async () => {

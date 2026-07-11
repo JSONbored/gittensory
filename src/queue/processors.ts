@@ -545,6 +545,7 @@ import { shouldEmitFixHandoff } from "../review/fix-handoff";
 import { buildFixHandoffBlocks } from "../review/fix-handoff-render";
 import { buildE2eTestGenCommentBody, type E2eTestGenCommitOutcome } from "../review/e2e-test-gen-render";
 import { resolveE2eTestGenInstructions, runGittensoryE2eTestGeneration } from "../services/ai-e2e-test-gen";
+import { generateChatQaAnswer } from "../services/ai-chat-qa";
 import { commitE2eTestToPrBranch } from "../github/e2e-test-commit";
 import { shouldApplyRepoCultureProfile } from "../review/repo-culture-profile-wire";
 import { applyReviewMemorySuppression, getCachedReviewSuppressions, invalidateReviewSuppressionCache, shouldApplyReviewMemory } from "../review/review-memory-wire";
@@ -12477,6 +12478,21 @@ async function maybeProcessGittensoryMentionCommand(
         },
         command.question,
       );
+  // #4595: resolved BEFORE the (synchronous) card renderer, mirroring how `bundle` above is fetched first --
+  // generateChatQaAnswer is Ollama-only and never falls back to the frontier chain (a hard requirement, unlike
+  // the other four advisoryAiRouting capabilities), so no withAdvisoryAiEnv() swap belongs here.
+  const chatAnswer =
+    command.name === "chat"
+      ? await generateChatQaAnswer(env, {
+          bundle,
+          question: command.question,
+          advisoryAiRouting: settings.advisoryAiRouting,
+          repoFullName,
+          issueNumber: issue.number,
+          actor: commenter,
+          route: "github_app.chat_qa",
+        })
+      : null;
   const body = buildPublicAgentCommandComment({
     command,
     repo,
@@ -12488,6 +12504,7 @@ async function maybeProcessGittensoryMentionCommand(
     officialMiner: official?.status === "confirmed" ? official.snapshot : null,
     bundle,
     maintainerDigest,
+    chatAnswer,
     env,
   });
   const responseComment = await createOrUpdateAgentCommandComment(
@@ -12643,8 +12660,8 @@ async function buildMentionCommandBundle(
     repoFullName: context.repoFullName,
     surface: "github_comment",
     objective:
-      commandName === "ask" && question && question.trim().length > 0
-        ? `Respond to @gittensory ask for ${context.repoFullName}#${context.issue.number}. Question: ${question.trim().slice(0, 280)}`
+      (commandName === "ask" || commandName === "chat") && question && question.trim().length > 0
+        ? `Respond to @gittensory ${commandName} for ${context.repoFullName}#${context.issue.number}. Question: ${question.trim().slice(0, 280)}`
         : `Respond to @gittensory ${commandName} for ${context.repoFullName}#${context.issue.number}.`,
   });
 }
