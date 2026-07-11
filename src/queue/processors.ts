@@ -7620,6 +7620,11 @@ async function maybePublishPrPublicSurface(
                 // (the standard "Closes #N" auto-close), instead of losing propagation authority the instant
                 // the merge that's supposed to earn the label also closes its evidence.
                 prMergedAt: pr.mergedAt ?? null,
+                // #4818: lets the ambiguous "issue closed but THIS pass's own prMergedAt reads null" case
+                // (a pull_request_review/_comment/_thread webhook whose embedded snapshot predates an
+                // imminent merge, delayed behind other queued work) resolve via one fresh live check instead
+                // of silently downgrading a correct label.
+                prNumber: pr.number,
               })
             : { labels: [], inconclusive: false };
         // #regression-safe-propagation: an INCONCLUSIVE recheck (the linked issue's facts or the

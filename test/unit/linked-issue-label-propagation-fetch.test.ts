@@ -359,6 +359,121 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
     });
   });
 
+  describe("webhook-race live-recheck (#4818 — a null prMergedAt from a stale webhook snapshot is ambiguous, not confirmed)", () => {
+    it("REGRESSION (PR #4818 shape): propagates when prMergedAt reads null (a pull_request_review webhook's stale pre-merge snapshot) but a live check confirms the PR is actually merged at/before the issue's closedAt", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/2192"))
+          return Response.json({
+            number: 2192,
+            state: "closed",
+            closed_at: "2026-07-11T02:26:25Z",
+            user: { login: "owner" },
+            labels: ["gittensor:feature"],
+          });
+        if (url.endsWith("/pulls/4818")) return Response.json({ merged_at: "2026-07-11T02:26:24Z" });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [2192],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        mappings: [{ issueLabel: "gittensor:feature", prLabel: "gittensor:feature", removeOtherTypeLabels: true, trustMaintainerAuthoredIssue: true }],
+        prMergedAt: null,
+        prNumber: 4818,
+      });
+      expectPropagation(result, ["gittensor:feature"]);
+    });
+
+    it("does not propagate when the live recheck confirms the PR is genuinely still unmerged (the real anti-gaming case #4528 protects)", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/777"))
+          return Response.json({ number: 777, state: "closed", closed_at: "2026-07-01T00:00:00Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
+        if (url.endsWith("/pulls/42")) return Response.json({ merged_at: null });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [777],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: null,
+        prNumber: 42,
+      });
+      expectPropagation(result, []);
+    });
+
+    it("does not propagate when the live recheck confirms the PR merged AFTER the issue's own independent closedAt (still not this PR's own close)", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/777"))
+          return Response.json({ number: 777, state: "closed", closed_at: "2026-07-01T00:00:00Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
+        if (url.endsWith("/pulls/42")) return Response.json({ merged_at: "2026-07-05T00:00:00Z" });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [777],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: null,
+        prNumber: 42,
+      });
+      expectPropagation(result, []);
+    });
+
+    it("flags the result inconclusive (never a confirmed absence) when the live merge-state recheck itself fails to fetch", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/777"))
+          return Response.json({ number: 777, state: "closed", closed_at: "2026-07-01T00:00:00Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
+        if (url.endsWith("/pulls/42")) return new Response("server error", { status: 500 });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [777],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: null,
+        prNumber: 42,
+      });
+      expectPropagation(result, [], true);
+    });
+
+    it("does not attempt a live recheck (and stays a confirmed negative, byte-identical to pre-#4818 behavior) when the caller omits prNumber", async () => {
+      const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/777"))
+          return Response.json({ number: 777, state: "closed", closed_at: "2026-07-01T00:00:00Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
+        return new Response("not found", { status: 404 });
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [777],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: null,
+      });
+      expectPropagation(result, []);
+      expect(fetchSpy.mock.calls.some(([input]) => input.toString().includes("/pulls/"))).toBe(false);
+    });
+  });
+
   it("does not propagate labels when the PR author is missing", async () => {
     stubFetch((url) => {
       if (url.includes("/access_tokens"))

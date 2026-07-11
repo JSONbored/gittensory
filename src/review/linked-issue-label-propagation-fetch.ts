@@ -1,6 +1,6 @@
-import { fetchLinkedIssueFacts, type LinkedIssueFactsFetch, type LinkedIssueFactsResult } from "../github/backfill";
+import { fetchLinkedIssueFacts, fetchLivePullRequestMergedAt, type LinkedIssueFactsFetch, type LinkedIssueFactsResult } from "../github/backfill";
 import { createInstallationToken, getRepositoryCollaboratorPermission } from "../github/app";
-import { githubRateLimitAdmissionKeyForToken } from "../github/client";
+import { githubRateLimitAdmissionKeyForToken, type GitHubRateLimitAdmissionKey } from "../github/client";
 import { parseGitHubLoginList } from "../auth/security";
 import { errorMessage } from "../utils/json";
 import type { LinkedIssueLabelPropagationMapping } from "../types";
@@ -120,7 +120,14 @@ export type LinkedIssuePropagationLabels = {
  *  confirmed `not_found` (a proven-nonexistent issue) is likewise NOT inconclusive -- that is real,
  *  deterministic evidence, not a hiccup. */
 async function resolveIssueLabelsForPropagation(
-  args: { env: Env; repoFullName: string; installationId: number },
+  args: {
+    env: Env;
+    repoFullName: string;
+    installationId: number;
+    prNumber: number | undefined;
+    token: string | undefined;
+    admissionKey: GitHubRateLimitAdmissionKey | undefined;
+  },
   result: LinkedIssueFactsFetch,
   prAuthorLogin: string | undefined,
   relaxableLabels: ReadonlySet<string>,
@@ -136,7 +143,36 @@ async function resolveIssueLabelsForPropagation(
     );
     return { labels: [], inconclusive: true };
   }
-  if (result.status !== "found" || !isLinkedIssueTrustworthy(result.facts, prMergedAt) || !prAuthorLogin) return { labels: [], inconclusive: false };
+  if (result.status !== "found" || !prAuthorLogin) return { labels: [], inconclusive: false };
+  let trustedMergedAt = prMergedAt;
+  // #4818 (#regression-safe-propagation): a null `prMergedAt` on a CLOSED linked issue is AMBIGUOUS, not a
+  // confirmed negative -- it means either "this PR genuinely isn't merged yet" (the real anti-gaming case
+  // #4528 exists to block: an unrelated, already-resolved issue opportunistically cited by a still-open PR)
+  // OR "this pass's own triggering webhook happened to be a pull_request_review/_comment/_thread whose
+  // embedded `pull_request` snapshot was taken a few ms before an imminent merge, then this pass got delayed
+  // in the queue long enough for the real merge (and the issue's consequent auto-close) to land first."
+  // Those two cases are indistinguishable from `prMergedAt` alone -- `handlePullRequestWebhookEvent` never
+  // re-verifies the webhook-embedded snapshot it built `pr` from (`src/queue/processors.ts`). Resolve the
+  // ambiguity with ONE fresh, authoritative read of THIS PR's own live merge state (never inferred from
+  // whichever webhook happened to trigger this particular pass) before deciding -- only when the issue is
+  // confirmed closed with a real `closedAt` (a genuinely still-open issue never reaches here at all, per
+  // {@link isLinkedIssueTrustworthy}'s own open-state short-circuit) and a PR number is available to check.
+  if (trustedMergedAt === null && result.facts.state !== "open" && result.facts.closedAt !== null && args.prNumber !== undefined) {
+    const liveMergedAt = await fetchLivePullRequestMergedAt(args.env, args.repoFullName, args.prNumber, args.token, args.admissionKey);
+    if (liveMergedAt === undefined) {
+      console.log(
+        JSON.stringify({
+          event: "linked_issue_label_propagation_inconclusive",
+          repoFullName: args.repoFullName,
+          issueNumber: result.facts.number,
+          reason: "live_merge_state_check_failed",
+        }),
+      );
+      return { labels: [], inconclusive: true };
+    }
+    trustedMergedAt = liveMergedAt;
+  }
+  if (!isLinkedIssueTrustworthy(result.facts, trustedMergedAt)) return { labels: [], inconclusive: false };
   const allLabels = result.facts.labels;
   const issueAuthorLogin = result.facts.authorLogin?.toLowerCase();
   const assignees = result.facts.assignees.map((login) => login.toLowerCase());
@@ -197,14 +233,20 @@ async function resolveIssueLabelsForPropagation(
  *  either flag) reproduces today's strict author-or-assignee-only behavior exactly.
  *
  *  `prMergedAt` (#4528) is this PR's own `merged_at`, or `null` while unmerged -- the caller's `pr.mergedAt`
- *  straight from the DB row, no extra fetch.
+ *  straight from the DB row (or webhook payload), no extra fetch in the common case.
+ *
+ *  `prNumber` (#4818, optional) unlocks ONE extra live fetch, only in the narrow ambiguous case
+ *  {@link resolveIssueLabelsForPropagation} documents (a CLOSED linked issue whose closure this pass's own
+ *  `prMergedAt` reads null): omitting it reproduces the pre-#4818 behavior exactly (a confirmed negative,
+ *  never ambiguity-checked) -- production always passes it (`src/queue/processors.ts`'s `pr.number`).
  *
  *  Returns {@link LinkedIssuePropagationLabels} (#regression-safe-propagation), NOT a bare `string[]`:
- *  `inconclusive` is true when ANY linked issue's resolution was inconclusive (fetch failure or an errored
- *  maintainer-permission check), aggregated across every linked issue with a plain OR -- deliberately
- *  coarse. A caller only needs to distinguish "confirmed: no propagation applies" from "could not fully
- *  verify this pass" when `labels` came back empty; when even one linked issue resolved with real labels,
- *  those labels are just as trustworthy as before regardless of a sibling issue's fetch trouble. */
+ *  `inconclusive` is true when ANY linked issue's resolution was inconclusive (fetch failure, an errored
+ *  maintainer-permission check, or an errored live-merge-state recheck), aggregated across every linked
+ *  issue with a plain OR -- deliberately coarse. A caller only needs to distinguish "confirmed: no
+ *  propagation applies" from "could not fully verify this pass" when `labels` came back empty; when even one
+ *  linked issue resolved with real labels, those labels are just as trustworthy as before regardless of a
+ *  sibling issue's fetch trouble. */
 export async function fetchLinkedIssueLabelsForPropagation(args: {
   env: Env;
   repoFullName: string;
@@ -213,6 +255,7 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
   prAuthorLogin: string | null | undefined;
   mappings?: readonly LinkedIssueLabelPropagationMapping[] | undefined;
   prMergedAt?: string | null | undefined;
+  prNumber?: number | undefined;
 }): Promise<LinkedIssuePropagationLabels> {
   if (args.linkedIssues.length === 0) return { labels: [], inconclusive: false };
   const linkedIssues = args.linkedIssues.slice(0, MAX_LINKED_ISSUES_TO_FETCH);
@@ -257,7 +300,7 @@ export async function fetchLinkedIssueLabelsForPropagation(args: {
   const perIssueResults = await Promise.all(
     results.map((result) =>
       resolveIssueLabelsForPropagation(
-        { env: args.env, repoFullName: args.repoFullName, installationId: args.installationId },
+        { env: args.env, repoFullName: args.repoFullName, installationId: args.installationId, prNumber: args.prNumber, token, admissionKey },
         result,
         prAuthorLogin,
         relaxableLabels,

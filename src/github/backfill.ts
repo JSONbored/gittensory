@@ -3208,6 +3208,28 @@ export async function fetchLivePullRequestState(
   return result?.data.state ?? undefined;
 }
 
+/** The PR's LIVE `merged_at` via REST `GET /pulls/{n}` (#4818): a webhook whose embedded `pull_request` snapshot
+ *  predates an imminent merge -- e.g. a `pull_request_review`/`pull_request_review_comment`/
+ *  `pull_request_review_thread` fired a few ms before an "approve and merge" action -- can carry `merged_at:
+ *  null` even though the PR is, by the time this pass actually runs, genuinely merged;
+ *  `handlePullRequestWebhookEvent` never re-verifies the webhook-embedded snapshot it built `pr` from. Used
+ *  ONLY to resolve that one ambiguous case in `resolveIssueLabelsForPropagation`
+ *  (`review/linked-issue-label-propagation-fetch.ts`) -- a CLOSED linked issue whose closure can't yet be
+ *  attributed to this PR from the triggering webhook's own (possibly stale) `merged_at` alone. Best-effort:
+ *  returns undefined on any error, distinct from the confirmed `null` of a genuinely-still-open PR, so the
+ *  caller treats a fetch failure as inconclusive rather than folding it into a confirmed negative (never fails
+ *  toward silently stripping a correct label). */
+export async function fetchLivePullRequestMergedAt(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<string | null | undefined> {
+  const result = await githubJsonWithHeaders<{ merged_at?: string | null }>(env, repoFullName, `/pulls/${prNumber}`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
+  return result === undefined ? undefined : (result.data.merged_at ?? null);
+}
+
 /** The issue's LIVE state ("open" / "closed") via REST `GET /issues/{n}`. Mirrors {@link fetchLivePullRequestState}
  *  for issues: the stored open-issue cache lags GitHub, so a sibling closed on GitHub (or elsewhere) can still
  *  read `open` locally. The per-contributor open-issue cap (#2479 gate finding) confirms each counted sibling's
