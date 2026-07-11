@@ -13,7 +13,7 @@ function mockDb(execImpl: (sql: string) => Promise<unknown>): D1Database {
 describe("GITHUB_ID_BIGINT_WIDENING_SQL (#selfhost-github-id-overflow)", () => {
   it("widens every known GitHub-native-id column to bigint, one ALTER per statement", () => {
     const statements = GITHUB_ID_BIGINT_WIDENING_SQL.split(";").map((s) => s.trim()).filter(Boolean);
-    expect(statements.length).toBeGreaterThanOrEqual(18);
+    expect(statements.length).toBeGreaterThanOrEqual(20);
     for (const statement of statements) {
       expect(statement.toUpperCase()).toMatch(/^ALTER TABLE \w+ ALTER COLUMN \w+ TYPE bigint$/i);
     }

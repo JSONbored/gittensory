@@ -138,6 +138,7 @@ export async function tuneGithubRateLimitObservationsAutovacuum(db: D1Database):
 export const GITHUB_ID_BIGINT_WIDENING_SQL = [
   "ALTER TABLE installations ALTER COLUMN id TYPE bigint",
   "ALTER TABLE installations ALTER COLUMN account_id TYPE bigint",
+  "ALTER TABLE installations ALTER COLUMN app_id TYPE bigint",
   "ALTER TABLE repositories ALTER COLUMN installation_id TYPE bigint",
   "ALTER TABLE advisories ALTER COLUMN check_run_id TYPE bigint",
   "ALTER TABLE webhook_events ALTER COLUMN installation_id TYPE bigint",
@@ -149,6 +150,7 @@ export const GITHUB_ID_BIGINT_WIDENING_SQL = [
   "ALTER TABLE review_targets ALTER COLUMN installation_id TYPE bigint",
   "ALTER TABLE orb_webhook_events ALTER COLUMN installation_id TYPE bigint",
   "ALTER TABLE orb_github_installations ALTER COLUMN installation_id TYPE bigint",
+  "ALTER TABLE orb_github_installations ALTER COLUMN account_id TYPE bigint",
   "ALTER TABLE orb_pr_outcomes ALTER COLUMN installation_id TYPE bigint",
   "ALTER TABLE orb_enrollments ALTER COLUMN installation_id TYPE bigint",
   "ALTER TABLE orb_enrollments ALTER COLUMN maintainer_github_id TYPE bigint",
