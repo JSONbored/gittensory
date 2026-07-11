@@ -241,7 +241,7 @@ describe("api routes", () => {
 
   it("serves stale public repo stats instead of failing during transient GitHub errors", async () => {
     const app = createApp();
-    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token", PUBLIC_REPO_STATS_ALLOWLIST: "JSONbored/gittensory" });
     vi.stubGlobal("fetch", async () => Response.json({ full_name: "JSONbored/gittensory", html_url: "https://github.com/JSONbored/gittensory", stargazers_count: 21, forks_count: 4 }));
 
     const fresh = await app.request("/v1/public/github/repos/JSONbored/gittensory/stats", {}, env);
