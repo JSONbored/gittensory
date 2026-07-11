@@ -285,7 +285,9 @@ gate:
   # comment, but never blocks; block = a confidence-floor-passing "unaddressed"
   # verdict ALSO becomes a hard blocker (linked_issue_scope_mismatch).
   # off | advisory | block. Default: off. DB-backed (dashboard-settable too);
-  # this overrides the stored value.
+  # this overrides the stored value. When unset, the review.linkedIssueSatisfaction
+  # knob further below is used as a fallback instead (#4149) -- setting either
+  # spelling has the same real effect; this one wins if both are set.
   linkedIssueSatisfaction: off
 
   # Gate-check dry-run. When true, the posted check conclusion remains the real
@@ -983,8 +985,8 @@ settings:
 #   finding_categories: false
 #   # How strictly a linked issue must actually be SATISFIED by the PR (distinct from linkedIssuePolicy,
 #   # which only checks a link EXISTS). off = not evaluated; advisory = surface a finding; block = can
-#   # become a hard blocker (confirmed-contributor-gated). This is the config knob only — parsed and
-#   # normalized here; the merge/close decision that reads it is a separate maintainer slice.
+#   # become a hard blocker (confirmed-contributor-gated). Fallback alias for gate.linkedIssueSatisfaction
+#   # above (#4149) -- used only when that field is unset; setting either spelling has the same real effect.
 #   # off | advisory | block. Default: off (byte-identical when unset).
 #   linkedIssueSatisfaction: off
 #   # Maintainer-declared DETERMINISTIC content assertions (title/description must contain a phrase, a

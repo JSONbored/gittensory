@@ -588,6 +588,15 @@ export function resolveEffectiveSettings(
     };
   }
   applyGateConfigOverrides(effective, manifest.gate);
+  // #4149: `review.linkedIssueSatisfaction` (#2173) is a near-identically-named but functionally distinct
+  // phantom field -- parsed, but until now never wired to the real DB-backed gate
+  // (linkedIssueSatisfactionGateMode), unlike every other typed `gate.*` alias. Fold it in as a fallback:
+  // `gate.linkedIssueSatisfaction` (applied above) always wins when set; otherwise an explicit
+  // `review.linkedIssueSatisfaction` takes effect instead of being silently discarded, so a self-hoster who
+  // sets either spelling gets the same real gate behavior.
+  if (manifest.gate.linkedIssueSatisfaction === null && manifest.review.linkedIssueSatisfaction !== null) {
+    effective.linkedIssueSatisfactionGateMode = manifest.review.linkedIssueSatisfaction;
+  }
   // The dashboard "Require linked issue" toggle must not silently diverge from gate blocking: when the
   // boolean is on but linkedIssueGateMode is still off, treat it as a block requirement (#797).
   // #4618: the yml-only top-level `linkedIssuePolicy: required` knob gets the same promotion -- previously a

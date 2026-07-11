@@ -815,10 +815,13 @@ export type RepositorySettings = {
    *  satisfies its primary linked issue's intent never runs (byte-identical to today). `advisory` = it runs
    *  and renders as a collapsible section in the review comment, but never blocks. `block` = ALSO let a
    *  confidence-floor-passing "unaddressed" verdict become a gate blocker (`linked_issue_scope_mismatch`,
-   *  confirmed-contributors only, like every other blocker). Distinct from the config-as-code-only
-   *  `review.linkedIssueSatisfaction` manifest field (#2173) — this is the DB-backed, dashboard-settable
-   *  gate-mode counterpart; `.gittensory.yml gate.linkedIssueSatisfaction` overrides it exactly like every
-   *  other `gate:` field overrides its `RepositorySettings` counterpart. Default `off` — opt-in. */
+   *  confirmed-contributors only, like every other blocker). This is the DB-backed, dashboard-settable
+   *  counterpart; `.gittensory.yml gate.linkedIssueSatisfaction` overrides it exactly like every other
+   *  `gate:` field overrides its `RepositorySettings` counterpart. The near-identically-named, config-as-
+   *  code-only `review.linkedIssueSatisfaction` manifest field (#2173) is folded in as a fallback alias
+   *  (#4149) when `gate.linkedIssueSatisfaction` is unset — see `resolveEffectiveSettings` in
+   *  `signals/focus-manifest.ts` — so setting either spelling has the same real effect. Default `off` —
+   *  opt-in. */
   linkedIssueSatisfactionGateMode: GateRuleMode;
   /** First-time-contributor grace (#552). RESERVED / currently INERT (#2266): parsed, clamped, and threaded
    *  end-to-end, but the gate evaluator never reads it — a genuine newcomer with a real blocker is still

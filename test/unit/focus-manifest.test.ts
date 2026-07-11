@@ -3105,6 +3105,37 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.linkedIssueGateMode).toBe("advisory");
   });
 
+  describe("review.linkedIssueSatisfaction phantom-field alias (#4149)", () => {
+    it("an explicit review.linkedIssueSatisfaction takes effect when gate.linkedIssueSatisfaction is unset", () => {
+      const eff = resolveEffectiveSettings(
+        { linkedIssueSatisfactionGateMode: "off" } as RepositorySettings,
+        parseFocusManifest({ review: { linkedIssueSatisfaction: "block" } }),
+      );
+      expect(eff.linkedIssueSatisfactionGateMode).toBe("block");
+    });
+
+    it("gate.linkedIssueSatisfaction always wins over review.linkedIssueSatisfaction when both are set", () => {
+      const eff = resolveEffectiveSettings(
+        { linkedIssueSatisfactionGateMode: "off" } as RepositorySettings,
+        parseFocusManifest({ review: { linkedIssueSatisfaction: "block" }, gate: { linkedIssueSatisfaction: "advisory" } }),
+      );
+      expect(eff.linkedIssueSatisfactionGateMode).toBe("advisory");
+    });
+
+    it("falls through to the DB value when neither spelling is set", () => {
+      const eff = resolveEffectiveSettings({ linkedIssueSatisfactionGateMode: "block" } as RepositorySettings, parseFocusManifest(null));
+      expect(eff.linkedIssueSatisfactionGateMode).toBe("block");
+    });
+
+    it("review.linkedIssueSatisfaction: off is a real, distinct value from unset -- it still applies (not silently skipped)", () => {
+      const eff = resolveEffectiveSettings(
+        { linkedIssueSatisfactionGateMode: "block" } as RepositorySettings,
+        parseFocusManifest({ review: { linkedIssueSatisfaction: "off" } }),
+      );
+      expect(eff.linkedIssueSatisfactionGateMode).toBe("off");
+    });
+  });
+
   it("REGRESSION: downgrades a pre-existing DB qualityGateMode: block to advisory, even with no gate.readiness.mode override (#2267)", () => {
     // Simulates a repo whose DB row already has quality_gate_mode = "block" from before the write-time guards
     // (the settings.qualityGateMode parser, the settings-write API routes) existed — the dashboard/API path's
