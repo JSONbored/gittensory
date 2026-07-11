@@ -168,8 +168,8 @@ describe("attemptLoopReentry (#2338)", () => {
     expect(() => attemptLoopReentry({ repoFullName: "", outcome: "merged" }, { eventLedger, portfolioQueue })).toThrow("invalid_repo_full_name");
     expect(() => attemptLoopReentry({ repoFullName: "acme/widgets", outcome: "bogus" as never }, { eventLedger, portfolioQueue })).toThrow("invalid_outcome");
     expect(() => attemptLoopReentry({ repoFullName: "acme/widgets", outcome: "merged" }, null as never)).toThrow("invalid_loop_reentry_deps");
-    expect(() => attemptLoopReentry({ repoFullName: "acme/widgets", outcome: "merged" }, { eventLedger })).toThrow("invalid_portfolio_queue");
-    expect(() => attemptLoopReentry({ repoFullName: "acme/widgets", outcome: "merged" }, { portfolioQueue })).toThrow("invalid_event_ledger");
+    expect(() => attemptLoopReentry({ repoFullName: "acme/widgets", outcome: "merged" }, { eventLedger } as never)).toThrow("invalid_portfolio_queue");
+    expect(() => attemptLoopReentry({ repoFullName: "acme/widgets", outcome: "merged" }, { portfolioQueue } as never)).toThrow("invalid_event_ledger");
   });
 
   it("threads a caller-supplied loopSummary verbatim into the audit event payload for traceability", () => {

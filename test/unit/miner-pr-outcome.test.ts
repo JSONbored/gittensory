@@ -6,15 +6,17 @@ import {
   readPrOutcomes,
   recordPrOutcomeSnapshot,
 } from "../../packages/gittensory-miner/lib/pr-outcome.js";
+import type { AppendEventInput, LedgerEntry } from "../../packages/gittensory-miner/lib/event-ledger.js";
 
 // A minimal injected event ledger (the DI shape the writer/reader accept), so these stay pure unit tests with no
 // SQLite file. `_events` is exposed so a test can inject crafted rows for the reader's defensive skip branches.
-function mockLedger(): { appendEvent: (e: unknown) => unknown; readEvents: (filter?: { repoFullName?: string }) => unknown[]; _events: Array<Record<string, unknown>> } {
+// Typed against the real EventLedger#appendEvent contract so this mock can't silently drift from it.
+function mockLedger(): { appendEvent: (e: AppendEventInput) => LedgerEntry; readEvents: (filter?: { repoFullName?: string }) => unknown[]; _events: Array<Record<string, unknown>> } {
   const events: Array<Record<string, unknown>> = [];
   let seq = 0;
   return {
     appendEvent: (e) => {
-      const entry = { ...(e as object), seq: ++seq } as Record<string, unknown>;
+      const entry = { id: ++seq, seq, type: e.type, repoFullName: e.repoFullName ?? null, payload: e.payload, createdAt: new Date().toISOString() };
       events.push(entry);
       return entry;
     },
