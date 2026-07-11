@@ -1605,6 +1605,11 @@ describe("parseFocusManifest gate config", () => {
     // A non-object, non-array primitive (not just an array) also warns as "must be a mapping".
     expect(parseFocusManifest({ experimental: "nope" }).warnings.some((w) => /"experimental" must be a mapping/.test(w))).toBe(true);
     expect(parseFocusManifest({ experimental: "nope" }).experimental.present).toBe(false);
+    // experimentalConfigToJson's per-key null-skip is unreachable via parseFocusManifest today (a single-key
+    // EXPERIMENTAL_PLUGIN_KEYS means `present: true` always implies that one key is non-null) — but the
+    // function is exported and pure over the full type, so a directly-constructed config (e.g. a future
+    // second plugin key left unset while another is set) must still round-trip correctly.
+    expect(experimentalConfigToJson({ present: true, gittensor: null })).toEqual({});
   });
 
   it("parses the contentLane: block (#2435 per-repo registry-lane config), round-trips it, and makes the manifest present", () => {
