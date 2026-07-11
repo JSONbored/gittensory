@@ -15,7 +15,7 @@ import { githubHeaders } from "../github-headers.js";
 import { isHistoryUninformativePath } from "./history-path.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const WINDOW_DAYS = 90;
 const PER_PAGE = 100; // one page; a file with a full page of commits in the window is already a clear hotspot
 const MAX_FILES_PROBED = 8; // bound the GitHub round-trips, matching the other history-class analyzers

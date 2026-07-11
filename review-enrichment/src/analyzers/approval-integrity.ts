@@ -17,7 +17,7 @@ import { boundedFetchJson } from "../external-fetch.js";
 import { githubHeaders } from "../github-headers.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const REVIEWS_PER_PAGE = 100;
 // GitHub returns PR reviews oldest-first with no reorder option, so a single `per_page=100` fetch would silently
 // read only the OLDEST reviews on any PR with more — exactly backwards for "each reviewer's latest vote". Walk

@@ -104,6 +104,15 @@ test("scanStaleBranch: a malformed repoFullName is skipped, not thrown", async (
   assert.deepEqual(findings, []);
 });
 
+test("scanStaleBranch: a dot-segment owner (path-traversal shape) is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const findings = await scanStaleBranch(
+    req({ repoFullName: "../evil" }),
+    routedFetch({ defaultBranch: "main", behindBy: 150, status: "behind" }),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanStaleBranch: the repo-info fetch failing yields no finding (and never calls compare)", async () => {
   let compareCalled = false;
   const findings = await scanStaleBranch(req(), async (url) => {

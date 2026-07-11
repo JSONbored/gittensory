@@ -178,6 +178,15 @@ test("scanPendingReviewRequests: a malformed repoFullName is skipped, not thrown
   assert.deepEqual(findings, []);
 });
 
+test("scanPendingReviewRequests: a dot-segment owner (path-traversal shape) is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const findings = await scanPendingReviewRequests(
+    req({ repoFullName: "../evil" }),
+    async () => jsonResponse({}),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanPendingReviewRequests: the requested-reviewers fetch failing yields no finding", async () => {
   const findings = await scanPendingReviewRequests(req(), async () => jsonResponse({ message: "bad" }, 500));
   assert.deepEqual(findings, []);

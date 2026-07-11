@@ -16,7 +16,7 @@ import { boundedFetchJson } from "../external-fetch.js";
 import { githubHeaders } from "../github-headers.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 // Below this many commits behind, drifting from the default branch is normal PR life, not a staleness risk.
 const BEHIND_THRESHOLD = 100;
 

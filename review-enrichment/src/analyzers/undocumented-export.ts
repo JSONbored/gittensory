@@ -16,7 +16,7 @@ const GITHUB_API = "https://api.github.com";
 const MAX_FILES = 10;
 const MAX_FINDINGS = 30;
 const MAX_FETCH_BYTES = 1_000_000;
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 // A public entrypoint barrel — an `index.<js/ts>` source file. Declaration (.d.ts), test, and generated output are
 // excluded: they are not the hand-authored public surface this scan is about.
 const ENTRYPOINT_RE = /(?:^|\/)index\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;

@@ -16,7 +16,7 @@ import { githubHeaders } from "../github-headers.js";
 import { isHistoryUninformativePath } from "./history-path.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const MAX_FILES_PROBED = 6; // bound the files we probe, matching the other history-class analyzers
 const MAX_LOOKUPS = 12; // hard cap on total GitHub round-trips (each file costs up to 2: commits + pulls)
 const SHA_PREFIX_LEN = 12;

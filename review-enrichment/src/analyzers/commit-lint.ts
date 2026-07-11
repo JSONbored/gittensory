@@ -16,7 +16,7 @@ import { githubHeaders } from "../github-headers.js";
 import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const MAX_COMMITS = 100;
 const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;
 const SHA_PREFIX_LEN = 12;

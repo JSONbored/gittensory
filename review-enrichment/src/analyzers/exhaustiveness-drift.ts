@@ -13,7 +13,7 @@ import { isTestPath } from "./test-ratio.js";
 import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const MAX_FILES = 10;
 const MAX_FETCHES = 10;
 const MAX_FINDINGS = DEFAULT_MAX_FINDINGS;

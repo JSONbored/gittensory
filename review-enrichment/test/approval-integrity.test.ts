@@ -192,6 +192,15 @@ test("scanApprovalIntegrity: a malformed repoFullName is skipped, not thrown", a
   assert.deepEqual(findings, []);
 });
 
+test("scanApprovalIntegrity: a dot-segment owner (path-traversal shape) is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const findings = await scanApprovalIntegrity(
+    req({ repoFullName: "../evil" }),
+    reviewsFetch([review("alice", "APPROVED", "old-sha", "2026-01-01T00:00:00Z")]),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanApprovalIntegrity: a fetch failure yields no finding", async () => {
   const findings = await scanApprovalIntegrity(req(), async () => jsonResponse({ message: "bad" }, 500));
   assert.deepEqual(findings, []);

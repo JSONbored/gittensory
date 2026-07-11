@@ -18,7 +18,7 @@ import { boundedFetchJson } from "../external-fetch.js";
 import { githubHeaders } from "../github-headers.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const TIMELINE_PER_PAGE = 100;
 const MAX_TIMELINE_PAGES = 5;
 const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours

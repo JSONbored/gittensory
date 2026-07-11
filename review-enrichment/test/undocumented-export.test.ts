@@ -203,6 +203,15 @@ test("scanUndocumentedExport: a rejected fetch or a non-OK (404) response yields
   assert.deepEqual(await scanUndocumentedExport(req(files), notOk), []); // resp.ok false → content skipped
 });
 
+test("scanUndocumentedExport: a dot-segment owner/repo slug is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const findings = await scanUndocumentedExport(
+    req([{ path: "src/index.ts", status: "modified", patch: PATCH }], { repoFullName: "../evil" }),
+    headFetch(HEAD),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanUndocumentedExport: no token or no headSha → skipped (no finding, no throw)", async () => {
   const files = [{ path: "src/index.ts", status: "modified", patch: PATCH }];
   assert.deepEqual(await scanUndocumentedExport(req(files, { githubToken: undefined }), headFetch(HEAD)), []);

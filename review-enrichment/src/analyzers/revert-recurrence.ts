@@ -18,7 +18,7 @@ import { isHistoryUninformativePath } from "./history-path.js";
 import { DEFAULT_MAX_FINDINGS } from "./limits.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const MAX_FILES_PROBED = 5; // bound the per-file commit-history fan-out, matching the other history-class analyzers
 const COMMITS_PER_FILE = 15; // recent commits to inspect per probed file when looking for a revert
 const MAX_REVERT_LOOKUPS = 10; // global cap on revert-commit detail fetches across all probed files

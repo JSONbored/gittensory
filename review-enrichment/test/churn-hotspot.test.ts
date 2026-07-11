@@ -93,6 +93,8 @@ test("scanChurnHotspot: skips lockfiles, binaries, and newly-added files without
 test("scanChurnHotspot: requires a github token and a valid repo slug", async () => {
   assert.deepEqual(await scanChurnHotspot({ repoFullName: "octo/repo", prNumber: 1, files: [{ path: "src/a.ts" }] }, async () => jsonResponse(commits(20, 2))), []);
   assert.deepEqual(await scanChurnHotspot({ repoFullName: "bad slug/x!", prNumber: 1, githubToken: "t", files: [{ path: "src/a.ts" }] }, async () => jsonResponse(commits(20, 2))), []);
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  assert.deepEqual(await scanChurnHotspot({ repoFullName: "../evil", prNumber: 1, githubToken: "t", files: [{ path: "src/a.ts" }] }, async () => jsonResponse(commits(20, 2))), []);
 });
 
 test("scanChurnHotspot: rejects multi-segment repo slugs without fetching", async () => {

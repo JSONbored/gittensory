@@ -18,7 +18,7 @@ import { boundedFetchJson } from "../external-fetch.js";
 import { githubHeaders } from "../github-headers.js";
 
 const GITHUB_API = "https://api.github.com";
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 const MAX_RUNS_PROBED = 5; // recent successful runs to search for a coverage artifact
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024; // skip an artifact zip larger than this (bounded download)
 const MAX_ENTRY_BYTES = 4 * 1024 * 1024; // skip a single uncompressed zip entry larger than this

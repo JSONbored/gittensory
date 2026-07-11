@@ -308,6 +308,20 @@ test("scanDocCommentDrift: rejects multi-segment repo slugs without fetching", a
   assert.equal(called, false);
 });
 
+test("scanDocCommentDrift: rejects a dot-segment owner/repo slug without fetching", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  let called = false;
+  const out = await scanDocCommentDrift(
+    { repoFullName: "../evil", prNumber: 1, headSha: "abc123", githubToken: "ght", files: [{ path: "src/a.ts", patch: DRIFT_PATCH }] },
+    async () => {
+      called = true;
+      return fileWith(DRIFTED)();
+    },
+  );
+  assert.deepEqual(out, []);
+  assert.equal(called, false);
+});
+
 test("scanDocCommentDrift: skips non-source and test files without fetching", async () => {
   let called = false;
   const out = await scanDocCommentDrift(

@@ -147,7 +147,9 @@ test("scanCommitSignature fails closed on a malformed repo slug WITHOUT any netw
   // A spy that records invocation: a malformed slug must be rejected BEFORE any GitHub request, so the guard
   // can never query the wrong repository. (A throwing fetch would be swallowed by the analyzer's fail-safe
   // try/catch and could mask a slug that slipped through, so assert the call never happens instead.)
-  for (const repoFullName of ["not-a-slug", "o/r/extra", "/r", "o/", "a/b/c/d"]) {
+  // "../evil"/"o/.."/"o/." each individually satisfy a bare `[A-Za-z0-9._-]+` class (every char in ".."/"." is
+  // allowed); only a first-character requirement on owner AND repo independently catches them.
+  for (const repoFullName of ["not-a-slug", "o/r/extra", "/r", "o/", "a/b/c/d", "../evil", "o/..", "o/."]) {
     let called = false;
     const spyFetch: typeof fetch = async () => {
       called = true;
