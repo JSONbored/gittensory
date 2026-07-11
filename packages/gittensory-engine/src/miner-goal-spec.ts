@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 
+import { MINER_LIVE_MODE_OPT_IN } from "./governor/action-mode.js";
 import {
   DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD,
   resolveSelfPlagiarismConfig,
@@ -42,6 +43,18 @@ export type MinerKillSwitchPolicy = {
    * queue state so un-pausing resumes exactly where the queue left off. Default: false (not paused).
    */
   paused: boolean;
+};
+
+/** Per-repo dry-run/live execution tuning consulted by the Governor chokepoint's action-mode primitive (#2342). */
+export type MinerExecutionPolicy = {
+  /**
+   * Explicit opt-in to LIVE write execution for this repo. Must equal EXACTLY the literal string `"live"` — any
+   * other value (a typo, `"yes"`, `"on"`, or a boolean `true` from a malformed file) is treated as not opted
+   * in, so a fat-fingered config can never accidentally enable live writes. A miner also stays in dry-run
+   * unless its own operator separately opts in globally (`GITTENSORY_MINER_LIVE_MODE=live`) — this field alone
+   * cannot force a stranger's miner instance live. Default: null (dry-run).
+   */
+  liveModeOptIn: string | null;
 };
 
 /** Per-repo miner configuration parsed from `.gittensory-miner.yml`. See {@link DEFAULT_MINER_GOAL_SPEC}. */
@@ -97,6 +110,11 @@ export type MinerGoalSpec = {
    * Default: { paused: false }.
    */
   killSwitch: MinerKillSwitchPolicy;
+  /**
+   * Per-repo dry-run/live execution opt-in consulted by the Governor chokepoint (#2342).
+   * Default: { liveModeOptIn: null }.
+   */
+  execution: MinerExecutionPolicy;
 };
 
 /** The tolerant parser result for `.gittensory-miner.yml`: the normalized spec plus parse warnings and whether the
@@ -128,6 +146,7 @@ export const DEFAULT_MINER_GOAL_SPEC: Readonly<MinerGoalSpec> = Object.freeze({
   feasibilityGate: Object.freeze({ enabled: true, suppressedReasons: Object.freeze([]) }),
   selfPlagiarism: Object.freeze({ similarityThreshold: DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD }),
   killSwitch: Object.freeze({ paused: false }),
+  execution: Object.freeze({ liveModeOptIn: null }),
 });
 
 const MAX_MINER_GOAL_SPEC_BYTES = 32_768;
@@ -147,6 +166,7 @@ function cloneDefaultMinerGoalSpec(): MinerGoalSpec {
     },
     selfPlagiarism: { ...DEFAULT_MINER_GOAL_SPEC.selfPlagiarism },
     killSwitch: { ...DEFAULT_MINER_GOAL_SPEC.killSwitch },
+    execution: { ...DEFAULT_MINER_GOAL_SPEC.execution },
   };
 }
 
@@ -266,6 +286,30 @@ function normalizeKillSwitchPolicy(
   };
 }
 
+function normalizeExecutionPolicy(
+  value: unknown,
+  field: string,
+  fallback: MinerExecutionPolicy,
+  warnings: string[],
+): MinerExecutionPolicy {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push(`MinerGoalSpec field "${field}" must be a mapping; falling back to defaults.`);
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const raw = record.liveModeOptIn;
+  if (raw === undefined || raw === null) return { liveModeOptIn: fallback.liveModeOptIn };
+  if (typeof raw !== "string") {
+    warnings.push(`MinerGoalSpec field "${field}.liveModeOptIn" must be a string; falling back to dry-run.`);
+    return { liveModeOptIn: fallback.liveModeOptIn };
+  }
+  // A string that isn't the exact opt-in literal is NOT malformed (it's a valid string, just not the one value
+  // that grants live mode) -- no warning, just a silent, safe fall-through to dry-run. Only a wrong TYPE above
+  // warns, matching every other field's tolerant-parse convention.
+  return { liveModeOptIn: raw === MINER_LIVE_MODE_OPT_IN ? raw : null };
+}
+
 function normalizePositiveInteger(value: unknown, field: string, fallback: number, warnings: string[]): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -302,7 +346,8 @@ function hasConfiguredGoalFields(spec: MinerGoalSpec): boolean {
     spec.feasibilityGate.enabled !== DEFAULT_MINER_GOAL_SPEC.feasibilityGate.enabled ||
     spec.feasibilityGate.suppressedReasons.length > 0 ||
     spec.selfPlagiarism.similarityThreshold !== DEFAULT_MINER_GOAL_SPEC.selfPlagiarism.similarityThreshold ||
-    spec.killSwitch.paused !== DEFAULT_MINER_GOAL_SPEC.killSwitch.paused
+    spec.killSwitch.paused !== DEFAULT_MINER_GOAL_SPEC.killSwitch.paused ||
+    spec.execution.liveModeOptIn !== DEFAULT_MINER_GOAL_SPEC.execution.liveModeOptIn
   );
 }
 
@@ -356,6 +401,7 @@ export function parseMinerGoalSpec(raw: unknown): ParsedMinerGoalSpec {
       warnings,
     ),
     killSwitch: normalizeKillSwitchPolicy(record.killSwitch, "killSwitch", DEFAULT_MINER_GOAL_SPEC.killSwitch, warnings),
+    execution: normalizeExecutionPolicy(record.execution, "execution", DEFAULT_MINER_GOAL_SPEC.execution, warnings),
   };
   if (!hasConfiguredGoalFields(spec)) {
     warnings.push("MinerGoalSpec contained no recognized non-default goal fields; falling back to safe defaults.");

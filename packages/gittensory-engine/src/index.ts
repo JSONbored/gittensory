@@ -150,6 +150,7 @@ export * from "./governor/reputation-throttle.js";
 export * from "./governor/write-rate-limit.js";
 export * from "./governor/run-halt.js";
 export * from "./governor/kill-switch.js";
+export * from "./governor/action-mode.js";
 export {
   GOVERNOR_LEDGER_EVENT_TYPES,
   normalizeGovernorLedgerEvent,
@@ -405,6 +406,7 @@ export {
   discoverMinerGoalSpecPath,
   MINER_GOAL_SPEC_FILENAMES,
   type FeasibilityGatePolicy,
+  type MinerExecutionPolicy,
   type MinerGoalSpec,
   type MinerIssueDiscoveryPolicy,
   type MinerKillSwitchPolicy,

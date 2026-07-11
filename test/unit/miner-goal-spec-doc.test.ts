@@ -20,6 +20,7 @@ const SPEC_FIELDS = [
   "feasibilityGate",
   "selfPlagiarism",
   "killSwitch",
+  "execution",
 ] as const;
 
 describe("miner goal spec docs (#2300)", () => {
@@ -59,6 +60,7 @@ describe("miner goal spec docs (#2300)", () => {
       feasibilityGate: { enabled: true, suppressedReasons: [] },
       selfPlagiarism: { similarityThreshold: 0.85 },
       killSwitch: { paused: false },
+      execution: { liveModeOptIn: null },
     });
     expect(parsed.warnings).toEqual([]);
   });
