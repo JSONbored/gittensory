@@ -1,9 +1,36 @@
 // Gittensory Orb (#1255) — fleet calibration ANALYTICS. Reads the anonymized orb_signals collected from
 // self-hosted instances and derives gate-accuracy metrics across the fleet. Aggregation is median/percentile
 // (never mean) so a single instance contributing fabricated data cannot move the fleet numbers.
+//
+// ANTI-FARMING DETECTION (#2350): gamingPatternFlags below extends the existing outlier check with a more targeted,
+// ONE-SIDED signal for the specific "gaming" pattern the issue describes -- an instance mass-submitting only
+// trivially-safe PRs to inflate its own merge-precision. mergePrecision alone can't distinguish "gamed" from
+// "genuinely excellent" (a careful team also has high precision); combining it with UNUSUALLY HIGH volume and
+// UNUSUALLY LOW reversal-rate, all three simultaneously, is the actual farming signature: lots of easy merges,
+// nothing risky enough to ever get reverted. Detection only — never an automatic action.
+//
+// SCOPE (explicit non-goals, read before extending): this flags a self-hosted INSTANCE, never an individual
+// miner. The fleet pipeline (orb_signals, review_audit's export) carries NO per-actor identity by deliberate,
+// repeatedly-stated design (review_audit has no login column; predicted_gate_calibration_ledger is explicitly
+// documented as never-exported, citing THIS issue as the reason) -- a genuine per-miner detector would require
+// adding a new anonymized per-actor signal to the export pipeline, which is a privacy-sensitive design
+// decision deserving its own focused issue/PR, not a rushed addition here. This module never deanonymizes,
+// never auto-bans, and never touches the live gate — instanceId here is the SAME opaque, HMAC-derived handle
+// already used everywhere else in this pipeline (see selfhost/orb-collector.ts), nothing more identifying.
+//
+// OUT OF SCOPE: "duplicate-claim-election win-rate skew" (isDuplicateClusterWinnerByClaim,
+// src/signals/duplicate-winner.ts) is NOT implemented here. Its outcome is never persisted anywhere in this
+// pipeline — only the LOSING side of a duplicate cluster produces a finding (duplicate_pr_risk), bucketed as
+// gate_reasoncode_bucket="duplicate_risk" on export with no cluster id and no actor linkage. There is no
+// winner marker to measure a win-rate FROM, and a per-instance duplicate_risk rate would measure something
+// different (how often THIS instance's own PRs lose a local collision) than "identities farming wins," so no
+// proxy for it is implemented — a misleading proxy would be worse than none.
 
 const MIN_DECIDED = 5; // an instance needs at least this many decided PRs to count toward the fleet median
 const OUTLIER_BAND = 0.25; // |instance precision − fleet median| beyond this flags the instance
+const GAMING_VOLUME_MULTIPLIER = 2; // an instance's decided count more than this many times the fleet median
+const GAMING_PRECISION_BAND = OUTLIER_BAND; // mergePrecision this far ABOVE the fleet median (one-sided)
+const GAMING_REVERSAL_RATIO = 0.5; // reversalRate below this fraction of the fleet median
 
 /** Per-instance confusion-matrix cell as stored. */
 interface Cell {
@@ -29,6 +56,20 @@ export interface InstanceMetrics {
   reversalRate: number; // share of decided PRs a human reversed
 }
 
+/** #2350: one self-hosted instance whose combined volume/precision/reversal-rate pattern looks like it is
+ *  gaming the fleet-aggregate accuracy signal (see the module doc comment for the exact signature and its
+ *  scope). Detection only — a human reads this, nothing here takes any action automatically. `instanceId` is
+ *  the same opaque, HMAC-derived handle used throughout this pipeline; nothing more identifying is included. */
+export interface GamingPatternFlag {
+  instanceId: string;
+  decided: number;
+  mergePrecision: number;
+  reversalRate: number;
+  fleetMedianDecided: number;
+  fleetMergePrecision: number;
+  fleetReversalRate: number;
+}
+
 export interface FleetAnalytics {
   windowDays: number;
   instanceCount: number; // instances meeting MIN_DECIDED
@@ -42,6 +83,7 @@ export interface FleetAnalytics {
   };
   instances: InstanceMetrics[];
   outliers: Array<{ instanceId: string; metric: string; value: number; fleetMedian: number }>;
+  gamingPatternFlags: GamingPatternFlag[];
 }
 
 function median(xs: number[]): number | null {
@@ -127,7 +169,7 @@ export async function computeFleetAnalytics(env: Env, opts: { windowDays?: numbe
     const reg = await env.DB.prepare(`SELECT instance_id FROM orb_instances WHERE registered = 1`).all<{ instance_id: string }>();
     registered = new Set((reg.results ?? []).map((r) => r.instance_id));
   } catch {
-    return { windowDays, instanceCount: 0, fleet: { mergePrecision: null, closePrecision: null, fpRate: null, reversalRate: null, cycleP50Ms: null, cycleP95Ms: null }, instances: [], outliers: [] };
+    return { windowDays, instanceCount: 0, fleet: { mergePrecision: null, closePrecision: null, fpRate: null, reversalRate: null, cycleP50Ms: null, cycleP95Ms: null }, instances: [], outliers: [], gamingPatternFlags: [] };
   }
 
   // Group cells by instance, fold each.
@@ -157,6 +199,31 @@ export async function computeFleetAnalytics(env: Env, opts: { windowDays?: numbe
     }
   }
 
+  // #2350: gamingPatternFlags. Gated on fleetMergeP !== null (at least one eligible instance made a comparable
+  // merge verdict) — decided/reversalRate are never null per-instance, so once `eligible` is known non-empty
+  // (implied by fleetMergeP being resolvable), both medians below are guaranteed non-null too.
+  const gamingPatternFlags: FleetAnalytics["gamingPatternFlags"] = [];
+  if (fleetMergeP !== null) {
+    const fleetMedianDecided = median(eligible.map((i) => i.decided))!;
+    const fleetReversalRate = median(eligible.map((i) => i.reversalRate))!;
+    for (const i of eligible) {
+      const highVolume = i.decided > fleetMedianDecided * GAMING_VOLUME_MULTIPLIER;
+      const highPrecision = i.mergePrecision !== null && i.mergePrecision - fleetMergeP > GAMING_PRECISION_BAND;
+      const lowReversal = i.reversalRate < fleetReversalRate * GAMING_REVERSAL_RATIO;
+      if (highVolume && highPrecision && lowReversal) {
+        gamingPatternFlags.push({
+          instanceId: i.instanceId,
+          decided: i.decided,
+          mergePrecision: i.mergePrecision!,
+          reversalRate: i.reversalRate,
+          fleetMedianDecided,
+          fleetMergePrecision: fleetMergeP,
+          fleetReversalRate,
+        });
+      }
+    }
+  }
+
   return {
     windowDays,
     instanceCount: eligible.length,
@@ -170,5 +237,6 @@ export async function computeFleetAnalytics(env: Env, opts: { windowDays?: numbe
     },
     instances,
     outliers,
+    gamingPatternFlags,
   };
 }

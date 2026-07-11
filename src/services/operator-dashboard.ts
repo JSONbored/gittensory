@@ -181,6 +181,12 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
         value: fleetMetrics.fleet.mergePrecision !== null ? `${Math.round(fleetMetrics.fleet.mergePrecision * 100)}%` : "—",
         delta: "median across the fleet",
       },
+      {
+        // #2350: human-facing detection signal only — no automatic action reads this value.
+        label: "Fleet gaming-pattern flags",
+        value: String(fleetMetrics.gamingPatternFlags.length),
+        delta: fleetMetrics.gamingPatternFlags.length > 0 ? `${fleetMetrics.gamingPatternFlags.map((f) => f.instanceId).join(", ")}` : "no gaming pattern detected",
+      },
     ],
     noiseReduction: [
       {

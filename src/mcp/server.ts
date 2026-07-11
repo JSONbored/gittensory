@@ -2859,7 +2859,7 @@ export class GittensoryMcp {
     const report = await computeFleetAnalytics(this.env, input.windowDays !== undefined ? { windowDays: input.windowDays } : {});
     const merge = report.fleet.mergePrecision !== null ? `${Math.round(report.fleet.mergePrecision * 100)}%` : "n/a";
     return {
-      summary: `Fleet calibration over ${report.windowDays}d: ${report.instanceCount} instance(s), median merge precision ${merge}, ${report.outliers.length} outlier(s).`,
+      summary: `Fleet calibration over ${report.windowDays}d: ${report.instanceCount} instance(s), median merge precision ${merge}, ${report.outliers.length} outlier(s), ${report.gamingPatternFlags.length} gaming-pattern flag(s).`,
       data: report as unknown as Record<string, unknown>,
     };
   }

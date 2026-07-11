@@ -127,8 +127,35 @@ describe("operator dashboard payload", () => {
       expect.arrayContaining([
         expect.objectContaining({ label: "Fleet instances", value: "3", delta: "1 outlier(s)" }),
         expect.objectContaining({ label: "Fleet merge precision", value: "100%" }),
+        expect.objectContaining({ label: "Fleet gaming-pattern flags", value: "0", delta: "no gaming pattern detected" }),
       ]),
     );
+  });
+
+  it("surfaces a fleet farming flag (#2350) as a dedicated dashboard tile naming the flagged instance", async () => {
+    const env = createTestEnv();
+    let n = 0;
+    const seed = async (instance: string, count: number, opts: { reversal?: string } = {}): Promise<void> => {
+      for (let i = 0; i < count; i++) {
+        await env.DB
+          .prepare(`INSERT INTO orb_signals (instance_id, repo_hash, pr_hash, gate_verdict, outcome, reversal_flag) VALUES (?, ?, ?, 'merge', 'merged', ?)`)
+          .bind(instance, `r${n}`, `p${n++}`, opts.reversal ?? "none")
+          .run();
+      }
+    };
+    // Two normal instances: decided 10, precision 0.7, reversalRate 0.3 (7 confirmed + 3 reverted).
+    for (const id of ["normal1", "normal2"]) {
+      await seed(id, 7);
+      await seed(id, 3, { reversal: "reverted" });
+    }
+    // Farmer: decided 30 (> 2x the fleet median volume of 10), precision 1.0 (> 0.7 + 0.25), reversalRate 0.
+    await seed("farmer", 30);
+    for (const id of ["normal1", "normal2", "farmer"]) {
+      await env.DB.prepare(`INSERT INTO orb_instances (instance_id, registered) VALUES (?, 1)`).bind(id).run();
+    }
+    const payload = await buildOperatorDashboardPayload(env);
+    expect(payload.fleetMetrics.gamingPatternFlags.map((f) => f.instanceId)).toEqual(["farmer"]);
+    expect(payload.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Fleet gaming-pattern flags", value: "1", delta: "farmer" })]));
   });
 
   it("picks the newest rollup day for adoption insights", () => {

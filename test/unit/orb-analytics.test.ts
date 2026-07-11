@@ -159,3 +159,154 @@ describe("computeFleetAnalytics()", () => {
     expect(a.fleet.cycleP95Ms).toBe(3000);
   });
 });
+
+describe("gamingPatternFlags — anti-farming detection (#2350)", () => {
+  /** 7 confirmed merges + 3 reverted merges: precision 0.7, reversalRate 0.3. */
+  async function normalInstance(env: Env, id: string): Promise<void> {
+    await signals(env, id, 7, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await signals(env, id, 3, { verdict: "merge", outcome: "merged", reversal: "reverted" });
+  }
+
+  it("a normal-distribution fleet (similar volume/precision/reversal everywhere) produces no flag", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "a");
+    await normalInstance(env, "b");
+    await normalInstance(env, "c");
+    await register(env, "a", "b", "c");
+    const result = await computeFleetAnalytics(env);
+    expect(result.instanceCount).toBe(3);
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+
+  it("an inflated-trivial-volume instance (high volume + high precision + low reversal, all three) flags", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1"); // decided 10, precision 0.7, reversalRate 0.3
+    await normalInstance(env, "normal2");
+    await normalInstance(env, "normal3");
+    // 30 decided (> 2x the fleet median of 10), precision 1.0 (> 0.7 + 0.25), reversalRate 0 (< 0.5 * 0.3).
+    await signals(env, "farmer", 30, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await register(env, "normal1", "normal2", "normal3", "farmer");
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags).toHaveLength(1);
+    const flag = result.gamingPatternFlags[0]!;
+    expect(flag.instanceId).toBe("farmer");
+    expect(flag.decided).toBe(30);
+    expect(flag.mergePrecision).toBe(1);
+    expect(flag.reversalRate).toBe(0);
+    expect(flag.fleetMedianDecided).toBe(10);
+    expect(flag.fleetMergePrecision).toBeCloseTo(0.7);
+    expect(flag.fleetReversalRate).toBeCloseTo(0.3);
+    // No identity beyond the same opaque instance handle used everywhere else in the pipeline.
+    expect(Object.keys(flag).sort()).toEqual(["decided", "fleetMedianDecided", "fleetMergePrecision", "fleetReversalRate", "instanceId", "mergePrecision", "reversalRate"]);
+  });
+
+  it("high precision WITHOUT elevated volume does not flag (precision alone is not the signature)", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1");
+    await normalInstance(env, "normal2");
+    // Same volume (10) as the normals, but perfect precision and zero reversals.
+    await signals(env, "precise", 10, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await register(env, "normal1", "normal2", "precise");
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags).toEqual([]);
+    // It IS still caught by the existing, broader outlier check — this test isolates gamingPatternFlags specifically.
+    expect(result.outliers.map((o) => o.instanceId)).toContain("precise");
+  });
+
+  it("elevated volume WITHOUT elevated precision does not flag (volume alone is not the signature)", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1");
+    await normalInstance(env, "normal2");
+    // 30 decided (high volume) but the SAME precision/reversal profile as everyone else.
+    await signals(env, "busy", 21, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await signals(env, "busy", 9, { verdict: "merge", outcome: "merged", reversal: "reverted" });
+
+    await register(env, "normal1", "normal2", "busy");
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+
+  it("elevated volume + elevated precision but NOT a suspiciously low reversal rate does not flag", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1"); // decided 10, precision 0.7, reversalRate 0.3
+    await normalInstance(env, "normal2");
+    // 30 decided (high volume). mergePrecision is 25/25 = 1.0 (elevated) -- ONLY the merge-verdict rows count
+    // toward it. reversalRate is 5/30 ≈ 0.167, from separate close-verdict reopens -- above the 0.5x-fleet-
+    // median floor (0.15), i.e. NOT suspiciously low, so this must not read as "farming".
+    await signals(env, "risky", 25, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await signals(env, "risky", 5, { verdict: "close", outcome: "closed", reversal: "reopened" });
+    await register(env, "normal1", "normal2", "risky");
+
+    const result = await computeFleetAnalytics(env);
+    const risky = result.instances.find((i) => i.instanceId === "risky")!;
+    expect(risky.mergePrecision).toBe(1);
+    expect(risky.reversalRate).toBeCloseTo(5 / 30);
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+
+  it("an instance with no merge verdicts at all (null mergePrecision) never flags, even alongside a farmer", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1"); // decided 10
+    await normalInstance(env, "normal2"); // decided 10
+    await signals(env, "farmer", 30, { verdict: "merge", outcome: "merged", reversal: "none" });
+    // Every verdict is "close" — mergePrecision is null, so it cannot be flagged on precision regardless of
+    // volume. Kept at MIN_DECIDED so it counts toward the fleet without shifting the volume median the farmer
+    // is measured against.
+    await signals(env, "close-only", 5, { verdict: "close", outcome: "closed", reversal: "none" });
+    await register(env, "normal1", "normal2", "farmer", "close-only");
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags.map((f) => f.instanceId)).toEqual(["farmer"]);
+  });
+
+  it("no flags when no eligible instance has any merge verdict (fleetMergeP unresolvable)", async () => {
+    const env = createTestEnv();
+    await signals(env, "a", 10, { verdict: "close", outcome: "closed" });
+    await signals(env, "b", 10, { verdict: "close", outcome: "closed" });
+    await register(env, "a", "b");
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.fleet.mergePrecision).toBeNull();
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+
+  it("an unregistered instance never flags, even with an extreme farming-shaped pattern", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1");
+    await normalInstance(env, "normal2");
+    await signals(env, "unregistered-farmer", 30, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await register(env, "normal1", "normal2"); // deliberately NOT registering the farmer
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags).toEqual([]);
+    // Still visible per-instance for the operator, same precedent as outliers.
+    expect(result.instances.map((i) => i.instanceId)).toContain("unregistered-farmer");
+  });
+
+  it("a below-MIN_DECIDED instance never flags, even if registered with an extreme farming-shaped pattern", async () => {
+    const env = createTestEnv();
+    await normalInstance(env, "normal1");
+    await normalInstance(env, "normal2");
+    // Only 3 decided (< MIN_DECIDED = 5) — excluded from `eligible` regardless of registration.
+    await signals(env, "tiny-farmer", 3, { verdict: "merge", outcome: "merged", reversal: "none" });
+    await register(env, "normal1", "normal2", "tiny-farmer");
+
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+
+  it("empty store -> empty gamingPatternFlags (not undefined)", async () => {
+    const env = createTestEnv();
+    const result = await computeFleetAnalytics(env);
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+
+  it("fail-safe on a DB error -> empty gamingPatternFlags", async () => {
+    const broken = { DB: { prepare: () => ({ bind: () => ({ all: () => Promise.reject(new Error("boom")) }) }) } } as unknown as Env;
+    const result = await computeFleetAnalytics(broken);
+    expect(result.gamingPatternFlags).toEqual([]);
+  });
+});
