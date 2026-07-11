@@ -2,8 +2,11 @@ export const HARNESS_SUBMISSION_TRIGGER_DECISION_EVENT: "harness_submission_trig
 
 export type HarnessSubmissionSlopBand = "clean" | "low" | "elevated" | "high";
 export type HarnessSubmissionMode = "observe" | "enforce";
+export type HarnessSubmissionKillSwitchScope = "global" | "repo" | "none";
 
 export type HarnessSubmissionCandidateInput = {
+  /** Forwarded to shouldSubmit's own kill-switch check (#2339). */
+  killSwitchScope: HarnessSubmissionKillSwitchScope;
   repoFullName: string;
   handoffPacket: {
     worktreePath: string;

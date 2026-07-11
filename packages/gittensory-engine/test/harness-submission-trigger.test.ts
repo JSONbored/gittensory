@@ -57,6 +57,7 @@ function handoffPacket(verdictOverrides: Partial<SelfReviewVerdict> = {}): Hando
 
 function baseCandidate(overrides: Partial<HarnessSubmissionTriggerCandidate> = {}): HarnessSubmissionTriggerCandidate {
   return {
+    killSwitchScope: "none",
     handoffPacket: handoffPacket(),
     slopThreshold: "low",
     mode: "enforce",
@@ -73,6 +74,13 @@ test("barrel: the public entrypoint re-exports the harness submission trigger (#
 test("a passing handoff with the circuit breaker well clear allows, forwarding shouldSubmit's own empty reasons", () => {
   const decision = evaluateHarnessSubmissionTrigger(baseCandidate());
   assert.deepEqual(decision, { allow: true, reasons: [], circuitBreakerTripped: false });
+});
+
+test("kill-switch (#2339): forwarded to shouldSubmit's own check, blocking an otherwise-clean handoff below the circuit breaker", () => {
+  const decision = evaluateHarnessSubmissionTrigger(baseCandidate({ killSwitchScope: "global" }));
+  assert.equal(decision.allow, false);
+  assert.equal(decision.circuitBreakerTripped, false);
+  assert.deepEqual(decision.reasons, ["global_kill_switch_active"]);
 });
 
 test("circuit breaker: N consecutive blocks trips it, refusing even an otherwise-clean handoff -- never consulting shouldSubmit", () => {

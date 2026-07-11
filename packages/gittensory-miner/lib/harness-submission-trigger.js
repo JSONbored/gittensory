@@ -40,11 +40,12 @@ export function countConsecutiveGateBlocks(eventLedger, sinceMs) {
  * the circuit-breaker tally, and always appending exactly one audit event. Fails closed (throws) on a
  * malformed candidate or missing required dependency.
  *
- * @param {{ repoFullName: string, handoffPacket: object, slopThreshold: "clean"|"low"|"elevated"|"high", mode: "observe"|"enforce", maxConsecutiveGateBlocks?: number }} candidate
+ * @param {{ killSwitchScope: "global"|"repo"|"none", repoFullName: string, handoffPacket: object, slopThreshold: "clean"|"low"|"elevated"|"high", mode: "observe"|"enforce", maxConsecutiveGateBlocks?: number }} candidate
  * @param {{ eventLedger: object, sessionStartMs?: number }} deps
  */
 export function evaluateAndRecordHarnessSubmissionTrigger(candidate, deps) {
   if (!candidate || typeof candidate !== "object") throw new Error("invalid_harness_submission_candidate");
+  if (!["global", "repo", "none"].includes(candidate.killSwitchScope)) throw new Error("invalid_kill_switch_scope");
   const repoFullName = typeof candidate.repoFullName === "string" ? candidate.repoFullName.trim() : "";
   if (!repoFullName) throw new Error("invalid_repo_full_name");
   if (!candidate.handoffPacket || typeof candidate.handoffPacket !== "object") throw new Error("invalid_handoff_packet");
@@ -58,6 +59,7 @@ export function evaluateAndRecordHarnessSubmissionTrigger(candidate, deps) {
   const consecutiveGateBlocks = countConsecutiveGateBlocks(eventLedger, sessionStartMs);
 
   const decision = evaluateHarnessSubmissionTrigger({
+    killSwitchScope: candidate.killSwitchScope,
     handoffPacket: candidate.handoffPacket,
     slopThreshold: candidate.slopThreshold,
     mode: candidate.mode,
@@ -69,6 +71,7 @@ export function evaluateAndRecordHarnessSubmissionTrigger(candidate, deps) {
     type: HARNESS_SUBMISSION_TRIGGER_DECISION_EVENT,
     repoFullName,
     payload: {
+      killSwitchScope: candidate.killSwitchScope,
       allow: decision.allow,
       reasons: decision.reasons,
       circuitBreakerTripped: decision.circuitBreakerTripped,

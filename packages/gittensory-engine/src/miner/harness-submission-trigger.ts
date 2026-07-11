@@ -18,6 +18,7 @@
 // no candidate can un-trip it (that requires a human clearing the session's own consecutive-block tally),
 // unlike a per-candidate block which a later, different candidate can clear on its own merits.
 
+import type { MinerKillSwitchScope } from "../governor/kill-switch.js";
 import type { HandoffPacket } from "./iterate-policy.js";
 import type { SelfReviewSlopBand } from "./self-review-adapter.js";
 import { shouldSubmit, type SubmissionGateMode } from "./submission-gate.js";
@@ -25,6 +26,11 @@ import { shouldSubmit, type SubmissionGateMode } from "./submission-gate.js";
 export const DEFAULT_MAX_CONSECUTIVE_GATE_BLOCKS = 3;
 
 export type HarnessSubmissionTriggerCandidate = {
+  /** Forwarded to `shouldSubmit`'s own kill-switch check (#2339) -- this function does not ALSO short-circuit
+   *  on it separately (that would be a second, duplicated check, exactly what #2339's "single shared helper,
+   *  not duplicated per call site" deliverable warns against); `shouldSubmit` is always still called (the
+   *  circuit breaker above is the only thing that skips it), and its own kill-switch guard covers this. */
+  killSwitchScope: MinerKillSwitchScope;
   handoffPacket: HandoffPacket;
   slopThreshold: SelfReviewSlopBand;
   mode: SubmissionGateMode;
@@ -64,6 +70,7 @@ export function evaluateHarnessSubmissionTrigger(candidate: HarnessSubmissionTri
   }
 
   const gateDecision = shouldSubmit({
+    killSwitchScope: candidate.killSwitchScope,
     predictedGateVerdict: candidate.handoffPacket.selfReviewVerdict.predictedGateVerdict,
     slopAssessment: candidate.handoffPacket.selfReviewVerdict.slopAssessment,
     slopThreshold: candidate.slopThreshold,
