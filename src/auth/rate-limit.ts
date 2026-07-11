@@ -58,11 +58,22 @@ export async function enforceRateLimit(c: Context<{ Bindings: Env }>, routeClass
   if (!c.env.RATE_LIMITER) return null;
   const config = CONFIG[routeClass];
   const key = await rateLimitKey(c, routeClass);
-  const id = c.env.RATE_LIMITER.idFromName(key);
-  const decisionResponse = await c.env.RATE_LIMITER.get(id).fetch("https://rate-limit/check", {
-    method: "POST",
-    body: JSON.stringify({ key, ...config }),
-  });
+  let decisionResponse: Response;
+  try {
+    const id = c.env.RATE_LIMITER.idFromName(key);
+    decisionResponse = await c.env.RATE_LIMITER.get(id).fetch("https://rate-limit/check", {
+      method: "POST",
+      body: JSON.stringify({ key, ...config }),
+    });
+  } catch (error) {
+    // Fail OPEN (#5000): this middleware runs on every route ahead of the handler's own try/catch, and no
+    // app.onError is registered anywhere -- an uncaught Durable Object hiccup (eviction, migration, a
+    // rolling-deploy blip) previously escaped as Hono's bare, unstructured 500 for whatever route the caller
+    // happened to be hitting, indistinguishable from a real application bug in that route. The rate limiter
+    // exists to protect the app, not crash the request it's supposed to be gating.
+    console.error(JSON.stringify({ level: "error", event: "rate_limit_check_failed", routeClass, message: error instanceof Error ? error.message : String(error) }));
+    return null;
+  }
   const decision = (await decisionResponse.json().catch(() => ({}))) as Partial<RateLimitDecision>;
   if (decisionResponse.status !== 429) {
     c.res.headers.set("x-ratelimit-limit", String(decision.limit ?? config.limit));
@@ -70,12 +81,16 @@ export async function enforceRateLimit(c: Context<{ Bindings: Env }>, routeClass
     if (decision.resetAt) c.res.headers.set("x-ratelimit-reset", decision.resetAt);
     return null;
   }
+  // Best-effort: the 429 itself must still reach the caller even if this audit write fails (#5000, same
+  // fail-open reasoning as the DO call above).
   await recordAuditEvent(c.env, {
     eventType: "rate_limit.denied",
     actor: await actorHint(c),
     route: c.req.path,
     outcome: "denied",
     metadata: { routeClass, retryAfterSeconds: decision.retryAfterSeconds ?? null },
+  }).catch((error) => {
+    console.warn(JSON.stringify({ level: "warn", event: "rate_limit_denied_audit_failed", routeClass, message: error instanceof Error ? error.message : String(error) }));
   });
   return c.json(
     {

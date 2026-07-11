@@ -479,6 +479,85 @@ describe("private-beta auth and rate limiting", () => {
     expect(JSON.parse(tokenAudit?.metadata_json ?? "{}")).toMatchObject({ retryAfterSeconds: 17 });
   });
 
+  it("REGRESSION (#5000): fails OPEN when the rate-limit Durable Object itself throws, instead of crashing the request with a bare framework 500", async () => {
+    const throwingLimiter = {
+      idFromName(name: string) {
+        return name;
+      },
+      get() {
+        return {
+          async fetch() {
+            throw new Error("Durable Object reset");
+          },
+        };
+      },
+    };
+    const env = createTestEnv({ RATE_LIMITER: throwingLimiter as unknown as DurableObjectNamespace });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.9" }), "strict")).resolves.toBeNull();
+
+    expect(errors.mock.calls.some(([line]) => typeof line === "string" && line.includes("rate_limit_check_failed") && line.includes("\"routeClass\":\"strict\""))).toBe(true);
+    errors.mockRestore();
+  });
+
+  it("REGRESSION (#5000): still fails open when the Durable Object rejects with a non-Error value", async () => {
+    const throwingLimiter = {
+      idFromName(name: string) {
+        return name;
+      },
+      get() {
+        return {
+          async fetch() {
+            // Deliberately a non-Error rejection -- exercises the `error instanceof Error` false branch in the fail-open catch below.
+            throw "not an Error instance";
+          },
+        };
+      },
+    };
+    const env = createTestEnv({ RATE_LIMITER: throwingLimiter as unknown as DurableObjectNamespace });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.10" }), "strict")).resolves.toBeNull();
+
+    expect(errors.mock.calls.some(([line]) => typeof line === "string" && line.includes("rate_limit_check_failed") && line.includes("not an Error instance"))).toBe(true);
+    errors.mockRestore();
+  });
+
+  it("REGRESSION (#5000): a failed rate_limit.denied audit write does not stop the 429 itself from reaching the caller", async () => {
+    const deniedEnv = createTestEnv({ RATE_LIMITER: rateLimiterNamespace({ status: 429, body: { resetAt: "2026-05-25T00:04:00.000Z" } }) as unknown as DurableObjectNamespace });
+    const realPrepare = deniedEnv.DB.prepare.bind(deniedEnv.DB);
+    deniedEnv.DB.prepare = ((sql: string) => {
+      if (/^insert into "?audit_events"?/i.test(sql)) throw new Error("poisoned query");
+      return realPrepare(sql);
+    }) as typeof deniedEnv.DB.prepare;
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const response = await enforceRateLimit(fakeContext(deniedEnv, "/v1/local/branch-analysis", { "cf-connecting-ip": "203.0.113.44" }), "expensive");
+
+    expect(response?.status).toBe(429);
+    await expect(response?.json()).resolves.toMatchObject({ error: "rate_limited", routeClass: "expensive" });
+    expect(warnings.mock.calls.some(([line]) => typeof line === "string" && line.includes("rate_limit_denied_audit_failed") && line.includes("poisoned query"))).toBe(true);
+    warnings.mockRestore();
+  });
+
+  it("REGRESSION (#5000): still fails open on a non-Error audit-write rejection", async () => {
+    const deniedEnv = createTestEnv({ RATE_LIMITER: rateLimiterNamespace({ status: 429, body: { resetAt: "2026-05-25T00:05:00.000Z" } }) as unknown as DurableObjectNamespace });
+    const realPrepare = deniedEnv.DB.prepare.bind(deniedEnv.DB);
+    deniedEnv.DB.prepare = ((sql: string) => {
+      // Deliberately a non-Error throw -- exercises the `error instanceof Error` false branch in the fail-open catch below.
+      if (/^insert into "?audit_events"?/i.test(sql)) throw "not an Error instance";
+      return realPrepare(sql);
+    }) as typeof deniedEnv.DB.prepare;
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const response = await enforceRateLimit(fakeContext(deniedEnv, "/v1/local/branch-analysis", { "cf-connecting-ip": "203.0.113.45" }), "expensive");
+
+    expect(response?.status).toBe(429);
+    expect(warnings.mock.calls.some(([line]) => typeof line === "string" && line.includes("rate_limit_denied_audit_failed") && line.includes("not an Error instance"))).toBe(true);
+    warnings.mockRestore();
+  });
+
   it("starts GitHub device flow and rejects malformed provider responses", async () => {
     const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "client-id" });
     vi.stubGlobal("fetch", async () =>
