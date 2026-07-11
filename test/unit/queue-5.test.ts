@@ -5092,6 +5092,20 @@ describe("queue processors", () => {
     reconcileSpy.mockRestore();
   });
 
+  it("retry-orb-relay job dispatches into retryFailedRelays, pruning an expired relay-failure row (#relay-retry)", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT INTO orb_relay_failures (delivery_id, event_name, installation_id, raw_body, expires_at) VALUES (?, ?, ?, ?, datetime('now', '-1 hour'))",
+    )
+      .bind("expired-delivery", "push", 1234, "{}")
+      .run();
+
+    await processJob(env, { type: "retry-orb-relay", requestedBy: "test" });
+
+    const remaining = await env.DB.prepare("SELECT delivery_id FROM orb_relay_failures WHERE delivery_id = ?").bind("expired-delivery").first();
+    expect(remaining).toBeFalsy();
+  });
+
   describe("type label decoupling (#label-decoupling)", () => {
     function stubTypeLabelFetch(prNumber: number, seen: { posted: string[]; removed: string[]; checkRunCreated: boolean }) {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {

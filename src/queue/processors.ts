@@ -79,7 +79,6 @@ import {
   recordWebhookEvent,
   upsertAgentCommandAnswer,
   upsertOfficialMinerDetection,
-  rollupProductUsageDaily,
   upsertBurdenForecast,
   upsertContributorEvidence,
   upsertContributorScoringProfile,
@@ -94,10 +93,7 @@ import {
   repoOwnerLoginFromFullName,
 } from "./account-age-throttle";
 import {
-  backfillOpenPullRequestDetails,
-  backfillRegisteredRepositories,
   backfillRepositorySegment,
-  enqueueRepositoryOpenDataBackfill,
   fetchAndStorePullRequestFilesForReview,
   fetchLinkedIssueFacts,
   fetchLiveBaseBranchAdvancedAt,
@@ -114,8 +110,6 @@ import {
   invalidatePrStateCache,
   isReviewsCacheUpToDate,
   primeDurablePrStateCache,
-  refreshContributorActivity,
-  refreshInstallationHealth,
   refreshPullRequestDetails,
 } from "../github/backfill";
 import {
@@ -187,7 +181,7 @@ import { DEFAULT_TYPE_LABELS, resolvePrTypeLabel } from "../settings/pr-type-lab
 import { fetchLinkedIssueLabelsForPropagation } from "../review/linked-issue-label-propagation-fetch";
 import { shouldPublishReviewCheck } from "../review/check-names";
 import { fetchPublicContributorProfile } from "../github/public";
-import { getLatestRegistrySnapshot, refreshRegistry } from "../registry/sync";
+import { getLatestRegistrySnapshot } from "../registry/sync";
 import {
   buildIssueAdvisory,
   buildPullRequestAdvisory,
@@ -196,15 +190,8 @@ import {
 } from "../rules/advisory";
 import { hasValidationNote, isTestPath } from "../signals/test-evidence";
 import { detectNotificationEvents } from "../notifications/events";
-import {
-  deliverNotification,
-  detectIssueWatchEvents,
-  evaluateNotificationEvent,
-} from "../notifications/service";
-import {
-  getOrCreateScoringModelSnapshot,
-  refreshScoringModelSnapshot,
-} from "../scoring/model";
+import { detectIssueWatchEvents } from "../notifications/service";
+import { getOrCreateScoringModelSnapshot } from "../scoring/model";
 import {
   authoritativeContributorRepoStats,
   buildAndPersistContributorDecisionPack,
@@ -216,7 +203,6 @@ import {
   evidenceGraphTouchedRepoFullNames,
 } from "../services/contributor-evidence-graph";
 import {
-  executeAgentRun,
   explainBlockersWithAgent,
   planNextWork,
   preflightBranchWithAgent,
@@ -295,14 +281,8 @@ import {
   executeIssueMaintenanceActions,
   pendingClosureLabelApplied,
 } from "../services/agent-action-executor";
-import { processSubmitDraft } from "../services/draft";
 import { loadIssueQualityReportMap } from "../services/issue-quality";
-import { generateWeeklyValueReport } from "../services/weekly-value-report";
 import { generateAndSendReviewRecap } from "../services/review-recap";
-import {
-  fileUpstreamDriftIssues,
-  refreshUpstreamDrift,
-} from "../upstream/ruleset";
 import {
   buildFreshnessSloReport,
   freshnessAuditMetadata,
@@ -452,6 +432,10 @@ export {
   shouldStartAiReviewForAdvisory,
   splitRepoForRag,
 } from "./ai-review-orchestration";
+// #4013 step 10 (final): same shim shape for processJob -- re-exported because src/index.ts, src/server.ts,
+// and the bulk of the test suite import it directly as `import { processJob } from "../../src/queue/processors"`.
+// Nothing in this file calls processJob itself, so this is a pure re-export (no separate import needed).
+export { processJob } from "./job-dispatch";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, fetchShotContentBlock, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureRoute } from "../review/visual/capture";
 import {
@@ -613,17 +597,11 @@ import {
   SCREENSHOT_TABLE_VISION_FINDING_CODE,
   SCREENSHOT_TABLE_VISION_SYSTEM_PROMPT,
 } from "../review/visual/screenshot-table-vision";
-import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
-import { isRecapEnabled, resolveMaintainerRecapManifestOverride, runMaintainerRecapJob } from "../review/maintainer-recap-wire";
-import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
-import { isPrReconciliationEnabled, runOpenPrReconciliation } from "../review/pr-reconciliation";
-import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import {
   isCloseHoldOnly,
   isHoldOnly,
   recordPrOutcome,
   recordReversalSignals,
-  runSelfTuneBreaker,
 } from "../review/outcomes-wire";
 import { neutralHoldReasonCode, nativeGateActionFromConclusion, recordNativeGateDecision } from "../review/parity-wire";
 import { recordContributorGateDecision } from "../review/contributor-calibration";
@@ -646,7 +624,6 @@ import type {
   RepositoryRecord,
   RepositorySettings,
 } from "../types";
-import { retryFailedRelays } from "../orb/relay";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
 import { maybeSuggestMilestoneMatchForPr } from "../integrations/project-tracker-adapter";
@@ -772,280 +749,7 @@ export function publicSafeManifestPolicyFinding(
   return base;
 }
 
-export async function processJob(env: Env, message: JobMessage): Promise<void> {
-  switch (message.type) {
-    case "refresh-registry":
-      await refreshRegistry(env);
-      return;
-    case "backfill-registered-repos":
-      if (!message.repoFullName && message.requestedBy !== "test") {
-        const repositories = (await listRepositories(env)).filter(
-          (repo) => repo.isRegistered,
-        );
-        if (repositories.length > 0) {
-          const delayStepSeconds =
-            message.mode === "full" || message.mode === "resume" ? 45 : 15;
-          await Promise.all(
-            repositories.map((repo, index) => {
-              const repoMessage: JobMessage = {
-                type: "backfill-registered-repos",
-                requestedBy: message.requestedBy,
-                repoFullName: repo.fullName,
-                ...(message.force === undefined
-                  ? {}
-                  : { force: message.force }),
-                ...(message.mode === undefined ? {} : { mode: message.mode }),
-              };
-              const delaySeconds = Math.min(index * delayStepSeconds, 900);
-              return delaySeconds > 0
-                ? env.JOBS.send(repoMessage, { delaySeconds })
-                : env.JOBS.send(repoMessage);
-            }),
-          );
-          return;
-        }
-      }
-      if (message.repoFullName && message.requestedBy !== "test") {
-        await enqueueRepositoryOpenDataBackfill(env, {
-          repoFullName: message.repoFullName,
-          requestedBy: message.requestedBy,
-          ...(message.force === undefined ? {} : { force: message.force }),
-          ...(message.mode === undefined ? {} : { mode: message.mode }),
-        });
-        return;
-      }
-      await backfillRegisteredRepositories(env, {
-        ...(message.repoFullName ? { repoFullName: message.repoFullName } : {}),
-        requestedBy: message.requestedBy,
-        ...(message.force === undefined ? {} : { force: message.force }),
-        ...(message.mode === undefined ? {} : { mode: message.mode }),
-      });
-      return;
-    case "backfill-repo-segment":
-      await backfillRepositorySegment(env, {
-        repoFullName: message.repoFullName,
-        segment: message.segment,
-        requestedBy: message.requestedBy,
-        ...(message.mode === undefined ? {} : { mode: message.mode }),
-        ...(message.cursor === undefined ? {} : { cursor: message.cursor }),
-        ...(message.force === undefined ? {} : { force: message.force }),
-      });
-      return;
-    case "backfill-pr-details":
-      await backfillOpenPullRequestDetails(env, {
-        repoFullName: message.repoFullName,
-        ...(message.mode === undefined ? {} : { mode: message.mode }),
-        ...(message.cursor === undefined ? {} : { cursor: message.cursor }),
-      });
-      return;
-    case "refresh-installation-health":
-      await refreshInstallationHealth(env);
-      return;
-    case "generate-signal-snapshots":
-      if (!message.repoFullName && message.requestedBy !== "test") {
-        await fanOutRepoSignalSnapshotJobs(env, message.requestedBy);
-        return;
-      }
-      await generateSignalSnapshots(env, message.repoFullName);
-      return;
-    case "refresh-scoring-model":
-      await refreshScoringModelSnapshot(env);
-      return;
-    case "refresh-upstream-drift":
-      await refreshUpstreamDrift(env);
-      return;
-    case "file-upstream-drift-issues":
-      await fileUpstreamDriftIssues(env);
-      return;
-    case "build-contributor-evidence":
-      await buildContributorEvidence(env, message.login, message.logins);
-      return;
-    case "build-contributor-decision-packs":
-      await buildContributorDecisionPacks(env, message.login);
-      return;
-    case "refresh-contributor-activity":
-      await refreshContributorActivity(
-        env,
-        message.login,
-        message.repoFullName ? { repoFullName: message.repoFullName } : {},
-      );
-      return;
-    case "build-burden-forecasts":
-      await buildBurdenForecasts(env, message.repoFullName);
-      return;
-    case "repair-data-fidelity":
-      await repairDataFidelity(env, message.requestedBy);
-      return;
-    case "rollup-product-usage":
-      await rollupProductUsageDaily(env, {
-        ...(message.day ? { day: message.day } : {}),
-        ...(message.days === undefined ? {} : { days: message.days }),
-      });
-      return;
-    case "prune-retention":
-      await runRetentionPrune(
-        env,
-        message.requestedBy,
-        message.dryRun ?? false,
-      );
-      return;
-    case "generate-weekly-value-report":
-      await generateWeeklyValueReport(env, {
-        variant: message.variant ?? "operator",
-        ...(message.days === undefined ? {} : { days: message.days }),
-      });
-      return;
-    case "generate-review-recap":
-      await runReviewRecapJob(env, message.repoFullName, message.windowDays);
-      return;
-    case "generate-maintainer-recap": {
-      // Convergence (maintainer recap digest, flag GITTENSORY_MAINTAINER_RECAP, #1963/#2248, config-as-code
-      // override #2250). Defense-in-depth: the cron only ENQUEUES this when enabled, but a stale in-flight job
-      // that lands after a flag-flip (env OR manifest) must still no-op, so disabled does zero work here too.
-      const maintainerRecapOverride = await resolveMaintainerRecapManifestOverride(env);
-      if (isRecapEnabled(env, maintainerRecapOverride)) await runMaintainerRecapJob(env, message.windowDays, maintainerRecapOverride);
-      return;
-    }
-    case "agent-regate-sweep":
-      if (!message.repoFullName && message.requestedBy !== "test") {
-        await fanOutAgentRegateSweepJobs(env, message.requestedBy);
-        return;
-      }
-      await sweepRepoRegate(env, message.repoFullName, message.requestedBy);
-      return;
-    case "backlog-convergence-sweep":
-      if (!message.repoFullName && message.requestedBy !== "test") {
-        await fanOutBacklogConvergenceSweepJobs(env, message.requestedBy);
-        return;
-      }
-      await sweepRepoBacklogConvergence(env, message.repoFullName, message.requestedBy);
-      return;
-    case "repo-doc-refresh-sweep":
-      if (!message.repoFullName && message.requestedBy !== "test") {
-        await fanOutRepoDocRefreshSweepJobs(env, message.requestedBy);
-        return;
-      }
-      if (message.repoFullName) await performRepoDocRefresh(env, message.repoFullName);
-      return;
-    case "agent-regate-pr":
-      // One bounded re-gate unit fanned out by the sweep (#audit-sweep-fanout): re-review + stamp a single PR.
-      await regatePullRequest(
-        env,
-        message.repairHeadSha,
-        message.repoFullName,
-        message.prNumber,
-        message.installationId,
-        message.deliveryId,
-        message.force,
-        message.prCreatedAt,
-      );
-      return;
-    case "run-agent":
-      await executeAgentRun(env, message.runId);
-      return;
-    case "notify-evaluate": {
-      // Legacy payload compat: a row enqueued before the batched-events deploy (#selfhost-maintenance-self-pin)
-      // still carries the OLD singular `event` field on disk, not `events` -- a rolling deploy can process such
-      // a row after the new code ships, so normalize both shapes rather than assuming every persisted payload
-      // already matches the current type (which only the type checker, not the durable queue, enforces).
-      const legacyMessage = message as unknown as { events?: DetectedNotificationEvent[]; event?: DetectedNotificationEvent };
-      const events = Array.isArray(legacyMessage.events) ? legacyMessage.events : legacyMessage.event ? [legacyMessage.event] : [];
-      const deliveries = (
-        await mapWithConcurrency(events, NOTIFY_EVALUATE_EVENT_CONCURRENCY, (event) => evaluateNotificationEvent(env, event))
-      ).flat();
-      await Promise.all(
-        deliveries.map((delivery) =>
-          env.JOBS.send({
-            type: "notify-deliver",
-            requestedBy: "notify-evaluate",
-            deliveryId: delivery.id,
-          }),
-        ),
-      );
-      return;
-    }
-    case "notify-deliver":
-      await deliverNotification(env, message.deliveryId);
-      return;
-    case "ops-alerts":
-      // Convergence (ops / observability, flag GITTENSORY_REVIEW_OPS). Defense-in-depth: the cron only ENQUEUES this
-      // when the flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so
-      // flag-OFF does zero work here too. Read-only telemetry — never throws into the queue.
-      if (isOpsEnabled(env)) await runOpsAlerts(env);
-      return;
-    case "sweep-liveness-watchdog":
-      // Self-heal (flag GITTENSORY_SWEEP_WATCHDOG). Defense-in-depth: the cron only ENQUEUES this when the flag
-      // is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does zero
-      // work here too. Fails safe internally — never throws into the queue.
-      if (isSweepWatchdogEnabled(env)) await runSweepLivenessWatchdog(env);
-      return;
-    case "reconcile-open-prs":
-      // Self-heal (flag GITTENSORY_PR_RECONCILIATION). Defense-in-depth: the cron only ENQUEUES this when the
-      // flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does
-      // zero work here too. Fails safe internally — never throws into the queue.
-      if (isPrReconciliationEnabled(env)) await runOpenPrReconciliation(env);
-      return;
-    case "selftune":
-      // Convergence (self-improve / auto-tune, flag GITTENSORY_REVIEW_SELFTUNE). Defense-in-depth: the cron only
-      // ENQUEUES this when the flag is ON, but a stale in-flight job that lands after a flag-flip must still
-      // no-op, so flag-OFF does zero work here too. TIGHTENING-ONLY + shadow-soak + audited; never throws into
-      // the queue (runSelfTune fails safe).
-      if (isSelfTuneEnabled(env)) {
-        await runSelfTune(env);
-        // GAP-4 accuracy circuit-breaker: read the gate-eval confusion matrix over the recorded pr_outcome
-        // ground truth and ENGAGE holdonly (would-merge → hold) for any repo whose merge precision dropped
-        // below the floor, plus AUTO-CLEAR a recovered breaker. Fail-safe: with no pr_outcome history the eval
-        // reads neutral → nothing engages → byte-identical. (applyAutoTune / maybeAutoClearHoldOnly, previously
-        // unwired — zero call-sites.)
-        await runSelfTuneBreaker(env);
-      }
-      return;
-    case "rag-index-repo":
-      // Convergence (RAG / codebase index, flag GITTENSORY_REVIEW_RAG). Defense-in-depth: the cron + webhook only
-      // ENQUEUE this when the flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op,
-      // so flag-OFF does zero work here too. indexRepo / reindexChangedPaths are fully fail-safe (never throw).
-      if (isRagEnabled(env))
-        await runRagIndexJob(
-          env,
-          message.requestedBy,
-          message.repoFullName,
-          message.paths,
-        );
-      return;
-    case "recapture-preview":
-      // Delayed visual self-poll: re-review the PR to re-capture the AFTER preview shot once its deploy is live.
-      await reReviewStoredPullRequest(
-        env,
-        message.deliveryId,
-        message.installationId,
-        message.repoFullName,
-        message.prNumber,
-        message.attempt,
-      );
-      break;
-    case "github-webhook":
-      await processGitHubWebhook(
-        env,
-        message.deliveryId,
-        message.eventName,
-        message.payload,
-      );
-      return;
-    case "submit-draft":
-      // Public OAuth draft-submission (GITTENSORY_REVIEW_DRAFT). No-ops internally when the flag is off.
-      await processSubmitDraft(env, message.draftId);
-      return;
-    case "retry-orb-relay":
-      // Orb relay retry (#relay-retry): re-attempt events that failed to reach a brokered self-host container
-      // (container was temporarily down). Enqueued by the cron ONLY when ORB_BROKER_ENABLED is set; a stale
-      // in-flight job that arrives after the flag clears is still safe — retryFailedRelays fails open (no-op on
-      // an empty table). Never throws.
-      await retryFailedRelays(env);
-      return;
-  }
-}
-
-async function buildContributorDecisionPacks(
+export async function buildContributorDecisionPacks(
   env: Env,
   login?: string,
 ): Promise<void> {
@@ -1075,7 +779,7 @@ async function buildContributorDecisionPacks(
   }
 }
 
-async function fanOutRepoSignalSnapshotJobs(
+export async function fanOutRepoSignalSnapshotJobs(
   env: Env,
   requestedBy: "schedule" | "api" | "test",
 ): Promise<void> {
@@ -1115,7 +819,7 @@ type SweepFanoutResolutionOutcome =
 // #777 scheduled re-gate sweep. The cron (index.ts) enqueues one fan-out job hourly; this enqueues a per-repo
 // sweep job for every repo that opted the agent in (an acting autonomy level). Mirrors the signal-snapshot
 // fan-out so each repo's sweep runs as its own bounded, retryable queue message.
-async function fanOutAgentRegateSweepJobs(
+export async function fanOutAgentRegateSweepJobs(
   env: Env,
   requestedBy: "schedule" | "api" | "test",
 ): Promise<void> {
@@ -1412,7 +1116,7 @@ async function surfaceRepairPriorityPullNumbers(
 //   - repoFullName + paths → INCREMENTAL re-index of those changed paths (the push / merged-PR path).
 //   - repoFullName + no paths → FULL re-index of that one repo's code.
 // Fully fail-safe — indexRepo / reindexChangedPaths never throw; this only delegates.
-async function runRagIndexJob(
+export async function runRagIndexJob(
   env: Env,
   requestedBy: "schedule" | "api" | "webhook" | "test",
   repoFullName: string | undefined,
@@ -1587,7 +1291,7 @@ async function maybeEnqueueSiblingRegateForMergedPr(
 // ADVISORY ONLY: nothing is published to GitHub (no check, comment, or label) and no PR is mutated. This is
 // the Phase-0 scheduling rail; the action layer (#778) is what will later turn a flagged verdict into a real
 // action. Respects the #776 safety gate: a global or per-repo pause records a skip and recomputes nothing.
-async function sweepRepoRegate(
+export async function sweepRepoRegate(
   env: Env,
   repoFullName: string | undefined,
   requestedBy: "schedule" | "api" | "test",
@@ -1818,7 +1522,7 @@ async function sweepRepoRegate(
 // any repo whose prior fan-out is still draining (getLatestBacklogConvergenceRegatedAt / isRegateSweepDraining) —
 // closing the gap where a crashed/restarted worker's stuck "processing" trigger row went unnoticed by the next
 // 30-min tick and re-enqueued duplicate per-repo (and per-PR) jobs underneath the still-in-flight one.
-async function fanOutBacklogConvergenceSweepJobs(
+export async function fanOutBacklogConvergenceSweepJobs(
   env: Env,
   requestedBy: "schedule" | "api" | "test",
 ): Promise<void> {
@@ -1915,7 +1619,7 @@ async function fanOutBacklogConvergenceSweepJobs(
 // yet; the eventual scheduled trigger will enumerate opted-in repos the same way fanOutRepoDocRefreshSweepJobs
 // does, and can call generateAndSendReviewRecap directly since the enumeration step already filtered on
 // `.enabled` -- this per-call gate is what keeps a MANUAL trigger against a non-opted-in repo a no-op too.
-async function runReviewRecapJob(env: Env, repoFullName: string, windowDays: number | undefined): Promise<void> {
+export async function runReviewRecapJob(env: Env, repoFullName: string, windowDays: number | undefined): Promise<void> {
   const manifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
   if (!manifest?.reviewRecap.enabled) return;
   await generateAndSendReviewRecap(env, repoFullName, {
@@ -1930,7 +1634,7 @@ async function runReviewRecapJob(env: Env, repoFullName: string, windowDays: num
 // fan-outs is not a realistic risk. Eligibility/scope/diffing itself lives entirely inside
 // openRepoDocPullRequest (via performRepoDocRefresh) -- this fan-out is purely an enumeration + rate-limiting
 // optimization so a stable repo isn't re-checked more often than its own configured interval.
-async function fanOutRepoDocRefreshSweepJobs(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
+export async function fanOutRepoDocRefreshSweepJobs(env: Env, requestedBy: "schedule" | "api" | "test"): Promise<void> {
   const now = nowIso();
   const repoFullNames = (await listRepositories(env)).map((repo) => repo.fullName);
   const manifests = await loadRepoFocusManifests(env, repoFullNames);
@@ -1969,7 +1673,7 @@ async function fanOutRepoDocRefreshSweepJobs(env: Env, requestedBy: "schedule" |
 // own staleness check) and fan out one `agent-regate-pr` job per candidate, tagged with a `backlog-convergence:`
 // deliveryId prefix so the claim-time fairness lane (queue-fairness.ts, PR2) can prioritize it as backlog-drain
 // work. No installation → nothing can be re-reviewed; skip quietly (mirrors sweepRepoRegate).
-async function sweepRepoBacklogConvergence(
+export async function sweepRepoBacklogConvergence(
   env: Env,
   repoFullName: string | undefined,
   requestedBy: "schedule" | "api" | "test",
@@ -2057,7 +1761,7 @@ async function sweepRepoBacklogConvergence(
 // deferred/failed re-review never stalls convergence (the next sweep after the window re-claims the PR). The public
 // surface marker is observability only; it cannot prove GitHub still shows a complete current review panel, so the
 // per-PR job always re-evaluates the head.
-async function regatePullRequest(
+export async function regatePullRequest(
   env: Env,
   repairHeadSha: string | undefined,
   repoFullName: string,
@@ -3317,7 +3021,7 @@ async function runAgentMaintenancePlanAndExecute(
  * "the CI event WAKES the existing row and re-runs the full review". The PR's persisted head SHA is used as-is
  * (never overwritten from the CI payload — reviewbot scope parity). Best-effort throughout.
  */
-async function reReviewStoredPullRequest(
+export async function reReviewStoredPullRequest(
   env: Env,
   deliveryId: string,
   installationId: number,
@@ -4507,7 +4211,7 @@ async function maybeCaptureOnActionsFallbackWorkflowRun(
   return true;
 }
 
-async function repairDataFidelity(
+export async function repairDataFidelity(
   env: Env,
   requestedBy: "schedule" | "api" | "test",
 ): Promise<void> {
@@ -4661,7 +4365,7 @@ export function contributorEvidenceBatchSize(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_CONTRIBUTOR_EVIDENCE_BATCH_SIZE;
 }
 
-async function buildContributorEvidence(
+export async function buildContributorEvidence(
   env: Env,
   login?: string,
   batchLogins?: string[],
@@ -4881,7 +4585,7 @@ async function processContributorEvidenceLogins(
   }
 }
 
-async function buildBurdenForecasts(
+export async function buildBurdenForecasts(
   env: Env,
   repoFullName?: string,
 ): Promise<void> {
@@ -4960,13 +4664,6 @@ async function countLiveOpenWithConcurrencyUntil(
   return confirmedOpenCount;
 }
 
-// A batched notify-evaluate job (#selfhost-maintenance-self-pin) can carry many events from one webhook (a
-// popular newly-opened issue can have dozens of watchers) -- an unbounded Promise.all over all of them would
-// let a single job spend as many concurrent DB/eval calls as it likes, bypassing the queue's own
-// backgroundConcurrency cap (which defaults to 1) entirely from inside one job's execution. Bounded worker-pool
-// fan-out, same shape as GLOBAL_OPEN_ITEM_LIVE_CHECK_CONCURRENCY above.
-const NOTIFY_EVALUATE_EVENT_CONCURRENCY = 5;
-
 // The per-repo contributor-cap live-verification (#2270 busy-repo bypass fix) walks a fixed-size author-scoped
 // sibling sample. An author with many open PRs would otherwise fire too many concurrent
 // fetchLivePullRequestState calls from a single webhook, and the delivery-order-guard wake below can re-trigger
@@ -4974,7 +4671,7 @@ const NOTIFY_EVALUATE_EVENT_CONCURRENCY = 5;
 // via mapWithConcurrency in addition to the repository query's total row cap.
 const CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY = 10;
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let nextIndex = 0;
   const workerCount = Math.max(1, Math.min(concurrency, items.length || 1));
@@ -6198,7 +5895,7 @@ async function handleIssueWebhookEvent(
   return issueWatchEvents;
 }
 
-async function processGitHubWebhook(
+export async function processGitHubWebhook(
   env: Env,
   deliveryId: string,
   eventName: string,

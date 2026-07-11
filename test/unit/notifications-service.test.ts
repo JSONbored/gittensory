@@ -257,6 +257,23 @@ describe("notification queue wiring", () => {
     await expect(processJob(env, legacyMessage)).resolves.not.toThrow();
     expect(enqueued.some((message) => message.type === "notify-deliver")).toBe(true);
   });
+
+  it("a notify-evaluate payload with neither `events` nor the legacy singular `event` field is a safe no-op", async () => {
+    const enqueued: Array<{ type: string }> = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: { type: string }) {
+          enqueued.push(message);
+        },
+      } as unknown as Queue,
+    });
+
+    // Simulates a malformed/legacy payload with neither shape present -- falls through both ternary arms to [].
+    const emptyMessage = { type: "notify-evaluate", requestedBy: "test" } as unknown as { type: "notify-evaluate"; requestedBy: "test"; events: DetectedNotificationEvent[] };
+
+    await expect(processJob(env, emptyMessage)).resolves.not.toThrow();
+    expect(enqueued).toEqual([]);
+  });
 });
 
 describe("notification repository helpers", () => {
