@@ -8,11 +8,9 @@
 // is already durable, so a live weekly re-bucketing of the SAME rows can recompute any historical week correctly
 // on every request -- no cron-miss gap risk, and no second copy of the number to keep in sync.
 //
-// DELIBERATELY GLOBAL, not scoped to the public-stats repo allowlist: unlike accuracy/handled-PR counts, a
-// cache-hit/miss event carries no PR content, author, or repo-specific outcome -- the aggregate reuse rate
-// doesn't reveal anything about any one repo's activity, and target_key isn't uniformly shaped across all eight
-// capabilities (some key by bare repoFullName, others by repoFullName#prNumber), so allowlist-filtering it would
-// need a fragile per-capability parser for no real privacy benefit.
+// PUBLIC-SAFE SCOPE: only events whose target_key maps to GITTENSORY_PUBLIC_STATS_REPOS are included. Most
+// cache keys are either a bare repoFullName or repoFullName#prNumber; anything outside that allowlist is treated
+// as private operational telemetry and deliberately excluded from this unauthenticated payload.
 //
 // NAMING CONVENTION, not a hardcoded capability list: every instrumented capability already follows
 // `github_app.<name>_cache_hit` / `github_app.<name>_cache_miss` (confirmed via a full-repo grep before writing
@@ -20,7 +18,7 @@
 // same convention, with zero code change here. ai_review's three additional REUSE variants (frozen/paused/
 // one-shot) don't fit that exact suffix -- each is a genuine "skipped a redundant AI call" event, so they're
 // folded into "hit" alongside the plain ai_review_cache_hit.
-import { safeAll } from "../review/public-stats";
+import { publicStatsProjects, safeAll } from "../review/public-stats";
 import { isoWeekStart } from "./public-quality-metrics";
 
 export const PUBLIC_REUSE_RATE_TREND_WEEKS = 8;
@@ -81,7 +79,9 @@ export function buildPublicReuseRateTrend(dayRows: DayRow[], nowMs: number, week
 /** Day-bucketed hit/miss counts across every `github_app.<name>_cache_hit` / `_cache_miss` event, plus
  *  ai_review's three non-suffix-conforming reuse variants (see file header). Fail-safe: degrades to [] on any
  *  query error (safeAll), yielding under-counted weeks rather than throwing the whole public stats payload. */
-async function loadReuseRateDayRows(env: Env, sinceIso: string): Promise<DayRow[]> {
+async function loadReuseRateDayRows(env: Env, projects: string[], sinceIso: string): Promise<DayRow[]> {
+  if (projects.length === 0) return [];
+  const projectPlaceholders = projects.map(() => "?").join(", ");
   const reuseTypePlaceholders = AI_REVIEW_REUSE_EVENT_TYPES.map(() => "?").join(", ");
   const rows = await safeAll<{ day: string; hits: number; misses: number }>(
     env,
@@ -90,10 +90,12 @@ async function loadReuseRateDayRows(env: Env, sinceIso: string): Promise<DayRow[
             SUM(CASE WHEN event_type LIKE 'github_app.%cache_miss' THEN 1 ELSE 0 END) AS misses
        FROM audit_events
       WHERE (event_type LIKE 'github_app.%cache_hit' OR event_type LIKE 'github_app.%cache_miss' OR event_type IN (${reuseTypePlaceholders}))
+        AND LOWER(CASE WHEN instr(target_key, '#') > 0 THEN substr(target_key, 1, instr(target_key, '#') - 1) ELSE target_key END) IN (${projectPlaceholders})
         AND created_at >= ?
       GROUP BY day`,
     ...AI_REVIEW_REUSE_EVENT_TYPES,
     ...AI_REVIEW_REUSE_EVENT_TYPES,
+    ...projects,
     sinceIso,
   );
   /* v8 ignore next -- SUM(CASE WHEN ... THEN 1 ELSE 0 END) over an existing GROUP BY day always yields a
@@ -105,7 +107,8 @@ async function loadReuseRateDayRows(env: Env, sinceIso: string): Promise<DayRow[
 /** Assemble the public reuse-rate trend from the SAME live audit_events ledger every instrumented capability
  *  already writes to. */
 export async function loadPublicReuseRateTrend(env: Env, nowMs: number = Date.now()): Promise<PublicReuseRateTrendWeek[]> {
+  const projects = publicStatsProjects(env);
   const sinceIso = new Date(Date.parse(isoWeekStart(nowMs)) - (PUBLIC_REUSE_RATE_TREND_WEEKS - 1) * MS_PER_WEEK).toISOString();
-  const dayRows = await loadReuseRateDayRows(env, sinceIso);
+  const dayRows = await loadReuseRateDayRows(env, projects, sinceIso);
   return buildPublicReuseRateTrend(dayRows, nowMs);
 }

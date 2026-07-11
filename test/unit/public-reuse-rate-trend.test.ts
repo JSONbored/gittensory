@@ -70,7 +70,7 @@ describe("buildPublicReuseRateTrend", () => {
 
 describe("loadPublicReuseRateTrend — end-to-end over the real live audit_events ledger", () => {
   it("counts every github_app.*_cache_hit / *_cache_miss event, plus ai_review's three non-suffix reuse variants, as hits/misses", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "owner/repo" });
     const thisMonday = isoWeekStart(NOW);
     const thisWeekIso = `${thisMonday}T09:00:00.000Z`;
 
@@ -94,8 +94,40 @@ describe("loadPublicReuseRateTrend — end-to-end over the real live audit_event
   });
 
   it("returns all-zero buckets when no instrumented events exist yet", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "owner/repo" });
     const trend = await loadPublicReuseRateTrend(env, NOW);
     for (const week of trend) expect(week).toMatchObject({ hits: 0, misses: 0, reuseRatePct: null });
   });
+
+  it("REGRESSION: excludes cache activity outside the public stats repo allowlist", async () => {
+    const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "owner/repo" });
+    const thisMonday = isoWeekStart(NOW);
+    const thisWeekIso = `${thisMonday}T09:00:00.000Z`;
+
+    await recordAuditEvent(env, { eventType: "github_app.grounding_cache_hit", targetKey: "owner/repo", outcome: "completed", createdAt: thisWeekIso });
+    await recordAuditEvent(env, { eventType: "github_app.impact_map_cache_hit", targetKey: "owner/repo#123", outcome: "completed", createdAt: thisWeekIso });
+    await recordAuditEvent(env, { eventType: "github_app.review_memory_cache_miss", targetKey: "owner/repo#123", outcome: "completed", createdAt: thisWeekIso });
+    await recordAuditEvent(env, { eventType: "github_app.grounding_cache_hit", targetKey: "secret/private", outcome: "completed", createdAt: thisWeekIso });
+    await recordAuditEvent(env, { eventType: "github_app.review_memory_cache_miss", targetKey: "secret/private#7", outcome: "completed", createdAt: thisWeekIso });
+    await recordAuditEvent(env, { eventType: "github_app.ai_review_frozen_reuse", targetKey: "secret/private#7", outcome: "completed", createdAt: thisWeekIso });
+
+    const trend = await loadPublicReuseRateTrend(env, NOW);
+    const currentWeek = trend[trend.length - 1];
+    expect(currentWeek).toMatchObject({ weekStart: thisMonday, hits: 2, misses: 1, reuseRatePct: null });
+  });
+
+  it("returns all-zero buckets when the public stats repo allowlist is empty", async () => {
+    const env = createTestEnv();
+    const thisMonday = isoWeekStart(NOW);
+    await recordAuditEvent(env, {
+      eventType: "github_app.grounding_cache_hit",
+      targetKey: "owner/repo",
+      outcome: "completed",
+      createdAt: `${thisMonday}T09:00:00.000Z`,
+    });
+
+    const trend = await loadPublicReuseRateTrend(env, NOW);
+    for (const week of trend) expect(week).toMatchObject({ hits: 0, misses: 0, reuseRatePct: null });
+  });
+
 });
