@@ -273,6 +273,20 @@ export async function markRepositoriesRemovedFromInstallation(env: Env, installa
     .where(and(eq(repositories.installationId, installationId), inArray(repositories.fullName, names)));
 }
 
+/** Every repo full name currently marked `isInstalled` under this installation, so a caller can diff it against
+ *  a freshly-fetched live list and hand the leftovers to {@link markRepositoriesRemovedFromInstallation} (#5028).
+ *  Unlike listRepoFullNamesForInstallation (used for cross-repo aggregation with a truncation-audit concern),
+ *  this is a plain currently-installed set for a single maintainer's own installation, which is never large
+ *  enough to need a cap. */
+export async function listInstalledRepoFullNamesForInstallation(env: Env, installationId: number): Promise<string[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({ fullName: repositories.fullName })
+    .from(repositories)
+    .where(and(eq(repositories.installationId, installationId), eq(repositories.isInstalled, true)));
+  return rows.map((row) => row.fullName);
+}
+
 export async function getInstallation(env: Env, installationId: number): Promise<InstallationRecord | null> {
   const db = getDb(env.DB);
   const [row] = await db.select().from(installations).where(eq(installations.id, installationId)).limit(1);

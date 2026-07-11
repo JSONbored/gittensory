@@ -713,6 +713,46 @@ describe("worker entrypoint", () => {
     expect(sent.some((m) => m.type === "ops-alerts")).toBe(false);
   });
 
+  it("enqueues sync-brokered-installed-repos hourly ONLY in broker mode (ORB_ENROLLMENT_SECRET set, flag-OFF is byte-identical)", async () => {
+    const sentFor = async (enrollmentSecret?: string): Promise<Array<import("../../src/types").JobMessage>> => {
+      const sent: Array<import("../../src/types").JobMessage> = [];
+      const env = createTestEnv({
+        ...(enrollmentSecret === undefined ? {} : { ORB_ENROLLMENT_SECRET: enrollmentSecret }),
+        JOBS: {
+          async send(message: import("../../src/types").JobMessage) {
+            sent.push(message);
+          },
+        } as unknown as Queue,
+      });
+      const waitUntil: Promise<unknown>[] = [];
+      await worker.scheduled(controllerFor("2026-05-25T05:00:00.000Z"), env, executionContext(waitUntil));
+      await Promise.all(waitUntil);
+      return sent;
+    };
+
+    // Non-brokered (default) → no sync job; the enqueued set is unchanged from today.
+    expect((await sentFor()).some((m) => m.type === "sync-brokered-installed-repos")).toBe(false);
+    // Brokered (an enrollment secret is configured) → exactly one sync job, enqueued in the hourly window.
+    const brokered = await sentFor("orbsec_x");
+    expect(brokered.filter((m) => m.type === "sync-brokered-installed-repos")).toEqual([{ type: "sync-brokered-installed-repos", requestedBy: "schedule" }]);
+  });
+
+  it("does NOT enqueue sync-brokered-installed-repos outside the hourly window even in broker mode", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      ORB_ENROLLMENT_SECRET: "orbsec_x",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    const waitUntil: Promise<unknown>[] = [];
+    await worker.scheduled(controllerFor("2026-05-25T05:15:00.000Z"), env, executionContext(waitUntil)); // non-hourly
+    await Promise.all(waitUntil);
+    expect(sent.some((m) => m.type === "sync-brokered-installed-repos")).toBe(false);
+  });
+
   it("enqueues the sweep-liveness-watchdog job hourly ONLY when GITTENSORY_SWEEP_WATCHDOG is ON (flag-OFF is byte-identical)", async () => {
     const sentFor = async (watchdogFlag?: string): Promise<Array<import("../../src/types").JobMessage>> => {
       const sent: Array<import("../../src/types").JobMessage> = [];

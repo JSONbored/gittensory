@@ -43,6 +43,7 @@ import { deterministicJitterMs, parsePositiveIntEnv } from "./queue-common";
 export const MAINTENANCE_JOB_TYPES: ReadonlySet<string> = new Set([
   "backfill-registered-repos",
   "refresh-registry",
+  "sync-brokered-installed-repos",
   "refresh-installation-health",
   "refresh-scoring-model",
   "refresh-upstream-drift",

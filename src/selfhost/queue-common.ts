@@ -118,6 +118,11 @@ const GITHUB_BUDGET_BACKGROUND_TYPES = new Set<string>([
   // runReviewRecapJob calls loadRepoFocusManifest directly for its one repo. Not yet cron-enqueued (manual/API
   // trigger only today, per its own doc comment), but still worth gating against a rapid repeated manual trigger.
   "generate-review-recap",
+  // syncBrokeredInstalledRepos (#5028) makes a real, paginated, authenticated `GET /installation/repositories`
+  // REST call using the brokered installation token -- unlike refresh-registry (an unauthenticated/raw-file
+  // fetch to entrius/gittensor, not the GitHub REST API), this genuinely draws down the shared installation's
+  // REST budget and must yield alongside every other budget consumer here.
+  "sync-brokered-installed-repos",
 ]);
 const PRIORITY_BY_TYPE = new Map([
   ["agent-regate-pr", AGENT_REGATE_PRIORITY],
@@ -926,6 +931,7 @@ export function jobCoalesceKey(payload: string): string | null {
     }
     switch (type) {
       case "refresh-registry":
+      case "sync-brokered-installed-repos":
       case "refresh-installation-health":
       case "refresh-scoring-model":
       case "refresh-upstream-drift":

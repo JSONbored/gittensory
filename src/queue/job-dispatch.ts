@@ -32,6 +32,7 @@ import { runSelfTuneBreaker } from "../review/outcomes-wire";
 import { isRagEnabled } from "../review/rag-wire";
 import { processSubmitDraft } from "../services/draft";
 import { retryFailedRelays } from "../orb/relay";
+import { syncBrokeredInstalledRepos } from "../orb/installed-repos-sync";
 import { generateSignalSnapshots } from "./signal-snapshot";
 import { runRetentionPrune } from "./retention";
 // The 15 handlers below have no reason to move -- each is only reachable via this dispatcher (or, for
@@ -68,6 +69,9 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
   switch (message.type) {
     case "refresh-registry":
       await refreshRegistry(env);
+      return;
+    case "sync-brokered-installed-repos":
+      await syncBrokeredInstalledRepos(env);
       return;
     case "backfill-registered-repos":
       if (!message.repoFullName && message.requestedBy !== "test") {

@@ -57,6 +57,10 @@ export type JobMessage =
       requestedBy: "schedule" | "api" | "test";
     }
   | {
+      type: "sync-brokered-installed-repos";
+      requestedBy: "schedule" | "api" | "test";
+    }
+  | {
       type: "backfill-registered-repos";
       requestedBy: "schedule" | "api" | "test";
       repoFullName?: string;

@@ -4,6 +4,7 @@ import { delayUntil, shouldWaitForGitHubRateLimit, LOW_REST_RATE_LIMIT_REMAINING
 import { processDlqBatch } from "./queue/dlq";
 import { processJob } from "./queue/processors";
 import { isOrbBrokerEnabled } from "./orb/broker";
+import { isOrbBrokerMode } from "./orb/broker-client";
 import { isOpsEnabled } from "./review/ops-wire";
 import { isRecapEnabled, resolveMaintainerRecapManifestOverride, shouldFireMaintainerRecap } from "./review/maintainer-recap-wire";
 import { isSweepWatchdogEnabled } from "./review/sweep-watchdog";
@@ -202,6 +203,11 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
   if (selfHostedReviews && isReconciliationWindow && isPrReconciliationEnabled(env)) jobs.push({ type: "reconcile-open-prs", requestedBy: "schedule" });
   if (isHourly) {
     jobs.push({ type: "refresh-registry", requestedBy: "schedule" });
+    // Brokered self-host installed-repo sync (#5028): the central Orb relay deliberately does not forward
+    // installation/installation_repositories events to brokered containers, so a brokered self-host has no
+    // other way to learn its own repo list beyond the first forwarded PR/issue event per repo. Self-host +
+    // broker-mode only (isOrbBrokerMode reads ORB_ENROLLMENT_SECRET) — a no-op everywhere else, byte-identical.
+    if (selfHostedReviews && isOrbBrokerMode(env)) jobs.push({ type: "sync-brokered-installed-repos", requestedBy: "schedule" });
     jobs.push({ type: "refresh-scoring-model", requestedBy: "schedule" });
     jobs.push({ type: "refresh-upstream-drift", requestedBy: "schedule" });
     jobs.push({ type: "rollup-product-usage", requestedBy: "schedule", days: 7 });

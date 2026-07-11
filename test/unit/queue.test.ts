@@ -389,6 +389,7 @@ describe("queue processors", () => {
     });
 
     await processJob(env, { type: "refresh-registry", requestedBy: "test" });
+    await processJob(env, { type: "sync-brokered-installed-repos", requestedBy: "test" });
     await processJob(env, { type: "refresh-scoring-model", requestedBy: "test" });
     await processJob(env, { type: "backfill-registered-repos", requestedBy: "test", repoFullName: "JSONbored/gittensory", force: true });
     await processJob(env, { type: "generate-signal-snapshots", requestedBy: "test", repoFullName: "JSONbored/gittensory" });
