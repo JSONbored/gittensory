@@ -78,7 +78,6 @@ import {
   persistSignalSnapshot,
   recordWebhookEvent,
   upsertAgentCommandAnswer,
-  upsertCheckSummary,
   upsertOfficialMinerDetection,
   rollupProductUsageDaily,
   upsertBurdenForecast,
@@ -418,6 +417,12 @@ import {
 // existing `import { ... } from "../../src/queue/processors"` keeps working unchanged.
 import { runRetentionPrune } from "./retention";
 export { runRetentionPrune } from "./retention";
+// #4013 step 8: same shim shape for the gate-check policy/publish/audit functions -- imported here for
+// this file's own many disposition/publish call sites, and re-exported so
+// test/unit/gate-check-policy.test.ts and test/unit/repository-settings-enforcement.test.ts's existing
+// `import { gateCheckPolicy } from "../../src/queue/processors"` keeps working unchanged.
+import { auditGateCheckPermissionMissing, gateCheckPolicy, recordPublishedGateCheckSummary } from "./gate-checks";
+export { gateCheckPolicy } from "./gate-checks";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, fetchShotContentBlock, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureRoute } from "../review/visual/capture";
 import {
@@ -6795,48 +6800,6 @@ function isGitHubTransientPublishError(error: unknown): boolean {
   return status !== null && status >= 500;
 }
 
-// Intentionally writes to check_summaries only, not audit_events (#2908): this fires on every successful gate-
-// check publish, which is a very high-frequency event (every review pass, potentially several times per PR as
-// it iterates) -- check_summaries is the purpose-built, already-queryable canonical record for "when was this
-// check published and what did it conclude" (repo/PR/headSha/checkRunId/conclusion/detailsUrl), so a parallel
-// audit_events row would roughly double that table's volume for no new queryable information. The DOWNSTREAM
-// actions this verdict triggers (merge/close/hold) are already fully audited via recordNativeGateDecision and
-// agent-action-executor's audit() closure. Only the FAILURE/degraded sub-paths of the caller below are audited
-// (auditGateCheckPermissionMissing, auditPrVisibilitySkip) -- that asymmetry is deliberate, not a gap.
-async function recordPublishedGateCheckSummary(
-  env: Env,
-  args: {
-    repoFullName: string;
-    pullNumber: number;
-    headSha: string | null | undefined;
-    checkRunId: number;
-    conclusion: string | null | undefined;
-    detailsUrl?: string | undefined;
-    deliveryId: string;
-  },
-): Promise<void> {
-  /* v8 ignore next -- createOrUpdateNamedCheckRun returns null without a head SHA, so published results have one. */
-  if (!args.headSha) return;
-  const completedAt = nowIso();
-  await upsertCheckSummary(env, {
-    id: String(args.checkRunId),
-    repoFullName: args.repoFullName,
-    pullNumber: args.pullNumber,
-    headSha: args.headSha,
-    name: GITTENSORY_GATE_CHECK_NAME,
-    status: "completed",
-    /* v8 ignore next -- Gate publication always supplies a conclusion; this keeps the DB value defensive. */
-    conclusion: args.conclusion ?? null,
-    startedAt: null,
-    completedAt,
-    ...(args.detailsUrl ? { detailsUrl: args.detailsUrl } : {}),
-    payload: {
-      deliveryId: args.deliveryId,
-      source: "gittensory_gate_check",
-    },
-  });
-}
-
 function mergeReadinessGateEnabled(
   settings: Pick<RepositorySettings, "mergeReadinessGateMode">,
 ): boolean {
@@ -6961,69 +6924,6 @@ function shouldProcessPullRequestPublicSurface(
     PR_PUBLIC_SURFACE_ACTIONS.has(action ?? "") ||
     PR_GATE_CLOSED_ACTIONS.has(action ?? "")
   );
-}
-
-export function gateCheckPolicy(
-  settings: RepositorySettings,
-  readinessScore?: number | null,
-  confirmedContributor?: boolean,
-  slopRisk?: number | null,
-  authorHistory?: { mergedPrCount: number; closedUnmergedPrCount: number },
-  sizeContext?: {
-    changedFileCount: number;
-    changedLineCount: number;
-    guardrailHit: boolean;
-    guardrailMatches?: ReturnType<typeof guardrailPathMatches> | undefined;
-  },
-) {
-  // `settings` is already the EFFECTIVE config (`.gittensory.yml` > DB > defaults), resolved upstream by
-  // resolveRepositorySettings, so the blocker modes here reflect the repo's config file directly.
-  // The `oss-anti-slop` pack (#692) is repo-agnostic and carries no confirmed-contributor field at all (no
-  // Gittensor coupling). The `gittensor` pack still threads confirmedContributor for context/telemetry, but
-  // it no longer changes the verdict — every author is gated identically. (#gate-nonconfirmed)
-  const confirmedContributorForPack =
-    settings.gatePack === "oss-anti-slop" ? undefined : confirmedContributor;
-  return {
-    linkedIssueGateMode: settings.linkedIssueGateMode,
-    duplicatePrGateMode: settings.duplicatePrGateMode,
-    qualityGateMode: settings.qualityGateMode,
-    qualityGateMinScore: settings.qualityGateMinScore ?? null,
-    aiReviewGateMode: settings.aiReviewMode,
-    // Calibrated AI close-confidence floor (#7) — config-as-code via `.gittensory.yml gate.aiReview.closeConfidence`,
-    // resolved into settings upstream. `null`/undefined ⇒ advisory.ts applies the 0.93 default.
-    aiReviewCloseConfidence: settings.aiReviewCloseConfidence ?? null,
-    // Sub-floor AI-judgment disposition (#4603) — DB-backed (dashboard-settable) + `.gittensory.yml
-    // gate.aiReview.lowConfidenceDisposition` override, resolved into settings upstream. `null`/undefined ⇒
-    // advisory.ts applies the "hold_for_review" default.
-    aiReviewLowConfidenceDisposition: settings.aiReviewLowConfidenceDisposition ?? null,
-    readinessScore: readinessScore ?? null,
-    slopGateMode: settings.slopGateMode,
-    mergeReadinessGateMode: settings.mergeReadinessGateMode,
-    manifestPolicyGateMode: settings.manifestPolicyGateMode,
-    selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
-    linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode,
-    firstTimeContributorGrace: settings.firstTimeContributorGrace,
-    authorMergedPrCount: authorHistory?.mergedPrCount,
-    authorClosedUnmergedPrCount: authorHistory?.closedUnmergedPrCount,
-    slopGateMinScore: settings.slopGateMinScore ?? null,
-    slopRisk: slopRisk ?? null,
-    confirmedContributor: confirmedContributorForPack,
-    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): the MODE comes from config; the
-    // thresholds default to 10 files / 1000 lines (advisory.ts constants); the live counts + guardrail-hit come from
-    // the per-PR sizeContext threaded by the caller.
-    sizeGateMode: settings.sizeGateMode,
-    lockfileIntegrityGateMode: settings.lockfileIntegrityGateMode,
-    changedFileCount: sizeContext?.changedFileCount ?? null,
-    changedLineCount: sizeContext?.changedLineCount ?? null,
-    guardrailHit: sizeContext?.guardrailHit ?? false,
-    guardrailMatches: sizeContext?.guardrailMatches,
-    // CLA / license-compatibility gate (#2564): the MODE comes from config; the `cla_consent_missing` finding
-    // itself (or its absence) is pushed into the advisory upstream by evaluateClaCheck, so this only decides
-    // whether isConfiguredGateBlocker escalates it to a hard blocker.
-    claGateMode: settings.claGateMode,
-    // #gate-dryrun: render the would-be merge/close/manual verdict (advisory promoted to block) without enforcing.
-    dryRun: settings.gateDryRun ?? false,
-  };
 }
 
 async function loadGateAuthorHistory(
@@ -8219,27 +8119,6 @@ export async function runLinkedIssueSatisfactionForAdvisory(
     );
     return null;
   }
-}
-
-async function auditGateCheckPermissionMissing(
-  env: Env,
-  actor: string | null,
-  repoFullName: string,
-  pullNumber: number,
-  deliveryId: string,
-  warning: string,
-): Promise<void> {
-  await recordAuditEvent(env, {
-    eventType: "github_app.gate_check_permission_missing",
-    actor,
-    targetKey: `${repoFullName}#${pullNumber}`,
-    outcome: "error",
-    detail: warning,
-    metadata: { deliveryId, repoFullName },
-  });
-  // Surface the install-wide Checks:write gap to Sentry — until the scope is granted the required gate check-run
-  // silently never posts on ANY PR for this install; an operator must SEE this config fault, not just the ledger.
-  console.error(JSON.stringify({ level: "error", event: "gate_check_permission_missing", message: warning, repository: repoFullName, pullNumber, deliveryId }));
 }
 
 /**
