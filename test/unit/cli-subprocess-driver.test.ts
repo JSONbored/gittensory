@@ -77,20 +77,30 @@ describe("createCliSubprocessCodingAgentDriver (#4266)", () => {
     expect(result.error).toBe("claude_timeout_5000ms");
   });
 
-  it("hands the child a strict allowlisted env plus overlaid extras, never the full parent env", async () => {
+  it("hands the child a strict non-credential env plus overlaid extras, never the full parent env", async () => {
     const { spawn, calls } = fakeSpawn({ stdout: "", code: 0 });
     const driver = createCliSubprocessCodingAgentDriver({
       command: "claude",
       spawn,
-      parentEnv: { HOME: "/home/miner", RUNTIME_ONLY_FLAG: "leak-me", PATH: "/usr/bin" },
-      env: { AGENT_SESSION_HANDLE: "provided-by-caller" },
+      parentEnv: {
+        HOME: "/home/miner",
+        RUNTIME_ONLY_FLAG: "leak-me",
+        PATH: "/usr/bin",
+        XDG_CONFIG_HOME: "/home/miner/.config",
+        XDG_DATA_HOME: "/home/miner/.local/share",
+        XDG_STATE_HOME: "/home/miner/.local/state",
+      },
+      env: { AGENT_SESSION_HANDLE: "provided-by-caller", HOME: "/tmp/isolated-agent-home" },
     });
     await driver.run(TASK);
     const env = calls[0]?.opts.env ?? {};
-    expect(env.HOME).toBe("/home/miner");
+    expect(env.HOME).toBe("/tmp/isolated-agent-home");
     expect(env.PATH).toBe("/usr/bin");
     expect(env.AGENT_SESSION_HANDLE).toBe("provided-by-caller");
     expect(env.RUNTIME_ONLY_FLAG).toBeUndefined();
+    expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(env.XDG_DATA_HOME).toBeUndefined();
+    expect(env.XDG_STATE_HOME).toBeUndefined();
   });
 
   it("redacts known secret values and honors a custom argv builder", async () => {

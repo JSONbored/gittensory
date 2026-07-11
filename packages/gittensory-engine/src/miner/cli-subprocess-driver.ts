@@ -3,7 +3,7 @@ import type {
   CodingAgentDriverResult,
   CodingAgentDriverTask,
 } from "./coding-agent-driver.js";
-import { SUBPROCESS_CLI_ENV_ALLOWLIST, buildAllowlistedEnv, redactSecrets } from "../subprocess-env.js";
+import { buildAllowlistedEnv, redactSecrets } from "../subprocess-env.js";
 
 // CLI-subprocess CodingAgentDriver (#4266). Implements the CodingAgentDriver seam (#4262) by running the coding
 // agent (`claude`/`codex`) as a subprocess in the attempt's scoped working directory. The spawn primitive is
@@ -50,6 +50,22 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TRANSCRIPT_CHARS = 8000;
 const MAX_ERROR_DETAIL_CHARS = 500;
 
+const CODING_AGENT_ENV_ALLOWLIST = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "LANG",
+  "LC_ALL",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_PROXY",
+  "PATH",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TERM",
+  "https_proxy",
+  "http_proxy",
+  "no_proxy",
+] as const;
+
 function defaultBuildArgs(task: CodingAgentDriverTask): string[] {
   return defaultCliSubprocessArgs(task);
 }
@@ -77,7 +93,7 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
   const knownSecrets = options.knownSecrets ?? [];
   return {
     async run(task: CodingAgentDriverTask): Promise<CodingAgentDriverResult> {
-      const env = buildAllowlistedEnv(options.parentEnv ?? {}, SUBPROCESS_CLI_ENV_ALLOWLIST, options.env ?? {});
+      const env = buildAllowlistedEnv(options.parentEnv ?? {}, CODING_AGENT_ENV_ALLOWLIST, options.env ?? {});
       const spawned = await options.spawn(options.command, buildArgs(task), {
         cwd: task.workingDirectory,
         env,
