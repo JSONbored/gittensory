@@ -183,6 +183,20 @@ test("scanExhaustivenessDrift: uses the analysis-context fetchText when supplied
   ]);
 });
 
+test("scanExhaustivenessDrift: rejects a dot-segment owner/repo slug without fetching", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  let called = false;
+  const out = await scanExhaustivenessDrift(
+    req([{ path: "src/status.ts", status: "modified", patch: PATCH_ADD_ARCHIVED }], { repoFullName: "../evil" }),
+    async () => {
+      called = true;
+      return new Response(HEAD_UNCOVERED, { status: 200 });
+    },
+  );
+  assert.deepEqual(out, []);
+  assert.equal(called, false);
+});
+
 test("scanExhaustivenessDrift: returns no findings without a GitHub token", async () => {
   const findings = await scanExhaustivenessDrift(
     req([{ path: "src/status.ts", status: "modified", patch: PATCH_ADD_ARCHIVED }], {

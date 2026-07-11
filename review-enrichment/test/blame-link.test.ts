@@ -175,3 +175,12 @@ test("scanBlameLink: no GitHub token → skipped (no finding, no throw)", async 
   );
   assert.deepEqual(findings, []);
 });
+
+test("scanBlameLink: a dot-segment owner (path-traversal shape) is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const findings = await scanBlameLink(
+    req([{ path: "src/app.ts", status: "modified", patch: modifyPatch(2) }], { repoFullName: "../evil" }),
+    routedFetch({ commitSha: "abcdef1234567890", prNumber: 1 }),
+  );
+  assert.deepEqual(findings, []);
+});

@@ -207,6 +207,8 @@ test("scanCoverageDelta: requires a github token, a head sha, and a single valid
   assert.deepEqual(await scanCoverageDelta(req(files, { headSha: undefined }), call), []);
   assert.deepEqual(await scanCoverageDelta(req(files, { repoFullName: "octo/repo/extra" }), call), []);
   assert.deepEqual(await scanCoverageDelta(req(files, { repoFullName: "bad slug/x!" }), call), []);
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  assert.deepEqual(await scanCoverageDelta(req(files, { repoFullName: "../evil" }), call), []);
 });
 
 test("scanCoverageDelta: a PR that adds no lines never touches the network", async () => {

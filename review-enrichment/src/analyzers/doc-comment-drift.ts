@@ -18,7 +18,7 @@ const MAX_SIGNATURE_LINES = 40;
 const MAX_FETCH_BYTES = 1_000_000;
 const SOURCE_RE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const SKIP_RE = /(?:\.d\.ts$|\.min\.|\.test\.|\.spec\.|__tests__\/|(?:^|\/)tests?\/)/;
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 // Matches a named `function` declaration up to its parameter `(`. A single, non-nested generic clause is allowed;
 // a nested-generic declaration (e.g. `function f<T extends Record<string, string>>(x)`) simply does not match and
 // the function is skipped — a deliberate recall/precision trade-off, never a false positive.

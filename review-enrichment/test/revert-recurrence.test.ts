@@ -190,6 +190,14 @@ test("scanRevertRecurrence: requires a github token and a single valid repo slug
     ),
     [],
   );
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  assert.deepEqual(
+    await scanRevertRecurrence(
+      { repoFullName: "../evil", prNumber: 1, githubToken: "t", files: [{ path: "src/a.ts", patch: PR_PATCH }] },
+      routed(OVERLAP_LIST, OVERLAP_DETAIL),
+    ),
+    [],
+  );
 });
 
 test("scanRevertRecurrence: rejects multi-segment repo slugs without fetching", async () => {

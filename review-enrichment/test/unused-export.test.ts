@@ -156,6 +156,18 @@ test("scanUnusedExport: enforces the maxSearches cap", async () => {
   assert.equal(searches, 10);
 });
 
+test("scanUnusedExport: a dot-segment owner/repo slug is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const patch = ["@@ -0,0 +1,1 @@", "+export function orphanHelper() {}"].join("\n");
+  const findings = await scanUnusedExport(
+    req([{ path: "src/util.ts", status: "added", patch }], { repoFullName: "../evil" }),
+    async () => {
+      throw new Error("should not fetch");
+    },
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanUnusedExport: returns no findings without a GitHub token", async () => {
   const patch = ["@@ -0,0 +1,1 @@", "+export function lonely() {}"].join("\n");
   const findings = await scanUnusedExport(

@@ -196,6 +196,15 @@ test("scanCommitHygiene: a malformed repoFullName is skipped, not thrown", async
   assert.deepEqual(findings, []);
 });
 
+test("scanCommitHygiene: a dot-segment owner (path-traversal shape) is rejected, not thrown", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  const findings = await scanCommitHygiene(
+    req({ repoFullName: "../evil" }),
+    commitsFetch([commit(SHA_A, "fixup! x")]),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("scanCommitHygiene: a fetch failure yields no finding", async () => {
   const findings = await scanCommitHygiene(req(), async () => jsonResponse({ message: "bad" }, 500));
   assert.deepEqual(findings, []);

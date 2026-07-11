@@ -87,6 +87,8 @@ test("scanCommitLint: fail-safe — no token, a bad repo slug, or a fetch error 
   assert.deepEqual(await scanCommitLint(req({ githubToken: undefined }), good), []);
   assert.deepEqual(await scanCommitLint(req({ repoFullName: "octo/repo/extra" }), good), []);
   assert.deepEqual(await scanCommitLint(req({ repoFullName: "bad slug!/x" }), good), []);
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  assert.deepEqual(await scanCommitLint(req({ repoFullName: "../evil" }), good), []);
   const err = async () => new Response("nope", { status: 500 });
   assert.deepEqual(await scanCommitLint(req(), err), []);
 });

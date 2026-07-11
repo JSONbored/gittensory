@@ -19,7 +19,7 @@ const GITHUB_API = "https://api.github.com";
 // analyzers cap their network round-trips.
 const HISTORY_PER_PAGE = 30;
 // Only repository slugs that look like real `owner/repo` segments are ever interpolated into a request URL.
-const SLUG_RE = /^[A-Za-z0-9._-]+$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/; // rejects `..` and other path-traversal segments
 
 interface ScanOptions {
   signal?: AbortSignal;

@@ -360,6 +360,11 @@ test("scanCallerImpact: no token / no headSha / invalid slug / no removed export
     await scanCallerImpact(req(files, { repoFullName: "octo/re po" }), failFetch),
     [],
   );
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  assert.deepEqual(
+    await scanCallerImpact(req(files, { repoFullName: "../evil" }), failFetch),
+    [],
+  );
   assert.deepEqual(
     await scanCallerImpact(
       req([{ path: "src/utils.ts", patch: ["@@ -0,0 +1,1 @@", "+export function added() {}"].join("\n") }]),

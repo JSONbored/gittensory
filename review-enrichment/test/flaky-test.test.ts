@@ -155,6 +155,20 @@ test("scanFlakyTest: marks partial status when the check-run probe cap is hit", 
   assert.equal(diagnostics.partialReason, "flaky_test_probe_cap");
 });
 
+test("scanFlakyTest: rejects a dot-segment owner/repo slug without fetching", async () => {
+  // ".." individually satisfies a bare `[A-Za-z0-9._-]+` class; only a first-character requirement catches it.
+  let called = false;
+  const out = await scanFlakyTest(
+    req([{ path: "src/app.test.ts", status: "modified" }], { repoFullName: "../evil" }),
+    async () => {
+      called = true;
+      return jsonResponse({ default_branch: "main" });
+    },
+  );
+  assert.deepEqual(out, []);
+  assert.equal(called, false);
+});
+
 test("scanFlakyTest: returns no findings without a GitHub token", async () => {
   const findings = await scanFlakyTest(
     req([{ path: "src/app.test.ts", status: "modified" }], { githubToken: undefined }),
