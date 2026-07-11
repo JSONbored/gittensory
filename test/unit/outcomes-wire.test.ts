@@ -872,6 +872,148 @@ describe("runSelfTuneBreaker — reads recorded pr_outcome ground truth + engage
   });
 });
 
+// ── #2352: the miner-scoped breaker pass, independent of the existing human/mixed-population one ──────────────
+
+describe("runSelfTuneBreaker — miner-scoped breaker (#2352)", () => {
+  async function seedDecisionAndOutcomeScoped(
+    env: Env,
+    project: string,
+    pr: number,
+    pred: "merge" | "close",
+    truth: "merged" | "closed",
+    minerAuthored: boolean,
+  ): Promise<void> {
+    await env.DB.prepare(
+      "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, miner_authored, created_at) VALUES (?, ?, ?, 'gate_decision', ?, 'gittensory-native', ?, NULL, ?, CURRENT_TIMESTAMP)",
+    )
+      .bind(`gd:${minerAuthored ? "m" : "h"}:${project}#${pr}`, project, `${project}#${pr}`, pred, `sha${pr}`, minerAuthored ? 1 : 0)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?, ?, ?, 'pr_outcome', ?, 'gittensory-native', NULL, NULL, CURRENT_TIMESTAMP)",
+    )
+      .bind(`po:${minerAuthored ? "m" : "h"}:${project}#${pr}`, project, `${project}#${pr}`, truth)
+      .run();
+  }
+
+  // IMPORTANT (all scenarios below): the EXISTING/unscoped `report` pass is NOT disjoint from miner-authored
+  // data — it is `source='gittensory-native'` with NO miner_authored filter, so it counts EVERY prediction for
+  // a project, miner-authored or not (preserving that pass's existing, unchanged meaning: overall accuracy).
+  // Only the SEPARATE `minerOnly` pass excludes non-miner rows. So a project's miner-authored rows are counted
+  // TWICE — once in the mixed/unscoped population, once in the miner-only subset — and demonstrating "engages
+  // one scope but not the other" requires enough volume on the healthy side to keep the MIXED population's
+  // precision on the opposite side of the floor from the SUBSET's precision.
+
+  it("ENGAGES the miner-scoped holdonly flag (holdonly:<project>:miner) when miner-authored predictions show low merge precision, while the human-scoped flag for the SAME project stays clear", async () => {
+    const env = createTestEnv();
+    // Miner-authored: 12 would-merge, only 4 confirmed → 33% precision, below the floor.
+    for (let i = 0; i < 4; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", true);
+    for (let i = 4; i < 12; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "closed", true);
+    // Human-authored, SAME project: 50 would-merge, all confirmed. Diluted into the MIXED population: (4+50) /
+    // (12+50) = 87.1%, above the floor — the mixed/unscoped pass reads healthy even though the miner SUBSET
+    // (4/12 = 33%) does not.
+    for (let i = 100; i < 150; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", false);
+
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await runSelfTuneBreaker(env);
+
+    expect(await isHoldOnly(env, "owner/repo:miner")).toBe(true);
+    expect(await isHoldOnly(env, "owner/repo")).toBe(false);
+    expect(err.mock.calls.some(([l]) => String(l).includes('"event":"miner_breaker_engaged"') && String(l).includes('"project":"owner/repo:miner"'))).toBe(true);
+    err.mockRestore();
+  });
+
+  it("does NOT engage the miner-scoped flag when the mixed population is only dragged down by NON-miner rows — the leak #2352 exists to prevent, in the other direction", async () => {
+    const env = createTestEnv();
+    // Human-authored: 12 would-merge, only 4 confirmed → 33% precision — drags the MIXED population's precision
+    // down (there is no dilution on this side: this IS the whole non-miner population).
+    for (let i = 0; i < 4; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", false);
+    for (let i = 4; i < 12; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "closed", false);
+    // Miner-authored, SAME project: perfectly healthy on its own (the miner-only SUBSET reads 100%).
+    for (let i = 100; i < 112; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", true);
+
+    await runSelfTuneBreaker(env);
+
+    // Mixed: (4+12)/(12+12) = 66.7% < floor → the existing, unscoped breaker still fires (unchanged invariant).
+    expect(await isHoldOnly(env, "owner/repo")).toBe(true);
+    // Miner-only subset: 12/12 = 100% >= floor → must NOT engage just because the MIXED population is unhealthy.
+    expect(await isHoldOnly(env, "owner/repo:miner")).toBe(false);
+  });
+
+  it("ENGAGES the miner-scoped CLOSE breaker (closehold:<project>:miner) independently of the human-scoped close breaker", async () => {
+    const env = createTestEnv();
+    for (let i = 0; i < 4; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "close", "closed", true);
+    for (let i = 4; i < 12; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "close", "merged", true);
+    // Dilute the mixed population with healthy non-miner close predictions, same ratio as the merge scenario.
+    for (let i = 100; i < 150; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "close", "closed", false);
+
+    await runSelfTuneBreaker(env);
+
+    expect(await isCloseHoldOnly(env, "owner/repo:miner")).toBe(true);
+    expect(await isCloseHoldOnly(env, "owner/repo")).toBe(false);
+  });
+
+  it("clearing the human-scoped holdonly flag does NOT clear the miner-scoped one, and vice versa — they are genuinely distinct flags", async () => {
+    const env = createTestEnv();
+    const flags = createFlagStore(env);
+    // Engage BOTH scopes directly, then backdate both past the 24h cooldown.
+    await flags.setFlag("holdonly:owner/repo", true);
+    await flags.setFlag("holdonly:owner/repo:miner", true);
+    await env.DB.prepare(
+      "UPDATE system_flags SET updated_at = datetime('now', '-2 days') WHERE key IN ('holdonly:owner/repo', 'holdonly:owner/repo:miner')",
+    ).run();
+    expect(await isHoldOnly(env, "owner/repo")).toBe(true);
+    expect(await isHoldOnly(env, "owner/repo:miner")).toBe(true);
+
+    // Miner-authored stays genuinely failing (4/12 = 33%). Enough healthy non-miner volume dilutes the MIXED
+    // population back above the floor ((4+50)/(12+50) = 87.1%) so the unscoped flag recovers, while the
+    // miner-only SUBSET (still 33%) does not.
+    for (let i = 0; i < 4; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", true);
+    for (let i = 4; i < 12; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "closed", true);
+    for (let i = 100; i < 150; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", false);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runSelfTuneBreaker(env);
+    log.mockRestore();
+
+    expect(await isHoldOnly(env, "owner/repo")).toBe(false); // human/mixed-scoped: recovered → auto-cleared
+    expect(await isHoldOnly(env, "owner/repo:miner")).toBe(true); // miner-scoped: still failing → stays engaged
+  });
+
+  it("the miner-scoped flag auto-clears independently once ITS cooldown elapses and ITS precision recovers, while a still-engaged (still genuinely failing) mixed-scoped flag is untouched", async () => {
+    const env = createTestEnv();
+    const flags = createFlagStore(env);
+    await flags.setFlag("holdonly:owner/repo", true);
+    await flags.setFlag("holdonly:owner/repo:miner", true);
+    await env.DB.prepare(
+      "UPDATE system_flags SET updated_at = datetime('now', '-2 days') WHERE key IN ('holdonly:owner/repo', 'holdonly:owner/repo:miner')",
+    ).run();
+
+    // Miner-authored fully recovers (12/12 = 100%). Non-miner data for the SAME project stays genuinely bad
+    // (4/12 = 33%) — with no dilution on that side, the MIXED population is (12+4)/(12+12) = 66.7%, still below
+    // the floor, so the mixed/unscoped flag correctly stays engaged (this is a REAL still-failing population,
+    // not merely "no fresh sample" — a stronger claim than the existing #autoclear-deadlock "no signal" case).
+    for (let i = 0; i < 12; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", true);
+    for (let i = 100; i < 104; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "merged", false);
+    for (let i = 104; i < 112; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "closed", false);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runSelfTuneBreaker(env);
+    log.mockRestore();
+
+    expect(await isHoldOnly(env, "owner/repo:miner")).toBe(false);
+    expect(await isHoldOnly(env, "owner/repo")).toBe(true);
+  });
+
+  it("does NOT engage the miner-scoped breaker with no miner-authored history at all (fail-safe / byte-identical)", async () => {
+    const env = createTestEnv();
+    for (let i = 0; i < 12; i += 1) await seedDecisionAndOutcomeScoped(env, "owner/repo", i, "merge", "closed", false);
+
+    await runSelfTuneBreaker(env);
+
+    expect(await isHoldOnly(env, "owner/repo:miner")).toBe(false);
+  });
+});
+
 // ── integration: the PR-closed webhook records pr_outcome through processJob ────────────────────────────────────
 
 describe("processJob(github-webhook) wires pr_outcome recording on a PR close", () => {

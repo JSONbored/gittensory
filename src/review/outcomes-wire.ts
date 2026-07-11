@@ -513,6 +513,91 @@ const BREAKER_EVAL_WINDOW_DAYS = 90;
  * break the cron). With no pr_outcome history the eval reads neutral → nothing engages → byte-identical. The
  * close breaker is INERT until selftune is enabled AND close-outcome data is present, exactly like its merge twin.
  */
+// #2352: the flag-scope suffix that makes a miner-originated project's breaker flags (holdonly:<project>:miner
+// / closehold:<project>:miner) DISTINCT from the same project's human/mixed-population flags. Every downstream
+// primitive that keys on `project` -- applyAutoTune/applyCloseAutoTune/maybeAutoClear* (auto-tune.ts),
+// createFlagStore, listEngagedProjectScopes -- is already fully generic over that opaque string, so re-keying
+// a report's rows with this suffix is the ENTIRE mechanism; none of those primitives needed to change.
+const MINER_BREAKER_SCOPE_SUFFIX = ":miner";
+
+function minerBreakerScope(project: string): string {
+  return `${project}${MINER_BREAKER_SCOPE_SUFFIX}`;
+}
+
+/** Run the full engage + auto-clear sequence for one {@link GateEvalReport} (either the plain project-keyed
+ *  report or a miner-rescoped one). `eventPrefix` namespaces the emitted log events (`""` for the existing
+ *  human/mixed pass, `"miner_"` for the #2352 miner-scoped pass) so an operator can tell which population
+ *  triggered a given line. `engagedHoldonly`/`engagedClosehold` are this SAME scope's already-engaged flags
+ *  (the caller pre-splits {@link listEngagedProjectScopes}'s result by scope) -- passing the WRONG scope's
+ *  engaged list here would auto-clear a flag using the other population's precision, which is exactly the
+ *  cross-scope leak #2352 exists to prevent. */
+async function runBreakerPassForReport(
+  flags: FlagStore,
+  report: GateEvalReport,
+  engagedHoldonly: readonly string[],
+  engagedClosehold: readonly string[],
+  nowMs: number,
+  eventPrefix: string,
+): Promise<void> {
+  const engaged = await applyAutoTune(flags, report);
+  for (const action of engaged) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: `${eventPrefix}breaker_engaged`,
+        project: action.project,
+        mergePrecision: action.mergePrecision,
+        decided: action.decided,
+        floor: AUTOTUNE_MERGE_PRECISION_FLOOR,
+      }),
+    );
+  }
+  // CLOSE-side breaker: engage closehold for any repo whose close precision dropped below the floor.
+  const closeEngaged = await applyCloseAutoTune(flags, report);
+  for (const action of closeEngaged) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: `${eventPrefix}close_breaker_engaged`,
+        project: action.project,
+        closePrecision: action.closePrecision,
+        decided: action.decided,
+        floor: AUTOTUNE_CLOSE_PRECISION_FLOOR,
+      }),
+    );
+  }
+  // OBSERVABILITY: a single summary line of the engaged close-hold backlog so a human can see, at a glance,
+  // how many (and which) repos are currently holding would-closes for review. Only emitted when ≥1 engaged.
+  if (closeEngaged.length > 0) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: `${eventPrefix}closehold_backlog`,
+        count: closeEngaged.length,
+        projects: closeEngaged.map((a) => a.project),
+      }),
+    );
+  }
+  // Auto-clear any auto-engaged breaker (merge AND close) that has cooled down + recovered. Candidates are the
+  // UNION of report.rows (projects with a fresh decided sample) and every project currently holding a
+  // per-project flag IN THIS SCOPE (#autoclear-deadlock) — a project whose breaker is suppressing 100% of its
+  // merges/closes stops producing new decided samples for THAT action class and can drop out of report.rows
+  // entirely, which would otherwise strand its flag engaged forever regardless of how long the cooldown has
+  // elapsed.
+  const mergeClearCandidates = new Set([...report.rows.map((row) => row.project), ...engagedHoldonly]);
+  const closeClearCandidates = new Set([...report.rows.map((row) => row.project), ...engagedClosehold]);
+  for (const project of mergeClearCandidates) {
+    if (await maybeAutoClearHoldOnly(flags, report, project, nowMs)) {
+      console.log(JSON.stringify({ event: `${eventPrefix}breaker_auto_cleared`, project }));
+    }
+  }
+  for (const project of closeClearCandidates) {
+    if (await maybeAutoClearCloseHoldOnly(flags, report, project, nowMs)) {
+      console.log(JSON.stringify({ event: `${eventPrefix}close_breaker_auto_cleared`, project }));
+    }
+  }
+}
+
 export async function runSelfTuneBreaker(env: Env): Promise<void> {
   try {
     const nowMs = Date.now();
@@ -521,64 +606,41 @@ export async function runSelfTuneBreaker(env: Env): Promise<void> {
       nowMs,
       source: GITTENSORY_NATIVE_SOURCE,
     });
+    // #2352: a SEPARATE, miner-scoped pass so a miner fleet's own self-review accuracy trips the SAME breaker
+    // independently of the maintainer's overall (mixed) accuracy. Re-keying every row's `project` with the
+    // `:miner` suffix (see MINER_BREAKER_SCOPE_SUFFIX's own doc comment) is what makes every downstream
+    // primitive naturally produce a DISTINCT flag, with zero changes to auto-tune.ts itself.
+    const minerReportRaw = await computeGateEval(env, {
+      days: BREAKER_EVAL_WINDOW_DAYS,
+      nowMs,
+      source: GITTENSORY_NATIVE_SOURCE,
+      minerOnly: true,
+    });
+    const minerReport: GateEvalReport = {
+      hasSignal: minerReportRaw.hasSignal,
+      rows: minerReportRaw.rows.map((row) => ({ ...row, project: minerBreakerScope(row.project) })),
+    };
+
     const flags = createFlagStore(env);
-    const engaged = await applyAutoTune(flags, report);
-    for (const action of engaged) {
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "breaker_engaged",
-          project: action.project,
-          mergePrecision: action.mergePrecision,
-          decided: action.decided,
-          floor: AUTOTUNE_MERGE_PRECISION_FLOOR,
-        }),
-      );
-    }
-    // CLOSE-side breaker: engage closehold for any repo whose close precision dropped below the floor.
-    const closeEngaged = await applyCloseAutoTune(flags, report);
-    for (const action of closeEngaged) {
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "close_breaker_engaged",
-          project: action.project,
-          closePrecision: action.closePrecision,
-          decided: action.decided,
-          floor: AUTOTUNE_CLOSE_PRECISION_FLOOR,
-        }),
-      );
-    }
-    // OBSERVABILITY: a single summary line of the engaged close-hold backlog so a human can see, at a glance,
-    // how many (and which) repos are currently holding would-closes for review. Only emitted when ≥1 engaged.
-    if (closeEngaged.length > 0) {
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "closehold_backlog",
-          count: closeEngaged.length,
-          projects: closeEngaged.map((a) => a.project),
-        }),
-      );
-    }
-    // Auto-clear any auto-engaged breaker (merge AND close) that has cooled down + recovered. Candidates are the
-    // UNION of report.rows (projects with a fresh decided sample) and every project currently holding a
-    // per-project flag (#autoclear-deadlock) — a project whose breaker is suppressing 100% of its merges/closes
-    // stops producing new decided samples for THAT action class and can drop out of report.rows entirely, which
-    // would otherwise strand its flag engaged forever regardless of how long the cooldown has elapsed.
     const engagedScopes = await listEngagedProjectScopes(env);
-    const mergeClearCandidates = new Set([...report.rows.map((row) => row.project), ...engagedScopes.holdonly]);
-    const closeClearCandidates = new Set([...report.rows.map((row) => row.project), ...engagedScopes.closehold]);
-    for (const project of mergeClearCandidates) {
-      if (await maybeAutoClearHoldOnly(flags, report, project, nowMs)) {
-        console.log(JSON.stringify({ event: "breaker_auto_cleared", project }));
-      }
-    }
-    for (const project of closeClearCandidates) {
-      if (await maybeAutoClearCloseHoldOnly(flags, report, project, nowMs)) {
-        console.log(JSON.stringify({ event: "close_breaker_auto_cleared", project }));
-      }
-    }
+    const isMinerScope = (project: string): boolean => project.endsWith(MINER_BREAKER_SCOPE_SUFFIX);
+
+    await runBreakerPassForReport(
+      flags,
+      report,
+      engagedScopes.holdonly.filter((project) => !isMinerScope(project)),
+      engagedScopes.closehold.filter((project) => !isMinerScope(project)),
+      nowMs,
+      "",
+    );
+    await runBreakerPassForReport(
+      flags,
+      minerReport,
+      engagedScopes.holdonly.filter(isMinerScope),
+      engagedScopes.closehold.filter(isMinerScope),
+      nowMs,
+      "miner_",
+    );
   } catch (error) {
     console.warn(
       JSON.stringify({

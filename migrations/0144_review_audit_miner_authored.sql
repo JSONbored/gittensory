@@ -1,0 +1,16 @@
+-- #2352: extend the live auto-tune circuit-breaker (src/review/auto-tune.ts) to consider miner-originated PRs
+-- as a distinguishable population, so a miner fleet's own self-review accuracy trips the SAME safety breaker
+-- independently of the maintainer's overall (mixed) review-stack accuracy.
+--
+-- review_audit (migration 0049) deliberately carries NO actor-identifying data (it feeds the anonymized
+-- cross-instance export in src/selfhost/orb-collector.ts -- see that migration's own "Privacy: ... No actor
+-- logins" comment). This column preserves that: it is a coarse, non-identifying miner/non-miner CATEGORY, not
+-- a login -- it reveals no more than "was this PR's author, at decision time, a confirmed official Gittensor
+-- miner" (src/queue/processors.ts's `confirmedContributor`, itself an aggregate boolean from the live
+-- Gittensor subnet API, not a stored identity).
+--
+-- Written by src/review/parity-wire.ts's recordNativeGateDecision alongside the existing `source` column (that
+-- write is UNCHANGED -- this is a strictly additive column, so every existing read of review_audit, including
+-- computeGateEval's current unscoped/source-scoped passes, is byte-identical unless it opts into the new
+-- `minerOnly` filter). Read by src/review/parity.ts's computeGateEval when its new `minerOnly` option is set.
+ALTER TABLE review_audit ADD COLUMN miner_authored INTEGER NOT NULL DEFAULT 0;

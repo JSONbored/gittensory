@@ -84,17 +84,22 @@ export const REVERSAL_DISCOUNT_WEIGHT = 0;
  *  pr_outcome (ground truth) is the human's realized merge/close, so it is NOT source-scoped — both
  *  systems are graded against the same answer key. Also LEFT JOINs a reversal existence check (#2348) so the
  *  fold below can additionally compute weightedMergeConfirmed/weightedCloseConfirmed alongside the existing
- *  raw counts — see REVERSAL_DISCOUNT_WEIGHT's doc comment for the formula. */
-export async function computeGateEval(env: Env, opts: { days: number; nowMs: number; source?: string }): Promise<GateEvalReport> {
+ *  raw counts — see REVERSAL_DISCOUNT_WEIGHT's doc comment for the formula.
+ *  `minerOnly` (#2352) additionally scopes the PREDICTION side to rows recorded with `miner_authored = 1`
+ *  (migration 0144) — orthogonal to `source`: both filters AND together when both are set. Ground truth stays
+ *  unscoped either way (same answer key). Omitted (the default, and every pre-#2352 caller) is byte-identical
+ *  to before this option existed. */
+export async function computeGateEval(env: Env, opts: { days: number; nowMs: number; source?: string; minerOnly?: boolean }): Promise<GateEvalReport> {
   const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(opts.days, 730) : 90;
   const fromIso = new Date(opts.nowMs - days * 86_400_000).toISOString().slice(0, 10);
   // SQLite "bare column with MAX()" picks the column from the max-created_at row → the LATEST decision /
   // outcome per target (a reopened+reclosed PR keeps its final state).
   const sourceFilter = opts.source ? "AND source = ?" : "";
+  const minerFilter = opts.minerOnly ? "AND miner_authored = 1" : "";
   const sql = `
     WITH gd AS (
       SELECT target_id, project, decision AS pred, MAX(created_at) AS t
-      FROM review_audit WHERE event_type = 'gate_decision' AND decision IS NOT NULL AND created_at >= ? ${sourceFilter}
+      FROM review_audit WHERE event_type = 'gate_decision' AND decision IS NOT NULL AND created_at >= ? ${sourceFilter} ${minerFilter}
       GROUP BY target_id
     ),
     po AS (

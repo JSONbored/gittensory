@@ -322,6 +322,54 @@ describe("computeGateEval — source scoping for per-system standalone accuracy 
     expect(bound).toHaveLength(1); // only fromIso
   });
 
+  it("#2352: adds the miner_authored filter when minerOnly is set, alongside an unrelated source filter", async () => {
+    let boundSql = "";
+    let bound: unknown[] = [];
+    const env = {
+      DB: {
+        prepare: (sql: string) => {
+          boundSql = sql;
+          return { bind: (...a: unknown[]) => { bound = a; return { all: async () => ({ results: [] }) }; } };
+        },
+      },
+    } as unknown as Env;
+    await computeGateEval(env, { days: 90, nowMs: NOW, source: "gittensory-native", minerOnly: true });
+    expect(boundSql).toContain("AND miner_authored = 1");
+    expect(boundSql).toContain("AND source = ?");
+    // miner_authored = 1 is a literal in the SQL, not a bound param — only fromIso + source are bound.
+    expect(bound).toHaveLength(2);
+    expect(bound).toContain("gittensory-native");
+  });
+
+  it("#2352: omits the miner_authored filter (scores ALL authorship) when minerOnly is not set — behavior-preserving", async () => {
+    let boundSql = "";
+    const env = {
+      DB: {
+        prepare: (sql: string) => {
+          boundSql = sql;
+          return { bind: () => ({ all: async () => ({ results: [] }) }) };
+        },
+      },
+    } as unknown as Env;
+    await computeGateEval(env, { days: 90, nowMs: NOW });
+    expect(boundSql).not.toContain("miner_authored");
+  });
+
+  it("#2352: minerOnly works independently of source (no source given, minerOnly set)", async () => {
+    let boundSql = "";
+    const env = {
+      DB: {
+        prepare: (sql: string) => {
+          boundSql = sql;
+          return { bind: () => ({ all: async () => ({ results: [] }) }) };
+        },
+      },
+    } as unknown as Env;
+    await computeGateEval(env, { days: 90, nowMs: NOW, minerOnly: true });
+    expect(boundSql).toContain("AND miner_authored = 1");
+    expect(boundSql).not.toContain("AND source = ?");
+  });
+
   it("folds the prediction-vs-outcome confusion matrix into per-project precisions", async () => {
     // A stub D1 returning the gd⨝po cells directly (the self-join is exercised against real SQL in prod;
     // here we drive the FOLD): merge-correct/merge-false/close-correct/close-false/hold buckets.

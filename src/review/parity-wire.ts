@@ -137,7 +137,19 @@ type ParityRecorderEnv = {
  */
 export async function recordNativeGateDecision(
   env: ParityRecorderEnv,
-  input: { project: string; pullNumber: number; headSha: string | null | undefined; conclusion: GateCheckConclusion; reasonCode?: string | null | undefined; action?: GateAction | undefined },
+  input: {
+    project: string;
+    pullNumber: number;
+    headSha: string | null | undefined;
+    conclusion: GateCheckConclusion;
+    reasonCode?: string | null | undefined;
+    action?: GateAction | undefined;
+    /** #2352: true when the PR's author is a confirmed official Gittensor miner (processors.ts's
+     *  `confirmedContributor`) at decision time. A coarse, non-identifying category -- NOT a login -- so this
+     *  stays within review_audit's own "no actor-identifying data" design (see migration 0144's own comment).
+     *  Omitted defaults to `false` (not miner-originated), matching every pre-#2352 caller unchanged. */
+    minerAuthored?: boolean | undefined;
+  },
 ): Promise<void> {
   // Self-hosted instances always record (their own local DB; exportOrbBatch needs this data). The cloud
   // worker keeps the exact flag-gated, byte-identical-when-off contract.
@@ -148,16 +160,17 @@ export async function recordNativeGateDecision(
   const project = input.project.slice(0, 200);
   const targetId = `${project}#${input.pullNumber}`;
   const summary = input.reasonCode ? input.reasonCode.slice(0, 200) : null;
+  const minerAuthored = input.minerAuthored === true ? 1 : 0;
   try {
     // Deterministic id per (source, project, pr, sha): a re-run at the SAME commit REPLACES its prior decision
     // (the latest finalize wins), while a new commit gets its own row. event_type/source default in the schema
     // but are written explicitly for clarity.
     await env.DB.prepare(
-      `INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at)
-       VALUES (?, ?, ?, 'gate_decision', ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET decision = excluded.decision, summary = excluded.summary, created_at = excluded.created_at`,
+      `INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, miner_authored, created_at)
+       VALUES (?, ?, ?, 'gate_decision', ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET decision = excluded.decision, summary = excluded.summary, miner_authored = excluded.miner_authored, created_at = excluded.created_at`,
     )
-      .bind(`gate:${GITTENSORY_NATIVE_SOURCE}:${targetId}@${input.headSha}`, project, targetId, action, GITTENSORY_NATIVE_SOURCE, input.headSha, summary, nowIso())
+      .bind(`gate:${GITTENSORY_NATIVE_SOURCE}:${targetId}@${input.headSha}`, project, targetId, action, GITTENSORY_NATIVE_SOURCE, input.headSha, summary, minerAuthored, nowIso())
       .run();
   } catch (error) {
     // Telemetry must never break finalization.

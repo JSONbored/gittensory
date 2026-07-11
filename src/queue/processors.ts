@@ -9200,6 +9200,9 @@ async function maybePublishPrPublicSurface(
         headSha: pr.headSha,
         conclusion: gateEvaluation.conclusion,
         reasonCode,
+        // #2352: lets the live auto-tune breaker (src/review/outcomes-wire.ts's runSelfTuneBreaker) scope a
+        // SEPARATE precision read to miner-originated PRs, independently of the maintainer's overall accuracy.
+        minerAuthored: confirmedContributor,
       });
       // #2349 (PR 1): additive per-contributor calibration data, mirroring recordNativeGateDecision's own
       // action derivation above so both writers agree on whether this conclusion is a comparable decision --

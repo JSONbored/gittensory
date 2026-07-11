@@ -118,6 +118,34 @@ describe("recordNativeGateDecision — flag-gated SHADOW recording into review_a
     expect(typeof rows[0]!.created_at).toBe("string");
   });
 
+  it("#2352: records miner_authored = 1 when minerAuthored is true", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "success", minerAuthored: true });
+
+    const rows = await rawAll(env, "SELECT * FROM review_audit");
+    expect(rows[0]).toMatchObject({ miner_authored: 1 });
+  });
+
+  it("#2352: records miner_authored = 0 when minerAuthored is false or omitted (default, not a confirmed miner)", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "success", minerAuthored: false });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 8, headSha: "def456", conclusion: "success" });
+
+    const rows = await rawAll(env, "SELECT * FROM review_audit ORDER BY target_id");
+    expect(rows[0]).toMatchObject({ target_id: "owner/repo#7", miner_authored: 0 });
+    expect(rows[1]).toMatchObject({ target_id: "owner/repo#8", miner_authored: 0 });
+  });
+
+  it("#2352: a re-run at the same commit can flip miner_authored (latest finalize wins, mirroring decision/summary)", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "success", minerAuthored: false });
+    await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "success", minerAuthored: true });
+
+    const rows = await rawAll(env, "SELECT * FROM review_audit");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ miner_authored: 1 });
+  });
+
   it("a re-run at the SAME commit REPLACES the prior decision (latest finalize wins, no duplicate)", async () => {
     const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true" });
     await recordNativeGateDecision(env, { project: "owner/repo", pullNumber: 7, headSha: "abc123", conclusion: "success", reasonCode: "all_clear" });
@@ -405,8 +433,8 @@ function prWebhook(deliveryId: string, author: string) {
   };
 }
 
-async function nativeRows(env: Env): Promise<Array<{ decision: string; summary: string; source: string }>> {
-  const res = await env.DB.prepare("SELECT decision, summary, source FROM review_audit WHERE source = ? AND event_type = 'gate_decision'").bind(GITTENSORY_NATIVE_SOURCE).all<{ decision: string; summary: string; source: string }>();
+async function nativeRows(env: Env): Promise<Array<{ decision: string; summary: string; source: string; miner_authored: number }>> {
+  const res = await env.DB.prepare("SELECT decision, summary, source, miner_authored FROM review_audit WHERE source = ? AND event_type = 'gate_decision'").bind(GITTENSORY_NATIVE_SOURCE).all<{ decision: string; summary: string; source: string; miner_authored: number }>();
   return res.results;
 }
 
@@ -474,5 +502,34 @@ describe("recordNativeGateDecision wired into the review FINALIZE path (GITTENSO
     const rows = await nativeRows(env);
     expect(rows.length).toBe(1);
     expect(rows[0]).toMatchObject({ decision: "hold", source: GITTENSORY_NATIVE_SOURCE, summary: "missing_linked_issue" });
+  });
+
+  it("#2352: a confirmed-miner author's gate decision is recorded with miner_authored = 1", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true", GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedGateEnabledRepo(env);
+    await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: parityMinerSnapshot("contributor") }, 60_000);
+    stubFinalizeFetch("contributor");
+    try {
+      await processJob(env, prWebhook("parity-finalize-miner", "contributor"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const rows = await nativeRows(env);
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ miner_authored: 1 });
+  });
+
+  it("#2352: a non-confirmed author's gate decision is recorded with miner_authored = 0", async () => {
+    const env = createTestEnv({ GITTENSORY_REVIEW_PARITY_AUDIT: "true", GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await seedGateEnabledRepo(env);
+    stubFinalizeFetch(null); // miner list empty → author unconfirmed
+    try {
+      await processJob(env, prWebhook("parity-finalize-nonminer", "contributor"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const rows = await nativeRows(env);
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ miner_authored: 0 });
   });
 });
