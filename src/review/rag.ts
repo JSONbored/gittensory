@@ -482,7 +482,7 @@ export async function retrieveContextWithMetrics(
       const p = (m.metadata?.path as string) ?? "";
       return p && !exclude.has(p) && (typeof m.score !== "number" || m.score >= configuredMinScore);
     });
-    const texts = matches.length > 0 ? await readChunkTexts(storage, matches.map((m) => m.id)) : new Map<string, string>();
+    const texts = matches.length > 0 ? await readChunkTexts(storage, opts.project, opts.repo, matches.map((m) => m.id)) : new Map<string, string>();
     let chunks = matches
       .map((m) => ({
         // the `path ?? ""` leg is unreachable — surviving matches already passed the filter's `p && …` so metadata.path is a truthy string here
@@ -609,13 +609,13 @@ export function formatRetrievedContext(chunks: Array<{ path: string; text: strin
   return lines.join("\n");
 }
 
-export async function readChunkTexts(storage: StorageAdapter, ids: string[]): Promise<Map<string, string>> {
+export async function readChunkTexts(storage: StorageAdapter, project: string, repo: string, ids: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (ids.length === 0) return map;
   try {
     const placeholders = ids.map(() => "?").join(",");
-    const rows = await storage.prepare(`SELECT id, text FROM repo_chunks WHERE id IN (${placeholders})`)
-      .bind(...ids)
+    const rows = await storage.prepare(`SELECT id, text FROM repo_chunks WHERE project = ? AND repo = ? AND id IN (${placeholders})`)
+      .bind(project, repo, ...ids)
       .all<{ id: string; text: string }>();
     for (const r of rows.results ?? []) map.set(r.id, r.text);
   } catch (error) {

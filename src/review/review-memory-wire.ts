@@ -4,9 +4,12 @@
 // src/signals/focus-manifest.ts) — so a repo can only ever NARROW what the operator has already turned on,
 // never widen it. Both OFF by default: with the env flag unset, the suppression store is never read from the
 // review path at all (the caller guards on this flag before doing any D1 read or matching), so the review
-// stays byte-identical to today.
+// stays byte-identical to today. `shouldApplyReviewMemory` is the "manifestOnly" precedence shape (#4616) —
+// see `resolveManifestOnlyFeature`/`FeatureActivationMode` in `./feature-activation` for the shared core this,
+// and four sibling `review:`-block features, now delegate to.
 
 import { listReviewSuppressions, recordAuditEvent } from "../db/repositories";
+import { resolveManifestOnlyFeature } from "./feature-activation";
 import { matchSuppressions, type ReviewMemoryFindingInput } from "./review-memory-match";
 import type { AdvisoryFinding, ReviewSuppressionRecord } from "../types";
 import { incr } from "../selfhost/metrics";
@@ -26,7 +29,7 @@ export function shouldApplyReviewMemory(
   env: { GITTENSORY_REVIEW_MEMORY?: string | undefined },
   manifestReviewMemoryEnabled: boolean,
 ): boolean {
-  return isReviewMemoryEnabled(env) && manifestReviewMemoryEnabled;
+  return resolveManifestOnlyFeature(isReviewMemoryEnabled(env), manifestReviewMemoryEnabled);
 }
 // Short in-isolate TTL cache for listReviewSuppressions (#4508), mirroring rag.ts's chunkCountCache: repeated
 // unified-comment renders for the same repo within a short window (the 3 independent maybePublishPrPublicSurface

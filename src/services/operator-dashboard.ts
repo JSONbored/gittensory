@@ -26,6 +26,7 @@ import type {
   WeeklyValueReport,
 } from "../types";
 import { computeFleetAnalytics, type FleetAnalytics } from "../orb/analytics";
+import { computeAgentHealth, type AgentHealth } from "../review/ops";
 import { computeGateEval, type GateEvalReport } from "../review/parity";
 import { computeCalibration, type Calibration } from "../review/ops";
 import { computeCycleTimeAggregate, type CycleTimeAggregate } from "../review/stats";
@@ -69,6 +70,8 @@ export type OperatorDashboardPayload = {
   cycleTime: CycleTimeAggregate;
   // Confidence-vs-outcome calibration curve (#2192): merge confidence bins + recommended floor from computeCalibration.
   calibration: Calibration;
+  // Agent reversal health (#2193): how often humans reopened/reverted bot auto-actions (ops.ts AgentHealth).
+  agentHealth: AgentHealth;
 };
 
 const USAGE_WINDOW_DAYS = 7;
@@ -94,7 +97,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     fleetMetrics,
     gateEval,
     cycleTime,
-    calibration,
+    agentHealth,
   ] = await Promise.all([
     listRepositories(env),
     listInstallations(env),
@@ -117,6 +120,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     // #2194: cycle-time percentiles from the stats feed; fails safe to an empty aggregate.
     computeCycleTimeAggregate(env, { days: 90, nowMs: Date.now() }),
     computeCalibration(env, operatorAgentConfig(env)),
+    computeAgentHealth(env, operatorAgentConfig(env)),
   ]);
   const weeklyValueReport = buildWeeklyValueReport({
     generatedAt: nowIso(),
@@ -213,6 +217,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     gateEval,
     cycleTime,
     calibration,
+    agentHealth,
   };
 }
 
@@ -223,6 +228,8 @@ function operatorAgentConfig(env: Env): { slug: string; secrets: Record<string, 
       : "gittensory";
   return { slug, secrets: {} };
 }
+
+export const __operatorDashboardInternals = { operatorAgentConfig };
 
 export function latestUsageRollup(rollups: ProductUsageDailyRollupRecord[]): ProductUsageDailyRollupRecord | null {
   if (rollups.length === 0) return null;

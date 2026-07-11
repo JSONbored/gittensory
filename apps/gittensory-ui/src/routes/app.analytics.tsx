@@ -17,6 +17,8 @@ import { CycleTimeCard } from "@/components/site/app-panels/cycle-time-card";
 import type { CycleTimeAggregate } from "@/components/site/app-panels/cycle-time-card-model";
 import { CalibrationCard } from "@/components/site/app-panels/calibration-card";
 import type { GateCalibration } from "@/components/site/app-panels/calibration-card-model";
+import { ReversalHealthCard } from "@/components/site/app-panels/reversal-health-card";
+import type { ReversalHealth } from "@/components/site/app-panels/reversal-health-card-model";
 import { AnalyticsCardShell } from "@/components/site/app-panels/analytics-card-shell";
 import {
   AcceptanceRateCard,
@@ -119,6 +121,7 @@ type OperatorDashboard = {
   gateEval?: GateEvalReport;
   cycleTime?: CycleTimeAggregate;
   calibration?: GateCalibration;
+  agentHealth?: ReversalHealth;
   acceptance?: FindingAcceptance;
   findingsBreakdown?: FindingsBreakdown;
 };
@@ -224,6 +227,7 @@ function ProductAnalytics() {
 
           {data.calibration ? <CalibrationCard calibration={data.calibration} /> : null}
 
+          {data.agentHealth ? <ReversalHealthCard health={data.agentHealth} /> : null}
           <AcceptanceRateCard acceptance={data.acceptance} />
 
           <FindingsBreakdownCard findings={data.findingsBreakdown} />

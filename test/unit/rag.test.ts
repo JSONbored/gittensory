@@ -383,6 +383,48 @@ describe("rag: fail-safe (never throws; degrades to no context)", () => {
     expect(queryEmbedBatch).toBe(1); // a single query string, regardless of the configured batch size
   });
 
+  it("retrieveContextWithMetrics drops vector matches whose chunk rows belong to a colliding repo namespace", async () => {
+    const requested = { project: "acme", repo: `${"r".repeat(59)}-public` };
+    const victim = { project: "acme", repo: `${"r".repeat(59)}-private` };
+    expect(ragNamespace(requested.project, requested.repo)).toBe(ragNamespace(victim.project, victim.repo));
+
+    const matches = [{ id: "victim::0", score: 0.95, metadata: { path: "internal/security/secret-runbook.md" } }];
+    const vector = { query: async () => ({ matches }) } as unknown as VectorAdapter;
+    const storage = {
+      prepare: (query: string) => ({
+        bind: (...values: unknown[]) => ({
+          first: async () => ({ n: 1 }),
+          all: async () => ({
+            results:
+              query.includes("AND id IN") && values[0] === victim.project && values[1] === victim.repo
+                ? [{ id: "victim::0", text: "private incident response runbook" }]
+                : [],
+          }),
+          run: async () => undefined,
+        }),
+      }),
+      batch: async () => undefined,
+    } as unknown as StorageAdapter;
+
+    const out = await retrieveContextWithMetrics(
+      { storage, vector, inference: ai1024 },
+      {
+        project: requested.project,
+        repo: requested.repo,
+        queryText: "incident response runbook token rotation coverage",
+        reranker: "off",
+      },
+    );
+
+    expect(out.context).toBe("");
+    expect(out.metrics).toMatchObject({
+      candidates: 1,
+      kept: 0,
+      paths: [],
+      injectedChars: 0,
+    });
+  });
+
   it("retrieveContextWithMetrics reports candidates, injected chars, and unique retrieved paths", async () => {
     const matches = [
       { id: "src/a.ts::0", score: 0.9, metadata: { path: "src/a.ts" } },
@@ -701,7 +743,7 @@ describe("rag: storage/inference catch paths return their fail-safe defaults", (
   it("readChunkTexts returns an empty Map when the storage read throws", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const storage = { prepare: () => { throw new Error("d1 down"); }, batch: async () => undefined } as unknown as StorageAdapter;
-    const map = await readChunkTexts(storage, ["id-1"]);
+    const map = await readChunkTexts(storage, "p", "o/r", ["id-1"]);
     expect(map.size).toBe(0);
     // #3894: previously a no-level console.log, invisible to Sentry.
     const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
@@ -710,7 +752,7 @@ describe("rag: storage/inference catch paths return their fail-safe defaults", (
   });
 
   it("readChunkTexts short-circuits on an empty id list", async () => {
-    expect((await readChunkTexts(storageStub(), [])).size).toBe(0);
+    expect((await readChunkTexts(storageStub(), "p", "o/r", [])).size).toBe(0);
   });
 
   it("readChunkTexts yields an empty Map when the SELECT returns no `results` key (the `rows.results ?? []` fallback)", async () => {
@@ -719,7 +761,7 @@ describe("rag: storage/inference catch paths return their fail-safe defaults", (
       prepare: () => ({ bind: () => ({ all: async () => ({}) }) }),
       batch: async () => undefined,
     } as unknown as StorageAdapter;
-    const map = await readChunkTexts(storage, ["id-1", "id-2"]);
+    const map = await readChunkTexts(storage, "p", "o/r", ["id-1", "id-2"]);
     expect(map.size).toBe(0);
   });
 });

@@ -517,6 +517,13 @@ review:
   # comment | commit. Default: null/comment (byte-identical -- no write access to any PR branch).
   # e2e_test_delivery: comment
 
+  # Opts THIS repo into the manifest_missing_tests AUTO-TRIGGER (#4196, part of the #4189 epic) -- an
+  # unprompted generation run whenever a PR looks like it needs tests. Separate from features.e2eTests, which
+  # only unlocks the maintainer-initiated paths (the `@gittensory generate-tests` command and the PR-panel
+  # checkbox). Bool | null. Default: null/false -- the auto-trigger never fires, even with e2eTests already
+  # on; a maintainer who wants unprompted generation opts in here explicitly, per repo.
+  # e2e_test_auto_trigger: false
+
   # Inline-comment layer toggles (#1956 / #1958). Bool | null. Default: null/false — byte-identical.
   # Requires operator flag GITTENSORY_REVIEW_INLINE_COMMENTS + cutover allowlist + review.inline_comments: true.
   # inline_comments: false
@@ -1106,17 +1113,20 @@ settings:
 #     auto_pause_after_reviewed_commits: 3
 
 # Per-repo activation overrides for the converged review features that ship behind a deployment-wide
-# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding/e2eTests/improvementSignal).
-# Each key is `true` (force on for this repo, subject to the env flag still being enabled), `false` (force off),
-# or omitted (falls back to the GITTENSORY_REVIEW_REPOS allowlist default -- an operator who sets nothing keeps
-# today's behavior). Exception: `safety` is force-on-only -- an untrusted repo-controlled `false` is treated as
-# "no opinion" rather than an active force-off (#2269), since a lower-trust actor must never be able to silently
-# defeat the operator's own security-hardening enablement. `e2eTests` (#4190) and `improvementSignal` (#4738,
-# foundation phase of the #4737 PR-improvement-signal epic) are plain symmetric overrides like
-# rag/reputation/unifiedComment -- neither AI-generated test content nor a read-only advisory quality-delta
-# signal carries a security-hardening rationale to protect from a repo-controlled override, so there's no
-# force-on/force-off asymmetry for either. `improvementSignal` is activation wiring only for now -- no tier
-# reads the resolved value yet.
+# GITTENSORY_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding/e2eTests/screenshots/
+# improvementSignal). Each key is `true` (force on for this repo, subject to the env flag still being
+# enabled), `false` (force off), or omitted (falls back to the GITTENSORY_REVIEW_REPOS allowlist default --
+# an operator who sets nothing keeps today's behavior). Exception: `safety` is force-on-only -- an untrusted
+# repo-controlled `false` is treated as "no opinion" rather than an active force-off (#2269), since a
+# lower-trust actor must never be able to silently defeat the operator's own security-hardening enablement.
+# `e2eTests` (#4190), `screenshots` (#4616), and `improvementSignal` (#4738, foundation phase of the #4737
+# PR-improvement-signal epic) are plain symmetric overrides like rag/reputation/unifiedComment -- none carries
+# a security-hardening or full-file-fetch rationale (unlike safety/grounding) that would justify a force-on/
+# force-off asymmetry. `screenshots` sits UNDER the separate, richer `review.visual.*` block further below
+# (route/preview-URL config, and `review.visual.enabled: false` as an always-available additional force-off);
+# this key only answers "does capture run for this repo at all," the same question its siblings answer for
+# their own feature. `improvementSignal` is activation wiring only for now -- no tier reads the resolved
+# value yet.
 # features:
 #   rag: true
 #   reputation: false
@@ -1124,6 +1134,7 @@ settings:
 #   safety: true
 #   grounding: true
 #   e2eTests: false
+#   screenshots: false
 #   improvementSignal: false
 
 # Registry-review lane (#2435): lets a self-hosted maintainer point gittensory at their OWN structured

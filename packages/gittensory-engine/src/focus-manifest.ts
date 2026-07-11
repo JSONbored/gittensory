@@ -208,22 +208,34 @@ export type CopycatGateMode = "off" | "warn" | "label" | "block";
 // (#4100) is now migrated too — its original "coupled to the merge/close DISPOSITION path" blocker was the
 // removed AI CI-refutation path (grounding-wire.ts's aiCiRefutationActive is now a vestigial historical-
 // compatibility helper with zero real callers); grounding today only shapes reviewer PROMPT content, same
-// shape as rag/reputation. `screenshots` has its own richer `visual:` block instead (review.visual.enabled,
-// #4083) since it carries more than a single boolean. contentLane got its own richer `contentLane:` block below
-// (#2435) instead of a boolean here, since it resolves to a whole RegistryLaneSpec, not an on/off toggle — see
-// resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts. `selftune` (#4104) ALSO deliberately lives
-// outside this block, as its own top-level `review.selftune` field below — it has no `GITTENSORY_REVIEW_REPOS`
-// allowlist to fall back to (its own repo scoping is `isAgentConfigured`, a different consent boundary), so it
-// doesn't fit this resolver's env-kill-switch → override → allowlist-default shape; see `selfTuneRepos` in
-// `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189 E2E-test-generation epic) fits this shape
-// exactly as a plain symmetric override — unlike `safety`/`grounding` it has no force-on-only or force-off-only
-// floor/ceiling, since AI-generated test content carries no security-hardening or full-file-fetch rationale to
-// protect from a repo-controlled override. `improvementSignal` (#4738, foundation phase of the #4737 PR-
-// improvement-signal epic) is likewise a plain symmetric override: it is a READ-ONLY advisory quality-delta
-// signal, not a security control, so a repo-level `false` behaves like any other plain override with no
-// floor/ceiling. This is activation wiring only -- no tier reads the resolved value yet (sibling sub-issues
-// #4739-#4746 build the deterministic/LLM/panel behavior that will gate on it).
-export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests", "improvementSignal"] as const;
+// shape as rag/reputation. contentLane got its own richer `contentLane:` block below (#2435) instead of a
+// boolean here, since it resolves to a whole RegistryLaneSpec, not an on/off toggle — see
+// resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts (its own precedence already matches this
+// block's env-kill-switch → override → allowlist-default shape one-for-one; it just isn't literally routed
+// through resolveConvergedFeature yet — a disclosed, low-priority fast-follow, #4616). `selftune` (#4104)
+// ALSO deliberately lives outside this block, as its own top-level `review.selftune` field below — it has no
+// `GITTENSORY_REVIEW_REPOS` allowlist to fall back to (its own repo scoping is `isAgentConfigured`, a
+// different consent boundary), so it doesn't fit this resolver's env-kill-switch → override → allowlist-
+// default shape; see `selfTuneRepos` in `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189
+// E2E-test-generation epic) fits this shape exactly as a plain symmetric override — unlike `safety`/
+// `grounding` it has no force-on-only or force-off-only floor/ceiling, since AI-generated test content
+// carries no security-hardening or full-file-fetch rationale to protect from a repo-controlled override.
+// `screenshots` (#4616) joined this block for the SAME reason `e2eTests` fits it plainly: capturing a
+// before/after render of the PR's own web-visible files carries no security-hardening or full-file-fetch
+// rationale either, so it gets the standard override, not an asymmetric one. Before #4616 it had NO
+// `features:` override at all (env flag AND allowlist only) despite being documented right next to its six
+// siblings in `.gittensory.yml.example` — a self-hoster who guessed `features.screenshots: true` (a natural
+// guess given the sibling keys) found it silently did nothing. `features.screenshots` is layered UNDER the
+// separate, richer `review.visual.*` block (route/preview-URL config, #3609/#3610, and `review.visual.enabled:
+// false` as an always-available additional force-off, #4083) — that block still narrows/disables capture
+// AFTER this key decides whether capture is even attempted for the repo at all; the two are independent and
+// `review.visual.enabled` keeps its own existing force-off-only semantics untouched by this change.
+// `improvementSignal` (#4738, foundation phase of the #4737 PR-improvement-signal epic) is likewise a plain
+// symmetric override: it is a READ-ONLY advisory quality-delta signal, not a security control, so a repo-
+// level `false` behaves like any other plain override with no floor/ceiling. This is activation wiring only
+// -- no tier reads the resolved value yet (sibling sub-issues #4739-#4746 build the deterministic/LLM/panel
+// behavior that will gate on it).
+export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety", "grounding", "e2eTests", "screenshots", "improvementSignal"] as const;
 export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
 
 /** Per-repo activation overrides for the converged review features (`features:` block). `true`/`false` force the
@@ -570,6 +582,15 @@ export type FocusManifestReviewConfig = {
    *  is a confirmed Gittensor miner, to protect the external, upstream-computed score from ever including a
    *  maintainer-authored line the miner didn't write themselves — see `src/github/e2e-test-commit.ts`. */
   e2eTestDelivery: E2eTestDeliveryMode | null;
+  /** `review.e2e_test_auto_trigger` (#4196, part of the #4189 epic): opts THIS repo into the `manifest_missing_tests`
+   *  auto-trigger, which promotes that advisory finding into an actual unprompted generation run whenever a PR looks
+   *  like it needs tests -- separate from `features.e2eTests`, which only unlocks the maintainer-initiated paths
+   *  (the `@gittensory generate-tests` command and the PR-panel checkbox). Deliberately independent and OFF by
+   *  default: enabling `e2eTests` for on-demand use must never, by itself, start firing generation unprompted on
+   *  every under-tested PR (the exact loophole this field closes) -- a maintainer who *wants* the auto-trigger opts
+   *  in explicitly per repo. null/false (default, absent) ⇒ the auto-trigger never fires, even with e2eTests on;
+   *  true additionally requires e2eTests to already be enabled (this field alone does nothing). */
+  e2eTestAutoTrigger: boolean | null;
   /** `review.path_instructions`: per-path natural-language guidance handed to the AI reviewer when the PR's
    *  changed files match the glob. Empty (default) ⇒ byte-identical reviewer prompt. Also consumed by
    *  AI-generated E2E test coverage (`resolveE2eTestGenInstructions` in `ai-e2e-test-gen.ts`, #4200) when
@@ -967,6 +988,7 @@ const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
   safety: null,
   grounding: null,
   e2eTests: null,
+  screenshots: null,
   improvementSignal: null,
 };
 
@@ -1021,7 +1043,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
   features: { ...EMPTY_FEATURES_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -1052,7 +1074,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
     features: { ...EMPTY_FEATURES_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
@@ -2157,7 +2179,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, labelingRules: [], aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -2218,6 +2240,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const maxFindings = parseMaxFindingsConfig(r.max_findings, warnings);
   const commentVerbosity = normalizeOptionalEnum(r.comment_verbosity, "review.comment_verbosity", COMMENT_VERBOSITY_LEVELS, warnings);
   const e2eTestDelivery = normalizeOptionalEnum(r.e2e_test_delivery, "review.e2e_test_delivery", E2E_TEST_DELIVERY_MODES, warnings);
+  const e2eTestAutoTrigger = normalizeOptionalBoolean(r.e2e_test_auto_trigger, "review.e2e_test_auto_trigger", warnings);
   const pathInstructions = parseReviewPathInstructions(r.path_instructions, warnings);
   const instructions = parsePublicSafeText(r.instructions, "review.instructions", warnings);
   const excludePaths = parseReviewExcludePaths(r.exclude_paths, warnings);
@@ -2251,6 +2274,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       maxFindingsPresent(maxFindings) ||
       commentVerbosity !== null ||
       e2eTestDelivery !== null ||
+      e2eTestAutoTrigger !== null ||
       pathInstructions.length > 0 ||
       instructions !== null ||
       excludePaths.length > 0 ||
@@ -2290,6 +2314,7 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     maxFindings,
     commentVerbosity,
     e2eTestDelivery,
+    e2eTestAutoTrigger,
     pathInstructions,
     instructions,
     excludePaths,
@@ -2389,6 +2414,7 @@ function computeReviewConfigPresent(review: Omit<FocusManifestReviewConfig, "pre
     maxFindingsPresent(review.maxFindings) ||
     review.commentVerbosity !== null ||
     review.e2eTestDelivery !== null ||
+    review.e2eTestAutoTrigger !== null ||
     review.pathInstructions.length > 0 ||
     review.instructions !== null ||
     review.excludePaths.length > 0 ||
@@ -2434,6 +2460,7 @@ export function overlayReviewConfig(
     maxFindings: overlayMaxFindingsConfig(base.maxFindings, override.maxFindings),
     commentVerbosity: pickOverlayNullable(override.commentVerbosity, base.commentVerbosity),
     e2eTestDelivery: pickOverlayNullable(override.e2eTestDelivery, base.e2eTestDelivery),
+    e2eTestAutoTrigger: pickOverlayNullable(override.e2eTestAutoTrigger, base.e2eTestAutoTrigger),
     pathInstructions: override.pathInstructions.length > 0 ? [...override.pathInstructions] : [...base.pathInstructions],
     instructions: pickOverlayNullable(override.instructions, base.instructions),
     excludePaths: pickOverlayStringList(override.excludePaths, base.excludePaths),
@@ -2959,6 +2986,7 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   }
   if (review.commentVerbosity !== null) out.comment_verbosity = review.commentVerbosity;
   if (review.e2eTestDelivery !== null) out.e2e_test_delivery = review.e2eTestDelivery;
+  if (review.e2eTestAutoTrigger !== null) out.e2e_test_auto_trigger = review.e2eTestAutoTrigger;
   if (review.instructions !== null) out.instructions = review.instructions;
   if (review.pathInstructions.length > 0) out.path_instructions = review.pathInstructions.map((entry) => ({ path: entry.path, instructions: entry.instructions }));
   if (review.excludePaths.length > 0) out.exclude_paths = [...review.excludePaths];

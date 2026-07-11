@@ -302,6 +302,7 @@ import {
   MAX_REVIEW_NAG_COOLDOWN_DAYS,
   isProtectedAutomationAuthor,
   planAgentMaintenanceActions,
+  resolveNullableLabel,
   type AgentActionPlanInput,
   type AgentDispositionLabelSettings,
   type PlannedAgentAction,
@@ -384,7 +385,6 @@ import {
 // unchanged -- those tests are deeply interspersed with unrelated ones in that file, not in a cleanly
 // extractable describe block, so relocating them is deliberately deferred rather than forced into this PR.
 export { claimPrActuationLock, releasePrActuationLock } from "./transient-locks";
-import { screenshotsAllowed } from "../review/visual-wire";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, fetchShotContentBlock, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureRoute } from "../review/visual/capture";
 import {
@@ -433,6 +433,7 @@ import {
   resolveReviewPreMergeChecks,
   resolveReviewPromptOverrides,
   resolveReviewMemoryManifestToggle,
+  resolveE2eTestAutoTriggerManifestToggle,
   resolveReviewVisualConfig,
   type AiReviewCadence,
   type FocusManifestFinding,
@@ -514,7 +515,7 @@ import { resolveE2eTestGenInstructions, runGittensoryE2eTestGeneration } from ".
 import { commitE2eTestToPrBranch } from "../github/e2e-test-commit";
 import {
   buildRepoCultureProfileContext,
-  isRepoCultureProfileEnabled,
+  shouldApplyRepoCultureProfile,
 } from "../review/repo-culture-profile-wire";
 import { applyReviewMemorySuppression, getCachedReviewSuppressions, invalidateReviewSuppressionCache, shouldApplyReviewMemory } from "../review/review-memory-wire";
 import {
@@ -623,15 +624,6 @@ const SWEEP_OPEN_PULL_REQUEST_SYNC_MAX_AGE_MS = 10 * 60 * 1000;
 const PR_PANEL_RETRIGGER_COMMAND_AUTHORIZATION: RepositoryCommandAuthorizationPolicy = {
   default: ["maintainer", "collaborator"],
   commands: { "review-now": ["maintainer", "collaborator"] },
-};
-// #4589: the generate-tests checkbox is hardcoded to maintainer-only regardless of what a repo's own
-// .gittensory.yml commandAuthorization might configure for the text-command version of generate-tests (which
-// CAN be widened to collaborator/confirmed_miner) -- a one-click checkbox is meaningfully lower-friction than
-// typing a command, so it gets a hard floor that can't be misconfigured away. Mirrors
-// PR_PANEL_RETRIGGER_COMMAND_AUTHORIZATION's exact same override pattern, one tier narrower (no collaborator).
-const PR_PANEL_GENERATE_TESTS_COMMAND_AUTHORIZATION: RepositoryCommandAuthorizationPolicy = {
-  default: ["maintainer"],
-  commands: { "generate-tests": ["maintainer"] },
 };
 const PR_PUBLIC_SURFACE_ACTIONS = new Set([
   "opened",
@@ -7836,10 +7828,9 @@ export async function runAiReviewForAdvisory(
     // (typical PR size, common accepted labels) and appends it as additive grounding — exactly like RAG. Both
     // gates OFF (default) → NO new branch: no D1 read, and `cultureProfileContext` is left undefined so the
     // prompt is byte-identical to today. Fully fail-safe (any error/insufficient-history degrades to "").
-    const cultureProfileContext =
-      isRepoCultureProfileEnabled(env) && args.reviewCultureProfile === true
-        ? await buildRepoCultureProfileContext(env, args.repoFullName)
-        : undefined;
+    const cultureProfileContext = shouldApplyRepoCultureProfile(env, args.reviewCultureProfile === true)
+      ? await buildRepoCultureProfileContext(env, args.repoFullName)
+      : undefined;
     // Review-enrichment (#1472, flag-gated by GITTENSORY_REVIEW_ENRICHMENT + REES_URL). POST the PR to the external
     // REES for the heavy/external analysis the reviewer can't run (dependency CVEs, secrets, license/EOL/supply-chain);
     // its public-safe brief splices into the prompt next to grounding + RAG. Flag-OFF (default) → no call, no branch,
@@ -9286,7 +9277,12 @@ async function maybeApplyManifestPolicyGate(
     // tests" from scratch, per the issue's own requirement -- this is why the auto-trigger lives inside this
     // exact manifestPolicyGateMode-gated block instead of a parallel code path: that is the only place this
     // finding is computed at all today.
-    if (args.pr.headSha && policyFindings.some((finding) => finding.code === "manifest_missing_tests") && e2eTestGenAvailable) {
+    // Deliberately gated by its OWN separate manifest toggle (review.e2e_test_auto_trigger) on top of
+    // e2eTestGenAvailable -- enabling features.e2eTests only unlocks the maintainer-initiated command/checkbox
+    // paths below; it must never, by itself, start firing generation unprompted on every under-tested PR. A
+    // repo opts into the auto-trigger explicitly, in addition to the base feature.
+    const e2eAutoTriggerOptedIn = resolveE2eTestAutoTriggerManifestToggle(manifest);
+    if (args.pr.headSha && policyFindings.some((finding) => finding.code === "manifest_missing_tests") && e2eTestGenAvailable && e2eAutoTriggerOptedIn) {
       const e2eTargetKey = `${args.repoFullName}#${args.pr.number}`;
       // Double-generation guard: an unchanged head SHA re-entering this pass (a re-review/sweep tick, not a
       // new push) must never re-spend an LLM call or repost a duplicate suggestion. A genuinely NEW push
@@ -10667,7 +10663,7 @@ async function maybePublishPrPublicSurface(
             // invalidation) can refresh independently of this PR's head SHA, exactly like RAG's vector index —
             // so a repo with it active also bypasses the AI-review result cache rather than fingerprinting a
             // value that can't prove freshness.
-            cultureProfile: isRepoCultureProfileEnabled(env) && reviewCultureProfile === true,
+            cultureProfile: shouldApplyRepoCultureProfile(env, reviewCultureProfile === true),
             // Impact map (#2182-#2186): queries the SAME live vector index RAG does (computeImpactMap issues
             // its own retrieveContextWithMetrics calls), so it can go stale for the SAME head SHA exactly like
             // RAG — a repo with it active also bypasses the AI-review result cache.
@@ -11651,9 +11647,11 @@ async function maybePublishPrPublicSurface(
         gate: commentGate,
         duplicateWinnerEnabled,
       });
-      // Visual before/after capture (visual-capture port). Fires ONLY when (1) the global flag + per-repo
-      // cutover gate both allow it (screenshotsAllowed) AND (2) the PR touches WEB-VISIBLE files (isVisualPath
-      // — frontend pages / public OG images; backend .ts/.md/.json PRs never qualify). Fully wrapped in
+      // Visual before/after capture (visual-capture port). Fires ONLY when (1) the "screenshots" converged
+      // feature resolves active for this repo (resolveConvergedFeature — the global flag AND (a per-repo
+      // `features.screenshots` override OR the cutover allowlist default), #4616; reuses the manifest this
+      // pass already loaded above, no extra fetch) AND (2) the PR touches WEB-VISIBLE files (isVisualPath —
+      // frontend pages / public OG images; backend .ts/.md/.json PRs never qualify). Fully wrapped in
       // try/catch + defaults to [] so a capture failure (render timeout, missing binding, GitHub hiccup) can
       // NEVER sink the review — it just omits the "Visual preview" section. Flag-OFF (default) ⇒ this block is
       // skipped entirely and the unified comment is byte-identical.
@@ -11661,7 +11659,7 @@ async function maybePublishPrPublicSurface(
       const visualFiles = unifiedFiles
         .map((file) => file.path)
         .filter(isVisualPath);
-      if (screenshotsAllowed(env, repoFullName) && visualFiles.length > 0) {
+      if (resolveConvergedFeature(env, repoFocusManifestForComment, "screenshots", repoFullName) && visualFiles.length > 0) {
         try {
           const token = await createInstallationToken(env, installationId);
           // review.visual (#3609 / #3610): an explicit per-repo preview-URL template / route list. Absent config
@@ -11873,7 +11871,7 @@ async function maybePublishPrPublicSurface(
         // #4589: only rendered when there's an actual gap AND the checkbox would work for this repo -- same
         // condition testCoverageBody gates its own (informational) collapsible on, so the two always agree.
         ...(missingTestsFinding && e2eTestGenAvailable
-          ? { generateTestsLabel: `${PR_PANEL_GENERATE_TESTS_MARKER} Generate an AI Playwright test for this PR` }
+          ? { generateTestsLabel: `${PR_PANEL_GENERATE_TESTS_MARKER} **[BETA]** Generate an AI Playwright test for this PR` }
           : {}),
         ...(beforeAfter.length > 0 ? { beforeAfter } : {}),
         ...(changedFilesSummaryEnabledForReview
@@ -13336,12 +13334,15 @@ async function maybeProcessPrPanelRetrigger(
  * `runE2eTestGenerationAndDeliver` core `@gittensory generate-tests` (#4195) and the `manifest_missing_tests`
  * auto-trigger (#4196) already use, rather than a full panel re-render.
  *
- * Hardcoded to `commandAuthorization: PR_PANEL_GENERATE_TESTS_COMMAND_AUTHORIZATION` (maintainer-only, one
- * tier narrower than the retrigger's own maintainer+collaborator floor) regardless of what a repo's own
- * `.gittensory.yml` might configure for the text-command version of `generate-tests` — a one-click checkbox
- * must never be wider than the deliberately narrow default the text command itself already has. An
- * unauthorized click is a SILENT no-op (no comment fetch, no patch, no revert, no explanation) — audit-logged
- * only, exactly mirroring `maybeProcessPrPanelRetrigger`'s own denial behavior above.
+ * Authorization uses the repo's OWN `settings.commandAuthorization` — same as the text-command version of
+ * `generate-tests` above, and configurable like every other command (#4589 follow-up: this used to hardcode a
+ * maintainer-only override here, overriding whatever `.gittensory.yml` configured; a self-hoster who wants
+ * contributors/confirmed miners to trigger test generation can now widen it there instead). Out of the box —
+ * no override configured — this still resolves to maintainer-only, since `DEFAULT_COMMAND_AUTHORIZATION_POLICY`
+ * already restricts `generate-tests` to `["maintainer"]` and `normalizeCommandRoleList` clamps any configured
+ * widening to `maintainer`/`collaborator`/`confirmed_miner` (the spoofable raw `pr_author` role is always
+ * dropped for this command). An unauthorized click is a SILENT no-op (no comment fetch, no patch, no revert, no
+ * explanation) — audit-logged only, exactly mirroring `maybeProcessPrPanelRetrigger`'s own denial behavior above.
  */
 async function maybeProcessPrPanelGenerateTests(
   env: Env,
@@ -13388,7 +13389,7 @@ async function maybeProcessPrPanelGenerateTests(
     issue,
     actor,
     commandName: "generate-tests" as GittensoryMentionCommandName,
-    settings: { ...settings, commandAuthorization: PR_PANEL_GENERATE_TESTS_COMMAND_AUTHORIZATION },
+    settings,
     pr,
     needsMinerDetection: false,
   });
@@ -13403,7 +13404,7 @@ async function maybeProcessPrPanelGenerateTests(
         deliveryId,
         repoFullName,
         commentId: comment.id,
-        allowedRoles: commandAuthorizationAllowedRoles(PR_PANEL_GENERATE_TESTS_COMMAND_AUTHORIZATION, "generate-tests"),
+        allowedRoles: commandAuthorizationAllowedRoles(settings.commandAuthorization, "generate-tests"),
       },
     });
     await recordGithubProductUsage(env, "e2e_tests_generation_denied", {
@@ -14319,7 +14320,7 @@ async function closeReviewEvasionSelfCloseIfActive(
       () => undefined,
     );
   }
-  const label = settings.reviewEvasionLabel === null ? null : (settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL);
+  const label = resolveNullableLabel(settings.reviewEvasionLabel, DEFAULT_REVIEW_EVASION_LABEL);
   if (label !== null) {
     await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, label, { createMissingLabel: true }).catch(() => undefined);
   }
@@ -14468,7 +14469,7 @@ async function closeReviewEvasionDraftConversionIfActive(
       () => undefined,
     );
   }
-  const label = settings.reviewEvasionLabel === null ? null : (settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL);
+  const label = resolveNullableLabel(settings.reviewEvasionLabel, DEFAULT_REVIEW_EVASION_LABEL);
   if (label !== null) {
     await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, label, { createMissingLabel: true }).catch(() => undefined);
   }
@@ -14632,7 +14633,7 @@ async function closeRepeatedDraftCyclingIfDetected(
       () => undefined,
     );
   }
-  const label = settings.reviewEvasionLabel === null ? null : (settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL);
+  const label = resolveNullableLabel(settings.reviewEvasionLabel, DEFAULT_REVIEW_EVASION_LABEL);
   if (label !== null) {
     await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, label, { createMissingLabel: true }).catch(() => undefined);
   }
