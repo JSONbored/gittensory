@@ -488,8 +488,12 @@ describe("check-engine-parity script", () => {
     });
 
     it("uses default version readers against the real monorepo workspace", () => {
+      // Deliberately NOT a hardcoded literal (e.g. "0.2.0") -- that exact-value assertion would go stale on
+      // every single engine release, exactly like the sibling hand-synced values this whole file exists to
+      // catch drift in. The real invariant is that the reader returns a well-shaped semver AND that it
+      // agrees with the installed version, which runEngineParityChecks below already verifies directly.
       expect(defaultResolveInstalledEngineVersion(process.cwd())).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(defaultReadExpectedEngineVersion(process.cwd())).toBe("0.2.0");
+      expect(defaultReadExpectedEngineVersion(process.cwd())).toMatch(/^\d+\.\d+\.\d+$/);
       const result = runEngineParityChecks({ root: process.cwd() });
       expect(result.failures).toEqual([]);
     });
