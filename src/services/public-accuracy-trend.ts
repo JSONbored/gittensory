@@ -18,9 +18,9 @@ export const MIN_ACCURACY_TREND_SAMPLE = 3;
 export type PublicAccuracyTrendWeek = {
   /** UTC Monday (YYYY-MM-DD) that starts the bucket. */
   weekStart: string;
-  merged: number;
-  closed: number;
-  reversed: number;
+  merged: number | null;
+  closed: number | null;
+  reversed: number | null;
   accuracyPct: number | null;
 };
 
@@ -34,11 +34,11 @@ function roundPct(value: number): number {
 
 /** Same formula as public-stats.ts's accuracyPct, reused so the trend and the live number can never drift
  *  apart into two competing definitions of "accuracy". */
-function accuracyPctOf(merged: number, closed: number, reversed: number): number | null {
-  const decided = merged + closed;
-  if (decided < MIN_ACCURACY_TREND_SAMPLE) return null;
-  const reversalRate = Math.min(1, reversed / decided);
-  return roundPct(1 - reversalRate);
+function publicBucketOf(bucket: { merged: number; closed: number; reversed: number }): Omit<PublicAccuracyTrendWeek, "weekStart"> {
+  const decided = bucket.merged + bucket.closed;
+  if (decided < MIN_ACCURACY_TREND_SAMPLE) return { merged: null, closed: null, reversed: null, accuracyPct: null };
+  const reversalRate = Math.min(1, bucket.reversed / decided);
+  return { merged: bucket.merged, closed: bucket.closed, reversed: bucket.reversed, accuracyPct: roundPct(1 - reversalRate) };
 }
 
 /** Fold day-granularity rows into `weeks` trailing UTC-Monday buckets ending in the week containing `nowMs`.
@@ -61,10 +61,7 @@ export function buildPublicAccuracyTrend(dayRows: DayRow[], nowMs: number, weeks
 
   return buckets.map((bucket, offset) => ({
     weekStart: isoWeekStart(oldestStartMs + offset * MS_PER_WEEK),
-    merged: bucket.merged,
-    closed: bucket.closed,
-    reversed: bucket.reversed,
-    accuracyPct: accuracyPctOf(bucket.merged, bucket.closed, bucket.reversed),
+    ...publicBucketOf(bucket),
   }));
 }
 

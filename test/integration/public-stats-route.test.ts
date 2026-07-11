@@ -63,7 +63,7 @@ describe("GET /v1/public/stats (#1059)", () => {
       totals: Record<string, number | null>;
       weekly: { reviewed: number; merged: number };
       byProject: Array<{ project: string; reviewed: number }>;
-      accuracyTrend: Array<{ weekStart: string; merged: number; closed: number; reversed: number; accuracyPct: number | null }>;
+      accuracyTrend: Array<{ weekStart: string; merged: number | null; closed: number | null; reversed: number | null; accuracyPct: number | null }>;
       reuseRateTrend: Array<{ weekStart: string; hits: number; misses: number; reuseRatePct: number | null }>;
       reviewVolumeTrend: Array<{ weekStart: string; reviewed: number; merged: number; filteredPct: number | null }>;
     };

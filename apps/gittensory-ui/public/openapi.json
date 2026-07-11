@@ -474,13 +474,16 @@
                   "type": "string"
                 },
                 "merged": {
-                  "type": "number"
+                  "type": "number",
+                  "nullable": true
                 },
                 "closed": {
-                  "type": "number"
+                  "type": "number",
+                  "nullable": true
                 },
                 "reversed": {
-                  "type": "number"
+                  "type": "number",
+                  "nullable": true
                 },
                 "accuracyPct": {
                   "type": "number",

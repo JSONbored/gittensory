@@ -45,22 +45,22 @@ describe("buildPublicAccuracyTrend", () => {
   it("REGRESSION: ignores day rows outside the trailing window instead of letting them corrupt the oldest bucket", () => {
     const currentMonday = isoWeekStart(NOW);
     const tooOld = isoWeekStart(NOW - 30 * 86_400_000);
-    const trend = buildPublicAccuracyTrend([{ day: tooOld, merged: 999, closed: 999, reversed: 999 }, { day: currentMonday, merged: 1, closed: 0, reversed: 0 }], NOW, 2);
-    expect(trend[0]).toMatchObject({ merged: 0, closed: 0, reversed: 0 });
-    expect(trend[1]).toMatchObject({ merged: 1, closed: 0, reversed: 0 });
+    const trend = buildPublicAccuracyTrend([{ day: tooOld, merged: 999, closed: 999, reversed: 999 }, { day: currentMonday, merged: MIN_ACCURACY_TREND_SAMPLE, closed: 0, reversed: 0 }], NOW, 2);
+    expect(trend[0]).toMatchObject({ merged: null, closed: null, reversed: null });
+    expect(trend[1]).toMatchObject({ merged: MIN_ACCURACY_TREND_SAMPLE, closed: 0, reversed: 0 });
   });
 
   it("ignores an unparseable day string rather than throwing or corrupting a bucket", () => {
     const currentMonday = isoWeekStart(NOW);
-    const trend = buildPublicAccuracyTrend([{ day: "not-a-date", merged: 5, closed: 5, reversed: 5 }, { day: currentMonday, merged: 1, closed: 0, reversed: 0 }], NOW, 1);
+    const trend = buildPublicAccuracyTrend([{ day: "not-a-date", merged: 5, closed: 5, reversed: 5 }, { day: currentMonday, merged: MIN_ACCURACY_TREND_SAMPLE, closed: 0, reversed: 0 }], NOW, 1);
     expect(trend).toHaveLength(1);
-    expect(trend[0]).toMatchObject({ merged: 1, closed: 0, reversed: 0 });
+    expect(trend[0]).toMatchObject({ merged: MIN_ACCURACY_TREND_SAMPLE, closed: 0, reversed: 0 });
   });
 
-  it("returns null accuracyPct (not a misleading 0% or 100%) below MIN_ACCURACY_TREND_SAMPLE decided PRs", () => {
+  it("REGRESSION: redacts counts and accuracyPct below MIN_ACCURACY_TREND_SAMPLE decided PRs", () => {
     const week = isoWeekStart(NOW);
     const trend = buildPublicAccuracyTrend([{ day: week, merged: MIN_ACCURACY_TREND_SAMPLE - 1, closed: 0, reversed: 0 }], NOW, 1);
-    expect(trend[0]?.accuracyPct).toBeNull();
+    expect(trend[0]).toMatchObject({ merged: null, closed: null, reversed: null, accuracyPct: null });
   });
 
   it("returns a real percentage at exactly MIN_ACCURACY_TREND_SAMPLE decided PRs", () => {
@@ -83,7 +83,7 @@ describe("buildPublicAccuracyTrend", () => {
   it("returns all-zero, null-accuracy buckets for an empty input (a brand-new / not-yet-enabled deployment)", () => {
     const trend = buildPublicAccuracyTrend([], NOW, 3);
     expect(trend).toHaveLength(3);
-    for (const week of trend) expect(week).toMatchObject({ merged: 0, closed: 0, reversed: 0, accuracyPct: null });
+    for (const week of trend) expect(week).toMatchObject({ merged: null, closed: null, reversed: null, accuracyPct: null });
   });
 });
 
@@ -130,7 +130,7 @@ describe("loadPublicAccuracyTrend — end-to-end over the real live tables", () 
     expect(currentWeek?.reversed).toBe(1);
   });
 
-  it("still reports the Orb-fleet side when GITTENSORY_PUBLIC_STATS_REPOS is empty (no own-ledger allowlist)", async () => {
+  it("redacts a sparse Orb-fleet week when GITTENSORY_PUBLIC_STATS_REPOS is empty (no own-ledger allowlist)", async () => {
     const env = createTestEnv({ GITTENSORY_PUBLIC_STATS_REPOS: "" });
     const thisMonday = isoWeekStart(NOW);
     const thisWeekIso = `${thisMonday}T09:00:00.000Z`;
@@ -141,8 +141,6 @@ describe("loadPublicAccuracyTrend — end-to-end over the real live tables", () 
 
     const trend = await loadPublicAccuracyTrend(env, NOW);
     const currentWeek = trend[trend.length - 1];
-    expect(currentWeek?.closed).toBe(1);
-    expect(currentWeek?.merged).toBe(0);
-    expect(currentWeek?.reversed).toBe(0);
+    expect(currentWeek).toMatchObject({ merged: null, closed: null, reversed: null, accuracyPct: null });
   });
 });

@@ -120,14 +120,14 @@ export const PublicStatsSchema = z
         accuracyPct: z.number().nullable(),
       }),
     ),
-    /** Trailing weekly history of totals.accuracyPct's SAME formula (#4447) -- null accuracyPct on a week means
-     *  too few decided (merged+closed) PRs that week to publish a meaningful percentage, not zero accuracy. */
+    /** Trailing weekly history of totals.accuracyPct's SAME formula (#4447) -- null counts/accuracyPct on a week means
+     *  too few decided (merged+closed) PRs to publish meaningful or non-identifying details. */
     accuracyTrend: z.array(
       z.object({
         weekStart: z.string(),
-        merged: z.number(),
-        closed: z.number(),
-        reversed: z.number(),
+        merged: z.number().nullable(),
+        closed: z.number().nullable(),
+        reversed: z.number().nullable(),
         accuracyPct: z.number().nullable(),
       }),
     ),
