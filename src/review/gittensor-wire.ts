@@ -35,11 +35,13 @@ export function shouldEnableGittensorForRepo(
 
 /**
  * The set of repos (lowercased full names) this self-host instance has opted into the gittensor plugin for --
- * every locally-known repo (listRepositories, deliberately NOT filtered by isRegistered: isRegistered is
+ * every locally installed repo (listRepositories, deliberately NOT filtered by isRegistered: isRegistered is
  * itself DOWNSTREAM of this decision on self-host, see registry/sync.ts's persistRegistrySnapshot, so filtering
  * on it here would be circular -- a repo could never earn its first isRegistered=true) whose manifest sets
- * `experimental.gittensor: true` AND the global env kill-switch is on. A per-repo manifest-load error is
- * skipped (treated as not-opted-in), never aborts the pass -- mirrors selftune-wire.ts's selfTuneRepos.
+ * `experimental.gittensor: true` AND the global env kill-switch is on. Registry-only rows from historical
+ * snapshots are ignored: an external repo's cached manifest must not activate outbound subnet work for this
+ * instance. A per-repo manifest-load error is skipped (treated as not-opted-in), never aborts the pass -- mirrors
+ * selftune-wire.ts's selfTuneRepos.
  * Flag-OFF (default) short-circuits before listing repos or loading a single manifest, so a plain self-host
  * instance makes zero local reads for this and zero outbound gittensor-registry requests (see index.ts).
  */
@@ -48,6 +50,7 @@ export async function gittensorEnabledRepoFullNames(env: Env & { GITTENSORY_EXPE
   const repos = await listRepositories(env);
   const enabled = new Set<string>();
   for (const repo of repos) {
+    if (!repo.isInstalled) continue;
     try {
       const manifest = await loadRepoFocusManifest(env, repo.fullName);
       if (shouldEnableGittensorForRepo(env, manifest.experimental.gittensor)) enabled.add(repo.fullName.toLowerCase());

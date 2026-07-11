@@ -11,6 +11,14 @@ async function seedRegisteredRepo(env: Env, fullName: string): Promise<void> {
     .run();
 }
 
+async function seedRegistryOnlyRepo(env: Env, fullName: string): Promise<void> {
+  const [owner, name] = fullName.split("/");
+  await (env.DB as unknown as { prepare: (s: string) => { bind: (...v: unknown[]) => { run: () => Promise<unknown> } } })
+    .prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, ?, ?, 0, 1)")
+    .bind(fullName, owner, name)
+    .run();
+}
+
 // Wrap env.DB.prepare so any SQL matching `pattern` throws, exercising a fail-safe catch; every other query
 // delegates to the real test DB unchanged. Mirrors selftune-wiring.test.ts's poisonDbPrepare.
 function poisonDbPrepare(env: Env, pattern: RegExp): void {
@@ -95,6 +103,13 @@ describe("gittensorEnabledRepoFullNames", () => {
     await seedRegisteredRepo(env, "owner/notyetregistered"); // seeded with is_registered=0
     await upsertRepoFocusManifest(env, "owner/notyetregistered", { experimental: { gittensor: true } });
     await expect(gittensorEnabledRepoFullNames(env)).resolves.toEqual(new Set(["owner/notyetregistered"]));
+  });
+
+  it("excludes registry-only repos whose cached manifests opt in (regression for the unscoped registry activation bypass)", async () => {
+    const env = createTestEnv({ GITTENSORY_EXPERIMENTAL_GITTENSOR: "true" });
+    await seedRegistryOnlyRepo(env, "attacker/external");
+    await upsertRepoFocusManifest(env, "attacker/external", { experimental: { gittensor: true } });
+    await expect(gittensorEnabledRepoFullNames(env)).resolves.toEqual(new Set());
   });
 
   it("fails safe per-repo: a manifest-load error is swallowed and the pass still resolves", async () => {
