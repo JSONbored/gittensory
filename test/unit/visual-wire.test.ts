@@ -20,14 +20,10 @@ describe("isScreenshotsEnabled", () => {
   });
 });
 
-// #4616: screenshots is now a `ConvergedFeatureKey` — its per-repo activation decision (global flag AND (a
-// `features.screenshots` override OR the GITTENSORY_REVIEW_REPOS allowlist default)) is resolved through the
-// SAME shared `resolveConvergedFeature` every other converged feature uses (see feature-activation.test.ts for
-// the exhaustive, feature-key-agnostic precedence suite this inherits automatically). The dedicated
-// `screenshotsAllowed` helper this file used to test (env flag AND allowlist ONLY, no `features:` override at
-// all) was removed as part of that migration; these are its former assertions, ported onto the new call shape
-// and extended with the override case `screenshotsAllowed` never had.
-describe("screenshots converged-feature activation (env flag AND (features.screenshots override OR the repo cutover allowlist), #4616)", () => {
+// #4616: screenshots is a `ConvergedFeatureKey`, but browser rendering remains allowlist-bound:
+// `features.screenshots` may opt an allowlisted repo out, but it must not let an unallowlisted repo bypass the
+// operator-controlled GITTENSORY_REVIEW_REPOS rollout boundary.
+describe("screenshots converged-feature activation (env flag AND repo cutover allowlist, with manifest opt-out)", () => {
   const repo = "JSONbored/gittensory";
   const noOverride: Pick<FocusManifest, "features"> = {
     features: { present: false, rag: null, reputation: null, unifiedComment: null, safety: null, grounding: null, e2eTests: null, screenshots: null, improvementSignal: null },
@@ -52,9 +48,15 @@ describe("screenshots converged-feature activation (env flag AND (features.scree
     expect(resolveConvergedFeature({ GITTENSORY_REVIEW_SCREENSHOTS: "on", GITTENSORY_REVIEW_REPOS: "jsonbored/GITTENSORY" } as Env, noOverride, "screenshots", repo)).toBe(true);
   });
 
-  it("(#4616) a `features.screenshots` override now fully controls the feature, even for a repo NOT on the allowlist — the gap this migration fixes", () => {
+  it("does not let a `features.screenshots` override bypass the repo allowlist", () => {
     const forcedOn: Pick<FocusManifest, "features"> = { features: { ...noOverride.features, present: true, screenshots: true } };
-    expect(resolveConvergedFeature({ GITTENSORY_REVIEW_SCREENSHOTS: "true" } as Env, forcedOn, "screenshots", "not/allowlisted")).toBe(true);
+    expect(resolveConvergedFeature({ GITTENSORY_REVIEW_SCREENSHOTS: "true" } as Env, forcedOn, "screenshots", "not/allowlisted")).toBe(false);
+    expect(resolveConvergedFeature({ GITTENSORY_REVIEW_SCREENSHOTS: "true", GITTENSORY_REVIEW_REPOS: "JSONbored/other" } as Env, forcedOn, "screenshots", repo)).toBe(false);
+  });
+
+  it("allows an allowlisted repo to enable screenshots by default and force it OFF per repo", () => {
+    const forcedOn: Pick<FocusManifest, "features"> = { features: { ...noOverride.features, present: true, screenshots: true } };
+    expect(resolveConvergedFeature({ GITTENSORY_REVIEW_SCREENSHOTS: "true", GITTENSORY_REVIEW_REPOS: repo } as Env, forcedOn, "screenshots", repo)).toBe(true);
     const forcedOff: Pick<FocusManifest, "features"> = { features: { ...noOverride.features, present: true, screenshots: false } };
     expect(resolveConvergedFeature({ GITTENSORY_REVIEW_SCREENSHOTS: "true", GITTENSORY_REVIEW_REPOS: repo } as Env, forcedOff, "screenshots", repo)).toBe(false);
   });

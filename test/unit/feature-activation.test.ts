@@ -188,6 +188,20 @@ describe("resolveConvergedFeature — grounding remains allowlist-bound", () => 
   });
 });
 
+describe("resolveConvergedFeature — screenshots remain allowlist-bound", () => {
+  it("does not let a repo manifest force screenshots ON outside the operator allowlist", () => {
+    const e = env({ GITTENSORY_REVIEW_SCREENSHOTS: "true", GITTENSORY_REVIEW_REPOS: "other/repo" });
+    expect(resolveConvergedFeature(e, manifestWith({ screenshots: true }), "screenshots", REPO)).toBe(false);
+  });
+
+  it("allows an allowlisted repo to enable screenshots by default and force them OFF per repo", () => {
+    const e = env({ GITTENSORY_REVIEW_SCREENSHOTS: "true", GITTENSORY_REVIEW_REPOS: REPO });
+    expect(resolveConvergedFeature(e, manifestWith({}), "screenshots", REPO)).toBe(true);
+    expect(resolveConvergedFeature(e, manifestWith({ screenshots: true }), "screenshots", REPO)).toBe(true);
+    expect(resolveConvergedFeature(e, manifestWith({ screenshots: false }), "screenshots", REPO)).toBe(false);
+  });
+});
+
 describe("resolveConvergedFeature — improvementSignal is a plain symmetric override (#4738)", () => {
   // The full resolution matrix the #4738 acceptance criteria calls out explicitly: env off; env on + no
   // override; env on + repo true; env on + repo false. improvementSignal has no safety/grounding-style

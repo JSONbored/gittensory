@@ -15,8 +15,8 @@
 // `resolveConvergedFeature` and `resolveManifestOnlyFeature` are the two thin adapters over it in actual use:
 //   - `resolveConvergedFeature` — the `features:`-block keys (rag/reputation/unifiedComment/safety/grounding/
 //     e2eTests/screenshots): env kill-switch → per-repo `features:` override → `GITTENSORY_REVIEW_REPOS`
-//     allowlist default. Safety and grounding are the two NAMED exceptions this shape has always had (#2269);
-//     see `FEATURE_MODE` below.
+//     allowlist default. Safety, grounding, and screenshots are the named exceptions this shape has; see
+//     `FEATURE_MODE` below.
 //   - `resolveManifestOnlyFeature` — the `review:`-block keys with NO allowlist role at all (impactMap /
 //     reviewMemory / cultureProfile / inlineComments / fixHandoff): env kill-switch → an EXPLICIT per-repo
 //     `review.*` opt-in is the only way to activate. These live under a different `.gittensory.yml` namespace
@@ -44,14 +44,14 @@ import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
  * The four per-feature activation precedence shapes actually in use across gittensory's advisory review
  * capabilities (#4616):
  *  - `"standard"`: `override` fully controls (`true` forces on, `false` forces off); `null` (unset) falls back
- *    to `allowlisted`. rag / reputation / unifiedComment / e2eTests / screenshots.
+ *    to `allowlisted`. rag / reputation / unifiedComment / e2eTests / improvementSignal.
  *  - `"forceOnOnly"`: `override` can only force ON (bypassing the allowlist); an untrusted `false` is "no
  *    opinion" and falls through to `allowlisted` — for a feature where a lower-trust, repo-controlled override
  *    must never be able to silently defeat the operator's own enablement. safety (#2269).
  *  - `"allowlistRequired"`: `allowlisted` is a hard requirement regardless of `override`; an override may
  *    ADDITIONALLY force OFF within an allowlisted repo, never force ON outside it. grounding (fetches full
- *    post-change file contents for the AI prompt, so a repo override alone must never bypass the operator's
- *    own allowlist).
+ *    post-change file contents for the AI prompt) and screenshots (launches browser rendering and stores
+ *    publicly embedded images), so a repo override alone must never bypass the operator's own allowlist.
  *  - `"manifestOnly"`: there is no allowlist role at all (`allowlisted` is never consulted); an explicit
  *    `override === true` is the ONLY way to activate. impactMap / reviewMemory / cultureProfile /
  *    inlineComments / fixHandoff — each shipped as an explicit-opt-in-only `.gittensory.yml` `review.*` toggle
@@ -90,10 +90,11 @@ const FEATURE_GLOBAL_FLAG: Record<ConvergedFeatureKey, (env: Env) => boolean> = 
 
 /** The named per-feature exceptions to `resolveConvergedFeature`'s default `"standard"` precedence — every
  *  `ConvergedFeatureKey` not listed here uses `"standard"`. See {@link FeatureActivationMode}'s doc comment for
- *  why each of these two needs its own asymmetric shape. */
+ *  why each of these features needs its own asymmetric shape. */
 const FEATURE_MODE: Partial<Record<ConvergedFeatureKey, FeatureActivationMode>> = {
   safety: "forceOnOnly",
   grounding: "allowlistRequired",
+  screenshots: "allowlistRequired",
 };
 
 /**
@@ -101,8 +102,8 @@ const FEATURE_MODE: Partial<Record<ConvergedFeatureKey, FeatureActivationMode>> 
  * synchronous so it carries no I/O and is the single unit-tested place the `features:`-block precedence lives
  * (delegating the actual arithmetic to {@link resolveFeatureActivation}). Precedence: env kill-switch (off ⇒
  * false) → per-repo `features:` override → `GITTENSORY_REVIEW_REPOS` allowlist default. `safety` is asymmetric:
- * an override can only force it ON, never force it OFF (#2269). `grounding` is also asymmetric in the opposite
- * direction: a repo override can only force it OFF, never bypass the operator allowlist.
+ * an override can only force it ON, never force it OFF (#2269). `grounding` and `screenshots` are asymmetric in
+ * the opposite direction: a repo override can only force them OFF, never bypass the operator allowlist.
  */
 export function resolveConvergedFeature(
   env: Env,
