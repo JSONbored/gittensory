@@ -60,6 +60,15 @@ function cachingStorageStub(count: number, fetchedAtOverride?: string): { storag
         all: async () =>
           /SELECT id, text/i.test(sql) ? { results: args.map((id) => ({ id: String(id), text: `body for ${String(id)}` })) } : { results: [] },
         run: async () => {
+          if (/DELETE FROM impact_map_query_cache/i.test(sql)) {
+            const [project, repo, third] = args as [string, string, string];
+            for (const [key, row] of rows) {
+              const [rowProject, rowRepo, rowFingerprint] = key.split("|");
+              const matchesExactRow = /query_fingerprint = \?/i.test(sql) && rowProject === project && rowRepo === repo && rowFingerprint === third;
+              const matchesExpiredRepoRow = /fetched_at < \?/i.test(sql) && rowProject === project && rowRepo === repo && row.fetchedAt < third;
+              if (matchesExactRow || matchesExpiredRepoRow) rows.delete(key);
+            }
+          }
           if (/INSERT INTO impact_map_query_cache/i.test(sql)) {
             const [project, repo, fingerprint, context, metricsJson, fetchedAt] = args as [string, string, string, string, string, string];
             rows.set(`${project}|${repo}|${fingerprint}`, { context, metricsJson, fetchedAt: fetchedAtOverride ?? fetchedAt });
@@ -385,6 +394,45 @@ describe("computeImpactMap", () => {
     await computeImpactMap(testEnv(), symbols, { infra, project: "acme", repo: "widgets" });
 
     expect(queryCalls).toBe(2);
+  });
+
+  it("REGRESSION: expired impact-map cache rows are evicted instead of accumulating indefinitely", async () => {
+    const staleIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const freshIso = new Date().toISOString();
+    const { storage, rows } = cachingStorageStub(5);
+    rows.set("acme|widgets|expired-one", { context: "old context", metricsJson: "{}", fetchedAt: staleIso });
+    rows.set("acme|widgets|expired-two", { context: "old context", metricsJson: "{}", fetchedAt: staleIso });
+    rows.set("other|widgets|expired-other-project", { context: "old context", metricsJson: "{}", fetchedAt: staleIso });
+    rows.set("acme|widgets|fresh-one", { context: "fresh context", metricsJson: "{}", fetchedAt: freshIso });
+    const infra: RagInfra = {
+      storage,
+      vector: vectorStub([{ id: "src/review/caller.ts::0", score: 0.9, metadata: { path: "src/review/caller.ts" } }]),
+      inference: ai1024,
+    };
+
+    await computeImpactMap(testEnv(), [{ path: "src/review/impact-map.ts", symbols: ["computeImpactMap"] }], { infra, project: "acme", repo: "widgets" });
+
+    const acmeWidgetRows = [...rows.keys()].filter((key) => key.startsWith("acme|widgets|"));
+    expect(acmeWidgetRows).toHaveLength(2);
+    expect(acmeWidgetRows).toContain("acme|widgets|fresh-one");
+    expect(acmeWidgetRows).not.toContain("acme|widgets|expired-one");
+    expect(acmeWidgetRows).not.toContain("acme|widgets|expired-two");
+    expect(rows.has("other|widgets|expired-other-project")).toBe(true);
+  });
+
+  it("REGRESSION: impact-map cache rows retain only metrics, not the retrieved context body", async () => {
+    const { storage, rows } = cachingStorageStub(5);
+    const infra: RagInfra = {
+      storage,
+      vector: vectorStub([{ id: "src/review/caller.ts::0", score: 0.9, metadata: { path: "src/review/caller.ts" } }]),
+      inference: ai1024,
+    };
+
+    await computeImpactMap(testEnv(), [{ path: "src/review/impact-map.ts", symbols: ["computeImpactMap"] }], { infra, project: "acme", repo: "widgets" });
+
+    expect([...rows.values()]).toHaveLength(1);
+    expect([...rows.values()][0]?.context).toBe("");
+    expect([...rows.values()][0]?.metricsJson).toContain("src/review/caller.ts");
   });
 
   describe("cache hit/miss telemetry (#4448)", () => {

@@ -65,6 +65,10 @@ function buildSymbolQueryText(file: FileChangedSymbols): string {
 // re-embed within that window, and any longer would risk masking a real index update for no added benefit.
 const IMPACT_MAP_QUERY_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
 
+function impactMapQueryCacheCutoffIso(): string {
+  return new Date(Date.now() - IMPACT_MAP_QUERY_CACHE_MAX_AGE_MS).toISOString();
+}
+
 /** One query's cache key: every input that affects retrieveContextWithMetrics' result. topK/minScore/reranker
  *  are constants for this module's own calls, but are still hashed (not assumed) so this function stays
  *  correct if a future caller ever varies them. excludePaths is sorted before hashing so argument order never
@@ -88,13 +92,16 @@ async function getCachedImpactMapQuery(
 ): Promise<RagRetrievalResult | null> {
   try {
     const row = await storage
-      .prepare("SELECT context, metrics_json AS metricsJson, fetched_at AS fetchedAt FROM impact_map_query_cache WHERE project = ? AND repo = ? AND query_fingerprint = ?")
+      .prepare("SELECT metrics_json AS metricsJson, fetched_at AS fetchedAt FROM impact_map_query_cache WHERE project = ? AND repo = ? AND query_fingerprint = ?")
       .bind(project, repo, fingerprint)
-      .first<{ context: string; metricsJson: string; fetchedAt: string }>();
+      .first<{ metricsJson: string; fetchedAt: string }>();
     if (!row) return null;
     const ageMs = Date.now() - Date.parse(row.fetchedAt);
-    if (!Number.isFinite(ageMs) || ageMs >= IMPACT_MAP_QUERY_CACHE_MAX_AGE_MS) return null;
-    return { context: row.context, metrics: JSON.parse(row.metricsJson) as RagRetrievalResult["metrics"] };
+    if (!Number.isFinite(ageMs) || ageMs >= IMPACT_MAP_QUERY_CACHE_MAX_AGE_MS) {
+      await storage.prepare("DELETE FROM impact_map_query_cache WHERE project = ? AND repo = ? AND query_fingerprint = ?").bind(project, repo, fingerprint).run();
+      return null;
+    }
+    return { context: "", metrics: JSON.parse(row.metricsJson) as RagRetrievalResult["metrics"] };
   } catch {
     return null; // fail-safe: a storage error degrades to "no cache", never blocks the query
   }
@@ -108,6 +115,7 @@ async function putCachedImpactMapQuery(
   result: RagRetrievalResult,
 ): Promise<void> {
   try {
+    await storage.prepare("DELETE FROM impact_map_query_cache WHERE project = ? AND repo = ? AND fetched_at < ?").bind(project, repo, impactMapQueryCacheCutoffIso()).run();
     await storage
       .prepare(
         `INSERT INTO impact_map_query_cache (project, repo, query_fingerprint, context, metrics_json, fetched_at)
@@ -115,7 +123,7 @@ async function putCachedImpactMapQuery(
          ON CONFLICT(project, repo, query_fingerprint) DO UPDATE SET
            context = excluded.context, metrics_json = excluded.metrics_json, fetched_at = excluded.fetched_at`,
       )
-      .bind(project, repo, fingerprint, result.context, JSON.stringify(result.metrics), nowIso())
+      .bind(project, repo, fingerprint, "", JSON.stringify(result.metrics), nowIso())
       .run();
   } catch {
     // fail-safe: a write failure only means this ONE result isn't cached -- never blocks the review

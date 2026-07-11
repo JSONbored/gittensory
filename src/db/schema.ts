@@ -1492,5 +1492,6 @@ export const impactMapQueryCache = sqliteTable(
   },
   (table) => ({
     primary: primaryKey({ columns: [table.project, table.repo, table.queryFingerprint] }),
+    repoFetchedAtIdx: index("impact_map_query_cache_repo_fetched_at_idx").on(table.project, table.repo, table.fetchedAt),
   }),
 );
