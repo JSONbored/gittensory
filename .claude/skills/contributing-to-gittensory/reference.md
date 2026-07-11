@@ -141,12 +141,18 @@ All tools are metadata-only (no source upload). Run in this order:
 2. `gittensory_validate_linked_issue` — `{owner, repo, issueNumber, plannedChange}` → is the issue
    open, valid, single-owner, solvable by this PR.
 3. `gittensory_check_slop_risk` — `{changedFiles[{path,additions,deletions}], description, tests,
-   testFiles}` → slopRisk 0–100 + band + findings.
-4. `gittensory_lint_pr_text` — `{commitMessages[], prBody, linkedIssue}` → verdict
+   testFiles}` → band + findings.
+4. `gittensory_check_improvement_potential` — `{changedFiles?[{path,additions,deletions}], tests?,
+   testFiles?, patchCoverageDeltaPercent?, complexityDeltas?[{file,line,name,before,after,delta}],
+   duplicationDeltas?[{file,line,duplicateOfLine,lines}]}` → improvementScore + band
+   (insufficient-signal/none/minor/moderate/significant) + findings. The positive-axis mirror of
+   `gittensory_check_slop_risk` — deterministic tier only (no LLM judgment); complexityDeltas/
+   duplicationDeltas are optional precomputed deltas the calling agent supplies, never raw source.
+5. `gittensory_lint_pr_text` — `{commitMessages[], prBody, linkedIssue}` → verdict
    strong/adequate/weak + specific fixes.
-5. `gittensory_validate_config` — `{content, source?}` → normalized manifest fields,
+6. `gittensory_validate_config` — `{content, source?}` → normalized manifest fields,
    warnings, and ok/warn/error status.
-6. `gittensory_predict_gate` — `{login, owner, repo, title, body, labels, linkedIssues}` → predicted
+7. `gittensory_predict_gate` — `{login, owner, repo, title, body, labels, linkedIssues}` → predicted
    conclusion + blockers + warnings + readiness score.
 
 (Auth'd extras: `gittensory_preflight_pr` / `…_local_diff` for lane fit + collision + queue health;

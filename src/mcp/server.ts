@@ -154,6 +154,7 @@ import { MAX_FOCUS_MANIFEST_BYTES } from "../signals/focus-manifest";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildPredictedGateVerdict, type PredictedGateVerdict } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment, buildSlopAssessment } from "../signals/slop";
+import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
 import { buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
@@ -918,6 +919,62 @@ const checkSlopRiskOutputSchema = {
   rubric: z.string().optional(),
 };
 
+// Deterministic structural-improvement counterpart to checkSlopRiskShape (#4746, sub-issue I of epic #4737):
+// the positive-axis mirror of checkSlopRisk, same pure local-metadata contract. changedFiles/tests/testFiles
+// are reused verbatim (same shape as checkSlopRiskShape) so the two signals never disagree about what counts
+// as test evidence. complexityDeltas/duplicationDeltas mirror ComplexityDeltaLike/DuplicationDeltaLike
+// (src/signals/improvement.ts) as already-derived structured deltas — the calling agent computes them from
+// its own local working tree (real before/after content, no reconstructOldContent trick needed) and supplies
+// them here; this tool never reads file content or diffs itself. Every field is optional:
+// buildStructuralImprovementAssessment degrades cleanly to "insufficient-signal" when nothing is supplied
+// (see its own tests), so there is no synthetic "at least one field required" check to duplicate here. No
+// auth required — same choice as checkSlopRisk: a pure function over caller-supplied structured data with no
+// owner/repo/login to scope, and improvementScore carries no gate/blocker power (advisory-only; see
+// improvement.ts's header comment), so there is nothing to gate.
+const checkImprovementPotentialShape = {
+  changedFiles: z
+    .array(z.object({ path: z.string().min(1).max(400), additions: z.number().int().min(0).optional(), deletions: z.number().int().min(0).optional() }))
+    .max(2000)
+    .optional(),
+  tests: z.array(z.string().max(400)).max(2000).optional(),
+  testFiles: z.array(z.string().max(400)).max(2000).optional(),
+  patchCoverageDeltaPercent: z.number().optional(),
+  complexityDeltas: z
+    .array(
+      z.object({
+        file: z.string().min(1).max(400),
+        line: z.number().int().min(1),
+        name: z.string().min(1).max(400),
+        before: z.number().int().min(0),
+        after: z.number().int().min(0),
+        delta: z.number().int(),
+      }),
+    )
+    .max(2000)
+    .optional(),
+  duplicationDeltas: z
+    .array(
+      z.object({
+        file: z.string().min(1).max(400),
+        line: z.number().int().min(1),
+        duplicateOfLine: z.number().int().min(1),
+        lines: z.number().int().min(1),
+      }),
+    )
+    .max(2000)
+    .optional(),
+};
+
+// Unlike checkSlopRiskOutputSchema, the numeric score is NOT blunted: improvementScore has no gate/blocker
+// power (unlike slopRisk, which the blunting explicitly protects from reverse-engineering an evasion of a
+// block — #mcp-slop-blunt), and the whole point of a supply-side pre-submit value signal is to let a miner
+// see how close their planned change is to the next band, so hiding the number would defeat the tool.
+const checkImprovementPotentialOutputSchema = {
+  improvementScore: z.number().optional(),
+  band: z.enum(["insufficient-signal", "none", "minor", "moderate", "significant"]).optional(),
+  findings: z.unknown().optional(),
+};
+
 // Coverage-gap self-check (#2235): pure local-metadata, like checkSlopRisk — the agent supplies its changed
 // paths (plus any test paths) and asks whether the change carries enough test evidence, no source uploaded.
 const checkTestEvidenceShape = {
@@ -1621,6 +1678,17 @@ export class GittensoryMcp {
         outputSchema: checkSlopRiskOutputSchema,
       },
       async (input) => this.toolResult(await this.checkSlopRisk(input)),
+    );
+
+    server.registerTool(
+      "gittensory_check_improvement_potential",
+      {
+        description:
+          "Assess the deterministic structural-improvement potential of a planned change from local diff metadata (paths + line counts) plus optional precomputed complexity/duplication deltas and a patch-coverage delta — an agent-native, source-free positive-signal self-check mirroring gittensory_check_slop_risk. Returns the score, band (insufficient-signal/none/minor/moderate/significant), and actionable findings. Deterministic tier only (no LLM judgment); no repo data needed.",
+        inputSchema: checkImprovementPotentialShape,
+        outputSchema: checkImprovementPotentialOutputSchema,
+      },
+      async (input) => this.toolResult(await this.checkImprovementPotential(input)),
     );
 
     server.registerTool(
@@ -2880,6 +2948,21 @@ export class GittensoryMcp {
     return {
       summary: `Slop risk: ${assessment.band}.`,
       data: { band: assessment.band, findings: assessment.findings } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async checkImprovementPotential(
+    input: z.infer<z.ZodObject<typeof checkImprovementPotentialShape>>,
+  ): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("gittensory_check_improvement_potential");
+    const assessment = buildStructuralImprovementAssessment(input);
+    return {
+      summary: `Improvement potential: ${assessment.band}.`,
+      data: {
+        improvementScore: assessment.improvementScore,
+        band: assessment.band,
+        findings: assessment.findings,
+      } as unknown as Record<string, unknown>,
     };
   }
 
