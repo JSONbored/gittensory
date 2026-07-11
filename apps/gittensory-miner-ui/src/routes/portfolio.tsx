@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
+
 import { fetchPortfolioQueue, type PortfolioQueueResult, type QueueStatus } from "../lib/portfolio-queue";
 
 export const Route = createFileRoute("/portfolio")({
@@ -16,19 +18,21 @@ const STATUS_LABELS: Record<QueueStatus, string> = {
   done: "Done",
 };
 
-const STATUS_CARD_CLASSES: Record<QueueStatus, string> = {
-  queued: "border-sky-400/30 bg-sky-500/10 text-sky-100",
-  in_progress: "border-amber-400/30 bg-amber-500/10 text-amber-100",
-  done: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100",
+// Semantic tone per status, sourced from the shared design system's success/warning
+// tokens rather than arbitrary color utilities — kept separate from the accent hue.
+const STATUS_TONE: Record<QueueStatus, string> = {
+  queued: "text-muted-foreground",
+  in_progress: "text-[var(--warning)]",
+  done: "text-[var(--success)]",
 };
 
 export function PortfolioQueueView({ result }: { result: PortfolioQueueResult | null }) {
   if (result === null) {
-    return <p className="text-sm text-white/60">Loading local portfolio queue…</p>;
+    return <p className="text-token-sm text-muted-foreground">Loading local portfolio queue…</p>;
   }
   if (!result.ok) {
     return (
-      <p role="alert" className="text-sm text-rose-300">
+      <p role="alert" className="text-token-sm text-[var(--danger)]">
         Could not read the local portfolio queue: {result.error}
       </p>
     );
@@ -36,22 +40,24 @@ export function PortfolioQueueView({ result }: { result: PortfolioQueueResult | 
   const summary = result.summary;
   if (summary.total === 0) {
     return (
-      <p className="text-sm text-white/60">
+      <p className="text-token-sm text-muted-foreground">
         No queued work yet — the cards fill in once the miner enqueues its first portfolio item.
       </p>
     );
   }
   return (
-    <div>
-      <dl className="grid gap-4 sm:grid-cols-3">
-        {(Object.keys(STATUS_LABELS) as QueueStatus[]).map((status) => (
-          <div key={status} className={`rounded-xl border p-4 ${STATUS_CARD_CLASSES[status]}`}>
-            <dt className="text-xs uppercase tracking-wider opacity-80">{STATUS_LABELS[status]}</dt>
-            <dd className="mt-1 text-3xl font-semibold">{summary.counts[status]}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+    <dl className="grid gap-4 sm:grid-cols-3">
+      {(Object.keys(STATUS_LABELS) as QueueStatus[]).map((status) => (
+        <Card key={status}>
+          <CardContent className="p-4">
+            <dt className="text-token-2xs uppercase tracking-wider text-muted-foreground">{STATUS_LABELS[status]}</dt>
+            <dd className={`mt-1 text-token-3xl font-display font-semibold ${STATUS_TONE[status]}`}>
+              {summary.counts[status]}
+            </dd>
+          </CardContent>
+        </Card>
+      ))}
+    </dl>
   );
 }
 
@@ -73,14 +79,16 @@ export function PortfolioPage({
   }, [loadPortfolioQueue]);
 
   return (
-    <section className="rounded-xl border border-white/10 bg-white/5 p-6">
-      <h2 className="text-xl font-semibold">Portfolio queue</h2>
-      <p className="mt-1 text-sm text-white/60">
-        Local, read-only summary of the miner&apos;s portfolio queue (`miner_portfolio_queue`).
-      </p>
-      <div className="mt-4">
+    <Card>
+      <CardHeader>
+        <h2 className="text-token-lg font-display font-semibold leading-none tracking-tight">Portfolio queue</h2>
+        <p className="text-token-sm text-muted-foreground">
+          Local, read-only summary of the miner&apos;s portfolio queue (`miner_portfolio_queue`).
+        </p>
+      </CardHeader>
+      <CardContent>
         <PortfolioQueueView result={result} />
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }

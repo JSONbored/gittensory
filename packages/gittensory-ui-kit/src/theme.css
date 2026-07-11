@@ -290,3 +290,32 @@
     border-top: 1px solid color-mix(in oklab, var(--foreground) 6%, transparent);
   }
 }
+
+/* Shared focus + hover utilities — generic enough that both gittensory-ui
+   and gittensory-miner-ui use them directly, unlike the hero/marketing-only
+   flourishes (aurora-glow, bg-grid, gradient-border) that stay app-local. */
+@layer utilities {
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--background),
+      0 0 0 4px color-mix(in oklab, var(--mint) 90%, transparent);
+    border-radius: var(--radius-token);
+  }
+  .hover-surface {
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+  .hover-surface:hover {
+    background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hover-surface {
+      transition: none;
+    }
+  }
+}

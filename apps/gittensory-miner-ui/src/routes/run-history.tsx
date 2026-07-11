@@ -1,6 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { Badge } from "@jsonbored/gittensory-ui-kit/components/badge";
+import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@jsonbored/gittensory-ui-kit/components/table";
+
 import { fetchRunStates, type RunHistoryResult, type RunStateRow } from "../lib/run-history";
 
 export const Route = createFileRoute("/run-history")({
@@ -11,58 +22,52 @@ export const Route = createFileRoute("/run-history")({
 // last-updated), served by the dev server's local API. No writes, no new state — a fresh install renders the
 // empty state, an unreachable API renders an error message.
 
-const STATE_BADGE_CLASSES: Record<RunStateRow["state"], string> = {
-  idle: "bg-white/10 text-white/70",
-  discovering: "bg-sky-500/20 text-sky-200",
-  planning: "bg-amber-500/20 text-amber-200",
-  preparing: "bg-emerald-500/20 text-emerald-200",
+const STATE_BADGE_VARIANT: Record<RunStateRow["state"], "secondary" | "outline"> = {
+  idle: "secondary",
+  discovering: "outline",
+  planning: "outline",
+  preparing: "outline",
 };
 
 export function RunHistoryView({ result }: { result: RunHistoryResult | null }) {
   if (result === null) {
-    return <p className="text-sm text-white/60">Loading local run state…</p>;
+    return <p className="text-token-sm text-muted-foreground">Loading local run state…</p>;
   }
   if (!result.ok) {
     return (
-      <p role="alert" className="text-sm text-rose-300">
+      <p role="alert" className="text-token-sm text-[var(--danger)]">
         Could not read local run state: {result.error}
       </p>
     );
   }
   if (result.rows.length === 0) {
     return (
-      <p className="text-sm text-white/60">
+      <p className="text-token-sm text-muted-foreground">
         No local run state yet — the table fills in once the miner records its first repo run.
       </p>
     );
   }
   return (
-    <table className="w-full text-left text-sm">
-      <thead>
-        <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-white/50">
-          <th scope="col" className="py-2 pr-4">
-            Repository
-          </th>
-          <th scope="col" className="py-2 pr-4">
-            State
-          </th>
-          <th scope="col" className="py-2">
-            Last updated
-          </th>
-        </tr>
-      </thead>
-      <tbody>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Repository</TableHead>
+          <TableHead>State</TableHead>
+          <TableHead>Last updated</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {result.rows.map((row) => (
-          <tr key={row.repoFullName} className="border-b border-white/5">
-            <td className="py-2 pr-4 font-mono text-white/90">{row.repoFullName}</td>
-            <td className="py-2 pr-4">
-              <span className={`rounded-full px-2 py-0.5 text-xs ${STATE_BADGE_CLASSES[row.state]}`}>{row.state}</span>
-            </td>
-            <td className="py-2 text-white/70">{row.updatedAt}</td>
-          </tr>
+          <TableRow key={row.repoFullName}>
+            <TableCell className="font-mono text-foreground">{row.repoFullName}</TableCell>
+            <TableCell>
+              <Badge variant={STATE_BADGE_VARIANT[row.state]}>{row.state}</Badge>
+            </TableCell>
+            <TableCell className="text-muted-foreground">{row.updatedAt}</TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 
@@ -84,14 +89,16 @@ export function RunHistoryPage({
   }, [loadRunStates]);
 
   return (
-    <section className="rounded-xl border border-white/10 bg-white/5 p-6">
-      <h2 className="text-xl font-semibold">Run history</h2>
-      <p className="mt-1 text-sm text-white/60">
-        Local, read-only view over the miner&apos;s per-repo run state (`miner_run_state`).
-      </p>
-      <div className="mt-4">
+    <Card>
+      <CardHeader>
+        <h2 className="text-token-lg font-display font-semibold leading-none tracking-tight">Run history</h2>
+        <p className="text-token-sm text-muted-foreground">
+          Local, read-only view over the miner&apos;s per-repo run state (`miner_run_state`).
+        </p>
+      </CardHeader>
+      <CardContent>
         <RunHistoryView result={result} />
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }

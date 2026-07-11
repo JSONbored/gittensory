@@ -6,21 +6,21 @@ export const Route = createRootRoute({
 
 function RootLayout() {
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-white/10 px-6 py-4">
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="border-b-hairline px-6 py-4">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
           <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-emerald-300/80">Gittensory Miner</p>
-            <h1 className="text-lg font-semibold">Local dashboard shell</h1>
+            <p className="text-token-xs uppercase tracking-[0.2em] text-primary font-mono">Gittensory Miner</p>
+            <h1 className="text-token-lg font-display font-semibold">Local dashboard</h1>
           </div>
-          <nav className="flex gap-4 text-sm text-white/70">
-            <Link to="/" className="hover:text-white">
+          <nav className="flex gap-4 text-token-sm text-muted-foreground">
+            <Link to="/" className="hover-surface rounded-token-sm px-2 py-1 hover:text-foreground">
               Overview
             </Link>
-            <Link to="/run-history" className="hover:text-white">
+            <Link to="/run-history" className="hover-surface rounded-token-sm px-2 py-1 hover:text-foreground">
               Run history
             </Link>
-            <Link to="/portfolio" className="hover:text-white">
+            <Link to="/portfolio" className="hover-surface rounded-token-sm px-2 py-1 hover:text-foreground">
               Portfolio
             </Link>
           </nav>

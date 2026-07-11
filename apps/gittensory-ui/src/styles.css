@@ -92,19 +92,9 @@
   }
 }
 
-/* Shared focus + animated gradient utilities. */
+/* Animated gradient border utility (focus-ring now lives in the shared
+   theme — see @jsonbored/gittensory-ui-kit/theme.css). */
 @layer utilities {
-  .focus-ring {
-    outline: none;
-  }
-  .focus-ring:focus-visible {
-    outline: none;
-    box-shadow:
-      0 0 0 2px var(--background),
-      0 0 0 4px color-mix(in oklab, var(--mint) 80%, transparent);
-    border-radius: var(--radius-token);
-  }
-
   .gradient-border {
     position: relative;
     background:
@@ -192,28 +182,5 @@
   /* Thin grid lines (replaces raw bg-border on tile gap surfaces). */
   .accent-grid-lines {
     background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
-  }
-}
-
-/* Stronger, AA-friendly focus ring + interactive hover layer. */
-@layer utilities {
-  .focus-ring:focus-visible {
-    box-shadow:
-      0 0 0 2px var(--background),
-      0 0 0 4px color-mix(in oklab, var(--mint) 90%, transparent);
-  }
-  /* Subtle hover surface that is actually visible on the dark background. */
-  .hover-surface {
-    transition:
-      background-color 150ms ease,
-      color 150ms ease;
-  }
-  .hover-surface:hover {
-    background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .hover-surface {
-      transition: none;
-    }
   }
 }
