@@ -73,3 +73,10 @@ selfPlagiarism:
 # `paused` (boolean, default: false).
 killSwitch:
   paused: false
+
+# Per-repo dry-run/live execution opt-in (#2342). A freshly-configured miner always defaults to dry-run; this
+# field alone is NOT sufficient to go live -- the miner's own operator must also separately opt in globally
+# (env var GITTENSORY_MINER_LIVE_MODE=live). `liveModeOptIn` must equal EXACTLY the string "live" (not a
+# boolean, not "yes"/"on") -- any other value stays dry-run. Default: null.
+execution:
+  liveModeOptIn: null

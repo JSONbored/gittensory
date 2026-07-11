@@ -57,6 +57,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         feasibilityGate: { enabled: false, suppressedReasons: ["duplicate_cluster_high"] },
         selfPlagiarism: { similarityThreshold: 0.85 },
         killSwitch: { paused: false },
+        execution: { liveModeOptIn: null },
       },
       warnings: ['MinerGoalSpec field "blockedPaths" truncated an over-long entry.'],
     });
@@ -151,6 +152,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         feasibilityGate: { enabled: true, suppressedReasons: [] },
         selfPlagiarism: { similarityThreshold: 0.85 },
         killSwitch: { paused: false },
+        execution: { liveModeOptIn: null },
       },
       warnings: expect.arrayContaining([
         expect.stringMatching(/minerEnabled/i),
@@ -241,6 +243,27 @@ describe("MinerGoalSpec parser (#2301)", () => {
     expect(arrayValue.warnings.join(" ")).toMatch(/killSwitch.*must be a mapping/i);
   });
 
+  it("an execution.liveModeOptIn opt-in alone (all other fields default) marks the spec present", () => {
+    const parsed = parseMinerGoalSpec({ execution: { liveModeOptIn: "live" } });
+    expect(parsed.present).toBe(true);
+    expect(parsed.spec.execution).toEqual({ liveModeOptIn: "live" });
+  });
+
+  it("execution.liveModeOptIn requires the exact literal and rejects a non-mapping value", () => {
+    // A near-miss string is valid but not the magic literal -- silently stays dry-run, no warning.
+    const nearMiss = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: { liveModeOptIn: "LIVE" } });
+    expect(nearMiss.spec.execution).toEqual({ liveModeOptIn: null });
+    expect(nearMiss.warnings).toEqual([]);
+
+    const wrongType = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: { liveModeOptIn: true } });
+    expect(wrongType.spec.execution).toEqual({ liveModeOptIn: null });
+    expect(wrongType.warnings.join(" ")).toMatch(/execution\.liveModeOptIn/i);
+
+    const arrayValue = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: ["not", "a", "mapping"] });
+    expect(arrayValue.spec.execution).toEqual({ liveModeOptIn: null });
+    expect(arrayValue.warnings.join(" ")).toMatch(/execution.*must be a mapping/i);
+  });
+
   it("rejects claim counts below one after flooring", () => {
     const parsed = parseMinerGoalSpec({
       wantedPaths: ["src/**"],
@@ -271,6 +294,7 @@ describe("MinerGoalSpec parser (#2301)", () => {
         feasibilityGate: { enabled: true, suppressedReasons: [] },
         selfPlagiarism: { similarityThreshold: 0.85 },
         killSwitch: { paused: false },
+        execution: { liveModeOptIn: null },
       }),
     ).toEqual({
       present: false,

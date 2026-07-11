@@ -49,6 +49,7 @@ test("parseMinerGoalSpec: valid raw config normalizes every field and keeps non-
     feasibilityGate: { enabled: false, suppressedReasons: ["duplicate_cluster_high"] },
     selfPlagiarism: { similarityThreshold: 0.85 },
     killSwitch: { paused: false },
+    execution: { liveModeOptIn: null },
   });
   assert.deepEqual(parsed.warnings, []);
 });
@@ -65,6 +66,26 @@ test("parseMinerGoalSpec: killSwitch sub-field normalizes independently and reje
   const arrayValue = parseMinerGoalSpec({ wantedPaths: ["src/**"], killSwitch: ["not", "a", "mapping"] });
   assert.deepEqual(arrayValue.spec.killSwitch, { paused: false });
   assert.match(arrayValue.warnings.join(" "), /killSwitch.*must be a mapping/i);
+});
+
+test("parseMinerGoalSpec: execution.liveModeOptIn requires the exact literal, no truthy coercion", () => {
+  const optedIn = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: { liveModeOptIn: "live" } });
+  assert.deepEqual(optedIn.spec.execution, { liveModeOptIn: "live" });
+  assert.deepEqual(optedIn.warnings, []);
+
+  // A near-miss string is a valid string, just not the magic literal -- silently stays dry-run, no warning.
+  const nearMiss = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: { liveModeOptIn: "LIVE" } });
+  assert.deepEqual(nearMiss.spec.execution, { liveModeOptIn: null });
+  assert.deepEqual(nearMiss.warnings, []);
+
+  // A wrong TYPE (not a string at all) is malformed and warns, matching every other field's convention.
+  const wrongType = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: { liveModeOptIn: true } });
+  assert.deepEqual(wrongType.spec.execution, { liveModeOptIn: null });
+  assert.match(wrongType.warnings.join(" "), /execution\.liveModeOptIn/i);
+
+  const arrayValue = parseMinerGoalSpec({ wantedPaths: ["src/**"], execution: ["not", "a", "mapping"] });
+  assert.deepEqual(arrayValue.spec.execution, { liveModeOptIn: null });
+  assert.match(arrayValue.warnings.join(" "), /execution.*must be a mapping/i);
 });
 
 test("parseMinerGoalSpec: feasibilityGate sub-fields normalize independently and reject a non-mapping value", () => {
@@ -173,6 +194,7 @@ test("parseMinerGoalSpec: malformed fields fall back independently with targeted
     feasibilityGate: { enabled: true, suppressedReasons: [] },
     selfPlagiarism: { similarityThreshold: 0.85 },
     killSwitch: { paused: false },
+    execution: { liveModeOptIn: null },
   });
   const warningText = parsed.warnings.join(" ");
   assert.match(warningText, /minerEnabled/i);
