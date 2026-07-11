@@ -644,6 +644,13 @@ const PR_PUBLIC_SURFACE_ACTIONS = new Set([
   "edited",
 ]);
 const PR_GATE_CLOSED_ACTIONS = new Set(["closed"]);
+// #4818 follow-up: the three review-family event names `shouldProcessPullRequestPublicSurface` (below) also
+// routes into `maybePublishPrPublicSurface` -- none of them can ever change a PR's title or its own linked-issue
+// list (the only two inputs a TYPE-label decision depends on), yet each carries its OWN independently-timed,
+// independently-stale embedded `pull_request` webhook snapshot. Used ONLY to skip the type-label recompute
+// itself (see `maybePublishPrPublicSurface`'s type-label block) -- every OTHER piece of the public-surface
+// publish (gate re-evaluation, comments, screenshots, …) still needs to run on these events same as before.
+const PR_TYPE_LABEL_IRRELEVANT_EVENT_NAMES = new Set(["pull_request_review", "pull_request_review_comment", "pull_request_review_thread"]);
 const ISSUE_PLAN_COOLDOWN_MS = 10 * 60 * 1000;
 const NOTIFY_EVALUATE_EVENTS_PER_JOB = 100;
 
@@ -5641,6 +5648,7 @@ async function handlePullRequestWebhookEvent(
                 deliveryId,
                 authorType: payloadPullRequest.user?.type,
                 action: payload.action,
+                eventName,
                 baseSha: payloadPullRequest.base?.sha ?? null,
                 liveFacts,
               },
@@ -7331,6 +7339,12 @@ async function maybePublishPrPublicSurface(
     deliveryId: string;
     authorType?: string | undefined;
     action?: string | undefined;
+    // #4818 follow-up: the GitHub webhook event name (`pull_request`, `pull_request_review`, …), distinct from
+    // `action` above -- `action: "edited"` alone can't tell a `pull_request` title edit apart from a
+    // `pull_request_review` comment edit, and only the type-label block needs this distinction (see
+    // `PR_TYPE_LABEL_IRRELEVANT_EVENT_NAMES`). Omitted (sweep / manual-retrigger callers) is never in that
+    // set, so those paths are unaffected.
+    eventName?: string | undefined;
     baseSha?: string | null | undefined;
     previewPollAttempt?: number | undefined;
     skipAiReview?: boolean | undefined;
@@ -7576,11 +7590,19 @@ async function maybePublishPrPublicSurface(
   // label, so a type label would violate it same as a comment would. `typeLabelsEnabled` itself is
   // computed earlier (see its declaration above prelimHasPublicOutput) so gittensor_only's silence
   // promise can gate the public-surface computation too, not just this label decision (#gate-only-type-labels).
+  // #4818 follow-up: skip the recompute ENTIRELY (not merely the ambiguous branch) for a review-family
+  // trigger -- it can't legitimately change the answer, and its embedded PR snapshot is exactly the class of
+  // stale input that caused #4818. Nothing is lost, only deferred to the next pull_request-native event or the
+  // periodic sweep (which reaches this same code with `eventName` unset, so it is never excluded). Computed
+  // once and reused by both the gate below and the skip-reason ternary in the `else` branch, rather than
+  // re-evaluating `webhook.eventName ?? ""` twice for the identical answer.
+  const isReviewFamilyEvent = PR_TYPE_LABEL_IRRELEVANT_EVENT_NAMES.has(webhook.eventName ?? "");
   if (
     typeLabelsEnabled &&
     !settings.agentPaused &&
     decision.skipReason !== "miner_detection_unavailable" &&
-    decision.skipReason !== "not_official_gittensor_miner"
+    decision.skipReason !== "not_official_gittensor_miner" &&
+    !isReviewFamilyEvent
   ) {
     // Per-PR mutual exclusion (#regression-safe-propagation, mirrors the agent-maintenance claim at #2129
     // below in maybeRunAgentMaintenance): a merge fans out into a BURST of near-simultaneous webhook
@@ -7709,11 +7731,13 @@ async function maybePublishPrPublicSurface(
       }
     }
   } else {
-    const skipReason = settings.agentPaused
-      ? "agent_paused"
-      : decision.skipReason === "miner_detection_unavailable" || decision.skipReason === "not_official_gittensor_miner"
-        ? decision.skipReason
-        : "typeLabelsEnabled_false";
+    const skipReason = isReviewFamilyEvent
+      ? "irrelevant_review_family_event"
+      : settings.agentPaused
+        ? "agent_paused"
+        : decision.skipReason === "miner_detection_unavailable" || decision.skipReason === "not_official_gittensor_miner"
+          ? decision.skipReason
+          : "typeLabelsEnabled_false";
     await logTypeLabelSkip(env, repoFullName, pr.number, skipReason);
   }
 
