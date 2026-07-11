@@ -7,7 +7,12 @@ vi.mock("@jsonbored/gittensory-engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 
-import { evaluateAndRecordHarnessSubmissionTrigger, countConsecutiveGateBlocks, HARNESS_SUBMISSION_TRIGGER_DECISION_EVENT } from "../../packages/gittensory-miner/lib/harness-submission-trigger.js";
+import {
+  evaluateAndRecordHarnessSubmissionTrigger,
+  countConsecutiveGateBlocks,
+  prepareOpenPrSubmission,
+  HARNESS_SUBMISSION_TRIGGER_DECISION_EVENT,
+} from "../../packages/gittensory-miner/lib/harness-submission-trigger.js";
 import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
 
 const roots: string[] = [];
@@ -283,5 +288,150 @@ describe("evaluateAndRecordHarnessSubmissionTrigger (#2337)", () => {
     expect(() =>
       evaluateAndRecordHarnessSubmissionTrigger({ killSwitchScope: "none", repoFullName: "acme/widgets", handoffPacket: handoffPacket() } as never, {} as never),
     ).toThrow("invalid_event_ledger");
+  });
+});
+
+describe("prepareOpenPrSubmission (#2337 open-pr call site)", () => {
+  it("shapes a ready:true openPrInput exactly matching buildOpenPrSpec's expected fields when the gate allows", () => {
+    const eventLedger = tempEventLedger();
+
+    const result = prepareOpenPrSubmission(
+      {
+        killSwitchScope: "none",
+        repoFullName: "acme/widgets",
+        handoffPacket: handoffPacket({ branchRef: "attempt/1" }),
+        slopThreshold: "low",
+        mode: "enforce",
+        base: "main",
+        title: "fix: add retry logic",
+        body: "Closes #1.",
+        draft: true,
+      },
+      { eventLedger },
+    );
+
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready:true");
+    expect(result.decision.allow).toBe(true);
+    expect(result.openPrInput).toEqual({
+      repoFullName: "acme/widgets",
+      base: "main",
+      head: "attempt/1",
+      title: "fix: add retry logic",
+      body: "Closes #1.",
+      draft: true,
+    });
+  });
+
+  it("returns ready:false (no openPrInput) when the gate blocks, without requiring a branch to open a PR from at all", () => {
+    const eventLedger = tempEventLedger();
+
+    // Kill-switch active AND no branchRef on the handoff -- proves the head-branch check never runs on the
+    // blocked path (a candidate that will never open a PR must not throw for an unrelated missing-field reason).
+    const result = prepareOpenPrSubmission(
+      {
+        killSwitchScope: "global",
+        repoFullName: "acme/widgets",
+        handoffPacket: handoffPacket(),
+        slopThreshold: "low",
+        mode: "enforce",
+        base: "main",
+        title: "fix: add retry logic",
+      },
+      { eventLedger },
+    );
+
+    expect(result.ready).toBe(false);
+    expect(result.decision).toEqual({ allow: false, reasons: ["global_kill_switch_active"], circuitBreakerTripped: false });
+    expect((result as { openPrInput?: unknown }).openPrInput).toBeUndefined();
+  });
+
+  it("throws invalid_pr_base on a missing/blank base, before any gate evaluation or ledger write", () => {
+    const eventLedger = tempEventLedger();
+    expect(() =>
+      prepareOpenPrSubmission(
+        { killSwitchScope: "none", repoFullName: "acme/widgets", handoffPacket: handoffPacket({ branchRef: "attempt/1" }), slopThreshold: "low", mode: "enforce", title: "t" } as never,
+        { eventLedger },
+      ),
+    ).toThrow("invalid_pr_base");
+    expect(() =>
+      prepareOpenPrSubmission(
+        { killSwitchScope: "none", repoFullName: "acme/widgets", handoffPacket: handoffPacket({ branchRef: "attempt/1" }), slopThreshold: "low", mode: "enforce", base: "   ", title: "t" },
+        { eventLedger },
+      ),
+    ).toThrow("invalid_pr_base");
+    expect(eventLedger.readEvents({})).toHaveLength(0); // failed before the wrapped gate call ever wrote an event
+  });
+
+  it("throws invalid_pr_title on a missing/blank title, before any gate evaluation or ledger write", () => {
+    const eventLedger = tempEventLedger();
+    expect(() =>
+      prepareOpenPrSubmission(
+        { killSwitchScope: "none", repoFullName: "acme/widgets", handoffPacket: handoffPacket({ branchRef: "attempt/1" }), slopThreshold: "low", mode: "enforce", base: "main" } as never,
+        { eventLedger },
+      ),
+    ).toThrow("invalid_pr_title");
+    expect(eventLedger.readEvents({})).toHaveLength(0);
+  });
+
+  it("throws invalid_pr_head_branch when the gate allows but the handoff packet has no branch to open a PR from -- the allow decision is still recorded to the ledger", () => {
+    const eventLedger = tempEventLedger();
+
+    expect(() =>
+      prepareOpenPrSubmission(
+        {
+          killSwitchScope: "none",
+          repoFullName: "acme/widgets",
+          handoffPacket: handoffPacket(), // no branchRef
+          slopThreshold: "low",
+          mode: "enforce",
+          base: "main",
+          title: "t",
+        },
+        { eventLedger },
+      ),
+    ).toThrow("invalid_pr_head_branch");
+
+    // The gate's own allow:true decision is still on the audit trail even though the spec-build step failed.
+    const events = eventLedger.readEvents({ repoFullName: "acme/widgets" });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({ allow: true });
+  });
+
+  it("defaults draft to false and body to an empty string when omitted", () => {
+    const eventLedger = tempEventLedger();
+    const result = prepareOpenPrSubmission(
+      { killSwitchScope: "none", repoFullName: "acme/widgets", handoffPacket: handoffPacket({ branchRef: "attempt/1" }), slopThreshold: "low", mode: "enforce", base: "main", title: "t" },
+      { eventLedger },
+    );
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready:true");
+    expect(result.openPrInput.draft).toBe(false);
+    expect(result.openPrInput.body).toBe("");
+  });
+
+  it("trims repoFullName/base/title/head", () => {
+    const eventLedger = tempEventLedger();
+    const result = prepareOpenPrSubmission(
+      {
+        killSwitchScope: "none",
+        repoFullName: " acme/widgets ",
+        handoffPacket: handoffPacket({ branchRef: "  attempt/1  " }),
+        slopThreshold: "low",
+        mode: "enforce",
+        base: "  main  ",
+        title: "  t  ",
+      },
+      { eventLedger },
+    );
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready:true");
+    expect(result.openPrInput).toMatchObject({ repoFullName: "acme/widgets", base: "main", head: "attempt/1", title: "t" });
+  });
+
+  it("fails closed on a malformed candidate (null, or a non-object primitive) rather than silently allowing", () => {
+    const eventLedger = tempEventLedger();
+    expect(() => prepareOpenPrSubmission(null as never, { eventLedger })).toThrow("invalid_harness_submission_candidate");
+    expect(() => prepareOpenPrSubmission("nope" as never, { eventLedger })).toThrow("invalid_harness_submission_candidate");
   });
 });

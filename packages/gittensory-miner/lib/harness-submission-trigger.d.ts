@@ -44,3 +44,26 @@ export type HarnessSubmissionResult = {
 export function countConsecutiveGateBlocks(eventLedger: HarnessSubmissionEventLedger, sinceMs: number): number;
 
 export function evaluateAndRecordHarnessSubmissionTrigger(candidate: HarnessSubmissionCandidateInput, deps: HarnessSubmissionDeps): HarnessSubmissionResult;
+
+/** The exact input shape buildOpenPrSpec (root src/mcp/local-write-tools.ts) expects. */
+export type OpenPrInput = {
+  repoFullName: string;
+  base: string;
+  head: string;
+  title: string;
+  body: string;
+  draft: boolean;
+};
+
+export type PrepareOpenPrSubmissionCandidate = HarnessSubmissionCandidateInput & {
+  base: string;
+  title: string;
+  body?: string;
+  draft?: boolean;
+};
+
+export type PrepareOpenPrSubmissionResult =
+  | { ready: true; decision: HarnessSubmissionDecision; event: HarnessSubmissionResult["event"]; openPrInput: OpenPrInput }
+  | { ready: false; decision: HarnessSubmissionDecision; event: HarnessSubmissionResult["event"] };
+
+export function prepareOpenPrSubmission(candidate: PrepareOpenPrSubmissionCandidate, deps: HarnessSubmissionDeps): PrepareOpenPrSubmissionResult;
