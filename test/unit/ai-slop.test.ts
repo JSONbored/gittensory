@@ -511,6 +511,69 @@ describe("runAiSlopForAdvisory (processor wiring)", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("uses BYOK when settings.aiReviewProvider is explicitly set and matches the stored key's provider", async () => {
+    const run = vi.fn(async () => ({ response: slopJson({ band: "clean" }) })); // Workers AI must NOT be used
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+      TOKEN_ENCRYPTION_SECRET: "ai-slop-byok-test-encryption-secret-32b",
+    });
+    await upsertRepositoryAiKey(env, { repoFullName: "acme/widgets", provider: "anthropic", key: "sk-ant-byok-slop-9999", model: null });
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ content: [{ type: "text", text: slopJson({ band: "high" }) }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const adv = advisory();
+    await runAiSlopForAdvisory(env, {
+      mode: "live",
+      settings: { aiReviewByok: true, aiReviewProvider: "anthropic" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      files,
+      deterministicBand: "elevated",
+      confirmedContributor: true,
+      commitThresholdReached: false,
+    });
+    // A declared provider matching the stored key's provider still authorizes BYOK (same outcome as the
+    // no-declared-provider case above) — Workers AI is never called.
+    expect(adv.findings.map((f) => f.code)).toEqual([AI_SLOP_FINDING_CODE]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/v1/messages");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Workers AI when settings.aiReviewProvider is set but does NOT match the stored key's provider", async () => {
+    const run = vi.fn(async () => ({ response: slopJson({ band: "clean" }) }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+      TOKEN_ENCRYPTION_SECRET: "ai-slop-byok-test-encryption-secret-32b",
+    });
+    await upsertRepositoryAiKey(env, { repoFullName: "acme/widgets", provider: "anthropic", key: "sk-ant-byok-slop-9999", model: null });
+    const fetchMock = vi.fn(async () => new Response("should never be called", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const adv = advisory();
+    await runAiSlopForAdvisory(env, {
+      mode: "live",
+      settings: { aiReviewByok: true, aiReviewProvider: "openai" } as RepositorySettings,
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pr,
+      author: "alice",
+      files,
+      deterministicBand: "elevated",
+      confirmedContributor: true,
+      commitThresholdReached: false,
+    });
+    // Declared provider ("openai") mismatches the stored key's provider ("anthropic") ⇒ BYOK is skipped and
+    // the free Workers AI path runs instead (the BYOK fetch endpoint is never hit).
+    expect(run).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("no-ops entirely for unconfirmed contributors — neither the maintainer BYOK key nor free Workers AI is spent", async () => {
     const run = vi.fn(async () => ({ response: slopJson({ band: "high" }) }));
     const env = createTestEnv({

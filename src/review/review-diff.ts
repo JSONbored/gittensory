@@ -7,6 +7,7 @@
 // patches hunk-aware instead of dropping them, and always lists patch-less/over-budget files. (#accuracy-gap-1)
 
 import { isTestPath } from "../signals/test-evidence";
+import type { listPullRequestFiles } from "../db/repositories";
 
 /** Char budget of the diff fed to the review models. The 120B review models have ~128k-token context, so
  *  even a large PR fits in ONE coherent pass (accuracy over speed). Only a genuinely huge PR truncates —
@@ -147,4 +148,51 @@ export function buildUnifiedReviewDiff(files: ReviewDiffFile[], budget: number =
     diff += `${header}${body}\n\n`;
   }
   return diff.trim();
+}
+
+/** Build a bounded unified-diff string from cached PR files for the AI reviewer. Caps total size so a
+ *  huge PR cannot blow the model context or the neuron budget; each file's patch is taken from the raw
+ *  GitHub file payload when present. */
+export function buildAiReviewDiff(
+  files: Awaited<ReturnType<typeof listPullRequestFiles>>,
+): string {
+  // Source-first + hunk-aware + always-list-dropped-files (ported from reviewbot). The old blind 60k
+  // head-slice `break`-dropped whole files in stored order, so the file DEFINING a symbol could vanish
+  // while another referenced it → the model hallucinated "missing import / undefined symbol" (the #1528
+  // class, which survived even with grounding on). (#accuracy-gap-1)
+  return buildUnifiedReviewDiff(
+    files.map((file) => ({
+      path: file.path,
+      patch:
+        typeof file.payload?.patch === "string"
+          ? file.payload.patch
+          : undefined,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+    })),
+  );
+}
+
+/**
+ * Build the complete inline patch corpus for deterministic secret scanning. Unlike {@link buildAiReviewDiff},
+ * this is intentionally unbudgeted and does not reorder files or drop hunks: security controls must inspect
+ * every raw patch GitHub returned instead of the lossy AI-review prompt view.
+ *
+ * GitHub omits inline `patch` for binary/large files; {@link enrichSecretScanFilesWithPatchFallback} recovers
+ * scannable `+` lines for those files before this runs (see {@link maybeAddSecretLeakFinding}).
+ */
+export function buildSecretScanDiff(
+  files: Awaited<ReturnType<typeof listPullRequestFiles>>,
+): string {
+  return files
+    .map((file) => {
+      const status = file.status ?? "modified";
+      const header = `### ${file.path} (${status}) +${file.additions ?? 0}/-${file.deletions ?? 0}`;
+      const patch =
+        typeof file.payload?.patch === "string" ? file.payload.patch : "";
+      return patch ? `${header}\n${patch}` : header;
+    })
+    .join("\n\n")
+    .trim();
 }
