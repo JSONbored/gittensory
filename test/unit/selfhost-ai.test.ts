@@ -78,21 +78,25 @@ describe("provider-specific CLI timeouts (#selfhost — no shared timeout ambigu
     // zero/negative also falls back (raw > 0 false branch)
     expect(resolveCodexFirstOutputTimeoutMs({ CODEX_AI_FIRST_OUTPUT_TIMEOUT_MS: "0" })).toBe(30_000);
   });
-  it("resolveClaudeFirstOutputTimeoutMs defaults to 30s, is independent of effort, and honors + clamps CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS (#4994)", () => {
-    // absent → the 30s default (?? right side)
-    expect(resolveClaudeFirstOutputTimeoutMs({})).toBe(30_000);
+  it("REGRESSION (#5053): resolveClaudeFirstOutputTimeoutMs defaults to a 30-minute ceiling (effectively 'no separate fast-fail window' -- the call site's own Math.min(this, timeoutMs - 1) makes it equal the REAL timeout), unlike Codex's genuinely-streaming 30s default", () => {
+    // absent → the 1_800_000ms default -- `claude --output-format json` is a buffered "single result" (per
+    // `claude --help`), not streamed, so a short fast-fail window cannot distinguish a genuine hang from a
+    // slow-but-working call (confirmed live: a 274KB/effort:high prompt took 116s with zero stdout the whole
+    // time, then succeeded). The call site clamps this down to `timeoutMs - 1` for any realistic configured
+    // timeout, so by default the "first output" deadline IS the real deadline, matching pre-#4994 behavior.
+    expect(resolveClaudeFirstOutputTimeoutMs({})).toBe(1_800_000);
     // effort must NOT scale this deadline — a slow COMPLETION is not a slow first byte.
-    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_EFFORT: "max" })).toBe(30_000);
-    // present + valid → honored verbatim (?? left side, within bounds)
+    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_EFFORT: "max" })).toBe(1_800_000);
+    // present + valid → honored verbatim (an operator can still opt into a SHORTER, riskier window)
     expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "15000" })).toBe(15_000);
     // clamped to the 1s floor
     expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "1" })).toBe(1_000);
-    // clamped to the 120s ceiling (well under the shortest full timeout, 120_000ms)
-    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "999999" })).toBe(120_000);
+    // clamped to the 30-minute ceiling (matches resolveCliTimeoutFrom's own outer clamp)
+    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "99999999" })).toBe(1_800_000);
     // non-finite/garbage falls back to the default (Number.isFinite false branch)
-    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "not-a-number" })).toBe(30_000);
+    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "not-a-number" })).toBe(1_800_000);
     // zero/negative also falls back (raw > 0 false branch)
-    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "0" })).toBe(30_000);
+    expect(resolveClaudeFirstOutputTimeoutMs({ CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "0" })).toBe(1_800_000);
   });
 });
 
@@ -1647,7 +1651,7 @@ describe("subscription CLI helpers + fail-safe", () => {
     );
   });
 
-  it("REGRESSION (GITTENSORY-K/M/8/Z, #4994): a stalled-no-output timeout is thrown as claude_stalled_no_output, distinct from subscription_cli_timeout, and passes firstOutputTimeoutMs through to spawn", async () => {
+  it("REGRESSION (GITTENSORY-K/M/8/Z, #4994; corrected by #5053): a stalled-no-output timeout is thrown as claude_stalled_no_output, distinct from subscription_cli_timeout, and by default the fast-fail deadline EQUALS the full timeout (claude's --output-format json is buffered, not streamed — see #5053)", async () => {
     let capturedOpts: { timeoutMs: number; firstOutputTimeoutMs?: number } | undefined;
     const stalled: StubSpawn = async (_cmd, _args, o) => {
       capturedOpts = o;
@@ -1660,10 +1664,33 @@ describe("subscription CLI helpers + fail-safe", () => {
     await expect(createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, stalled).run("m", { prompt: "x" })).rejects.not.toThrow(
       /^subscription_cli_timeout/,
     );
-    // The fast-fail deadline defaults to 30s and is strictly less than the (180s-default) full timeout.
-    expect(capturedOpts?.firstOutputTimeoutMs).toBe(30_000);
+    // #5053: by default the fast-fail deadline is clamped to timeoutMs - 1 (not a separate short window) — this
+    // event now only fires for a GENUINE full-budget hang, matching claude's buffered (non-streaming) CLI output.
     expect(capturedOpts?.timeoutMs).toBe(180_000);
-    expect(capturedOpts?.firstOutputTimeoutMs).toBeLessThan(capturedOpts!.timeoutMs);
+    expect(capturedOpts?.firstOutputTimeoutMs).toBe(179_999);
+  });
+
+  it("REGRESSION (#5053): an operator who explicitly configures a shorter CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS still gets it honored (opt-in, not the default)", async () => {
+    let capturedOpts: { timeoutMs: number; firstOutputTimeoutMs?: number } | undefined;
+    const ok: StubSpawn = async (_cmd, _args, o) => {
+      capturedOpts = o;
+      return { stdout: JSON.stringify({ type: "result", result: "hi" }), code: 0 };
+    };
+    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t", CLAUDE_AI_TIMEOUT_MS: "30000", CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "15000" }, ok).run("m", { prompt: "x" });
+    expect(capturedOpts?.timeoutMs).toBe(30_000);
+    expect(capturedOpts?.firstOutputTimeoutMs).toBe(15_000);
+  });
+
+  it("REGRESSION (#5053): clamps firstOutputTimeoutMs below timeoutMs even when CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS is configured >= the full timeout", async () => {
+    let capturedOpts: { timeoutMs: number; firstOutputTimeoutMs?: number } | undefined;
+    const ok: StubSpawn = async (_cmd, _args, o) => {
+      capturedOpts = o;
+      return { stdout: JSON.stringify({ type: "result", result: "hi" }), code: 0 };
+    };
+    await createClaudeCodeAi({ CLAUDE_CODE_OAUTH_TOKEN: "t", CLAUDE_AI_TIMEOUT_MS: "30000", CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS: "30000" }, ok).run("m", { prompt: "x" });
+    expect(capturedOpts?.timeoutMs).toBe(30_000);
+    // Would otherwise equal timeoutMs and make the outer safety net unreachable — clamped to timeoutMs - 1.
+    expect(capturedOpts?.firstOutputTimeoutMs).toBe(29_999);
   });
 
   it("a full timeout WITHOUT stalledNoOutput still throws the generic subscription_cli_timeout, not claude_stalled_no_output (some output was produced before the kill)", async () => {

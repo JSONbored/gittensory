@@ -236,17 +236,24 @@ export function resolveCodexFirstOutputTimeoutMs(env: Record<string, string | un
   return 30_000;
 }
 
-// #4994: the SAME fast-fail deadline as resolveCodexFirstOutputTimeoutMs above, for the claude-code CLI. When this
-// pattern was first built (#codex-first-output-timeout), Claude Code had no prod-observed dead-air hang, so it was
-// deliberately left unwired for that provider (see the historical rationale that used to live on SpawnFn's
-// `firstOutputTimeoutMs` field). That premise is now stale: `selfhost_ai_provider_failed: subscription_cli_timeout`
-// for `provider: claude-code` accumulated 4,030+ events over 12 days in production (GITTENSORY-K/M/8/Z), the exact
-// shape this mechanism exists to catch and distinguish from a genuine full-timeout. Same bounds/defaults as Codex's
-// version for consistency; independent env var so either CLI's deadline can be tuned without affecting the other.
+// #4994/#5053: this mirrored resolveCodexFirstOutputTimeoutMs's shape, but NOT its premise -- codex's own comment
+// explains why ITS deadline is safe: "real JSONL progress from codex --json always lands on stdout" (a genuine
+// hang shows literally zero bytes; a working call shows steady incremental bytes). Claude Code's invocation here
+// uses `--output-format json`, which `claude --help` documents as a "single result" -- fully buffered, not
+// streamed. Confirmed live (#5053): a realistic 274KB/effort:high prompt took 116s to complete successfully with
+// ZERO stdout bytes for the entire run, then the full response arrived at once. A 30s (or even 120s) deadline
+// cannot tell that apart from a genuine hang for THIS CLI mode -- it can only ever be a coin flip between "kill a
+// slow-but-working review" and "wait out a truly dead one," and #4994 mis-set that coin badly (deployed, then
+// caused a total-outage incident: every review killed, tripping the per-provider circuit breaker fleet-wide on a
+// box with no fallback provider configured). Default/ceiling raised to match resolveCliTimeoutFrom's own outer
+// clamp, so `Math.min(this, timeoutMs - 1)` at the call site always resolves to the REAL timeout unless an
+// operator explicitly opts into a shorter, riskier window via CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS -- "stalled no
+// output" then only fires when nothing arrived for the ENTIRE configured budget, a genuine hang, exactly the
+// pre-#4994 behavior. Do NOT copy this default onto Codex's version above; its streaming premise still holds.
 export function resolveClaudeFirstOutputTimeoutMs(env: Record<string, string | undefined>): number {
   const raw = Number(firstConfigured(env.CLAUDE_AI_FIRST_OUTPUT_TIMEOUT_MS));
-  if (Number.isFinite(raw) && raw > 0) return Math.min(120_000, Math.max(1_000, raw));
-  return 30_000;
+  if (Number.isFinite(raw) && raw > 0) return Math.min(1_800_000, Math.max(1_000, raw));
+  return 1_800_000;
 }
 
 /** Read the per-call repo override matching this provider variant (#3902) -- ollama/openai/openai-compatible
