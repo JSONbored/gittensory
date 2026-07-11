@@ -789,6 +789,21 @@ describe("one-shot reopen prevention", () => {
     expect(audit?.detail).toContain("dry-run: would re-close");
   });
 
+  it("allows the bot's own reopen without reclosing (nightly re-review reopen, #one-shot-reopen)", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      calls.push({ url, method: init?.method ?? "GET" });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await processJob(env, { type: "github-webhook", deliveryId: "bot-reopen", eventName: "pull_request", payload: reopenedPayload("gittensory[bot]") });
+    // No collaborator-permission lookup or reclose PATCH -- the bot-login short-circuit fires before either.
+    expect(calls.some((c) => c.url.includes("/collaborators/"))).toBe(false);
+    expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+  });
+
   it("allows an admin reopener to reopen without reclosing (fast-path hasMaintainerPermission)", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
