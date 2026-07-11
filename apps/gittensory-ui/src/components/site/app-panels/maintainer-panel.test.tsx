@@ -39,6 +39,15 @@ describe("MaintainerPanel role gate", () => {
   });
 });
 
+const emptyGateOutcomeBreakdown = {
+  windowDays: 30,
+  generatedAt: "2026-07-11T00:00:00.000Z",
+  counts: { autoMerged: 0, autoClosed: 0, held: 0 },
+  total: 0,
+  rates: { autoMerged: null, autoClosed: null, held: null },
+  summary: "No gate-outcome audit events in the last 30 day(s) for the scoped repos.",
+};
+
 describe("MaintainerPanel install health — Orb broker mode (#selfhost-runtime-drift)", () => {
   const dashboardData = {
     metrics: [],
@@ -66,7 +75,7 @@ describe("MaintainerPanel install health — Orb broker mode (#selfhost-runtime-
     ],
     reviewability: [],
     settingsPreview: { removed: [], added: [] },
-    qualityDashboard: { topContributors: [] },
+    qualityDashboard: { topContributors: [], gateOutcomeBreakdown: emptyGateOutcomeBreakdown },
   };
 
   it("shows a neutral 'n/a (broker)' pill instead of a fabricated perms/webhook verdict for a brokered install", () => {

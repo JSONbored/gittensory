@@ -28,7 +28,17 @@ const dashboard = {
     },
   ],
   settingsPreview: { removed: [], added: [] },
-  qualityDashboard: { topContributors: [] },
+  qualityDashboard: {
+    topContributors: [],
+    gateOutcomeBreakdown: {
+      windowDays: 30,
+      generatedAt: "2026-07-11T00:00:00.000Z",
+      counts: { autoMerged: 0, autoClosed: 0, held: 0 },
+      total: 0,
+      rates: { autoMerged: null, autoClosed: null, held: null },
+      summary: "No gate-outcome audit events in the last 30 day(s) for the scoped repos.",
+    },
+  },
 };
 
 vi.mock("@/lib/api/use-api-resource", () => ({

@@ -21,6 +21,8 @@ import { ActivationPreview } from "@/components/site/app-panels/activation-previ
 import { AiReviewSettings } from "@/components/site/app-panels/ai-review-settings";
 import { ContributorQualityTable } from "@/components/site/app-panels/contributor-quality-table";
 import type { MaintainerTopContributor } from "@/components/site/app-panels/contributor-quality-table-model";
+import { GateOutcomeCard } from "@/components/site/app-panels/gate-outcome-card";
+import type { GateOutcomeCardData } from "@/components/site/app-panels/gate-outcome-card-model";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
 import { OnboardingPreviewCard } from "@/components/site/app-panels/onboarding-preview-card";
 import { CheckRunReadinessTable } from "@/components/site/check-run-readiness-table";
@@ -82,7 +84,10 @@ type MaintainerDashboard = {
     slop?: { risk: number; band: string } | null;
   }>;
   settingsPreview: { removed: string[]; added: string[] };
-  qualityDashboard: { topContributors: MaintainerTopContributor[] };
+  qualityDashboard: {
+    topContributors: MaintainerTopContributor[];
+    gateOutcomeBreakdown: GateOutcomeCardData;
+  };
 };
 
 type TrustChecklistStatus = "ready" | "needs_attention" | "blocked";
@@ -373,6 +378,8 @@ function MaintainerDashboardView({
               </tbody>
             </table>
           </section>
+
+          <GateOutcomeCard breakdown={data.qualityDashboard.gateOutcomeBreakdown} />
 
           <ContributorQualityTable topContributors={data.qualityDashboard.topContributors} />
 

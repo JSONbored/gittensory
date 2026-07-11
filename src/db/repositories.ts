@@ -3149,6 +3149,42 @@ export async function listPrVisibilitySkipAuditEvents(
   return { limit, hasMore: items.length > limit, items: items.slice(0, limit) };
 }
 
+/** Repo-scoped rollups of gate-outcome audit rows for the maintainer dashboard (#2203). Counts only
+ *  `agent.action.merge|close|hold` events whose targetKey is a `repo#pr` key inside the scoped repos. */
+export async function listGateOutcomeAuditEventRollups(
+  env: Env,
+  options: { repoFullNames: string[]; sinceIso: string },
+): Promise<Array<{ eventType: string; outcome: string; count: number }>> {
+  const scopedRepoNames = uniqueRepoNames(options.repoFullNames.map((name) => name.trim()).filter(Boolean));
+  if (scopedRepoNames.length === 0) return [];
+
+  const repoFilters = scopedRepoNames.map((repoFullName) => {
+    const prefix = `${repoFullName.toLowerCase()}#`;
+    const upperBound = `${repoFullName.toLowerCase()}$`;
+    return sql`lower(${auditEvents.targetKey}) >= ${prefix} and lower(${auditEvents.targetKey}) < ${upperBound}`;
+  });
+  const repoFilter = or(...repoFilters);
+  if (!repoFilter) return [];
+
+  const rows = await getDb(env.DB)
+    .select({
+      eventType: auditEvents.eventType,
+      outcome: auditEvents.outcome,
+      count: sql<number>`count(*)`,
+    })
+    .from(auditEvents)
+    .where(
+      and(
+        inArray(auditEvents.eventType, ["agent.action.merge", "agent.action.close", "agent.action.hold"]),
+        gte(auditEvents.createdAt, options.sinceIso),
+        repoFilter,
+      ),
+    )
+    .groupBy(auditEvents.eventType, auditEvents.outcome);
+
+  return rows.map((row) => ({ eventType: row.eventType, outcome: row.outcome, count: Number(row.count) }));
+}
+
 // #784 audit feed: the agent's own action history for a repo — both executed actions (`agent.action.<class>`)
 // and approval-queue decisions (`agent.pending_action.accepted|rejected`). Repo-scoped via the `repo#pr`
 // targetKey prefix range (mirrors listPrVisibilitySkipAuditEvents). Read-only; private trust/score metadata

@@ -68,6 +68,7 @@ import {
   listInstallationHealth,
   listInstallations,
   listIssues,
+  listGateOutcomeAuditEventRollups,
   listIssueSignalSample,
   listAgentRunsForActor,
   listDigestSubscriptionsForLogin,
@@ -265,6 +266,7 @@ import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
 import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { loadPublicReviewVolumeTrend } from "../services/public-review-volume-trend";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
+import { buildGateOutcomeBreakdown, GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS } from "../services/gate-outcome-breakdown";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
@@ -1392,6 +1394,16 @@ export function createApp() {
     const scopedSyncCompletions = allSyncStates.filter((state) => qualityRepoNames.has(state.repoFullName.toLowerCase())).map((state) => state.lastCompletedAt);
     const qualityStale = isMaintainerQualityDataStale({ lastCompletedAts: scopedSyncCompletions, repoCount: qualityRepos.length, nowMs: Date.parse(nowIso()) });
     const qualityDashboard = buildMaintainerQualityDashboard({ repos: qualityRepoInputs, generatedAt: nowIso(), stale: qualityStale, repoTotal: repositories.length });
+    const gateOutcomeSinceIso = new Date(Date.parse(nowIso()) - GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const gateOutcomeRollups = await listGateOutcomeAuditEventRollups(c.env, {
+      repoFullNames: repositories.map((repo) => repo.fullName),
+      sinceIso: gateOutcomeSinceIso,
+    });
+    const gateOutcomeBreakdown = buildGateOutcomeBreakdown({
+      rollups: gateOutcomeRollups,
+      windowDays: GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS,
+      generatedAt: nowIso(),
+    });
     return c.json({
       generatedAt: nowIso(),
       installations,
@@ -1413,7 +1425,7 @@ export function createApp() {
         slop: previewSettingsByRepo.get(repoFullName)?.slopGateMode !== "off" && typeof pull.slopRisk === "number" && pull.slopBand ? { risk: pull.slopRisk, band: pull.slopBand } : null,
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
-      qualityDashboard,
+      qualityDashboard: { ...qualityDashboard, gateOutcomeBreakdown },
     });
   });
 
