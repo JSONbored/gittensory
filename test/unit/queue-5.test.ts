@@ -1343,6 +1343,42 @@ describe("queue processors", () => {
       expect(seen.comments[0]).not.toContain("Did you mean");
     });
 
+    it("#4596: re-routing to ask/chat threads the original free text through as the command's own question (not dropped)", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI_ADVISORY: { run: async () => ({ response: '{"command": "ask"}' }) } as unknown as Ai,
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 315, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+          return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "maintain" });
+        if (url.includes("/issues/315/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/315/comments") && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "intent-routing-ask-question-threaded",
+        eventName: "issue_comment",
+        payload: mentionPayload(315, "@gittensory what should I fix first?"),
+      });
+      expect(seen.comments).toHaveLength(1);
+      expect(seen.comments[0]).toContain('Interpreted "what should I fix first?" as `@gittensory ask`');
+      // ask's own card only prints this fallback when its question is empty/undefined -- its absence proves
+      // command.unrecognizedText actually reached `ask` as its question rather than being dropped by the
+      // reroute (unlike blockers/next-action/etc., ask and chat are the only two commands that take one).
+      expect(seen.comments[0]).not.toContain("No specific question was provided");
+    });
+
     it("#4596: falls through to the existing did-you-mean hint end-to-end when intentRouting is off, the default", async () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 310, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
