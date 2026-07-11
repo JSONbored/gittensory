@@ -15,20 +15,33 @@ import {
   shouldAutoClearClose,
 } from "../../src/review/auto-tune";
 
-const row = (over: Partial<GateEvalRow>): GateEvalRow => ({
-  project: "p",
-  wouldMerge: 0,
-  mergeConfirmed: 0,
-  mergeFalse: 0,
-  wouldClose: 0,
-  closeConfirmed: 0,
-  closeFalse: 0,
-  hold: 0,
-  decided: 0,
-  mergePrecision: null,
-  closePrecision: null,
-  ...over,
-});
+const row = (over: Partial<GateEvalRow>): GateEvalRow => {
+  const mergeConfirmed = over.mergeConfirmed ?? 0;
+  const closeConfirmed = over.closeConfirmed ?? 0;
+  const mergePrecision = over.mergePrecision ?? null;
+  const closePrecision = over.closePrecision ?? null;
+  return {
+    project: "p",
+    wouldMerge: 0,
+    mergeConfirmed,
+    mergeFalse: 0,
+    wouldClose: 0,
+    closeConfirmed,
+    closeFalse: 0,
+    hold: 0,
+    decided: 0,
+    mergePrecision,
+    closePrecision,
+    // #2348: default weighted === raw (no reversal signal in a bare fixture), so every pre-#2348 test that
+    // only sets the raw fields keeps exercising the breaker meaningfully unchanged. A test proving the
+    // anti-gaming property overrides weightedMergePrecision/weightedClosePrecision explicitly to diverge.
+    weightedMergeConfirmed: mergeConfirmed,
+    weightedCloseConfirmed: closeConfirmed,
+    weightedMergePrecision: mergePrecision,
+    weightedClosePrecision: closePrecision,
+    ...over,
+  };
+};
 const report = (rows: GateEvalRow[]): GateEvalReport => ({ rows, hasSignal: rows.some((r) => r.decided >= 10) });
 
 /** A stub FlagStore (the injected seam — the live D1-backed store is deferred infra). */
@@ -66,6 +79,42 @@ describe("planAutoTune (#self-improve) — circuit-breaker is one-directional", 
   });
   it("skips a project with no would-merge predictions (mergePrecision null → nothing to judge)", () => {
     expect(planAutoTune(report([row({ project: "x", decided: 20, wouldMerge: 0, mergePrecision: null })]))).toHaveLength(0);
+  });
+});
+
+describe("planAutoTune — #2348 weighted anti-gaming cutover", () => {
+  it("engages on a WEIGHTED precision failure even though RAW precision is healthy (reversal-discounted merges cannot keep the raw number artificially healthy to dodge the breaker)", () => {
+    const a = planAutoTune(
+      report([
+        row({
+          project: "gamed",
+          decided: 20,
+          wouldMerge: 20,
+          mergeConfirmed: 19,
+          mergePrecision: 0.95, // raw looks healthy...
+          weightedMergePrecision: 0.5, // ...but most of those "confirmed" merges were later reverted
+        }),
+      ]),
+    );
+    expect(a).toHaveLength(1);
+    expect(a[0]?.mergePrecision).toBe(0.95); // raw preserved for log continuity, NOT what gated this
+    expect(a[0]?.weightedMergePrecision).toBe(0.5); // weighted is what actually gated it
+    expect(a[0]?.message).toContain("weighted merge precision 50%");
+    expect(a[0]?.message).toContain("raw 95%");
+  });
+  it("does NOT engage when weighted precision is healthy, proving the gate reads weightedMergePrecision (not mergePrecision) — these fields are structurally independent on GateEvalRow even though weighted <= raw always holds in real parity.ts data", () => {
+    expect(
+      planAutoTune(
+        report([row({ project: "p", decided: 20, wouldMerge: 20, mergeConfirmed: 10, mergePrecision: 0.5, weightedMergePrecision: 0.9 })]),
+      ),
+    ).toHaveLength(0);
+  });
+  it("falls back to the weighted precision for the action's raw mergePrecision field when raw is null (defensive fallback; not expected from live parity.ts data, whose weighted/raw nullability always match)", () => {
+    const a = planAutoTune(
+      report([row({ project: "p", decided: 20, wouldMerge: 20, mergeConfirmed: 18, mergePrecision: null, weightedMergePrecision: 0.5 })]),
+    );
+    expect(a).toHaveLength(1);
+    expect(a[0]?.mergePrecision).toBe(0.5);
   });
 });
 
@@ -151,6 +200,23 @@ describe("shouldAutoClear (#272 recovery-gated breaker auto-clear)", () => {
   });
 });
 
+describe("shouldAutoClear — #2348 weighted anti-gaming cutover", () => {
+  const now = Date.parse("2026-06-20T12:00:00Z");
+  const past = new Date(now - AUTOCLEAR_AFTER_MS - 3_600_000).toISOString(); // >24h ago
+  it("stays engaged after cooldown when RAW precision recovered but WEIGHTED precision is still failing (reversals keep it held; raw recovery alone cannot clear it)", () => {
+    const stillGamed = report([
+      row({ project: "g", decided: 20, wouldMerge: 20, mergeConfirmed: 20, mergePrecision: 1.0, weightedMergePrecision: 0.5 }),
+    ]);
+    expect(shouldAutoClear(stillGamed, "g", past, now)).toBe(false);
+  });
+  it("clears after cooldown once WEIGHTED precision recovers, proving the recovery check reads weightedMergePrecision", () => {
+    const recoveredWeighted = report([
+      row({ project: "g", decided: 20, wouldMerge: 20, mergeConfirmed: 20, mergePrecision: 1.0, weightedMergePrecision: 0.9 }),
+    ]);
+    expect(shouldAutoClear(recoveredWeighted, "g", past, now)).toBe(true);
+  });
+});
+
 // ── CLOSE-precision circuit-breaker (symmetric mirror of the merge breaker) ─────────────────────────────────
 
 describe("planCloseAutoTune (#close-precision-breaker) — tightening-only, close direction", () => {
@@ -172,6 +238,42 @@ describe("planCloseAutoTune (#close-precision-breaker) — tightening-only, clos
   });
   it("does NOT engage when close precision is healthy (it only ever tightens, never loosens)", () => {
     expect(planCloseAutoTune(report([row({ project: "p", decided: 30, wouldClose: 30, closeConfirmed: 29, closePrecision: 0.97 })]))).toHaveLength(0);
+  });
+});
+
+describe("planCloseAutoTune — #2348 weighted anti-gaming cutover", () => {
+  it("engages on a WEIGHTED close-precision failure even though RAW close precision is healthy", () => {
+    const a = planCloseAutoTune(
+      report([
+        row({
+          project: "gamed",
+          decided: 20,
+          wouldClose: 20,
+          closeConfirmed: 19,
+          closePrecision: 0.95,
+          weightedClosePrecision: 0.5,
+        }),
+      ]),
+    );
+    expect(a).toHaveLength(1);
+    expect(a[0]?.closePrecision).toBe(0.95); // raw preserved for log continuity, NOT what gated this
+    expect(a[0]?.weightedClosePrecision).toBe(0.5); // weighted is what actually gated it
+    expect(a[0]?.message).toContain("weighted close precision 50%");
+    expect(a[0]?.message).toContain("raw 95%");
+  });
+  it("does NOT engage when weighted close precision is healthy, proving the gate reads weightedClosePrecision (not closePrecision)", () => {
+    expect(
+      planCloseAutoTune(
+        report([row({ project: "p", decided: 20, wouldClose: 20, closeConfirmed: 10, closePrecision: 0.5, weightedClosePrecision: 0.9 })]),
+      ),
+    ).toHaveLength(0);
+  });
+  it("falls back to the weighted close precision for the action's raw closePrecision field when raw is null (defensive fallback)", () => {
+    const a = planCloseAutoTune(
+      report([row({ project: "p", decided: 20, wouldClose: 20, closeConfirmed: 18, closePrecision: null, weightedClosePrecision: 0.5 })]),
+    );
+    expect(a).toHaveLength(1);
+    expect(a[0]?.closePrecision).toBe(0.5);
   });
 });
 
@@ -255,6 +357,23 @@ describe("shouldAutoClearClose (#close-precision-breaker recovery-gated auto-cle
     };
     expect(await maybeAutoClearCloseHoldOnly(flags, recovered, "g", now)).toBe(false);
     expect(setFlag).not.toHaveBeenCalled();
+  });
+});
+
+describe("shouldAutoClearClose — #2348 weighted anti-gaming cutover", () => {
+  const now = Date.parse("2026-06-20T12:00:00Z");
+  const past = new Date(now - AUTOCLEAR_AFTER_MS - 3_600_000).toISOString(); // >24h ago
+  it("stays engaged after cooldown when RAW close precision recovered but WEIGHTED close precision is still failing", () => {
+    const stillGamed = report([
+      row({ project: "g", decided: 20, wouldClose: 20, closeConfirmed: 20, closePrecision: 1.0, weightedClosePrecision: 0.5 }),
+    ]);
+    expect(shouldAutoClearClose(stillGamed, "g", past, now)).toBe(false);
+  });
+  it("clears after cooldown once WEIGHTED close precision recovers, proving the recovery check reads weightedClosePrecision", () => {
+    const recoveredWeighted = report([
+      row({ project: "g", decided: 20, wouldClose: 20, closeConfirmed: 20, closePrecision: 1.0, weightedClosePrecision: 0.9 }),
+    ]);
+    expect(shouldAutoClearClose(recoveredWeighted, "g", past, now)).toBe(true);
   });
 });
 

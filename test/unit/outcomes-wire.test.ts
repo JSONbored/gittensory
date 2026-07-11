@@ -635,6 +635,11 @@ describe("applyAutoTune over the live FlagStore — engages holdonly on low merg
           decided: 12,
           mergePrecision: 5 / 12,
           closePrecision: null,
+          // #2348: no reversal scenario in this fixture — weighted mirrors raw.
+          weightedMergeConfirmed: 5,
+          weightedCloseConfirmed: 0,
+          weightedMergePrecision: 5 / 12,
+          weightedClosePrecision: null,
         },
       ],
       hasSignal: true,

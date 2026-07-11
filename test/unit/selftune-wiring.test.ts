@@ -92,6 +92,14 @@ describe("evalRowFromCalibration — gittensory outcome data → ported GateEval
     expect(row.closePrecision).toBeNull();
   });
 
+  it("#2348: the weighted fields mirror the raw ones — agent_recommendation_outcomes carries no reversal signal, so there is nothing for the breaker's reversal-discount read to discount BY", () => {
+    const row = evalRowFromCalibration("owner/repo", 7, 5);
+    expect(row.weightedMergeConfirmed).toBe(row.mergeConfirmed);
+    expect(row.weightedCloseConfirmed).toBe(0);
+    expect(row.weightedMergePrecision).toBe(row.mergePrecision);
+    expect(row.weightedClosePrecision).toBeNull();
+  });
+
   it("a low merge precision yields ONLY a TIGHTENING recommendation (raise the floor), never a loosening one", () => {
     // 5 confirmed / 15 would-merge = 33% precision over 15 decided → well under the risk floor.
     const row = evalRowFromCalibration("owner/repo", 5, 10);

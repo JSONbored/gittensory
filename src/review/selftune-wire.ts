@@ -67,6 +67,7 @@ export const SELFTUNE_BASE_CONFIDENCE_FLOOR = 0;
 export function evalRowFromCalibration(project: string, positive: number, negative: number): GateEvalRow {
   const wouldMerge = positive + negative; // resolved recommendation outcomes graded against the human's call
   const decided = wouldMerge;
+  const mergePrecision = wouldMerge > 0 ? positive / wouldMerge : null;
   return {
     project,
     wouldMerge,
@@ -77,8 +78,16 @@ export function evalRowFromCalibration(project: string, positive: number, negati
     closeFalse: 0, // held at 0 by construction: the only loosening branch of the advisor is unreachable
     hold: 0,
     decided,
-    mergePrecision: wouldMerge > 0 ? positive / wouldMerge : null,
+    mergePrecision,
     closePrecision: null,
+    // #2348: recommendation-outcome calibration (agent_recommendation_outcomes) carries no reversal signal at
+    // all — it is not derived from review_audit, so there is nothing for parity.ts's reversal-discount formula
+    // to discount BY. weighted === raw here by construction (no data to distinguish them), mirroring how a
+    // review_audit row with zero reversals also naturally produces weighted === raw.
+    weightedMergeConfirmed: positive,
+    weightedCloseConfirmed: 0,
+    weightedMergePrecision: mergePrecision,
+    weightedClosePrecision: null,
   };
 }
 

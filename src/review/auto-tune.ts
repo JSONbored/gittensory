@@ -34,6 +34,15 @@ export interface GateEvalRow {
   decided: number; // predictions that have a known outcome
   mergePrecision: number | null;
   closePrecision: number | null;
+  // #2348: reversal-discounted variants (src/review/parity.ts's own REVERSAL_DISCOUNT_WEIGHT — a merge/close
+  // later marked reversal_reverted/reversal_reopened has its confirmed-credit discounted). Denominators
+  // (wouldMerge/wouldClose) are unchanged, so these are always <= the raw precisions above. The circuit-
+  // breaker below gates on THESE, not the raw fields, so a high volume of later-reverted merges cannot keep
+  // the raw number artificially healthy while gaming the breaker into staying disengaged.
+  weightedMergeConfirmed: number;
+  weightedCloseConfirmed: number;
+  weightedMergePrecision: number | null;
+  weightedClosePrecision: number | null;
 }
 
 /** The gate eval report: per-project rows + a coarse "enough data to read" flag. */
@@ -78,28 +87,35 @@ export const AUTOCLEAR_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export interface AutoTuneAction {
   project: string;
+  /** Raw (unweighted) merge precision, preserved for continuity with any existing log/dashboard consumer of
+   *  this field's historical meaning. NOT what gated this action -- see weightedMergePrecision (#2348). */
   mergePrecision: number;
+  /** #2348: the reversal-discounted precision that actually gated this action. Always <= mergePrecision. */
+  weightedMergePrecision: number;
   decided: number;
   wouldMerge: number;
   message: string;
 }
 
-/** PURE: which projects' merge precision has dropped enough to warrant engaging the circuit-breaker? */
+/** PURE: which projects' merge precision has dropped enough to warrant engaging the circuit-breaker?
+ *  Gates on the reversal-WEIGHTED precision (#2348), not the raw one -- see GateEvalRow's own doc comment
+ *  for why: a high volume of later-reverted merges must not keep the raw number artificially healthy. */
 export function planAutoTune(report: GateEvalReport): AutoTuneAction[] {
   const actions: AutoTuneAction[] = [];
   for (const r of report.rows) {
     // Gate on wouldMerge, NOT decided: precision is measured over WOULD-MERGE predictions, so a project with many
     // holds/closes but few would-merges (e.g. 9 holds + 1 wrong would-merge) must not trip the breaker on a
-    // statistically meaningless sample. mergePrecision is non-null iff wouldMerge > 0, so check it FIRST to keep
-    // both arms of the guard reachable.
-    if (r.mergePrecision == null || r.wouldMerge < AUTOTUNE_MIN_DECIDED) continue;
-    if (r.mergePrecision < AUTOTUNE_MERGE_PRECISION_FLOOR) {
+    // statistically meaningless sample. weightedMergePrecision is non-null iff wouldMerge > 0 (same nullability
+    // as the raw field it discounts), so check it FIRST to keep both arms of the guard reachable.
+    if (r.weightedMergePrecision == null || r.wouldMerge < AUTOTUNE_MIN_DECIDED) continue;
+    if (r.weightedMergePrecision < AUTOTUNE_MERGE_PRECISION_FLOOR) {
       actions.push({
         project: r.project,
-        mergePrecision: r.mergePrecision,
+        mergePrecision: r.mergePrecision ?? r.weightedMergePrecision,
+        weightedMergePrecision: r.weightedMergePrecision,
         decided: r.decided,
         wouldMerge: r.wouldMerge,
-        message: `Auto-merge DISABLED for ${r.project}: merge precision ${Math.round(r.mergePrecision * 100)}% over ${r.wouldMerge} would-merge PR(s) (< ${Math.round(AUTOTUNE_MERGE_PRECISION_FLOOR * 100)}%). Would-merges now HOLD for review. Investigate, then clear holdonly:${r.project}.`,
+        message: `Auto-merge DISABLED for ${r.project}: weighted merge precision ${Math.round(r.weightedMergePrecision * 100)}% (raw ${Math.round((r.mergePrecision ?? r.weightedMergePrecision) * 100)}%) over ${r.wouldMerge} would-merge PR(s) (< ${Math.round(AUTOTUNE_MERGE_PRECISION_FLOOR * 100)}%). Would-merges now HOLD for review. Investigate, then clear holdonly:${r.project}.`,
       });
     }
   }
@@ -124,7 +140,9 @@ export async function applyAutoTune(flags: FlagStore, report: GateEvalReport): P
 
 /** PURE: should an auto-engaged breaker for `project` be cleared now? True when the per-project holdonly flag
  *  was set ≥ AUTOCLEAR_AFTER_MS ago AND merge precision is no longer failing (recovered, or no recent merge
- *  predictions to judge). Never considers a human-set global holdonly (no per-project row → setAt is null). */
+ *  predictions to judge). Never considers a human-set global holdonly (no per-project row → setAt is null).
+ *  Reads the same weighted precision the breaker engaged on (#2348) -- a project can never clear on a raw
+ *  number recovering while the reversal-discounted one it was actually held for is still failing. */
 export function shouldAutoClear(report: GateEvalReport, project: string, setAtIso: string | null, nowMs: number): boolean {
   if (!setAtIso) return false; // not auto-engaged for THIS project (global breaker is human-only)
   // SQLite CURRENT_TIMESTAMP is "YYYY-MM-DD HH:MM:SS" in UTC (no zone). Normalize to ISO and FORCE a UTC zone
@@ -135,7 +153,7 @@ export function shouldAutoClear(report: GateEvalReport, project: string, setAtIs
   const setMs = Date.parse(hasZone ? t : `${t}Z`);
   if (!Number.isFinite(setMs) || nowMs - setMs < AUTOCLEAR_AFTER_MS) return false; // still in cooldown
   const row = report.rows.find((r) => r.project === project);
-  const stillFailing = !!row && row.mergePrecision != null && row.wouldMerge >= AUTOTUNE_MIN_DECIDED && row.mergePrecision < AUTOTUNE_MERGE_PRECISION_FLOOR;
+  const stillFailing = !!row && row.weightedMergePrecision != null && row.wouldMerge >= AUTOTUNE_MIN_DECIDED && row.weightedMergePrecision < AUTOTUNE_MERGE_PRECISION_FLOOR;
   return !stillFailing; // cooldown elapsed + precision recovered (or no signal) → clear and let it retry
 }
 
@@ -162,25 +180,31 @@ export async function maybeAutoClearHoldOnly(flags: FlagStore, report: GateEvalR
 
 export interface CloseAutoTuneAction {
   project: string;
+  /** Raw (unweighted) close precision, preserved for continuity with any existing log/dashboard consumer of
+   *  this field's historical meaning. NOT what gated this action -- see weightedClosePrecision (#2348). */
   closePrecision: number;
+  /** #2348: the reversal-discounted precision that actually gated this action. Always <= closePrecision. */
+  weightedClosePrecision: number;
   decided: number;
   wouldClose: number;
   message: string;
 }
 
 /** PURE: which projects' CLOSE precision has dropped enough to warrant engaging the close-side breaker?
- *  Mirrors planAutoTune, testing closePrecision against AUTOTUNE_CLOSE_PRECISION_FLOOR. */
+ *  Mirrors planAutoTune, testing the reversal-WEIGHTED closePrecision (#2348) against
+ *  AUTOTUNE_CLOSE_PRECISION_FLOOR -- not the raw one, for the same anti-gaming reason as the merge breaker. */
 export function planCloseAutoTune(report: GateEvalReport): CloseAutoTuneAction[] {
   const actions: CloseAutoTuneAction[] = [];
   for (const r of report.rows) {
-    if (r.wouldClose < AUTOTUNE_MIN_DECIDED || r.closePrecision == null) continue;
-    if (r.closePrecision < AUTOTUNE_CLOSE_PRECISION_FLOOR) {
+    if (r.wouldClose < AUTOTUNE_MIN_DECIDED || r.weightedClosePrecision == null) continue;
+    if (r.weightedClosePrecision < AUTOTUNE_CLOSE_PRECISION_FLOOR) {
       actions.push({
         project: r.project,
-        closePrecision: r.closePrecision,
+        closePrecision: r.closePrecision ?? r.weightedClosePrecision,
+        weightedClosePrecision: r.weightedClosePrecision,
         decided: r.decided,
         wouldClose: r.wouldClose,
-        message: `Auto-CLOSE DISABLED for ${r.project}: close precision ${Math.round(r.closePrecision * 100)}% over ${r.wouldClose} would-close PR(s) (< ${Math.round(AUTOTUNE_CLOSE_PRECISION_FLOOR * 100)}%). Would-closes now HOLD for review. Investigate, then clear closehold:${r.project}.`,
+        message: `Auto-CLOSE DISABLED for ${r.project}: weighted close precision ${Math.round(r.weightedClosePrecision * 100)}% (raw ${Math.round((r.closePrecision ?? r.weightedClosePrecision) * 100)}%) over ${r.wouldClose} would-close PR(s) (< ${Math.round(AUTOTUNE_CLOSE_PRECISION_FLOOR * 100)}%). Would-closes now HOLD for review. Investigate, then clear closehold:${r.project}.`,
       });
     }
   }
@@ -205,9 +229,9 @@ export async function applyCloseAutoTune(flags: FlagStore, report: GateEvalRepor
 }
 
 /** PURE: should an auto-engaged CLOSE breaker for `project` be cleared now? Mirrors shouldAutoClear but tests
- *  closePrecision. True when the per-project closehold flag was set ≥ AUTOCLEAR_AFTER_MS ago AND close precision
- *  is no longer failing (recovered, or no recent close predictions to judge). Never considers a human-set global
- *  closehold (no per-project row → setAt is null). */
+ *  the weighted closePrecision (#2348). True when the per-project closehold flag was set ≥ AUTOCLEAR_AFTER_MS
+ *  ago AND close precision is no longer failing (recovered, or no recent close predictions to judge). Never
+ *  considers a human-set global closehold (no per-project row → setAt is null). */
 export function shouldAutoClearClose(report: GateEvalReport, project: string, setAtIso: string | null, nowMs: number): boolean {
   if (!setAtIso) return false; // not auto-engaged for THIS project (global breaker is human-only)
   const t = setAtIso.includes("T") ? setAtIso : setAtIso.replace(" ", "T");
@@ -215,7 +239,7 @@ export function shouldAutoClearClose(report: GateEvalReport, project: string, se
   const setMs = Date.parse(hasZone ? t : `${t}Z`);
   if (!Number.isFinite(setMs) || nowMs - setMs < AUTOCLEAR_AFTER_MS) return false; // still in cooldown
   const row = report.rows.find((r) => r.project === project);
-  const stillFailing = !!row && row.closePrecision != null && row.wouldClose >= AUTOTUNE_MIN_DECIDED && row.closePrecision < AUTOTUNE_CLOSE_PRECISION_FLOOR;
+  const stillFailing = !!row && row.weightedClosePrecision != null && row.wouldClose >= AUTOTUNE_MIN_DECIDED && row.weightedClosePrecision < AUTOTUNE_CLOSE_PRECISION_FLOOR;
   return !stillFailing; // cooldown elapsed + precision recovered (or no signal) → clear and let it retry
 }
 
