@@ -1901,6 +1901,15 @@ describe("fetchExternalScreenshotContentBlock", () => {
     await expect(fetchExternalScreenshotContentBlock("https://example.com/not-image.txt")).resolves.toBeUndefined();
   });
 
+  it("rejects a response with no content-type header at all (falls through the ?? \"\" fallback, not just a wrong MIME type)", async () => {
+    // A string body auto-gets a "text/plain" content-type from the Fetch API itself, which would only
+    // re-exercise the existing wrong-MIME-type test -- a binary body has no such auto-assignment, so
+    // headers.get("content-type") genuinely returns null here.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 })));
+
+    await expect(fetchExternalScreenshotContentBlock("https://example.com/no-content-type")).resolves.toBeUndefined();
+  });
+
   it("follows safe redirects and preserves non-png image MIME types", async () => {
     const fetchMock = vi
       .fn()
