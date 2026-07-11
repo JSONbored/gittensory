@@ -72,6 +72,23 @@ describe("recordMinerKillSwitchTransition (#2341)", () => {
     expect(rows[0]?.id).toBeLessThan(rows[1]?.id ?? 0);
   });
 
+  it("a transition with no repoFullName supplied records a null repoFullName, not an omitted or undefined one", () => {
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-kill-switch-no-repo-"));
+    roots.push(root);
+    const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
+    ledgers.push(ledger);
+
+    const tripped = recordMinerKillSwitchTransition(
+      { actionClass: "open_pr", previousScope: "none", scope: "global" },
+      { append: (event) => ledger.appendGovernorEvent(event) },
+    );
+
+    expect(tripped?.repoFullName).toBeNull();
+    const rows = ledger.readGovernorEvents({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.repoFullName).toBeNull();
+  });
+
   it("is a no-op and appends nothing when the scope has not changed", () => {
     const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-kill-switch-noop-"));
     roots.push(root);
