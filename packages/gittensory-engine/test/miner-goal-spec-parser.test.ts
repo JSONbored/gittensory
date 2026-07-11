@@ -183,6 +183,7 @@ test("parseMinerGoalSpec: unknown-only or default-only content stays absent with
     maxConcurrentClaims: 1,
     issueDiscoveryPolicy: "neutral",
     feasibilityGate: { enabled: true, suppressedReasons: [] },
+    selfPlagiarism: { similarityThreshold: 0.85 },
   });
   assert.equal(explicitDefaults.present, false);
   assert.deepEqual(explicitDefaults.spec, DEFAULT_MINER_GOAL_SPEC);
