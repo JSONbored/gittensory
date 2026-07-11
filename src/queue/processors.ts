@@ -12561,6 +12561,10 @@ async function maybeProcessGittensoryMentionCommand(
     officialAuthorDetection: official,
     commandAuthorizationPolicy: settings.commandAuthorization,
     commandRateLimitPolicy: settings.commandRateLimitPolicy,
+    // #5092: the per-PR rate-limit counter below never checks PR state on its own (a closed/merged PR keeps
+    // its own counter forever; a brand-new PR gets a fresh one) -- without this, a contributor could keep a
+    // fresh chat allowance indefinitely by reopening/reusing a closed PR or spamming cheap draft PRs.
+    pullRequestOpenAndNotDraft: cachedPullRequest?.state === "open" && cachedPullRequest?.isDraft !== true,
   });
   if (!authorization.authorized) {
     await recordAuditEvent(env, {

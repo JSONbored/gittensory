@@ -129,15 +129,26 @@ export function evaluateCommandAuthorization(args: {
    *  `pr_author` weren't in the allowed-roles list at all, so a repo that hasn't turned on rate limiting
    *  never grants contributor chat access no matter what `chat`'s configured roles say. */
   commandRateLimitPolicy?: "off" | "hold" | undefined;
+  /** #5092: ALSO required (must be `true`) for a bare `pr_author` match to authorize a command in
+   *  {@link PR_AUTHOR_RATE_LIMITED_COMMANDS} -- the per-PR rate-limit counter (`repoFullName#issueNumber#command`)
+   *  never resets or checks PR state, so without this a contributor could keep a fresh allowance forever by
+   *  reopening/reusing a closed PR or spamming cheap draft PRs. Caller-computed (e.g. `pr.state === "open" &&
+   *  !pr.isDraft`) so this function doesn't need to know GitHub's own state-string conventions. Unset/`false`
+   *  denies exactly like a missing rate-limit policy -- maintainers/collaborators are unaffected regardless
+   *  (this bounds the less-trusted pr_author tier, not already-trusted roles). */
+  pullRequestOpenAndNotDraft?: boolean | undefined;
 }): CommandAuthorizationDecision {
   const allowedRoles = commandAuthorizationAllowedRoles(args.policy, args.commandName);
   const roles = actorRoles(args);
   const matchedRole = roles.find((role) => allowedRoles.includes(role)) ?? null;
-  const prAuthorRateLimitGated =
-    matchedRole === "pr_author" &&
-    PR_AUTHOR_RATE_LIMITED_COMMANDS.has(normalizeCommandName(args.commandName)) &&
-    args.commandRateLimitPolicy !== "hold";
-  if (matchedRole && !prAuthorRateLimitGated) {
+  const prAuthorGatedCommand = matchedRole === "pr_author" && PR_AUTHOR_RATE_LIMITED_COMMANDS.has(normalizeCommandName(args.commandName));
+  if (prAuthorGatedCommand && args.commandRateLimitPolicy !== "hold") {
+    return { authorized: false, reason: "pr_author_requires_rate_limiting", actorKind: "author", matchedRole: null, allowedRoles };
+  }
+  if (prAuthorGatedCommand && args.pullRequestOpenAndNotDraft !== true) {
+    return { authorized: false, reason: "pr_author_requires_open_pr", actorKind: "author", matchedRole: null, allowedRoles };
+  }
+  if (matchedRole) {
     return {
       authorized: true,
       reason: authorizationReason(matchedRole),
@@ -145,9 +156,6 @@ export function evaluateCommandAuthorization(args: {
       matchedRole,
       allowedRoles,
     };
-  }
-  if (prAuthorRateLimitGated) {
-    return { authorized: false, reason: "pr_author_requires_rate_limiting", actorKind: "author", matchedRole: null, allowedRoles };
   }
   const ownPrAuthor = isSameLogin(args.commenterLogin, args.pullRequestAuthorLogin);
   if (ownPrAuthor && allowedRoles.includes("confirmed_miner")) {

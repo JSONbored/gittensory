@@ -309,7 +309,7 @@ describe("GitHub mention commands", () => {
     ).toMatchObject({ authorized: false, reason: "not_maintainer_or_pr_author" });
   });
 
-  it("#5084: threads commandRateLimitPolicy through to a chat pr_author authorization decision", () => {
+  it("#5084/#5092: threads commandRateLimitPolicy and pullRequestOpenAndNotDraft through to a chat pr_author authorization decision", () => {
     expect(
       isAuthorizedCommandActor({
         commandName: "chat",
@@ -325,6 +325,16 @@ describe("GitHub mention commands", () => {
         commenterAssociation: "NONE",
         pullRequestAuthorLogin: "oktofeesh1",
         commandRateLimitPolicy: "hold",
+      }),
+    ).toMatchObject({ authorized: false, reason: "pr_author_requires_open_pr" });
+    expect(
+      isAuthorizedCommandActor({
+        commandName: "chat",
+        commenterLogin: "oktofeesh1",
+        commenterAssociation: "NONE",
+        pullRequestAuthorLogin: "oktofeesh1",
+        commandRateLimitPolicy: "hold",
+        pullRequestOpenAndNotDraft: true,
       }),
     ).toMatchObject({ authorized: true, reason: "allowed_pr_author" });
   });

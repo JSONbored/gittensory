@@ -385,6 +385,9 @@ export function isAuthorizedCommandActor(args: {
   /** #5084: required (must be `"hold"`) for a PR author to be authorized for `chat` -- see
    *  PR_AUTHOR_RATE_LIMITED_COMMANDS in settings/command-authorization.ts. */
   commandRateLimitPolicy?: "off" | "hold" | undefined;
+  /** #5092: ALSO required (must be `true`) for a PR author to be authorized for `chat` -- the caller-computed
+   *  `pr.state === "open" && !pr.isDraft`, since the per-PR rate-limit counter never checks PR state on its own. */
+  pullRequestOpenAndNotDraft?: boolean | undefined;
 }): { authorized: boolean; reason: string; actorKind: "maintainer" | "author" | "none" } {
   const decision = evaluateCommandAuthorization({
     policy: args.commandAuthorizationPolicy,
@@ -394,6 +397,7 @@ export function isAuthorizedCommandActor(args: {
     pullRequestAuthorLogin: args.pullRequestAuthorLogin,
     minerStatus: args.officialAuthorDetection?.status,
     commandRateLimitPolicy: args.commandRateLimitPolicy,
+    pullRequestOpenAndNotDraft: args.pullRequestOpenAndNotDraft,
   });
   return { authorized: decision.authorized, reason: decision.reason, actorKind: decision.actorKind };
 }

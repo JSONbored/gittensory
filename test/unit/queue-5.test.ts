@@ -1374,6 +1374,77 @@ describe("queue processors", () => {
       expect(skipped?.detail).toBe("pr_author_requires_rate_limiting");
     });
 
+    it("#5092: a contributor's OWN closed PR does not authorize chat, even with commandRateLimitPolicy: hold (the per-PR counter never resets, so a closed PR must not keep granting access)", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI_ADVISORY: { run: async () => ({ response: "The PR is blocked because CI is failing." }) } as unknown as Ai,
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 332, title: "Contributor chat target (closed)", state: "closed", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+          return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n  commandRateLimitPolicy: hold\n", { status: 200 });
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "read" });
+        if (url.includes("/issues/332/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/332/comments") && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const authorPayload = {
+        action: "created" as const,
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        // A closed PR can still receive comments on GitHub -- the webhook's own issue.state reflects that.
+        issue: { number: 332, title: "Contributor chat target (closed)", state: "closed", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 3, body: "@gittensory chat why is this blocked?", user: { login: "oktofeesh1", type: "User" }, author_association: "NONE" },
+      };
+      await processJob(env, { type: "github-webhook", deliveryId: "contributor-chat-closed-pr", eventName: "issue_comment", payload: authorPayload });
+      expect(seen.comments).toHaveLength(0);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = 'github_app.agent_command_skipped'").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("pr_author_requires_open_pr");
+    });
+
+    it("#5092: a contributor's OWN draft PR does not authorize chat, even with commandRateLimitPolicy: hold (drafts are cheap to open and must not be a quota-farming vector)", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI_ADVISORY: { run: async () => ({ response: "The PR is blocked because CI is failing." }) } as unknown as Ai,
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 333, title: "Contributor chat target (draft)", state: "open", draft: true, user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+          return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n  commandRateLimitPolicy: hold\n", { status: 200 });
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "read" });
+        if (url.includes("/issues/333/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/333/comments") && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const authorPayload = {
+        action: "created" as const,
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 333, title: "Contributor chat target (draft)", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 4, body: "@gittensory chat why is this blocked?", user: { login: "oktofeesh1", type: "User" }, author_association: "NONE" },
+      };
+      await processJob(env, { type: "github-webhook", deliveryId: "contributor-chat-draft-pr", eventName: "issue_comment", payload: authorPayload });
+      expect(seen.comments).toHaveLength(0);
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = 'github_app.agent_command_skipped'").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("pr_author_requires_open_pr");
+    });
+
     it("#5063: posts a FRESH, separate reply comment for each chat invocation (never edits a shared comment), each linking back to its own triggering comment", async () => {
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),

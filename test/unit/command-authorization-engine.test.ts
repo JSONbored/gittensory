@@ -195,31 +195,50 @@ describe("repo command authorization policy", () => {
   it("#5084: a chat pr_author match is only granted when commandRateLimitPolicy is \"hold\" for the repo", () => {
     // No rate-limit policy passed at all (the undefined branch) -- denied, with a distinct reason from the
     // generic denials so an operator can tell "rate limiting isn't on" apart from "not authorized at all".
+    // pullRequestOpenAndNotDraft: true throughout, so this test isolates the rate-limit gate specifically.
     expect(
-      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author" }),
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", pullRequestOpenAndNotDraft: true }),
     ).toMatchObject({ authorized: false, reason: "pr_author_requires_rate_limiting", actorKind: "author", matchedRole: null });
     // Explicitly "off" (not just unset) -- same denial, covering both falsy branches of the `!== "hold"` check.
     expect(
-      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "off" }),
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "off", pullRequestOpenAndNotDraft: true }),
     ).toMatchObject({ authorized: false, reason: "pr_author_requires_rate_limiting" });
     // "hold" -- the PR's own author is authorized.
     expect(
-      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold" }),
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold", pullRequestOpenAndNotDraft: true }),
     ).toMatchObject({ authorized: true, reason: "allowed_pr_author", actorKind: "author", matchedRole: "pr_author" });
     // A confirmed miner acting on their OWN PR matches pr_author first (chat's roles list has pr_author, not
     // confirmed_miner) -- so a miner is gated by the SAME rate-limit requirement as any other PR author, not
     // the separate confirmed_miner exception "review" gets.
     expect(
-      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "miner", pullRequestAuthorLogin: "miner", minerStatus: "confirmed" }),
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "miner", pullRequestAuthorLogin: "miner", minerStatus: "confirmed", pullRequestOpenAndNotDraft: true }),
     ).toMatchObject({ authorized: false, reason: "pr_author_requires_rate_limiting" });
     expect(
-      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "miner", pullRequestAuthorLogin: "miner", minerStatus: "confirmed", commandRateLimitPolicy: "hold" }),
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "miner", pullRequestAuthorLogin: "miner", minerStatus: "confirmed", commandRateLimitPolicy: "hold", pullRequestOpenAndNotDraft: true }),
     ).toMatchObject({ authorized: true, reason: "allowed_pr_author", matchedRole: "pr_author" });
     // A commenter on someone ELSE's PR is still denied outright -- pr_author never matches for a non-author,
     // rate limiting or not.
     expect(
-      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "other", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold" }),
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "other", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold", pullRequestOpenAndNotDraft: true }),
     ).toMatchObject({ authorized: false, reason: "not_maintainer_or_pr_author" });
+  });
+
+  it("#5092: a chat pr_author match is ALSO only granted when the PR is open and not draft", () => {
+    // commandRateLimitPolicy: "hold" throughout, so this test isolates the PR-state gate specifically. The
+    // per-PR rate-limit counter (repoFullName#issueNumber#command) never checks PR state on its own, so
+    // without this a contributor could keep a fresh chat allowance forever by reopening/reusing a closed PR
+    // or spamming cheap draft PRs.
+    const base = { commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold" as const };
+    // Unset (the undefined branch) -- denied, distinct reason from the rate-limit denial.
+    expect(evaluateCommandAuthorization(base)).toMatchObject({ authorized: false, reason: "pr_author_requires_open_pr", actorKind: "author", matchedRole: null });
+    // Explicitly false (not just unset) -- same denial, covering both falsy branches of the `!== true` check.
+    expect(evaluateCommandAuthorization({ ...base, pullRequestOpenAndNotDraft: false })).toMatchObject({ authorized: false, reason: "pr_author_requires_open_pr" });
+    // Open and not draft -- authorized.
+    expect(evaluateCommandAuthorization({ ...base, pullRequestOpenAndNotDraft: true })).toMatchObject({ authorized: true, reason: "allowed_pr_author", matchedRole: "pr_author" });
+    // Maintainers/collaborators are completely unaffected by PR state -- the check only bounds the
+    // less-trusted pr_author tier, never already-trusted roles.
+    expect(evaluateCommandAuthorization({ commandName: "chat", commenterAssociation: "OWNER" })).toMatchObject({ authorized: true, reason: "maintainer_invocation" });
+    expect(evaluateCommandAuthorization({ commandName: "chat", commenterAssociation: "COLLABORATOR" })).toMatchObject({ authorized: true, reason: "collaborator_invocation" });
   });
 
   it("#5084: a maintainer's yml override restating chat's own default (incl. pr_author) is not clamped away", () => {
