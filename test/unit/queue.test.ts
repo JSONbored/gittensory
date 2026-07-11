@@ -6207,6 +6207,184 @@ describe("queue processors", () => {
         expect(skipAudit?.detail).toContain("one-shot review cadence");
       });
 
+      it("default (one_shot): a repeat trigger replays a cached unaddressed linked-issue blocker in block mode", async () => {
+        let aiCalls = 0;
+        const env = createTestEnv({
+          GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+          AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ status: "addressed", rationale: "fresh call should not run" }) }; } } as unknown as Ai,
+          AI_SUMMARIES_ENABLED: "true",
+          AI_PUBLIC_COMMENTS_ENABLED: "true",
+          AI_DAILY_NEURON_BUDGET: "100000",
+        });
+        await seedRegateChurnRepo(env, { publicSurface: "comment_only", aiReviewMode: "off", linkedIssueSatisfactionGateMode: "block" });
+        await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 98, title: "Same-issue blocker PR", state: "open", user: { login: "contributor" }, head: { sha: "a98-v1" }, labels: [], body: "Closes #1" });
+        await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 98, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+        await putCachedLinkedIssueSatisfaction(env, "JSONbored/gittensory", 98, "a98-v1", 1, "seed-fp", { status: "ok", result: { status: "unaddressed", rationale: "still does not implement the requested stream", confidence: 0.91 }, estimatedNeurons: 4 });
+
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          const method = init?.method ?? "GET";
+          if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+          if (url.includes("/pulls/98/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+export const ok = true;\n+export const also = 1;" }]);
+          if (url.endsWith("/pulls/98")) return Response.json({ number: 98, title: "Same-issue blocker PR", state: "open", user: { login: "contributor" }, head: { sha: "a98-v2" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+          if (url.includes("/commits/a98-v2/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+          if (url.includes("/commits/a98-v2/status")) return Response.json({ state: "success", statuses: [] });
+          if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+          if (url.includes("/issues/98/comments")) return method === "GET" ? Response.json([]) : Response.json({ id: 1 }, { status: 201 });
+          if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+          return Response.json({});
+        });
+
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "one-shot-same-issue-blocker-push", repoFullName: "JSONbored/gittensory", prNumber: 98, installationId: 123 });
+
+        expect(aiCalls).toBe(0);
+        const summary = await env.DB.prepare("select conclusion from check_summaries where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 98, "a98-v2")
+          .first<{ conclusion: string }>();
+        expect(summary?.conclusion).toBe("failure");
+        const blocker = await env.DB.prepare("select blocker_codes_json as blockerCodesJson from gate_outcomes where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 98, "a98-v2")
+          .first<{ blockerCodesJson: string }>();
+        expect(JSON.parse(blocker?.blockerCodesJson ?? "[]")).toContain("linked_issue_scope_mismatch");
+      });
+
+      it("default (one_shot, block mode): a failed replay-lookup falls through without pushing a blocker (fail-safe), even though a genuinely unaddressed row exists", async () => {
+        let aiCalls = 0;
+        const env = createTestEnv({
+          GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+          AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ status: "addressed", rationale: "fresh call should not run" }) }; } } as unknown as Ai,
+          AI_SUMMARIES_ENABLED: "true",
+          AI_PUBLIC_COMMENTS_ENABLED: "true",
+          AI_DAILY_NEURON_BUDGET: "100000",
+        });
+        await seedRegateChurnRepo(env, { publicSurface: "comment_only", aiReviewMode: "off", linkedIssueSatisfactionGateMode: "block" });
+        await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 101, title: "Replay-read-fails PR", state: "open", user: { login: "contributor" }, head: { sha: "a101-v1" }, labels: [], body: "Closes #1" });
+        await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 101, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+        // The EXISTENCE check (hasPublishedLinkedIssueSatisfaction) that gates the one-shot skip stays real and
+        // sees this row -- only the separate REPLAY read (getLatestPublishedLinkedIssueSatisfaction) below is
+        // made to fail, proving its `.catch(() => null)` fail-safe never spuriously blocks (or throws) a PR just
+        // because the prior verdict couldn't be read back for replay.
+        await putCachedLinkedIssueSatisfaction(env, "JSONbored/gittensory", 101, "a101-v1", 1, "seed-fp", { status: "ok", result: { status: "unaddressed", rationale: "still does not implement the requested stream", confidence: 0.91 }, estimatedNeurons: 4 });
+
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          const method = init?.method ?? "GET";
+          if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+          if (url.includes("/pulls/101/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+export const ok = true;\n+export const also = 1;" }]);
+          if (url.endsWith("/pulls/101")) return Response.json({ number: 101, title: "Replay-read-fails PR", state: "open", user: { login: "contributor" }, head: { sha: "a101-v2" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+          if (url.includes("/commits/a101-v2/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+          if (url.includes("/commits/a101-v2/status")) return Response.json({ state: "success", statuses: [] });
+          if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+          if (url.includes("/issues/101/comments")) return method === "GET" ? Response.json([]) : Response.json({ id: 1 }, { status: 201 });
+          if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+          return Response.json({});
+        });
+
+        const readSpy = vi.spyOn(repositoriesModule, "getLatestPublishedLinkedIssueSatisfaction").mockRejectedValueOnce(new Error("D1 read error"));
+        await expect(
+          processJob(env, { type: "agent-regate-pr", deliveryId: "one-shot-replay-read-fails", repoFullName: "JSONbored/gittensory", prNumber: 101, installationId: 123 }),
+        ).resolves.toBeUndefined();
+        readSpy.mockRestore();
+
+        expect(aiCalls).toBe(0); // still skipped -- the existence check alone gates the one-shot skip
+        const summary = await env.DB.prepare("select conclusion from check_summaries where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 101, "a101-v2")
+          .first<{ conclusion: string }>();
+        expect(summary?.conclusion).not.toBe("failure");
+        const blocker = await env.DB.prepare("select blocker_codes_json as blockerCodesJson from gate_outcomes where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 101, "a101-v2")
+          .first<{ blockerCodesJson: string }>();
+        expect(JSON.parse(blocker?.blockerCodesJson ?? "[]")).not.toContain("linked_issue_scope_mismatch");
+        const skipAudit = await env.DB.prepare("select outcome from audit_events where event_type = ? and target_key = ?")
+          .bind("github_app.linked_issue_satisfaction_one_shot_skip", "JSONbored/gittensory#101")
+          .first<{ outcome: string }>();
+        expect(skipAudit?.outcome).toBe("completed"); // the skip itself still completes normally despite the failed replay read
+      });
+
+      it("default (one_shot, block mode): a replayed 'addressed' prior verdict never pushes a blocker (only an 'unaddressed' verdict does)", async () => {
+        let aiCalls = 0;
+        const env = createTestEnv({
+          GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+          AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ status: "unaddressed", rationale: "fresh call should not run" }) }; } } as unknown as Ai,
+          AI_SUMMARIES_ENABLED: "true",
+          AI_PUBLIC_COMMENTS_ENABLED: "true",
+          AI_DAILY_NEURON_BUDGET: "100000",
+        });
+        await seedRegateChurnRepo(env, { publicSurface: "comment_only", aiReviewMode: "off", linkedIssueSatisfactionGateMode: "block" });
+        await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 102, title: "Addressed-replay PR", state: "open", user: { login: "contributor" }, head: { sha: "a102-v1" }, labels: [], body: "Closes #1" });
+        await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 102, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+        await putCachedLinkedIssueSatisfaction(env, "JSONbored/gittensory", 102, "a102-v1", 1, "seed-fp", { status: "ok", result: { status: "addressed", rationale: "fully implements the requested stream", confidence: 0.95 }, estimatedNeurons: 4 });
+
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          const method = init?.method ?? "GET";
+          if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+          if (url.includes("/pulls/102/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+export const ok = true;\n+export const also = 1;" }]);
+          if (url.endsWith("/pulls/102")) return Response.json({ number: 102, title: "Addressed-replay PR", state: "open", user: { login: "contributor" }, head: { sha: "a102-v2" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+          if (url.includes("/commits/a102-v2/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+          if (url.includes("/commits/a102-v2/status")) return Response.json({ state: "success", statuses: [] });
+          if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+          if (url.includes("/issues/102/comments")) return method === "GET" ? Response.json([]) : Response.json({ id: 1 }, { status: 201 });
+          if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+          return Response.json({});
+        });
+
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "one-shot-addressed-replay", repoFullName: "JSONbored/gittensory", prNumber: 102, installationId: 123 });
+
+        expect(aiCalls).toBe(0);
+        const summary = await env.DB.prepare("select conclusion from check_summaries where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 102, "a102-v2")
+          .first<{ conclusion: string }>();
+        expect(summary?.conclusion).not.toBe("failure");
+        const blocker = await env.DB.prepare("select blocker_codes_json as blockerCodesJson from gate_outcomes where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 102, "a102-v2")
+          .first<{ blockerCodesJson: string }>();
+        expect(JSON.parse(blocker?.blockerCodesJson ?? "[]")).not.toContain("linked_issue_scope_mismatch");
+      });
+
+      it("default (one_shot, advisory mode): a replayed unaddressed prior verdict is reused for display but never pushes a hard blocker (only block mode does)", async () => {
+        let aiCalls = 0;
+        const env = createTestEnv({
+          GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+          AI: { run: async () => { aiCalls += 1; return { response: JSON.stringify({ status: "addressed", rationale: "fresh call should not run" }) }; } } as unknown as Ai,
+          AI_SUMMARIES_ENABLED: "true",
+          AI_PUBLIC_COMMENTS_ENABLED: "true",
+          AI_DAILY_NEURON_BUDGET: "100000",
+        });
+        // advisory (not block) -- the same "unaddressed" stored verdict as the block-mode regression test above,
+        // so the ONLY variable changed is linkedIssueSatisfactionGateMode itself.
+        await seedRegateChurnRepo(env, { publicSurface: "comment_only", aiReviewMode: "off", linkedIssueSatisfactionGateMode: "advisory" });
+        await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 103, title: "Advisory-replay PR", state: "open", user: { login: "contributor" }, head: { sha: "a103-v1" }, labels: [], body: "Closes #1" });
+        await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 103, status: "complete", reviewsSyncedAt: new Date().toISOString() });
+        await putCachedLinkedIssueSatisfaction(env, "JSONbored/gittensory", 103, "a103-v1", 1, "seed-fp", { status: "ok", result: { status: "unaddressed", rationale: "still does not implement the requested stream", confidence: 0.91 }, estimatedNeurons: 4 });
+
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = input.toString();
+          const method = init?.method ?? "GET";
+          if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+          if (url.includes("/pulls/103/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 2, deletions: 0, changes: 2, patch: "@@\n+export const ok = true;\n+export const also = 1;" }]);
+          if (url.endsWith("/pulls/103")) return Response.json({ number: 103, title: "Advisory-replay PR", state: "open", user: { login: "contributor" }, head: { sha: "a103-v2" }, labels: [], body: "Closes #1", mergeable_state: "clean" });
+          if (url.includes("/commits/a103-v2/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+          if (url.includes("/commits/a103-v2/status")) return Response.json({ state: "success", statuses: [] });
+          if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
+          if (url.includes("/issues/103/comments")) return method === "GET" ? Response.json([]) : Response.json({ id: 1 }, { status: 201 });
+          if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+          return Response.json({});
+        });
+
+        await processJob(env, { type: "agent-regate-pr", deliveryId: "one-shot-advisory-replay", repoFullName: "JSONbored/gittensory", prNumber: 103, installationId: 123 });
+
+        expect(aiCalls).toBe(0);
+        const summary = await env.DB.prepare("select conclusion from check_summaries where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 103, "a103-v2")
+          .first<{ conclusion: string }>();
+        expect(summary?.conclusion).not.toBe("failure"); // advisory mode never hard-blocks, even on an unaddressed replay
+        const blocker = await env.DB.prepare("select blocker_codes_json as blockerCodesJson from gate_outcomes where repo_full_name = ? and pull_number = ? and head_sha = ?")
+          .bind("JSONbored/gittensory", 103, "a103-v2")
+          .first<{ blockerCodesJson: string }>();
+        expect(JSON.parse(blocker?.blockerCodesJson ?? "[]")).not.toContain("linked_issue_scope_mismatch");
+      });
+
       it("per-repo override (continuous via .gittensory.yml): a new push DOES spend a fresh main-review AI call, unlike the one_shot default", async () => {
         let aiCalls = 0;
         const env = createTestEnv({
