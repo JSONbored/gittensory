@@ -194,11 +194,15 @@ export function chunkFile(path: string, text: string, namespace = "", opts?: Chu
   // chunk is one coherent unit rather than "this function + 19 unrelated ones". Small files still collapse to
   // one chunk (the packer combines units up to chunkChars), so the per-repo vector budget is unaffected; a
   // single oversized unit falls back to newline splitting. (#282) Non-JS/TS keeps the newline chunker.
-  if (JS_TS_RE.test(path)) {
-    const logical = chunkJsTs(path, text, kind, namespace, chunkChars, chunkOverlap);
-    if (logical) return logical;
-  }
-  return newlineChunks(path, text, kind, namespace, chunkChars, chunkOverlap);
+  const chunks = JS_TS_RE.test(path) ? (chunkJsTs(path, text, kind, namespace, chunkChars, chunkOverlap) ?? newlineChunks(path, text, kind, namespace, chunkChars, chunkOverlap)) : newlineChunks(path, text, kind, namespace, chunkChars, chunkOverlap);
+  // #4996: the whole-FILE non-empty check above (`!text.trim()`) doesn't guarantee every individual SLICE is
+  // non-empty -- a newline-boundary split can land a chunk entirely inside a run of blank/whitespace-only
+  // lines (e.g. a large trailing gap between logical units). An empty/whitespace-only chunk reaching the embed
+  // API was the most plausible cause of the ai_embed_http_400 failures observed in production (Ollama's
+  // OpenAI-compatible /embeddings endpoint rejects it); filtering here is the single, centralized guard, since
+  // both chunkJsTs and newlineChunks can produce one. chunkIndex intentionally keeps its ORIGINAL (pre-filter)
+  // value -- it only needs to be a stable id component, not a gap-free sequence.
+  return chunks.filter((c) => c.text.trim().length > 0);
 }
 
 const JS_TS_RE = /\.(ts|tsx|js|jsx|mjs|cjs)$/i;

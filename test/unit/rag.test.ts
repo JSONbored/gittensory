@@ -195,6 +195,20 @@ describe("rag: per-file chunking", () => {
     expect(chunkFile("src/a.ts", "   ")).toEqual([]);
   });
 
+  it("REGRESSION (#4996): filters out an individual whitespace-only chunk, even though the whole file is non-empty (the most plausible cause of production ai_embed_http_400s)", () => {
+    // chunkChars=10, overlap=0: chunk0 = 10 X's, chunk1 = 10 SPACES (whitespace-only -- must be dropped),
+    // chunk2 = 10 Y's. Non-JS path (.py) so this exercises newlineChunks, the chunker actually used in prod
+    // for the file types most commonly indexed by size (large generated/data-adjacent code files).
+    const text = "X".repeat(10) + " ".repeat(10) + "Y".repeat(10);
+    const chunks = chunkFile("src/big.py", text, "", { chunkChars: 10, chunkOverlap: 0 });
+    expect(chunks.every((c) => c.text.trim().length > 0)).toBe(true);
+    expect(chunks.map((c) => c.text)).toEqual(["X".repeat(10), "Y".repeat(10)]);
+    // chunkIndex/id keep their ORIGINAL (pre-filter) position -- the surviving Y chunk is still index 2, not
+    // renumbered to 1, since it's only ever used as a stable id component, not required to be gap-free.
+    expect(chunks[1]?.chunkIndex).toBe(2);
+    expect(chunks[1]?.id).toBe("src/big.py::2");
+  });
+
   it("splits a JS/TS file at FUNCTION boundaries, never mid-function, tagging the boundary kind (#282)", () => {
     const fn = (n: number) => `export function f${n}() {\n${Array.from({ length: 120 }, (_, i) => `  const v${i} = ${i}; // padding aaaaaaaaaaaaaaaaaaaaaaaa`).join("\n")}\n}\n`;
     const chunks = chunkFile("src/multi.ts", fn(1) + fn(2) + fn(3)); // 3 functions, each ~6k; total > CHUNK_CHARS

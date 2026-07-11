@@ -184,9 +184,30 @@ describe("createOpenAiCompatibleAi (#979)", () => {
     expect(out).toEqual({ data: [[0.1, 0.2], [0.3, 0.4]] });
   });
 
-  it("throws on a non-OK embeddings response", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("e", { status: 502 })));
-    await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] })).rejects.toThrow(/ai_embed_http_502/);
+  it("throws on a non-OK embeddings response, including the response body detail (#4996: previously thrown away)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("bad request: input exceeds max length", { status: 400 })));
+    await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] })).rejects.toThrow(
+      "ai_embed_http_400: bad request: input exceeds max length",
+    );
+  });
+
+  it("falls back to the bare status code when the error response body is empty", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 502 })));
+    await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] })).rejects.toThrow(/^ai_embed_http_502$/);
+  });
+
+  it("still throws the bare status code (never masked) when reading the error response body itself fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, text: () => Promise.reject(new Error("stream error")) }) as unknown as Response),
+    );
+    await expect(createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] })).rejects.toThrow(/^ai_embed_http_503$/);
+  });
+
+  it("bounds the captured error detail to 300 chars", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x".repeat(1000), { status: 400 })));
+    const error = await createOpenAiCompatibleAi({ baseUrl: "http://x/v1" }).run("m", { text: ["a"] }).catch((e: Error) => e.message);
+    expect(error).toBe(`ai_embed_http_400: ${"x".repeat(300)}`);
   });
 
   it("empty text array returns { data: [] } without a fetch", async () => {

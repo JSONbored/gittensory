@@ -286,7 +286,15 @@ export function createOpenAiCompatibleAi(opts: {
           body: JSON.stringify({ model: opts.embedModel ?? "bge-m3", input: options.text }),
           signal: AbortSignal.timeout(120_000),
         });
-        if (!res.ok) throw new Error(`ai_embed_http_${res.status}`);
+        // #4996: the error previously carried only the status code, with no detail from the response body --
+        // diagnosing a real production ai_embed_http_400 required SSHing into the box and reasoning about
+        // likely causes from first principles, since the actual rejection reason (e.g. Ollama's own "input
+        // length exceeds..." message) was thrown away. Bounded read, best-effort (a body-read failure must
+        // never mask the original status in the thrown error).
+        if (!res.ok) {
+          const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => "");
+          throw new Error(detail ? `ai_embed_http_${res.status}: ${detail}` : `ai_embed_http_${res.status}`);
+        }
         const json = (await res.json()) as { data?: Array<{ embedding: number[] }> };
         return { data: (json.data ?? []).map((d) => d.embedding) };
       }
