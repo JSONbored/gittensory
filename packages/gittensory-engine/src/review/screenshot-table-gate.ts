@@ -211,6 +211,7 @@ export function extractTableRows(body: string | null | undefined): string[][] {
       rows.push(cells);
       j += 1;
     }
+    i = j - 1;
   }
   return rows;
 }

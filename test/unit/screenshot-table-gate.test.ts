@@ -5,6 +5,7 @@ import {
   DEFAULT_SCREENSHOT_TABLE_GATE,
   evaluateScreenshotTableGate,
   extractTableRowImageUrls,
+  extractTableRows,
   hasCommittedImageFile,
   hasImageBearingMarkdownTable,
   hasImageOutsideTable,
@@ -318,6 +319,14 @@ describe("requiredScreenshotMatrixPairs (#4535)", () => {
       { viewport: "Mobile", theme: "Light" },
       { viewport: "Mobile", theme: "Dark" },
     ]);
+  });
+});
+
+describe("extractTableRows", () => {
+  it("extracts a crafted separator-only table once instead of duplicating overlapping regions", () => {
+    const body = Array.from({ length: 40 }, () => "| --- |").join("\n");
+
+    expect(extractTableRows(body)).toHaveLength(38);
   });
 });
 
