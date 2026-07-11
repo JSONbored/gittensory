@@ -1598,6 +1598,13 @@ describe("parseFocusManifest gate config", () => {
     // An empty experimental block leaves the manifest absent (no recognized fields).
     expect(parseFocusManifest({ experimental: {} }).experimental.present).toBe(false);
     expect(experimentalConfigToJson(parseFocusManifest({ experimental: {} }).experimental)).toBeNull();
+    // An explicit `experimental: null` takes the same early-return path as unset (distinct branch from
+    // the undefined case above).
+    expect(parseFocusManifest({ experimental: null }).experimental.gittensor).toBeNull();
+    expect(parseFocusManifest({ experimental: null }).experimental.present).toBe(false);
+    // A non-object, non-array primitive (not just an array) also warns as "must be a mapping".
+    expect(parseFocusManifest({ experimental: "nope" }).warnings.some((w) => /"experimental" must be a mapping/.test(w))).toBe(true);
+    expect(parseFocusManifest({ experimental: "nope" }).experimental.present).toBe(false);
   });
 
   it("parses the contentLane: block (#2435 per-repo registry-lane config), round-trips it, and makes the manifest present", () => {
