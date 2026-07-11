@@ -191,6 +191,32 @@ export {
   type AcceptanceCriteria,
   type AcceptanceCriteriaInput,
 } from "./miner/acceptance-criteria.js";
+// The subset of types/predicted-gate-types.ts's hand-kept mirrors (see that file's own header comment) that
+// the self-review adapter's public signature (SelfReviewContext, SelfReviewSlopAssessment) references. Not
+// previously part of the public barrel; exported now so those types are actually nameable by consumers.
+export type {
+  AdvisoryFinding,
+  BountyRecord,
+  IssueQualityReport,
+  IssueRecord,
+  PullRequestRecord,
+  RepositoryRecord,
+} from "./types/predicted-gate-types.js";
+export {
+  buildSelfReviewChangedPaths,
+  buildSelfReviewPredictedGateInput,
+  buildSelfReviewSlopInput,
+  runSelfReview,
+  SELF_REVIEW_PASSING_CONCLUSION,
+  type AttemptDiffState,
+  type SelfReviewAdapterDeps,
+  type SelfReviewChangedFile,
+  type SelfReviewContext,
+  type SelfReviewSlopAssessment,
+  type SelfReviewSlopBand,
+  type SelfReviewSlopInput,
+  type SelfReviewVerdict,
+} from "./miner/self-review-adapter.js";
 export {
   codingAgentModeExecutes,
   isGlobalMinerCodingAgentPause,
