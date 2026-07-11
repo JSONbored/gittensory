@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import * as duplicateWinner from "../../packages/gittensory-engine/src/duplicate-winner";
+import { describe, expect, it } from "vitest";
 import {
   buildSelfPlagiarismGovernorLedgerEvent,
   DEFAULT_SELF_PLAGIARISM_CONFIG,
@@ -12,7 +11,9 @@ import {
 
 const CANDIDATE_AT = "2026-07-10T12:00:00.000Z";
 
-function candidate(overrides: Partial<OwnSubmissionRecord> = {}): OwnSubmissionRecord {
+function candidate(
+  overrides: Partial<OwnSubmissionRecord> = {},
+): OwnSubmissionRecord {
   return {
     repoFullName: "acme/widgets",
     fingerprint: "alpha beta gamma",
@@ -22,7 +23,9 @@ function candidate(overrides: Partial<OwnSubmissionRecord> = {}): OwnSubmissionR
   };
 }
 
-function prior(overrides: Partial<OwnSubmissionRecord> = {}): OwnSubmissionRecord {
+function prior(
+  overrides: Partial<OwnSubmissionRecord> = {},
+): OwnSubmissionRecord {
   return {
     repoFullName: "acme/other",
     fingerprint: "totally different tokens",
@@ -53,21 +56,34 @@ describe("fingerprintSimilarity", () => {
 
 describe("resolveSelfPlagiarismConfig", () => {
   it("returns defaults for nullish and invalid top-level shapes", () => {
-    expect(resolveSelfPlagiarismConfig(undefined)).toEqual({ ...DEFAULT_SELF_PLAGIARISM_CONFIG });
-    expect(resolveSelfPlagiarismConfig(null)).toEqual({ ...DEFAULT_SELF_PLAGIARISM_CONFIG });
-    expect(resolveSelfPlagiarismConfig(["not", "object"])).toEqual({ ...DEFAULT_SELF_PLAGIARISM_CONFIG });
-    expect(resolveSelfPlagiarismConfig("0.9")).toEqual({ ...DEFAULT_SELF_PLAGIARISM_CONFIG });
+    expect(resolveSelfPlagiarismConfig(undefined)).toEqual({
+      ...DEFAULT_SELF_PLAGIARISM_CONFIG,
+    });
+    expect(resolveSelfPlagiarismConfig(null)).toEqual({
+      ...DEFAULT_SELF_PLAGIARISM_CONFIG,
+    });
+    expect(resolveSelfPlagiarismConfig(["not", "object"])).toEqual({
+      ...DEFAULT_SELF_PLAGIARISM_CONFIG,
+    });
+    expect(resolveSelfPlagiarismConfig("0.9")).toEqual({
+      ...DEFAULT_SELF_PLAGIARISM_CONFIG,
+    });
   });
 
   it("accepts a bare numeric threshold and normalizes it", () => {
     expect(resolveSelfPlagiarismConfig(0.9).similarityThreshold).toBe(0.9);
-    expect(resolveSelfPlagiarismConfig(Number.NaN).similarityThreshold).toBe(0.85);
+    expect(resolveSelfPlagiarismConfig(Number.NaN).similarityThreshold).toBe(
+      0.85,
+    );
     expect(resolveSelfPlagiarismConfig(2).similarityThreshold).toBe(1);
     expect(resolveSelfPlagiarismConfig(-1).similarityThreshold).toBe(0);
   });
 
   it("reads similarityThreshold from an object or falls back to default when absent", () => {
-    expect(resolveSelfPlagiarismConfig({ similarityThreshold: 0.7 }).similarityThreshold).toBe(0.7);
+    expect(
+      resolveSelfPlagiarismConfig({ similarityThreshold: 0.7 })
+        .similarityThreshold,
+    ).toBe(0.7);
     expect(resolveSelfPlagiarismConfig({}).similarityThreshold).toBe(0.85);
   });
 });
@@ -83,7 +99,11 @@ describe("selfPlagiarismCheck (#2345)", () => {
   it("throttles a near-duplicate diff across two different target repos when the prior claimed first", () => {
     const shared = "fix null pointer in handler cleanup path shared";
     const verdict = selfPlagiarismCheck(
-      candidate({ repoFullName: "acme/repo-b", fingerprint: shared, pullRequestNumber: 201 }),
+      candidate({
+        repoFullName: "acme/repo-b",
+        fingerprint: shared,
+        pullRequestNumber: 201,
+      }),
       [
         prior({
           repoFullName: "acme/repo-a",
@@ -102,13 +122,25 @@ describe("selfPlagiarismCheck (#2345)", () => {
   });
 
   it("denies when the candidate fingerprint is missing (fail closed — does not assume uniqueness)", () => {
-    const verdict = selfPlagiarismCheck(candidate({ fingerprint: "  " }), [prior()]);
-    expect(verdict).toMatchObject({ allowed: false, eventType: "denied", reason: "missing_candidate_fingerprint" });
+    const verdict = selfPlagiarismCheck(candidate({ fingerprint: "  " }), [
+      prior(),
+    ]);
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "denied",
+      reason: "missing_candidate_fingerprint",
+    });
   });
 
   it("denies when the candidate submittedAt is missing even if fingerprints differ", () => {
-    const verdict = selfPlagiarismCheck(candidate({ submittedAt: null }), [prior()]);
-    expect(verdict).toMatchObject({ allowed: false, eventType: "denied", reason: "missing_candidate_submitted_at" });
+    const verdict = selfPlagiarismCheck(candidate({ submittedAt: null }), [
+      prior(),
+    ]);
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "denied",
+      reason: "missing_candidate_submitted_at",
+    });
   });
 
   it("denies when a near-duplicate prior lacks submittedAt (ambiguous election timing)", () => {
@@ -116,13 +148,21 @@ describe("selfPlagiarismCheck (#2345)", () => {
     const verdict = selfPlagiarismCheck(candidate({ fingerprint: shared }), [
       prior({ fingerprint: shared, submittedAt: null }),
     ]);
-    expect(verdict).toMatchObject({ allowed: false, eventType: "denied", reason: "missing_prior_submitted_at" });
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "denied",
+      reason: "missing_prior_submitted_at",
+    });
   });
 
   it("allows the earliest claimant when it precedes near-duplicate priors in claim-time order", () => {
     const shared = "shared implementation patch body";
     const verdict = selfPlagiarismCheck(
-      candidate({ fingerprint: shared, submittedAt: "2026-07-10T10:00:00.000Z", pullRequestNumber: 10 }),
+      candidate({
+        fingerprint: shared,
+        submittedAt: "2026-07-10T10:00:00.000Z",
+        pullRequestNumber: 10,
+      }),
       [
         prior({
           fingerprint: shared,
@@ -135,13 +175,56 @@ describe("selfPlagiarismCheck (#2345)", () => {
     expect(verdict.reason).toBe("earliest_near_duplicate_claimant");
   });
 
+  it("breaks equal-time self-plagiarism ties with repo-scoped numbers before repo names", () => {
+    const shared = "shared equal timestamp body";
+    const laterNumberVerdict = selfPlagiarismCheck(
+      candidate({
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: 2,
+      }),
+      [
+        prior({
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: 1,
+        }),
+      ],
+    );
+    expect(laterNumberVerdict).toMatchObject({
+      allowed: false,
+      eventType: "throttled",
+      matchedSubmission: { pullRequestNumber: 1 },
+    });
+
+    const earliestNumberVerdict = selfPlagiarismCheck(
+      candidate({
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: 1,
+      }),
+      [
+        prior({
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: 2,
+        }),
+      ],
+    );
+    expect(earliestNumberVerdict).toMatchObject({
+      allowed: true,
+      eventType: "allowed",
+      reason: "earliest_near_duplicate_claimant",
+    });
+  });
+
   it("uses the conservative built-in default threshold when config is omitted", () => {
     expect(DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD).toBe(0.85);
-    const almost = "aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv ww xx yy zz";
-    const verdict = selfPlagiarismCheck(
-      candidate({ fingerprint: almost }),
-      [prior({ fingerprint: `${almost} zz` })],
-    );
+    const almost =
+      "aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv ww xx yy zz";
+    const verdict = selfPlagiarismCheck(candidate({ fingerprint: almost }), [
+      prior({ fingerprint: `${almost} zz` }),
+    ]);
     expect(verdict.eventType).toBe("throttled");
   });
 
@@ -150,16 +233,30 @@ describe("selfPlagiarismCheck (#2345)", () => {
       candidate({ fingerprint: null as unknown as string }),
       [prior()],
     );
-    expect(verdict).toMatchObject({ allowed: false, eventType: "denied", reason: "missing_candidate_fingerprint" });
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "denied",
+      reason: "missing_candidate_fingerprint",
+    });
   });
 
   it("denies when the candidate submittedAt is unparsable", () => {
-    const verdict = selfPlagiarismCheck(candidate({ submittedAt: "not-a-date" }), [prior()]);
-    expect(verdict).toMatchObject({ allowed: false, eventType: "denied", reason: "missing_candidate_submitted_at" });
+    const verdict = selfPlagiarismCheck(
+      candidate({ submittedAt: "not-a-date" }),
+      [prior()],
+    );
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "denied",
+      reason: "missing_candidate_submitted_at",
+    });
   });
 
   it("skips priors with missing fingerprints when comparing", () => {
-    const verdict = selfPlagiarismCheck(candidate(), [prior({ fingerprint: "   " }), prior()]);
+    const verdict = selfPlagiarismCheck(candidate(), [
+      prior({ fingerprint: "   " }),
+      prior(),
+    ]);
     expect(verdict.allowed).toBe(true);
     expect(verdict.reason).toBe("distinct_from_recent_own_submissions");
   });
@@ -167,7 +264,11 @@ describe("selfPlagiarismCheck (#2345)", () => {
   it("throttles using issueNumber when pullRequestNumber is absent on the matched prior", () => {
     const shared = "shared patch content across repos";
     const verdict = selfPlagiarismCheck(
-      candidate({ fingerprint: shared, submittedAt: "2026-07-10T12:00:00.000Z", pullRequestNumber: 50 }),
+      candidate({
+        fingerprint: shared,
+        submittedAt: "2026-07-10T12:00:00.000Z",
+        pullRequestNumber: 50,
+      }),
       [
         prior({
           fingerprint: shared,
@@ -191,10 +292,13 @@ describe("selfPlagiarismCheck (#2345)", () => {
     expect(verdict.similarity).toBe(0);
   });
 
-  it("keeps the first highest-similarity prior when scores tie", () => {
+  it("reports the elected prior when multiple highest-similarity priors tie", () => {
     const shared = "identical shared tokens";
     const verdict = selfPlagiarismCheck(
-      candidate({ fingerprint: shared, submittedAt: "2026-07-10T12:00:00.000Z" }),
+      candidate({
+        fingerprint: shared,
+        submittedAt: "2026-07-10T12:00:00.000Z",
+      }),
       [
         prior({
           repoFullName: "acme/first",
@@ -211,7 +315,155 @@ describe("selfPlagiarismCheck (#2345)", () => {
       ],
     );
     expect(verdict.eventType).toBe("throttled");
-    expect(verdict.matchedSubmission?.repoFullName).toBe("acme/first");
+    expect(verdict.matchedSubmission?.repoFullName).toBe("acme/second");
+  });
+
+  it("throttles cross-repo equal-time submissions with matching repo-scoped PR numbers deterministically", () => {
+    const shared = "same diff fingerprint tokens";
+    const laterRepoVerdict = selfPlagiarismCheck(
+      candidate({
+        repoFullName: "acme/repo-b",
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: 1,
+      }),
+      [
+        prior({
+          repoFullName: "acme/repo-a",
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: 1,
+        }),
+      ],
+    );
+    expect(laterRepoVerdict).toMatchObject({
+      allowed: false,
+      eventType: "throttled",
+      reason: "near_duplicate_self_plagiarism",
+      matchedSubmission: { repoFullName: "acme/repo-a" },
+    });
+
+    const earliestRepoVerdict = selfPlagiarismCheck(
+      candidate({
+        repoFullName: "acme/repo-a",
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: 1,
+      }),
+      [
+        prior({
+          repoFullName: "acme/repo-b",
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: 1,
+        }),
+      ],
+    );
+    expect(earliestRepoVerdict).toMatchObject({
+      allowed: true,
+      eventType: "allowed",
+      reason: "earliest_near_duplicate_claimant",
+    });
+  });
+
+  it("denies ambiguous equal-time and equal-number cross-repo ties when a repo name is missing", () => {
+    const shared = "same diff fingerprint tokens";
+    const verdict = selfPlagiarismCheck(
+      candidate({
+        repoFullName: "",
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: 1,
+      }),
+      [
+        prior({
+          repoFullName: "acme/repo-a",
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: 1,
+        }),
+      ],
+    );
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "throttled",
+      reason: "near_duplicate_self_plagiarism",
+      matchedSubmission: { repoFullName: "acme/repo-a" },
+    });
+  });
+
+  it("breaks an equal-time tie by issueNumber when pullRequestNumber is absent on both sides", () => {
+    const shared = "equal-time issue-number tiebreak";
+    const laterIssueVerdict = selfPlagiarismCheck(
+      candidate({
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: undefined,
+        issueNumber: 2,
+      }),
+      [
+        prior({
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: undefined,
+          issueNumber: 1,
+        }),
+      ],
+    );
+    expect(laterIssueVerdict).toMatchObject({
+      allowed: false,
+      eventType: "throttled",
+      matchedSubmission: { issueNumber: 1 },
+    });
+
+    const earliestIssueVerdict = selfPlagiarismCheck(
+      candidate({
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: undefined,
+        issueNumber: 1,
+      }),
+      [
+        prior({
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: undefined,
+          issueNumber: 2,
+        }),
+      ],
+    );
+    expect(earliestIssueVerdict).toMatchObject({
+      allowed: true,
+      eventType: "allowed",
+      reason: "earliest_near_duplicate_claimant",
+    });
+  });
+
+  it("falls through to the repo-name tiebreak on an equal-time tie when both sides lack pull and issue numbers", () => {
+    const shared = "equal-time zero-number tiebreak";
+    const verdict = selfPlagiarismCheck(
+      candidate({
+        repoFullName: "acme/repo-b",
+        fingerprint: shared,
+        submittedAt: CANDIDATE_AT,
+        pullRequestNumber: undefined,
+        issueNumber: undefined,
+      }),
+      [
+        prior({
+          repoFullName: "acme/repo-a",
+          fingerprint: shared,
+          submittedAt: CANDIDATE_AT,
+          pullRequestNumber: undefined,
+          issueNumber: undefined,
+        }),
+      ],
+    );
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "throttled",
+      matchedSubmission: { repoFullName: "acme/repo-a" },
+    });
   });
 
   it("uses issueNumber on the candidate when pullRequestNumber is absent", () => {
@@ -223,68 +475,39 @@ describe("selfPlagiarismCheck (#2345)", () => {
         pullRequestNumber: undefined,
         issueNumber: 88,
       }),
-      [prior({ fingerprint: shared, submittedAt: "2026-07-10T11:00:00.000Z", issueNumber: 77 })],
+      [
+        prior({
+          fingerprint: shared,
+          submittedAt: "2026-07-10T11:00:00.000Z",
+          issueNumber: 77,
+        }),
+      ],
     );
     expect(verdict.eventType).toBe("throttled");
   });
 
-  it("falls back to bestMatch pullRequestNumber when winner resolution is ambiguous", () => {
-    const resolveSpy = vi.spyOn(duplicateWinner, "resolveDuplicateClusterWinnerNumber").mockReturnValue(null);
-    try {
-      const shared = "shared fallback winner tokens";
-      const verdict = selfPlagiarismCheck(
-        candidate({ fingerprint: shared, submittedAt: "2026-07-10T12:00:00.000Z", pullRequestNumber: 20 }),
-        [prior({ fingerprint: shared, submittedAt: "2026-07-10T11:00:00.000Z", pullRequestNumber: 10 })],
-      );
-      expect(verdict.eventType).toBe("throttled");
-      expect(verdict.matchedSubmission?.pullRequestNumber).toBe(10);
-    } finally {
-      resolveSpy.mockRestore();
-    }
-  });
-
-  it("falls back to bestMatch issueNumber when pullRequestNumber is absent and winner resolution is ambiguous", () => {
-    const resolveSpy = vi.spyOn(duplicateWinner, "resolveDuplicateClusterWinnerNumber").mockReturnValue(null);
-    try {
-      const shared = "shared issue fallback tokens";
-      const verdict = selfPlagiarismCheck(
-        candidate({ fingerprint: shared, submittedAt: "2026-07-10T12:00:00.000Z", pullRequestNumber: 20 }),
-        [
-          prior({
-            fingerprint: shared,
-            submittedAt: "2026-07-10T11:00:00.000Z",
-            pullRequestNumber: undefined,
-            issueNumber: 33,
-          }),
-        ],
-      );
-      expect(verdict.matchedSubmission?.issueNumber).toBe(33);
-    } finally {
-      resolveSpy.mockRestore();
-    }
-  });
-
   it("falls back to the first near-duplicate when winner resolution and bestMatch are absent", () => {
-    const resolveSpy = vi.spyOn(duplicateWinner, "resolveDuplicateClusterWinnerNumber").mockReturnValue(null);
-    try {
-      const verdict = selfPlagiarismCheck(
-        candidate({ fingerprint: "aaa", submittedAt: "2026-07-10T12:00:00.000Z", pullRequestNumber: 2 }),
-        [
-          prior({
-            fingerprint: "bbb",
-            submittedAt: "2026-07-10T11:00:00.000Z",
-            pullRequestNumber: undefined,
-            issueNumber: undefined,
-          }),
-        ],
-        { similarityThreshold: 0 },
-      );
-      expect(verdict.eventType).toBe("throttled");
-      expect(verdict.matchedSubmission?.repoFullName).toBe("acme/other");
-      expect(verdict.similarity).toBe(0);
-    } finally {
-      resolveSpy.mockRestore();
-    }
+    const verdict = selfPlagiarismCheck(
+      candidate({
+        repoFullName: "",
+        fingerprint: "aaa",
+        submittedAt: "2026-07-10T12:00:00.000Z",
+        pullRequestNumber: 2,
+      }),
+      [
+        prior({
+          repoFullName: "",
+          fingerprint: "bbb",
+          submittedAt: "2026-07-10T12:00:00.000Z",
+          pullRequestNumber: 2,
+          issueNumber: undefined,
+        }),
+      ],
+      { similarityThreshold: 0 },
+    );
+    expect(verdict.eventType).toBe("throttled");
+    expect(verdict.matchedSubmission?.repoFullName).toBe("");
+    expect(verdict.similarity).toBe(0);
   });
 
   it("defaults claim member number to zero when neither pull nor issue number is present", () => {
@@ -296,7 +519,14 @@ describe("selfPlagiarismCheck (#2345)", () => {
         pullRequestNumber: undefined,
         issueNumber: undefined,
       }),
-      [prior({ fingerprint: shared, submittedAt: "2026-07-10T11:00:00.000Z", pullRequestNumber: undefined, issueNumber: undefined })],
+      [
+        prior({
+          fingerprint: shared,
+          submittedAt: "2026-07-10T11:00:00.000Z",
+          pullRequestNumber: undefined,
+          issueNumber: undefined,
+        }),
+      ],
     );
     expect(verdict.eventType).toBe("throttled");
   });
@@ -348,9 +578,18 @@ describe("buildSelfPlagiarismGovernorLedgerEvent", () => {
   it("records a throttled open_pr denial with the flagged prior submission referenced", () => {
     const verdict = selfPlagiarismCheck(
       candidate({ fingerprint: "same patch tokens" }),
-      [prior({ fingerprint: "same patch tokens", pullRequestNumber: 42, repoFullName: "acme/first" })],
+      [
+        prior({
+          fingerprint: "same patch tokens",
+          pullRequestNumber: 42,
+          repoFullName: "acme/first",
+        }),
+      ],
     );
-    const event = buildSelfPlagiarismGovernorLedgerEvent("acme/second", verdict);
+    const event = buildSelfPlagiarismGovernorLedgerEvent(
+      "acme/second",
+      verdict,
+    );
     expect(event).toMatchObject({
       eventType: "throttled",
       repoFullName: "acme/second",
@@ -395,7 +634,10 @@ describe("buildSelfPlagiarismGovernorLedgerEvent", () => {
       ],
       { similarityThreshold: 0 },
     );
-    const event = buildSelfPlagiarismGovernorLedgerEvent("acme/target", verdict);
+    const event = buildSelfPlagiarismGovernorLedgerEvent(
+      "acme/target",
+      verdict,
+    );
     expect(event.payload).toMatchObject({
       matchedPullRequestNumber: null,
       matchedIssueNumber: 7,

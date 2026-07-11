@@ -8,11 +8,6 @@
 //
 // DETECTOR ONLY — no IO, no Date.now(), no randomness. Identical inputs always yield the identical verdict.
 
-import {
-  isDuplicateClusterWinnerByClaim,
-  resolveDuplicateClusterWinnerNumber,
-  type DuplicateClaimMember,
-} from "../duplicate-winner.js";
 import type { GovernorLedgerEventType } from "../governor-ledger.js";
 
 /** Conservative default — only very similar diff fingerprints throttle (not hard-coded at call sites). */
@@ -23,9 +18,10 @@ export type SelfPlagiarismConfig = {
   similarityThreshold: number;
 };
 
-export const DEFAULT_SELF_PLAGIARISM_CONFIG: Readonly<SelfPlagiarismConfig> = Object.freeze({
-  similarityThreshold: DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD,
-});
+export const DEFAULT_SELF_PLAGIARISM_CONFIG: Readonly<SelfPlagiarismConfig> =
+  Object.freeze({
+    similarityThreshold: DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD,
+  });
 
 /** One prior submission from the miner's own history (same actor only — never cross-miner). */
 export type OwnSubmissionRecord = {
@@ -51,7 +47,8 @@ export type SelfPlagiarismVerdict = {
 };
 
 function normalizeThreshold(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD;
+  if (!Number.isFinite(value))
+    return DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD;
   return Math.min(1, Math.max(0, value));
 }
 
@@ -90,14 +87,66 @@ function submissionTimeMs(value: string | null | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function asClaimMember(record: OwnSubmissionRecord): DuplicateClaimMember {
-  const number =
-    (typeof record.pullRequestNumber === "number" && Number.isFinite(record.pullRequestNumber)
+function submissionNumber(record: OwnSubmissionRecord): number {
+  return (
+    (typeof record.pullRequestNumber === "number" &&
+    Number.isFinite(record.pullRequestNumber)
       ? record.pullRequestNumber
       : null) ??
-    (typeof record.issueNumber === "number" && Number.isFinite(record.issueNumber) ? record.issueNumber : null) ??
-    0;
-  return { number, linkedIssueClaimedAt: record.submittedAt };
+    (typeof record.issueNumber === "number" &&
+    Number.isFinite(record.issueNumber)
+      ? record.issueNumber
+      : null) ??
+    0
+  );
+}
+
+function repoTieBreaker(record: OwnSubmissionRecord): string {
+  return record.repoFullName.trim().toLowerCase();
+}
+
+function submissionPrecedesSibling(
+  candidate: OwnSubmissionRecord,
+  sibling: OwnSubmissionRecord,
+): boolean {
+  const candidateTime = submissionTimeMs(candidate.submittedAt)!;
+  const siblingTime = submissionTimeMs(sibling.submittedAt)!;
+  if (siblingTime < candidateTime) return false;
+  if (siblingTime > candidateTime) return true;
+
+  const candidateNumber = submissionNumber(candidate);
+  const siblingNumber = submissionNumber(sibling);
+  if (siblingNumber < candidateNumber) return false;
+  if (siblingNumber > candidateNumber) return true;
+
+  const candidateRepo = repoTieBreaker(candidate);
+  const siblingRepo = repoTieBreaker(sibling);
+  if (siblingRepo.length === 0 || candidateRepo.length === 0) return false;
+  return candidateRepo < siblingRepo;
+}
+
+function isSelfPlagiarismClusterWinner(
+  candidate: OwnSubmissionRecord,
+  nearDuplicates: readonly OwnSubmissionRecord[],
+): boolean {
+  return nearDuplicates.every((sibling) =>
+    submissionPrecedesSibling(candidate, sibling),
+  );
+}
+
+// Precondition: the caller (selfPlagiarismCheck) already confirmed `candidate` is NOT the outright
+// winner (isSelfPlagiarismClusterWinner returned false) before calling this -- so this only needs to
+// search nearDuplicates for a sibling that wins instead.
+function resolveSelfPlagiarismWinner(
+  candidate: OwnSubmissionRecord,
+  nearDuplicates: readonly OwnSubmissionRecord[],
+): OwnSubmissionRecord | null {
+  for (const sibling of nearDuplicates) {
+    const rest = nearDuplicates.filter((other) => other !== sibling);
+    if (isSelfPlagiarismClusterWinner(sibling, [candidate, ...rest]))
+      return sibling;
+  }
+  return null;
 }
 
 function buildVerdict(
@@ -153,7 +202,11 @@ export function selfPlagiarismCheck(
   }
 
   if (nearDuplicates.length === 0) {
-    return buildVerdict(true, "allowed", "distinct_from_recent_own_submissions");
+    return buildVerdict(
+      true,
+      "allowed",
+      "distinct_from_recent_own_submissions",
+    );
   }
 
   for (const prior of nearDuplicates) {
@@ -162,23 +215,18 @@ export function selfPlagiarismCheck(
     }
   }
 
-  const candidateMember = asClaimMember(candidateFingerprint);
-  const siblingMembers = nearDuplicates.map(asClaimMember);
-  if (isDuplicateClusterWinnerByClaim(candidateMember, siblingMembers)) {
+  if (isSelfPlagiarismClusterWinner(candidateFingerprint, nearDuplicates)) {
     return buildVerdict(true, "allowed", "earliest_near_duplicate_claimant");
   }
 
-  const winner =
-    resolveDuplicateClusterWinnerNumber(candidateMember, siblingMembers) ??
-    bestMatch?.pullRequestNumber ??
-    bestMatch?.issueNumber ??
-    null;
+  const winner = resolveSelfPlagiarismWinner(
+    candidateFingerprint,
+    nearDuplicates,
+  );
   const matched =
-    bestMatch ??
-    nearDuplicates.find(
-      (prior) => prior.pullRequestNumber === winner || prior.issueNumber === winner,
-    ) ??
-    nearDuplicates[0]!;
+    winner && winner !== candidateFingerprint
+      ? winner
+      : (bestMatch ?? nearDuplicates[0]!);
 
   const matchedPrint = normalizeFingerprint(matched.fingerprint)!;
   return buildVerdict(
@@ -186,7 +234,9 @@ export function selfPlagiarismCheck(
     "throttled",
     "near_duplicate_self_plagiarism",
     matched,
-    bestSimilarity > 0 ? bestSimilarity : fingerprintSimilarity(candidatePrint, matchedPrint),
+    bestSimilarity > 0
+      ? bestSimilarity
+      : fingerprintSimilarity(candidatePrint, matchedPrint),
   );
 }
 
@@ -207,7 +257,11 @@ export function buildSelfPlagiarismGovernorLedgerEvent(
     eventType: verdict.eventType,
     repoFullName,
     actionClass: "open_pr",
-    decision: verdict.allowed ? "allow" : verdict.eventType === "throttled" ? "throttle" : "deny",
+    decision: verdict.allowed
+      ? "allow"
+      : verdict.eventType === "throttled"
+        ? "throttle"
+        : "deny",
     reason: verdict.reason,
     payload: matched
       ? {
@@ -222,8 +276,11 @@ export function buildSelfPlagiarismGovernorLedgerEvent(
 }
 
 /** Normalize a miner-goal-spec selfPlagiarism block (or bare threshold number) into engine config. */
-export function resolveSelfPlagiarismConfig(raw: unknown): SelfPlagiarismConfig {
-  if (raw === undefined || raw === null) return { ...DEFAULT_SELF_PLAGIARISM_CONFIG };
+export function resolveSelfPlagiarismConfig(
+  raw: unknown,
+): SelfPlagiarismConfig {
+  if (raw === undefined || raw === null)
+    return { ...DEFAULT_SELF_PLAGIARISM_CONFIG };
   if (typeof raw === "number") {
     return { similarityThreshold: normalizeThreshold(raw) };
   }
