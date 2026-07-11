@@ -26,9 +26,8 @@ import type {
   WeeklyValueReport,
 } from "../types";
 import { computeFleetAnalytics, type FleetAnalytics } from "../orb/analytics";
-import { computeAgentHealth, type AgentHealth } from "../review/ops";
+import { computeAgentHealth, computeCalibration, type AgentHealth, type Calibration } from "../review/ops";
 import { computeGateEval, type GateEvalReport } from "../review/parity";
-import { computeCalibration, type Calibration } from "../review/ops";
 import { computeCycleTimeAggregate, type CycleTimeAggregate } from "../review/stats";
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
@@ -97,6 +96,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     fleetMetrics,
     gateEval,
     cycleTime,
+    calibration,
     agentHealth,
   ] = await Promise.all([
     listRepositories(env),
