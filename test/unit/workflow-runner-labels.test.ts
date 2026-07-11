@@ -17,7 +17,7 @@ describe("workflow runner labels", () => {
     expect(workflow).not.toContain("|| 'self-hosted'");
     expect(workflow).not.toContain('"fork-ci"');
     expect(workflow).toContain("validate-code:");
-    expect(workflow).toContain("needs: [changes, validate-code, security]");
+    expect(workflow).toContain("needs: [changes, validate-code, validate-tests, security]");
     expect(workflow).not.toContain("\n  lint:\n");
     expect(workflow).not.toContain("\n  test:\n");
     expect(workflow).not.toContain("\n  workers:\n");
@@ -27,8 +27,12 @@ describe("workflow runner labels", () => {
 
     const changesJob = workflow.slice(workflow.indexOf("\n  changes:\n"), workflow.indexOf("\n  validate-code:\n"));
     expect(changesJob).toContain("runs-on: ubuntu-latest");
-    const validateCodeJob = workflow.slice(workflow.indexOf("\n  validate-code:\n"), workflow.indexOf("\n  security:\n"));
+    const validateCodeJob = workflow.slice(workflow.indexOf("\n  validate-code:\n"), workflow.indexOf("\n  validate-tests:\n"));
     expect(validateCodeJob).toContain("runs-on: ubuntu-latest");
+    // validate-tests (#ci-shard-coverage) is the matrix-sharded full-suite coverage run, split out of
+    // validate-code so the dominant ~9-10min step no longer serializes with the much-faster checks.
+    const validateTestsJob = workflow.slice(workflow.indexOf("\n  validate-tests:\n"), workflow.indexOf("\n  security:\n"));
+    expect(validateTestsJob).toContain("runs-on: ubuntu-latest");
     const securityJob = workflow.slice(workflow.indexOf("\n  security:\n"), workflow.indexOf("\n  validate:\n"));
     expect(securityJob).toContain("runs-on: ubuntu-latest");
     const validateJob = workflow.slice(workflow.indexOf("\n  validate:\n"));

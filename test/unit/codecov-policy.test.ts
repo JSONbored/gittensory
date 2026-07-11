@@ -36,8 +36,11 @@ describe("Codecov policy", () => {
 
   it("fails closed when the backend coverage report is missing or cannot upload", () => {
     const workflow = readYaml(".github/workflows/ci.yml");
-    const validateCode = nestedRecord(workflow, ["jobs", "validate-code"]);
-    const steps = recordArray(validateCode.steps, "jobs.validate-code.steps");
+    // The full-suite coverage run (and its Codecov uploads) lives in validate-tests, sharded out of
+    // validate-code (#ci-shard-coverage) so the ~9-10min run no longer serializes with the much-faster
+    // drift/typecheck/build checks that stayed behind in validate-code.
+    const validateTests = nestedRecord(workflow, ["jobs", "validate-tests"]);
+    const steps = recordArray(validateTests.steps, "jobs.validate-tests.steps");
 
     const stepNames = steps.map((step) => step.name);
     const verifyIndex = stepNames.indexOf("Verify coverage report exists");
@@ -52,10 +55,11 @@ describe("Codecov policy", () => {
     const coverageUpload = steps[coverageUploadIndex]!;
     const testResultsUpload = steps[testResultsUploadIndex]!;
 
-    // Verify must run whenever coverage was generated at all (push or backend==true) -- it deliberately
-    // does NOT exclude forks, since both the trusted and the tokenless fork upload path below it need
-    // the report to exist first.
-    expect(String(verifyStep.if)).toBe("${{ success() && (github.event_name == 'push' || needs.changes.outputs.backend == 'true') }}");
+    // Verify must run whenever coverage was generated at all -- the job's own top-level `if:` (push or
+    // backend==true) already gates the whole matrix, so the step itself only needs `success()`. It
+    // deliberately does NOT exclude forks, since both the trusted and the tokenless fork upload path
+    // below it need the report to exist first.
+    expect(String(verifyStep.if)).toBe("${{ success() }}");
     expect(String(coverageUpload.if)).toContain(String(verifyStep.if).replace(/^\$\{\{\s*|\s*\}\}$/g, ""));
     expect(String(verifyStep.run)).toContain("coverage/lcov.info is missing or empty");
     expect(String(verifyStep.run)).toContain("exit 1");
@@ -79,8 +83,8 @@ describe("Codecov policy", () => {
     // (public repos only) closes that gap with a single, synchronous, same-job upload: no separate
     // workflow, no artifact staging, no fork-authored attribution data to trust or validate.
     const workflow = readYaml(".github/workflows/ci.yml");
-    const validateCode = nestedRecord(workflow, ["jobs", "validate-code"]);
-    const steps = recordArray(validateCode.steps, "jobs.validate-code.steps");
+    const validateTests = nestedRecord(workflow, ["jobs", "validate-tests"]);
+    const steps = recordArray(validateTests.steps, "jobs.validate-tests.steps");
 
     const verifyStep = steps.find((step) => step.name === "Verify coverage report exists");
     expect(verifyStep).toBeDefined();
