@@ -2,7 +2,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Each test here does 10-15+ real `git`/`bash` subprocess spawns (init, commit, push, clone, fetch, plus
+// the script-under-test's own git calls) -- the heaviest subprocess user of any file in the suite. That's
+// near-instant in isolation but can occasionally exceed the global 15s testTimeout under full-suite
+// parallel load (many concurrent worker processes contending for CPU), producing a spurious timeout rather
+// than a real failure. Raise this file's own timeout well above what real contention should ever cost.
+vi.setConfig({ testTimeout: 60_000 });
 
 // Real end-to-end execution of scripts/selfhost-update.sh (#1660) against a throwaway git remote,
 // with deploy-selfhost-prebuilt.sh and selfhost-post-update-check.sh replaced by stubs that just
