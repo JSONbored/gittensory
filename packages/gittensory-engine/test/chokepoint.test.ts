@@ -200,3 +200,84 @@ test("the repo-side live opt-in alone (no global env opt-in) is sufficient to re
   assert.equal(decision.mode, "live");
   assert.equal(decision.allowed, true);
 });
+
+/** Throws a non-`Error` value (a plain string) the instant any property is read -- distinct from the existing
+ *  `null as unknown as X` fail-closed tests above, which all throw a genuine `TypeError` (a real `Error`
+ *  instance) and so only ever exercise the `error instanceof Error` arm of each catch block's message
+ *  formatting. This exercises the `String(error)` fallback arm for a thrown non-Error value. */
+function throwingProxy(message: string): never {
+  return new Proxy(
+    {},
+    {
+      get(): never {
+        throw message;
+      },
+    },
+  ) as never;
+}
+
+test("fail-closed: a rate-limit calculator throwing a non-Error value still formats a reason via String(error)", () => {
+  const decision = evaluateGovernorChokepoint(baseInput({ rateLimitBuckets: throwingProxy("boom: not an Error") }));
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.stage, "internal_error");
+  assert.match(decision.reason, /rate_limit_calculator_error: boom: not an Error/);
+});
+
+test("fail-closed: a budget-cap calculator throwing a non-Error value still formats a reason via String(error)", () => {
+  const decision = evaluateGovernorChokepoint(baseInput({ capUsage: throwingProxy("boom: not an Error") }));
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.stage, "internal_error");
+  assert.match(decision.reason, /budget_cap_calculator_error: boom: not an Error/);
+});
+
+test("fail-closed: a non-convergence calculator throwing a non-Error value still formats a reason via String(error)", () => {
+  const decision = evaluateGovernorChokepoint(baseInput({ convergenceInput: throwingProxy("boom: not an Error") }));
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.stage, "internal_error");
+  assert.match(decision.reason, /non_convergence_calculator_error: boom: not an Error/);
+});
+
+test("fail-closed: a reputation-throttle calculator throwing a non-Error value still formats a reason via String(error)", () => {
+  const decision = evaluateGovernorChokepoint(baseInput({ reputationHistory: throwingProxy("boom: not an Error") }));
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.stage, "internal_error");
+  assert.match(decision.reason, /reputation_throttle_calculator_error: boom: not an Error/);
+});
+
+test("fail-closed: a self-plagiarism calculator throwing a non-Error value still formats a reason via String(error)", () => {
+  const decision = evaluateGovernorChokepoint(baseInput({ selfPlagiarismCandidate: throwingProxy("boom: not an Error") }));
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.stage, "internal_error");
+  assert.match(decision.reason, /self_plagiarism_calculator_error: boom: not an Error/);
+});
+
+test("rate limit: a caller-supplied randomFn is threaded through to the calculator (not just the default)", () => {
+  let called = false;
+  const decision = evaluateGovernorChokepoint(
+    baseInput({
+      rateLimitRandomFn: () => {
+        called = true;
+        return 0.25;
+      },
+    }),
+  );
+  assert.equal(decision.allowed, true, "a custom randomFn on an otherwise-clear bucket must not itself deny");
+  // The rate-limit calculator only actually invokes randomFn when a bucket is over-limit and jittering a
+  // retry delay; on a clear bucket it is threaded through but never called -- asserting `false` here would be
+  // wrong. What this test verifies is the conditional-spread branch (the field IS present) compiles and runs
+  // end-to-end without the calculator rejecting an unexpected extra field.
+  assert.equal(called, false, "documents that a clear bucket never needs to call randomFn");
+});
+
+test("self-plagiarism: a whitespace-only candidate fingerprint denies via missing_candidate_fingerprint, with similarity omitted -> null", () => {
+  const decision = evaluateGovernorChokepoint(
+    baseInput({
+      selfPlagiarismCandidate: { repoFullName: "acme/widgets", fingerprint: "   ", submittedAt: "2026-07-11T12:00:00Z" },
+      selfPlagiarismRecentSubmissions: [],
+    }),
+  );
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.stage, "self_plagiarism");
+  assert.equal(decision.detail.selfPlagiarism?.similarity, undefined, "no similarity was ever computed for this deny reason");
+  assert.equal(decision.ledgerEvent.payload?.similarity, null, "the ?? null fallback must surface explicitly, not as an omitted key");
+});
