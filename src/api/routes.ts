@@ -3343,7 +3343,18 @@ export function createApp() {
     const auth = c.req.header("authorization") ?? "";
     const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
-    const enrollment = await validateOrbRelayEnrollment(c.env, secret);
+    // #4995: validateOrbRelayEnrollment/registerValidatedOrbRelay both touch the DB directly (no error handling
+    // of their own) — an unhandled D1/Postgres error here previously escaped as a bare framework 500 instead of
+    // a clean 503, the same class of gap #orb-broker-500 already fixed for /v1/orb/token's own DB-touching call.
+    // `.catch(...)` on just the two DB-touching calls (rather than wrapping the whole handler in try/catch) so a
+    // genuine broker_error is reported without disturbing every other line's indentation/coverage.
+    const dbBrokerError = (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ level: "error", event: "orb_relay_register_failed", message: message.slice(0, 200) }));
+      return null;
+    };
+    const enrollment = await validateOrbRelayEnrollment(c.env, secret).catch(dbBrokerError);
+    if (enrollment === null) return c.json({ error: "broker_error" }, 503);
     if ("error" in enrollment) return c.json(enrollment, enrollment.error === "invalid_enrollment" ? 401 : 403);
     const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
     if (rawBody === null) return c.json({ error: "payload_too_large" }, 413);
@@ -3358,7 +3369,8 @@ export function createApp() {
     if (mode === null) return c.json({ error: "invalid_mode" }, 400);
     const relayUrl = typeof body?.relayUrl === "string" ? body.relayUrl.trim() : "";
     if (mode === "push" && !relayUrl) return c.json({ error: "missing_relay_url" }, 400);
-    const result = await registerValidatedOrbRelay(c.env, enrollment, secret, relayUrl, mode);
+    const result = await registerValidatedOrbRelay(c.env, enrollment, secret, relayUrl, mode).catch(dbBrokerError);
+    if (result === null) return c.json({ error: "broker_error" }, 503);
     if ("error" in result) {
       const status = result.error === "invalid_enrollment" ? 401 : result.error === "installation_not_eligible" ? 403 : result.error === "encryption_unavailable" ? 500 : 400;
       return c.json(result, status);
@@ -3375,7 +3387,19 @@ export function createApp() {
     const auth = c.req.header("authorization") ?? "";
     const secret = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     if (!secret) return c.json({ error: "missing_enrollment_secret" }, 401);
-    const enrollment = await validateOrbRelayEnrollment(c.env, secret);
+    // #4995 (GITTENSORY-1C, orb_relay_drain_http_500): validateOrbRelayEnrollment/pullRelayPending both touch
+    // the DB directly (prune/delete/select, no error handling of their own) — an unhandled D1/Postgres error
+    // here previously escaped as a bare framework 500, which is exactly what the drain client saw repeatedly in
+    // production. The drain client's own in-flight guard and matched poll/request timeout (src/server.ts) were
+    // already correct; the gap was entirely server-side. Same `.catch(...)`-on-the-DB-call shape as the sibling
+    // /v1/orb/relay/register fix above, for the same reason.
+    const dbBrokerError = (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ level: "error", event: "orb_relay_pull_failed", message: message.slice(0, 200) }));
+      return null;
+    };
+    const enrollment = await validateOrbRelayEnrollment(c.env, secret).catch(dbBrokerError);
+    if (enrollment === null) return c.json({ error: "broker_error" }, 503);
     if ("error" in enrollment) return c.json(enrollment, enrollment.error === "invalid_enrollment" ? 401 : 403);
     const rawBody = await readOrbRelayRegisterBody(c.req.raw, c.req.header("content-length"));
     if (rawBody === null) return c.json({ error: "payload_too_large" }, 413);
@@ -3386,7 +3410,8 @@ export function createApp() {
     } catch {
       ack = undefined; // tolerate an empty/invalid body — just no ack this round
     }
-    const events = await pullRelayPending(c.env, enrollment.installationId, { ack });
+    const events = await pullRelayPending(c.env, enrollment.installationId, { ack }).catch(dbBrokerError);
+    if (events === null) return c.json({ error: "broker_error" }, 503);
     return c.json({ events }, 200);
   });
 

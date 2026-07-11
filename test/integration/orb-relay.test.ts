@@ -113,6 +113,48 @@ describe("POST /v1/orb/relay/register", () => {
     expect(res.status).toBe(401);
     expect(bodyAccesses).toBe(0);
   });
+
+  it("REGRESSION (#4995, same class of gap as GITTENSORY-1C): a DB error inside registerValidatedOrbRelay returns a clean 503 broker_error instead of an unhandled framework 500", async () => {
+    const e = brokeredEnv();
+    const secret = await enroll(e, 8506);
+    const realPrepare = db(e).prepare.bind(db(e));
+    db(e).prepare = ((sql: string) => {
+      const statement = realPrepare(sql);
+      if (!/orb_enrollments/i.test(sql)) return statement;
+      return {
+        ...statement,
+        bind(...values: unknown[]) {
+          const bound = statement.bind(...(values as never[]));
+          // Rejects with a non-Error value (not `new Error(...)`) so this also exercises dbBrokerError's
+          // `String(error)` fallback branch, not just its `error instanceof Error` branch.
+          return { ...bound, run: () => Promise.reject("db unavailable") };
+        },
+      };
+    }) as typeof realPrepare;
+    const res = await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: `Bearer ${secret}` }, body: JSON.stringify({ relayUrl: "https://x.example/relay" }) }, e);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "broker_error" });
+  });
+
+  it("REGRESSION (#4995): a DB error inside validateOrbRelayEnrollment's own lookup ALSO returns a clean 503 broker_error, not a framework 500 (the earlier of the two DB-touching calls in this handler)", async () => {
+    const e = brokeredEnv();
+    const secret = await enroll(e, 8507);
+    const realPrepare = db(e).prepare.bind(db(e));
+    db(e).prepare = ((sql: string) => {
+      const statement = realPrepare(sql);
+      if (!/select .* from ["`]?orb_enrollments["`]?/i.test(sql)) return statement;
+      return {
+        ...statement,
+        bind(...values: unknown[]) {
+          const bound = statement.bind(...(values as never[]));
+          return { ...bound, first: () => Promise.reject(new Error("db unavailable")) };
+        },
+      };
+    }) as typeof realPrepare;
+    const res = await app.request("/v1/orb/relay/register", { method: "POST", headers: { authorization: `Bearer ${secret}` }, body: JSON.stringify({ relayUrl: "https://x.example/relay" }) }, e);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "broker_error" });
+  });
 });
 
 describe("readOrbRelayRegisterBody", () => {
@@ -977,5 +1019,47 @@ describe("POST /v1/orb/relay/pull", () => {
     const bad = await app.request("/v1/orb/relay/pull", { method: "POST", headers: { authorization: `Bearer ${secret}` }, body: "{not json" }, e); // unparseable → catch
     expect(bad.status).toBe(200);
     expect(await bad.json()).toEqual({ events: [{ deliveryId: "keep-1", eventName: "pull_request", rawBody: "{}" }] });
+  });
+
+  it("REGRESSION (#4995, GITTENSORY-1C): a DB error inside pullRelayPending returns a clean 503 broker_error instead of an unhandled framework 500", async () => {
+    const e = brokeredEnv();
+    const secret = await enroll(e, 8505);
+    const realPrepare = db(e).prepare.bind(db(e));
+    db(e).prepare = ((sql: string) => {
+      const statement = realPrepare(sql);
+      if (!/orb_relay_pending/i.test(sql)) return statement;
+      return {
+        ...statement,
+        bind(...values: unknown[]) {
+          const bound = statement.bind(...(values as never[]));
+          // Rejects with a non-Error value (not `new Error(...)`) so this also exercises dbBrokerError's
+          // `String(error)` fallback branch, not just its `error instanceof Error` branch.
+          return { ...bound, all: () => Promise.reject("db unavailable"), run: () => Promise.reject("db unavailable") };
+        },
+      };
+    }) as typeof realPrepare;
+    const res = await app.request("/v1/orb/relay/pull", { method: "POST", headers: { authorization: `Bearer ${secret}` } }, e);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "broker_error" });
+  });
+
+  it("REGRESSION (#4995): a DB error inside validateOrbRelayEnrollment's own lookup ALSO returns a clean 503 broker_error, not a framework 500 (the earlier of the two DB-touching calls in this handler)", async () => {
+    const e = brokeredEnv();
+    const secret = await enroll(e, 8508);
+    const realPrepare = db(e).prepare.bind(db(e));
+    db(e).prepare = ((sql: string) => {
+      const statement = realPrepare(sql);
+      if (!/select .* from ["`]?orb_enrollments["`]?/i.test(sql)) return statement;
+      return {
+        ...statement,
+        bind(...values: unknown[]) {
+          const bound = statement.bind(...(values as never[]));
+          return { ...bound, first: () => Promise.reject(new Error("db unavailable")) };
+        },
+      };
+    }) as typeof realPrepare;
+    const res = await app.request("/v1/orb/relay/pull", { method: "POST", headers: { authorization: `Bearer ${secret}` } }, e);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "broker_error" });
   });
 });
