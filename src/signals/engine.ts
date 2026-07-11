@@ -20,7 +20,7 @@ import type {
   ScoringModelSnapshotRecord,
 } from "../types";
 import type { PublicContributorProfile } from "../github/public";
-import { gittensoryFooter, gittensorRepoEarnUrl, type GittensoryFooterEnv } from "../github/footer";
+import { commandReferenceUrl, gittensoryFooter, gittensorRepoEarnUrl, type GittensoryFooterEnv } from "../github/footer";
 import type { FocusManifestReviewConfig, ReviewFieldKey } from "./focus-manifest";
 import type { GittensorContributorSnapshot } from "../gittensor/api";
 import { nowIso } from "../utils/json";
@@ -4154,6 +4154,10 @@ type PublicSafeCollapsibleArgs = {
    *  resolveConvergedFeature("e2eTests") check the checkbox itself is gated on) -- controls whether the
    *  collapsible below points the reader at the checkbox, or just states the gap with no next step. */
   e2eTestGenAvailable?: boolean | undefined;
+  /** #5078: resolved by the caller from `env.PUBLIC_SITE_ORIGIN`, same as `buildPublicPrIntelligenceComment`'s
+   *  own `env` param -- lets the "[BETA] Chat with Gittensory" collapsible link to a self-hoster's own
+   *  command-reference doc page instead of always the canonical gittensory.aethereal.dev. */
+  env: GittensoryFooterEnv;
 };
 
 /** "Signal definitions" body — a static legend for the readiness signals. No inputs. */
@@ -4181,6 +4185,28 @@ function testCoverageBody(args: PublicSafeCollapsibleArgs): string[] {
   return [
     `- ${args.missingTestsFinding.detail}`,
     "- Check the box below to generate an AI Playwright test for this PR, or comment `@gittensory generate-tests`.",
+  ];
+}
+
+/** "[BETA] Chat with Gittensory" body (#5078) — empty (thus invisible, same convention as "Test coverage"
+ *  above) unless `chatQa` or `intentRouting` is enabled for this repo, so a repo that hasn't opted into
+ *  either capability never advertises a command that would just decline. Descriptions are byte-identical
+ *  to `@gittensory help`'s own listing (helpSections in github/commands.ts) so the two surfaces never
+ *  describe the same commands differently. */
+function chatBetaBody(args: PublicSafeCollapsibleArgs): string[] {
+  const chatQaEnabled = args.settings.advisoryAiRouting?.chatQa === true;
+  const intentRoutingEnabled = args.settings.advisoryAiRouting?.intentRouting === true;
+  if (!chatQaEnabled && !intentRoutingEnabled) return [];
+  return [
+    "Ask Gittensory a question about this PR directly in a comment — grounded only in the same cached, public-safe facts shown above, never a new claim.",
+    "",
+    "- `@gittensory ask <question>` answers contribution-quality Q&A with source citations and freshness.",
+    "- `@gittensory chat <question>` answers in natural prose from cached decision-pack facts via local inference (maintainer/collaborator; read-only).",
+    ...(intentRoutingEnabled
+      ? ["- A plain-language `@gittensory` mention with a real question is routed to the closest matching read-only command automatically -- no exact syntax required."]
+      : []),
+    "",
+    `Full command reference: ${commandReferenceUrl(args.env)}`,
   ];
 }
 
@@ -4227,9 +4253,11 @@ export function buildPublicSafeCollapsibles(args: PublicSafeCollapsibleArgs): Un
     { title: "Review context", body: reviewContextBody(args).join("\n") },
     { title: "Contributor next steps", body: contributorNextStepsBody(publicSafeNextSteps(args)).join("\n") },
     { title: "Signal definitions", body: signalDefinitionsBody().join("\n") },
-    // #4589: last, after Signal definitions -- empty (thus invisible, per the caller's empty-body skip) unless
+    // #4589: after Signal definitions -- empty (thus invisible, per the caller's empty-body skip) unless
     // there's an actual coverage gap AND the generate-tests checkbox is available for this repo.
     { title: "Test coverage", body: testCoverageBody(args).join("\n") },
+    // #5078: last -- empty (thus invisible) unless chatQa or intentRouting is enabled for this repo.
+    { title: "[BETA] Chat with Gittensory", body: chatBetaBody(args).join("\n") },
   ];
 }
 

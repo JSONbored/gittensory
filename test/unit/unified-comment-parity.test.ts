@@ -10,6 +10,7 @@ import {
   detectGittensorContributor,
 } from "../../src/signals/engine";
 import { buildUnifiedCommentBody } from "../../src/review/unified-comment-bridge";
+import { GITTENSORY_SITE_URL } from "../../src/github/footer";
 import type { GateCheckEvaluation } from "../../src/rules/advisory";
 import type { IssueRecord, PullRequestRecord, RepositoryRecord, RepositorySettings } from "../../src/types";
 
@@ -119,7 +120,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
       reviewerCount: aiReview.reviewerCount,
       footerMarkdown: "💰 Earn for open-source contributions like this. Checked by Gittensory.",
       reRunLabel: "gittensory-pr-panel:retrigger Re-run Gittensory review",
-      extraCollapsibles: buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth }),
+      extraCollapsibles: buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {} }),
     });
 
     // The three public-safe sections the legacy panel carried must survive into the converged comment.
@@ -132,15 +133,19 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     expect(body).not.toContain("Maintainer notes");
     // #4589: no coverage gap was supplied here, so "Test coverage" stays an empty (thus invisible) collapsible.
     expect(body).not.toContain("Test coverage");
+    // #5078: advisoryAiRouting isn't set in the base `settings` fixture, so the beta chat collapsible stays empty too.
+    expect(body).not.toContain("[BETA] Chat with Gittensory");
   });
 
   it("never includes a duplicate AI 'Review details' collapsible", () => {
     const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
-    const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth });
-    // #4589: "Test coverage" is always present (title-wise) after Signal definitions, but its body is empty
-    // (thus invisible when rendered) whenever missingTestsFinding/e2eTestGenAvailable aren't supplied, as here.
-    expect(collapsibles.map((section) => section.title)).toEqual(["Review context", "Contributor next steps", "Signal definitions", "Test coverage"]);
+    const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {} });
+    // #4589/#5078: "Test coverage" and "[BETA] Chat with Gittensory" are always present (title-wise) after
+    // Signal definitions, but their bodies are empty (thus invisible when rendered) whenever their respective
+    // gating inputs aren't supplied, as here.
+    expect(collapsibles.map((section) => section.title)).toEqual(["Review context", "Contributor next steps", "Signal definitions", "Test coverage", "[BETA] Chat with Gittensory"]);
     expect(collapsibles.find((section) => section.title === "Test coverage")?.body).toBe("");
+    expect(collapsibles.find((section) => section.title === "[BETA] Chat with Gittensory")?.body).toBe("");
     expect(collapsibles.map((section) => section.title)).not.toContain("Review details");
     // No section may carry the private maintainer-notes content.
     expect(collapsibles.map((section) => section.title)).not.toContain("Maintainer notes");
@@ -151,7 +156,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
     const aiReview = { notes: "Looks reasonable. Add a regression test for reconnect.", reviewerCount: 2 };
     const legacy = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, aiReview });
-    const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth });
+    const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {} });
 
     // Each shared collapsible body's individual lines must appear verbatim in the legacy panel so the two
     // renderers can never diverge on the public-safe content.
@@ -179,7 +184,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     it("renders the gap detail + a pointer to the checkbox when a coverage gap exists AND e2eTests is available", () => {
       const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
       const collapsibles = buildPublicSafeCollapsibles({
-        repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth,
+        repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {},
         missingTestsFinding: { detail: "No changed test files or passing validation evidence were detected for this PR." },
         e2eTestGenAvailable: true,
       });
@@ -192,7 +197,7 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     it("stays empty when a coverage gap exists but e2eTests is NOT available for this repo", () => {
       const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
       const collapsibles = buildPublicSafeCollapsibles({
-        repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth,
+        repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {},
         missingTestsFinding: { detail: "No changed test files or passing validation evidence were detected for this PR." },
         e2eTestGenAvailable: false,
       });
@@ -202,10 +207,55 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     it("stays empty when e2eTests is available but there is no coverage gap to report", () => {
       const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
       const collapsibles = buildPublicSafeCollapsibles({
-        repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth,
+        repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {},
         e2eTestGenAvailable: true,
       });
       expect(collapsibles.find((section) => section.title === "Test coverage")?.body).toBe("");
+    });
+  });
+
+  // #5078: the "[BETA] Chat with Gittensory" collapsible points readers at the ask/chat commands -- empty
+  // (thus invisible) unless the repo has opted into chatQa or intentRouting, mirroring #4589's own
+  // "never mention a command that would bounce" principle.
+  describe("[BETA] Chat with Gittensory collapsible (#5078)", () => {
+    const advisoryAiRoutingAllOff = {
+      slop: false, e2eTestGen: false, planner: false, summaries: false,
+      chatQa: false, chatQaFrontierFallback: false, intentRouting: false,
+    };
+
+    it("stays empty when neither chatQa nor intentRouting is enabled", () => {
+      const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
+      const collapsibles = buildPublicSafeCollapsibles({
+        repo, pr: currentPr, profile, detection, collisions, preflight, queueHealth, env: {},
+        settings: { ...settings, advisoryAiRouting: advisoryAiRoutingAllOff },
+      });
+      expect(collapsibles.find((section) => section.title === "[BETA] Chat with Gittensory")?.body).toBe("");
+    });
+
+    it("renders ask/chat usage + the docs link when chatQa is enabled", () => {
+      const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
+      const collapsibles = buildPublicSafeCollapsibles({
+        repo, pr: currentPr, profile, detection, collisions, preflight, queueHealth,
+        env: { PUBLIC_SITE_ORIGIN: "https://example-selfhost.test" },
+        settings: { ...settings, advisoryAiRouting: { ...advisoryAiRoutingAllOff, chatQa: true } },
+      });
+      const beta = collapsibles.find((section) => section.title === "[BETA] Chat with Gittensory");
+      expect(beta?.body).toContain("`@gittensory ask <question>`");
+      expect(beta?.body).toContain("`@gittensory chat <question>`");
+      expect(beta?.body).toContain("https://example-selfhost.test/docs/gittensory-commands");
+      // Intent routing is off in this fixture, so its plain-language line must not appear.
+      expect(beta?.body).not.toContain("Plain-language");
+    });
+
+    it("renders + mentions plain-language routing when intentRouting is enabled, even with chatQa off", () => {
+      const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
+      const collapsibles = buildPublicSafeCollapsibles({
+        repo, pr: currentPr, profile, detection, collisions, preflight, queueHealth, env: {},
+        settings: { ...settings, advisoryAiRouting: { ...advisoryAiRoutingAllOff, intentRouting: true } },
+      });
+      const beta = collapsibles.find((section) => section.title === "[BETA] Chat with Gittensory");
+      expect(beta?.body).toContain("routed to the closest matching read-only command");
+      expect(beta?.body).toContain(GITTENSORY_SITE_URL);
     });
   });
 });

@@ -4,7 +4,7 @@ import {
   suggestCommand as suggestCommandFromCatalog,
   type CommandSuggestCatalog,
 } from "./command-suggest";
-import { gittensoryFooter, GITTENSORY_SITE_URL, type GittensoryFooterEnv } from "./footer";
+import { commandReferenceUrl, gittensoryFooter, type GittensoryFooterEnv } from "./footer";
 import type { AgentRunBundle } from "../services/agent-orchestrator";
 import type { ChatQaResult } from "../services/ai-chat-qa";
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
@@ -928,20 +928,6 @@ function actionCommandHelpSections(): string[] {
       (command) => `- \`@gittensory ${command.id}\` ${sanitizePublicComment(command.description)}`,
     ),
   ];
-}
-
-/** The public command-reference doc link for `@gittensory help` (#4670). `new URL(path, origin)` -- same
- *  idiom as the sibling `maintainerControlPanelUrl` in footer.ts -- so a `PUBLIC_SITE_ORIGIN` with or
- *  without a trailing slash both resolve correctly instead of risking a double slash from naive
- *  concatenation. Falls back to the literal path string only if origin resolution itself throws (an
- *  operator-misconfigured PUBLIC_SITE_ORIGIN should degrade the link, not crash comment rendering). */
-function commandReferenceUrl(env: GittensoryFooterEnv): string {
-  const origin = env.PUBLIC_SITE_ORIGIN ?? GITTENSORY_SITE_URL;
-  try {
-    return new URL("/docs/gittensory-commands", origin).toString();
-  } catch {
-    return `${GITTENSORY_SITE_URL}/docs/gittensory-commands`;
-  }
 }
 
 function helpSections(env: GittensoryFooterEnv, unknownVerb?: string | undefined): string[] {

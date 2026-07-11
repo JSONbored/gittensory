@@ -33,6 +33,23 @@ export function maintainerControlPanelUrl(env: { PUBLIC_SITE_ORIGIN?: string | u
     return null;
   }
 }
+/** The public command-reference doc link for `@gittensory help` (#4670) and the "[BETA] Chat with
+ *  Gittensory" public-safe collapsible (#5078). Lives here (not commands.ts/engine.ts) so both can import
+ *  the SAME resolved URL without a circular module edge -- commands.ts already imports from signals/engine.ts,
+ *  so engine.ts importing back from commands.ts would cycle. `new URL(path, origin)` -- same idiom as the
+ *  sibling `maintainerControlPanelUrl` above -- so a `PUBLIC_SITE_ORIGIN` with or without a trailing slash
+ *  both resolve correctly instead of risking a double slash from naive concatenation. Falls back to the
+ *  literal path string only if origin resolution itself throws (an operator-misconfigured PUBLIC_SITE_ORIGIN
+ *  should degrade the link, not crash comment rendering). */
+export function commandReferenceUrl(env: GittensoryFooterEnv): string {
+  const origin = env.PUBLIC_SITE_ORIGIN ?? GITTENSORY_SITE_URL;
+  try {
+    return new URL("/docs/gittensory-commands", origin).toString();
+  } catch {
+    return `${GITTENSORY_SITE_URL}/docs/gittensory-commands`;
+  }
+}
+
 /** The Gittensor network — where GitHub contributors register to earn for their contributions. */
 export const GITTENSOR_HOME_URL = "https://gittensor.io";
 

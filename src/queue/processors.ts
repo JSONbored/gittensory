@@ -10022,6 +10022,7 @@ async function maybePublishPrPublicSurface(
           // function's own e2eTestGenAvailable const), rather than a second detection pass.
           ...(missingTestsFinding !== undefined ? { missingTestsFinding } : {}),
           e2eTestGenAvailable,
+          env,
         }),
         footerMarkdown: gittensoryFooter(env, {
           earnUrl: repo?.isRegistered
