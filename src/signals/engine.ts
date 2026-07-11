@@ -39,6 +39,7 @@ import { isAgentConfigured } from "../settings/autonomy";
 import { diffFilePriority } from "../review/review-diff";
 import type { ImprovementBand, StructuralImprovementAssessment } from "./improvement";
 import type { ImprovementMagnitude } from "../services/ai-review";
+import type { SlopBand } from "./slop";
 
 export type ParticipationLane = "direct_pr" | "issue_discovery" | "split" | "inactive" | "unknown";
 export type SignalFinding = AdvisoryFinding;
@@ -4305,6 +4306,13 @@ export function buildPublicPrIntelligenceComment(args: {
    *  `resolveConvergedFeature(env, manifest, "improvementSignal", repoFullName)` resolving false for the repo,
    *  or a caller that hasn't wired this yet. */
   improvementSignal?: StructuralImprovementAssessment | undefined;
+  /** The existing deterministic slop-risk band (#4745, sub-issue H of epic #4737), pre-computed by the
+   *  caller via `buildSlopAssessment` and passed through exactly like `improvementSignal` above is a
+   *  pre-computed result, not a raw input. Threaded into the Improvement row (when present) as the risk
+   *  half of the risk × value quadrant label -- see `formatRiskValueQuadrant`. Absent (every existing
+   *  caller today, and any repo where `shouldCollectSlopEvidence` resolves false this pass) ⇒ no quadrant
+   *  text is added, matching this epic's "degrade cleanly, never fabricate a reading" convention. */
+  slopBand?: SlopBand | undefined;
   /** Resolved by the caller from `env.PUBLIC_SITE_ORIGIN` so a self-hoster's own domain reaches the
    *  always-on footer's attribution link instead of `GITTENSORY_SITE_URL` (#4613). */
   env: GittensoryFooterEnv;
@@ -4429,7 +4437,7 @@ export function buildPublicPrIntelligenceComment(args: {
   // Improvement row (#4744): combines the deterministic tier (#4742) + LLM tier (#4743). `improvementRow` is
   // null (row omitted entirely) when the caller passes no `improvementSignal` -- see buildImprovementSignalRow's
   // own doc comment for why that's what keeps this byte-identical to today for every existing caller.
-  const improvementRow = buildImprovementSignalRow(args.improvementSignal, args.aiReview?.valueAssessment);
+  const improvementRow = buildImprovementSignalRow(args.improvementSignal, args.aiReview?.valueAssessment, args.slopBand);
   if (improvementRow) allRows.push(improvementRow);
   const reviewFields = args.review?.fields;
   const rows: Array<[string, string, string, string]> = allRows.filter((row) => reviewFields?.[row.key] !== false).map((row) => row.cells);
@@ -4586,6 +4594,9 @@ export function buildPublicPrPanelSignalRows(args: {
    *  depth, #4744) before it can reach the row. Absent ⇒ the row (when `improvementSignal` above is present)
    *  shows the deterministic tier only. */
   valueAssessment?: { magnitude: ImprovementMagnitude; rationale: string } | undefined;
+  /** The existing deterministic slop-risk band (#4745, sub-issue H of epic #4737) -- see the matching doc
+   *  comment on `buildPublicPrIntelligenceComment`'s own `slopBand` field, which this mirrors. */
+  slopBand?: SlopBand | undefined;
 }): { rows: PublicPrPanelSignalRow[]; readinessTotal: number } {
   const relatedWork = buildDuplicateWinnerRelatedWorkView({
     pr: args.pr,
@@ -4628,11 +4639,11 @@ export function buildPublicPrPanelSignalRows(args: {
     { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
     { key: "gateResult", cells: ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "Advisory only.", gateEnabled ? gateNextAction(gateConclusion) : "No action."] },
   ];
-  const improvementRow = buildImprovementSignalRow(args.improvementSignal, args.valueAssessment);
+  const improvementRow = buildImprovementSignalRow(args.improvementSignal, args.valueAssessment, args.slopBand);
   return { rows: improvementRow ? [...rows, improvementRow] : rows, readinessTotal: readiness.total };
 }
 
-// ── Improvement-signal row (#4744) ───────────────────────────────────────────────────────────────────
+// ── Improvement-signal row (#4744) + risk × value quadrant (#4745) ─────────────────────────────────────
 //
 // Combines the deterministic tier (#4742, `buildStructuralImprovementAssessment`) and, when also active, the
 // LLM tier's composed judgment (#4743, `composeImprovementSignal`) into the optional 8th panel row. Shared by
@@ -4642,6 +4653,17 @@ export function buildPublicPrPanelSignalRows(args: {
 // omits `improvementSignal` (the `improvementSignal` converged feature resolving false for the repo, or the
 // deterministic tier having nothing to report today isn't possible -- `buildStructuralImprovementAssessment`
 // always returns a band, even "insufficient-signal").
+//
+// #4745 (sub-issue H, the epic's last core sub-issue) crosses that same band with the EXISTING slop-risk band
+// (src/signals/slop.ts) into a compact "risk: X · value: Y" quadrant label -- the maintainer 2x2 from the
+// issue body (safe-but-worthless churn vs. risky-but-valuable work vs. actual slop vs. a fast-track candidate).
+// It is deliberately threaded in as an EXTRA prefix on the SAME Improvement row's Evidence cell rather than a
+// new row/toggle key: the row (and therefore the quadrant prefix) already only renders when `improvementSignal`
+// resolves on for the repo, so reusing it keeps opted-out repos byte-identical for free, with no second
+// `fields:` key to hand-sync across `.gittensory.yml.example` / `config/examples/gittensory.full.yml` /
+// `gittensory-repo-focus-manifest.ts` / `.gittensory.yml`. No dashboard visualization (`apps/gittensory-ui/`)
+// or queue-level "high risk / low value" worklist is built here -- explicitly out of scope for this issue (see
+// its own "Optional" deliverable and this PR's description for the fast-follow call).
 
 /** Static template labels (#4744), one per {@link ImprovementBand} -- never runtime-interpolated free text, so
  *  this bypasses the public-comment sanitizer safely, mirroring how `"**Readiness score: ${total}/100**"`
@@ -4678,6 +4700,29 @@ function improvementEvidenceText(
   return `${deterministicPart}${valuePart}`;
 }
 
+/** The risk × value quadrant label (#4745): crosses the existing `SlopBand` (risk axis, `src/signals/slop.ts`)
+ *  with the deterministic `ImprovementBand` (value axis, #4742) into one compact string, e.g.
+ *  `"risk: low · value: moderate"` -- exactly the issue's own example wording. Both band types are closed
+ *  enums interpolated verbatim (never free text sourced from a finding/rationale), so this is public-safe by
+ *  construction the same way {@link IMPROVEMENT_BAND_LABELS} is -- no `containsPrivatePublicTerm` check needed.
+ *
+ *  Degrades in two independent steps, never fabricating a reading for an axis this pass didn't compute:
+ *  - `improvementBand` absent (the `improvementSignal` converged feature off for the repo, or a caller that
+ *    hasn't wired it) ⇒ risk-only label, e.g. `"risk: low"`.
+ *  - `slopBand` absent (`shouldCollectSlopEvidence` resolved false this pass, e.g. both `slopGateMode` and
+ *    `mergeReadinessGateMode` are `"off"`) ⇒ `undefined` -- nothing to show, since a value-only reading with no
+ *    risk context at all isn't part of this issue's quadrant.
+ *
+ *  Exported for direct unit testing of all four quadrant combinations plus the degraded case, per #4745's own
+ *  acceptance criteria. */
+export function formatRiskValueQuadrant(
+  slopBand: SlopBand | undefined,
+  improvementBand: ImprovementBand | undefined,
+): string | undefined {
+  if (slopBand === undefined) return undefined;
+  return improvementBand === undefined ? `risk: ${slopBand}` : `risk: ${slopBand} · value: ${improvementBand}`;
+}
+
 /** Builds the optional "Improvement" row, or `null` when the caller has no improvement data to show. `null`
  *  here (rather than a placeholder row) is what keeps `allRows`/`buildPublicPrPanelSignalRows`'s `rows`
  *  byte-identical to today for every existing caller that doesn't pass `improvementSignal` -- see the
@@ -4690,18 +4735,25 @@ function improvementEvidenceText(
 function buildImprovementSignalRow(
   assessment: StructuralImprovementAssessment | undefined,
   valueAssessment: { magnitude: ImprovementMagnitude; rationale: string } | undefined,
+  slopBand?: SlopBand | undefined,
 ): PublicPrPanelSignalRow | null {
   if (!assessment) return null;
   const safeFindings = assessment.findings.filter(
     (finding) => !containsPrivatePublicTerm([finding.title, finding.detail, finding.publicText].filter(Boolean).join(" ")),
   );
   const safeValueAssessment = valueAssessment && !containsPrivatePublicTerm(valueAssessment.rationale) ? valueAssessment : undefined;
+  const evidence = improvementEvidenceText(assessment.band, safeFindings, safeValueAssessment);
+  // #4745: prefixes the risk × value quadrant onto the SAME Evidence cell instead of a new row/column --
+  // `assessment.band` is always defined here (the row already bailed out above when `assessment` is absent),
+  // so this only ever needs `slopBand` to produce the full quadrant; absent slopBand (slop wasn't computed
+  // this pass) leaves the evidence text exactly as it was before this PR, never a fabricated risk reading.
+  const quadrant = formatRiskValueQuadrant(slopBand, assessment.band);
   return {
     key: "improvementSignal",
     cells: [
       "Improvement",
       IMPROVEMENT_BAND_LABELS[assessment.band],
-      improvementEvidenceText(assessment.band, safeFindings, safeValueAssessment),
+      quadrant ? `${quadrant} — ${evidence}` : evidence,
       "Advisory only — never blocks merge.",
     ],
   };

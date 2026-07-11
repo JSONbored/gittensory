@@ -3030,6 +3030,185 @@ describe("queue processors", () => {
     }
   });
 
+  // #4745 (risk x value quadrant, sub-issue H of epic #4737): same scaffold as the #4744 test just above, but
+  // ALSO opts the repo into slop evidence collection (slopGateMode: "advisory", never "block" -- this test is
+  // not exercising the slop gate itself) so `maybePublishPrPublicSurface`'s hoisted `slopBand` is populated from
+  // a REAL `buildSlopAssessment` call this pass, not left null. Proves the risk x value quadrant threads end to
+  // end from that real slop band through to the posted comment's Improvement row -- the only place in the
+  // existing suite where BOTH improvementSignalAllowed AND shouldCollectSlopEvidence resolve true in the same
+  // pass (every other test exercises them independently).
+  it("#4745: threads the real slop band into the Improvement row's quadrant prefix when both improvementSignal and slop evidence collection are on", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_REVIEW_UNIFIED_COMMENT: "1",
+      GITTENSORY_REVIEW_IMPROVEMENT_SIGNAL: "true",
+      GITTENSORY_REVIEW_REPOS: "JSONbored/gittensory",
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "detected_contributors_only",
+      publicAudienceMode: "gittensor_only",
+      publicSignalLevel: "standard",
+      publicSurface: "comment_and_label",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      checkRunDetailLevel: "minimal",
+      gateCheckMode: "enabled", reviewCheckMode: "required",
+      backfillEnabled: true,
+      autonomy: { update_branch: "auto" },
+      // The only delta from the #4744 test above: turns on slop evidence collection so `slopBand` is populated
+      // this pass. "advisory" never blocks (only "block" mode does, at the configured threshold) -- this test
+      // is exercising the quadrant label, not the slop gate.
+      slopGateMode: "advisory",
+    });
+    let postedBody = "";
+    const calls = { comments: 0, gateChecks: 0 };
+    let gateFinalized = false;
+    let failedPostGateMint = false;
+    const liveCiSpy = vi
+      .spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl")
+      .mockRejectedValueOnce(new Error("transient CI read failed"))
+      .mockResolvedValue({
+        ciState: "passed",
+        hasPending: false,
+        hasVisiblePending: false,
+        hasMissingRequiredContext: false,
+        failingDetails: [],
+        nonRequiredFailingDetails: [],
+        ciCompletenessWarning: null,
+      });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) {
+        if (gateFinalized && !failedPostGateMint) {
+          failedPostGateMint = true;
+          return new Response("mint failed", { status: 500 });
+        }
+        return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+      }
+      // PR files — one plain code file with no accompanying test evidence: `missingTestEvidence` is the only
+      // slop finding that can fire for this fixture (churn is far below MIN_CHURN_LINES, description/linked
+      // issue are both present) -- slopRisk 15, band "low". Also what the improvement-signal deterministic
+      // tier reads via getReviewFiles() for its own test-evidence axis (#4742); same inputs, band "none".
+      if (url.includes("/pulls/4/files")) return Response.json([{ filename: "src/cache.ts", additions: 5, deletions: 1, status: "modified" }]);
+      if (/\/pulls\/4(?:\?|$)/.test(url)) return Response.json({ number: 4, mergeable_state: "clean" });
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") {
+        calls.gateChecks += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { status?: string; conclusion?: string };
+        if (body.status !== "in_progress" || body.conclusion) {
+          gateFinalized = true;
+          clearInstallationTokenCacheForTest();
+        }
+        return Response.json({ id: 901 }, { status: 201 });
+      }
+      if (url.includes("/check-runs/901") && method === "PATCH") {
+        calls.gateChecks += 1;
+        gateFinalized = true;
+        clearInstallationTokenCacheForTest();
+        return Response.json({ id: 901 });
+      }
+      if (url.includes("/issues/4/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/4/comments") && method === "POST") {
+        calls.comments += 1;
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "pr-improvement-signal-quadrant",
+        eventName: "pull_request",
+        payload: {
+          action: "synchronize",
+          installation: {
+            id: 123,
+            account: { login: "JSONbored", id: 1, type: "User" },
+            repository_selection: "selected",
+            permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+            events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 4,
+            title: "Cache invalidation cleanup",
+            state: "open",
+            user: { login: "oktofeesh1" },
+            head: { sha: "quadrant123" },
+            labels: [{ name: "bug" }],
+            body: "Fixes #1",
+          },
+        },
+      });
+
+      expect(calls.comments).toBeGreaterThan(0);
+      expect(postedBody).toContain("<!-- gittensory-pr-panel:v1 -->");
+      // The quadrant prefix ("risk: low · value: none") threaded from the REAL slopBand computed this pass
+      // (missingTestEvidence only, slopRisk 15 -> band "low") ahead of the SAME evidence text #4744 already
+      // asserts verbatim -- proving processors.ts's new hoisted slopBand reaches the rendered comment, not
+      // just computed and discarded.
+      expect(postedBody).toContain("| Improvement | ⚠️ ℹ️ None detected | risk: low · value: none — No structural-improvement signals were detected for this PR. |");
+      // Public-safe regardless: no internal trust/economics fields leak through the new quadrant clause either.
+      expect(postedBody).not.toMatch(/wallet|hotkey|coldkey|reward|trust score/i);
+    } finally {
+      liveCiSpy.mockRestore();
+    }
+  });
+
   it("INVARIANT (#4498): the disposition planner reuses the public surface's own live mergeable_state/CI read instead of re-fetching a third time", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
     await persistRegistrySnapshot(

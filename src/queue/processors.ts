@@ -8941,6 +8941,13 @@ async function maybePublishPrPublicSurface(
   // runAiReviewForAdvisory's identical check -- can read it without a second, audit-event-duplicating
   // getCachedOfficialMinerDetection lookup. Defaults false; only ever set true inside that try-block.
   let confirmedContributor = false;
+  // #4745: hoisted out of the try-block below (same reason/shape as confirmedContributor just above) so the
+  // risk × value quadrant label -- built once the comment/panel builders are reached, further down and OUTSIDE
+  // that try -- can reuse the ALREADY-computed slop band without a second buildSlopAssessment call. Stays null
+  // exactly when slopRisk (the sibling hoisted-inside-the-try variable) does: shouldCollectSlopEvidence(settings)
+  // resolving false this pass, in which case the quadrant degrades to showing nothing extra rather than
+  // fabricating a risk reading (see formatRiskValueQuadrant's own doc comment).
+  let slopBand: SlopBand | null = null;
   // Resolve the repo's action mode ONCE for the whole publish pass and thread it into every GitHub write below, so
   // a dry-run / pause / global-freeze publishes NOTHING (check-run, comment, label) — the gate verdict is still
   // computed + returned for the disposition logic, the writes are just suppressed + audited. (#dry-run-chokepoint)
@@ -9710,6 +9717,7 @@ async function maybePublishPrPublicSurface(
           isPullRequestInDuplicateCluster(collisions, pr.number),
       });
       slopRisk = slop.slopRisk;
+      slopBand = slop.band;
       advisory.findings.push(...slop.findings);
       // Persist dashboard-visible slop only when the repo opted into the slop gate. Merge-readiness may
       // still use the live score above, but disabling slop should clear any previously cached dashboard row.
@@ -11163,6 +11171,9 @@ async function maybePublishPrPublicSurface(
       review: reviewConfig,
       aiReview,
       improvementSignal: structuralImprovementAssessment,
+      // #4745: the risk × value quadrant's risk half -- reuses the slop band already computed above (if any);
+      // never a second buildSlopAssessment call.
+      slopBand: slopBand ?? undefined,
       duplicateWinnerEnabled,
       env,
     };
@@ -11296,6 +11307,8 @@ async function maybePublishPrPublicSurface(
         duplicateWinnerEnabled,
         improvementSignal: structuralImprovementAssessment,
         valueAssessment: aiReview?.valueAssessment,
+        // #4745: same reused slop band as the legacy commentArgs above -- the two panel builders never diverge.
+        slopBand: slopBand ?? undefined,
       });
       // Visual before/after capture (visual-capture port). Fires ONLY when (1) the "screenshots" converged
       // feature resolves active for this repo (resolveConvergedFeature — the global flag AND (a per-repo

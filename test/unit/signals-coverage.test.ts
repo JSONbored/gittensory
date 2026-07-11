@@ -25,6 +25,7 @@ import {
   buildQueueHealth,
   buildRoleContext,
   detectGittensorContributor,
+  formatRiskValueQuadrant,
   itemSharesPlannedLinkedIssue,
   shouldPublishPrIntelligenceComment,
   unionScopedOverlapClusters,
@@ -1039,6 +1040,86 @@ describe("signal coverage edge cases", () => {
       // With the one (unsafe) finding filtered out and the (unsafe) valueAssessment dropped, the deterministic
       // "no signals" fallback text is what's left -- never an empty cell.
       expect(row.cells[2]).toBe("No structural-improvement signals were detected for this PR.");
+    });
+  });
+
+  describe("#4745: risk x value quadrant label (sub-issue H, epic #4737 -- the maintainer 2x2 from the issue body)", () => {
+    it("computes the full quadrant label crossing the existing slop-risk band with the deterministic improvement band, across all four representative combinations", () => {
+      expect(formatRiskValueQuadrant("low", "minor")).toBe("risk: low · value: minor");
+      expect(formatRiskValueQuadrant("low", "significant")).toBe("risk: low · value: significant");
+      expect(formatRiskValueQuadrant("high", "minor")).toBe("risk: high · value: minor");
+      expect(formatRiskValueQuadrant("high", "significant")).toBe("risk: high · value: significant");
+    });
+
+    it("degrades to a risk-only label when the improvement band is unavailable (improvementSignal off for the repo, or a caller that hasn't wired it)", () => {
+      expect(formatRiskValueQuadrant("low", undefined)).toBe("risk: low");
+      expect(formatRiskValueQuadrant("elevated", undefined)).toBe("risk: elevated");
+      expect(formatRiskValueQuadrant("clean", undefined)).toBe("risk: clean");
+    });
+
+    it("returns undefined (nothing to show) when the slop band itself is unavailable this pass, regardless of the improvement band -- never fabricates a risk reading", () => {
+      expect(formatRiskValueQuadrant(undefined, "significant")).toBeUndefined();
+      expect(formatRiskValueQuadrant(undefined, undefined)).toBeUndefined();
+    });
+
+    const quadrantRepo = repo("owner/quadrant");
+    const quadrantPr = pr(quadrantRepo.fullName, 121, "Simplify retry logic", { authorLogin: "miner", linkedIssues: [8], body: "Fixes #8" });
+    const quadrantProfile = buildContributorProfile("miner", { login: "miner", topLanguages: ["TypeScript"], source: "github" }, [], []);
+    const quadrantDetection = { detected: true, source: "official_gittensor_api" as const, reason: "Confirmed.", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
+    const quadrantCollisions = buildCollisionReport(quadrantRepo.fullName, [], []);
+    const quadrantQueueHealth = buildQueueHealth(quadrantRepo, [], [], quadrantCollisions);
+    const quadrantPreflight = buildPreflightResult(
+      { repoFullName: quadrantRepo.fullName, title: quadrantPr.title, body: quadrantPr.body ?? undefined, linkedIssues: quadrantPr.linkedIssues, changedFiles: ["src/retry.ts"] },
+      quadrantRepo,
+      [],
+      [],
+    );
+    const quadrantSettings = repoSettings(quadrantRepo.fullName);
+    const quadrantBaseArgs = {
+      repo: quadrantRepo,
+      pr: quadrantPr,
+      profile: quadrantProfile,
+      detection: quadrantDetection,
+      queueHealth: quadrantQueueHealth,
+      collisions: quadrantCollisions,
+      preflight: quadrantPreflight,
+      settings: quadrantSettings,
+    };
+    const quadrantAssessment = { improvementScore: 10, band: "minor" as const, findings: [] };
+
+    it("prefixes the quadrant label onto the Improvement row's Evidence cell when slopBand is threaded alongside improvementSignal", () => {
+      const panel = buildPublicPrPanelSignalRows({ ...quadrantBaseArgs, improvementSignal: quadrantAssessment, slopBand: "low" });
+      const row = panel.rows.find((r) => r.key === "improvementSignal")!;
+      expect(row.cells[2]).toBe("risk: low · value: minor — No structural-improvement signals were detected for this PR.");
+      // The Result cell (the deterministic band label) is untouched by the quadrant -- the two tiers never blend.
+      expect(row.cells[1]).toBe("✅ Minor");
+
+      const comment = buildPublicPrIntelligenceComment({ ...quadrantBaseArgs, improvementSignal: quadrantAssessment, slopBand: "low", env: {} });
+      expect(comment).toContain("risk: low · value: minor — No structural-improvement signals were detected for this PR.");
+    });
+
+    it("leaves the Evidence cell exactly as #4744 shipped it when slopBand is omitted -- byte-identical for every caller that hasn't threaded it yet", () => {
+      const panel = buildPublicPrPanelSignalRows({ ...quadrantBaseArgs, improvementSignal: quadrantAssessment });
+      const row = panel.rows.find((r) => r.key === "improvementSignal")!;
+      expect(row.cells[2]).toBe("No structural-improvement signals were detected for this PR.");
+      expect(row.cells[2]).not.toContain("risk:");
+    });
+
+    it("never renders the row at all when improvementSignal is off for the repo, even when slopBand IS available -- repos that have not opted into the epic's feature stay byte-identical (degraded/slop-risk-only case)", () => {
+      const panel = buildPublicPrPanelSignalRows({ ...quadrantBaseArgs, slopBand: "high" });
+      expect(panel.rows.find((r) => r.key === "improvementSignal")).toBeUndefined();
+      expect(panel.rows).toHaveLength(7);
+
+      const comment = buildPublicPrIntelligenceComment({ ...quadrantBaseArgs, slopBand: "high", env: {} });
+      expect(comment).not.toContain("| Improvement |");
+      expect(comment).not.toContain("risk: high");
+    });
+
+    it("REGRESSION: the quadrant clause can never leak forbidden vocabulary -- SlopBand/ImprovementBand are closed enums, never free text, so no sanitizer check is needed for this clause specifically", () => {
+      const forbidden = /wallet|hotkey|coldkey|trust score|reward|payout|scoreability|reviewability|farming/i;
+      const panel = buildPublicPrPanelSignalRows({ ...quadrantBaseArgs, improvementSignal: quadrantAssessment, slopBand: "high" });
+      const row = panel.rows.find((r) => r.key === "improvementSignal")!;
+      expect(JSON.stringify(row)).not.toMatch(forbidden);
     });
   });
 
