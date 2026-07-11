@@ -157,20 +157,52 @@ describe("repo command authorization policy", () => {
     expect(clamped.policy.commands.review).toEqual(["confirmed_miner"]);
   });
 
-  it("#4595: chat defaults to maintainer/collaborator-only, deliberately excluding confirmed_miner (unlike ask's default)", () => {
-    expect(commandAuthorizationAllowedRoles(undefined, "chat")).toEqual(["maintainer", "collaborator"]);
+  it("#4595/#5084: chat defaults to maintainer/collaborator/pr_author (unlike ask's default, no confirmed_miner)", () => {
+    expect(commandAuthorizationAllowedRoles(undefined, "chat")).toEqual(["maintainer", "collaborator", "pr_author"]);
     expect(evaluateCommandAuthorization({ commandName: "chat", commenterAssociation: "OWNER" })).toMatchObject({ authorized: true, reason: "maintainer_invocation", actorKind: "maintainer" });
     expect(evaluateCommandAuthorization({ commandName: "chat", commenterAssociation: "COLLABORATOR" })).toMatchObject({ authorized: true, reason: "collaborator_invocation", actorKind: "maintainer" });
-    // A confirmed-miner PR author is denied on chat (unlike "review"): confirmed_miner is not in chat's default
-    // allowed-roles list, so the pr_author-widening guard denies it the same as any other non-maintainer author.
+  });
+
+  it("#5084: a chat pr_author match is only granted when commandRateLimitPolicy is \"hold\" for the repo", () => {
+    // No rate-limit policy passed at all (the undefined branch) -- denied, with a distinct reason from the
+    // generic denials so an operator can tell "rate limiting isn't on" apart from "not authorized at all".
+    expect(
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author" }),
+    ).toMatchObject({ authorized: false, reason: "pr_author_requires_rate_limiting", actorKind: "author", matchedRole: null });
+    // Explicitly "off" (not just unset) -- same denial, covering both falsy branches of the `!== "hold"` check.
+    expect(
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "off" }),
+    ).toMatchObject({ authorized: false, reason: "pr_author_requires_rate_limiting" });
+    // "hold" -- the PR's own author is authorized.
+    expect(
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "author", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold" }),
+    ).toMatchObject({ authorized: true, reason: "allowed_pr_author", actorKind: "author", matchedRole: "pr_author" });
+    // A confirmed miner acting on their OWN PR matches pr_author first (chat's roles list has pr_author, not
+    // confirmed_miner) -- so a miner is gated by the SAME rate-limit requirement as any other PR author, not
+    // the separate confirmed_miner exception "review" gets.
     expect(
       evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "miner", pullRequestAuthorLogin: "miner", minerStatus: "confirmed" }),
-    ).toMatchObject({ authorized: false, reason: "maintainer_command_requires_maintainer", actorKind: "author" });
-    // A spoofable pr_author role added via override is clamped off with a warning, same as every other
-    // maintainer-only default command.
-    const clamped = normalizeCommandAuthorizationPolicy({ commands: { chat: ["collaborator", "pr_author"] } });
-    expect(clamped.warnings).toContain("Ignored author command authorization roles for maintainer-only command: chat.");
-    expect(clamped.policy.commands.chat).toEqual(["collaborator"]);
+    ).toMatchObject({ authorized: false, reason: "pr_author_requires_rate_limiting" });
+    expect(
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "miner", pullRequestAuthorLogin: "miner", minerStatus: "confirmed", commandRateLimitPolicy: "hold" }),
+    ).toMatchObject({ authorized: true, reason: "allowed_pr_author", matchedRole: "pr_author" });
+    // A commenter on someone ELSE's PR is still denied outright -- pr_author never matches for a non-author,
+    // rate limiting or not.
+    expect(
+      evaluateCommandAuthorization({ commandName: "chat", commenterLogin: "other", pullRequestAuthorLogin: "author", commandRateLimitPolicy: "hold" }),
+    ).toMatchObject({ authorized: false, reason: "not_maintainer_or_pr_author" });
+  });
+
+  it("#5084: a maintainer's yml override restating chat's own default (incl. pr_author) is not clamped away", () => {
+    const restated = normalizeCommandAuthorizationPolicy({ commands: { chat: ["collaborator", "pr_author"] } });
+    expect(restated.warnings).not.toContain("Ignored author command authorization roles for maintainer-only command: chat.");
+    expect(restated.policy.commands.chat).toEqual(["collaborator", "pr_author"]);
+    // But every OTHER maintainer-only command's own shipped default still excludes pr_author, so the SAME
+    // override shape on a different command is still clamped -- this is a per-command union, not a blanket
+    // relaxation of the clamp.
+    const otherCommand = normalizeCommandAuthorizationPolicy({ commands: { "queue-summary": ["collaborator", "pr_author"] } });
+    expect(otherCommand.warnings).toContain("Ignored author command authorization roles for maintainer-only command: queue-summary.");
+    expect(otherCommand.policy.commands["queue-summary"]).toEqual(["collaborator"]);
   });
 
   it("falls back to default roles for inherited object property command names", () => {

@@ -1301,6 +1301,79 @@ describe("queue processors", () => {
       expect(seen.comments[0]).not.toContain("not enabled on this instance");
     });
 
+    it("#5084: a contributor (no maintainer/collaborator role) reaches chat on their OWN PR when commandRateLimitPolicy is hold", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI_ADVISORY: { run: async () => ({ response: "The PR is blocked because CI is failing." }) } as unknown as Ai,
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 330, title: "Contributor chat target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+          return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n  commandRateLimitPolicy: hold\n", { status: 200 });
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        // A plain contributor -- no maintainer/collaborator repo permission at all (unlike every other chat
+        // test in this file, which stubs "maintain" and has the FIXED "maintainer" commenter from mentionPayload).
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "read" });
+        if (url.includes("/issues/330/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/330/comments") && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const authorPayload = {
+        action: "created" as const,
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 330, title: "Contributor chat target", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        // The commenter IS the PR's own author -- not the fixed "maintainer" commenter mentionPayload uses.
+        comment: { id: 1, body: "@gittensory chat why is this blocked?", user: { login: "oktofeesh1", type: "User" }, author_association: "NONE" },
+      };
+      await processJob(env, { type: "github-webhook", deliveryId: "contributor-chat-dispatch", eventName: "issue_comment", payload: authorPayload });
+      expect(seen.comments).toHaveLength(1);
+      expect(seen.comments[0]).toContain("Grounded chat Q&A");
+    });
+
+    it("#5084: the SAME contributor is silently denied when commandRateLimitPolicy is left at its off default", async () => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        AI_ADVISORY: { run: async () => ({ response: "The PR is blocked because CI is failing." }) } as unknown as Ai,
+      });
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 331, title: "Contributor chat target (denied)", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
+      const seen = { comments: [] as string[] };
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+          // chatQa enabled, but commandRateLimitPolicy is NOT set -- pr_author must not be granted.
+          return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
+        if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "read" });
+        if (url.includes("/issues/331/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/331/comments") && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: seen.comments.length }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const authorPayload = {
+        action: "created" as const,
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 331, title: "Contributor chat target (denied)", state: "open", pull_request: {}, user: { login: "oktofeesh1" }, author_association: "NONE" },
+        comment: { id: 2, body: "@gittensory chat why is this blocked?", user: { login: "oktofeesh1", type: "User" }, author_association: "NONE" },
+      };
+      await processJob(env, { type: "github-webhook", deliveryId: "contributor-chat-denied", eventName: "issue_comment", payload: authorPayload });
+      expect(seen.comments).toHaveLength(0); // silently denied -- no reply at all, matching every other unauthorized command
+      const skipped = await env.DB.prepare("select detail from audit_events where event_type = 'github_app.agent_command_skipped'").first<{ detail: string }>();
+      expect(skipped?.detail).toBe("pr_author_requires_rate_limiting");
+    });
+
     it("#5063: posts a FRESH, separate reply comment for each chat invocation (never edits a shared comment), each linking back to its own triggering comment", async () => {
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),

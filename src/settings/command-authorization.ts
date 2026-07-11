@@ -14,12 +14,14 @@ export const DEFAULT_COMMAND_AUTHORIZATION_POLICY: RepositoryCommandAuthorizatio
     "noise-report": ["maintainer", "collaborator"],
     "gate-override": ["maintainer", "collaborator"],
     plan: ["maintainer", "collaborator"],
-    // #4595: deliberately narrower than "ask"'s default (which allows confirmed_miner) -- chat is Ollama-only
-    // grounded LLM generation, a materially larger surface than ask's deterministic-only answer, so v1 starts
-    // maintainer/collaborator-only. Explicit registration here (rather than falling through to `default`) also
-    // activates the pr_author-widening guard below, so a self-hoster can't accidentally yml themselves into
-    // "anyone commenting on their own PR" without it.
-    chat: ["maintainer", "collaborator"],
+    // #4595/#5084: chat is Ollama-only grounded LLM generation, a materially larger surface than ask's
+    // deterministic-only answer, so v1 started maintainer/collaborator-only. #5084 widens this to the PR's
+    // OWN author (never an arbitrary commenter on someone else's PR) -- but ONLY when commandRateLimitPolicy
+    // is "hold" for the repo, enforced in evaluateCommandAuthorization below, not just by operator convention.
+    // Explicit registration here (rather than falling through to `default`) also activates the
+    // MAINTAINER_ONLY_DEFAULT_COMMANDS clamp in normalizeCommandRoleList, so a self-hoster can't yml
+    // themselves into "any confirmed_miner" or similar widening beyond what's shipped here.
+    chat: ["maintainer", "collaborator", "pr_author"],
     // #1960 PR control-surface verbs. "review" is deliberately widenable to confirmed_miner (same self-rerun
     // precedent already applied to review-now, #824) — a confirmed miner may re-trigger review on their own PR.
     // The rest (pause/resume/resolve/configuration/explain) are conservative maintainer/collaborator-only
@@ -46,6 +48,11 @@ const COMMAND_AUTHORIZATION_ROLES = new Set<CommandAuthorizationRole>(["maintain
 // plain `pr_author` role; `confirmed_miner` survives so a detected miner can self-trigger reruns (#824).
 const MAINTAINER_COMMAND_AUTHORIZATION_ROLES = new Set<CommandAuthorizationRole>(["maintainer", "collaborator", "confirmed_miner"]);
 const MAINTAINER_ONLY_DEFAULT_COMMANDS = new Set(Object.keys(DEFAULT_COMMAND_AUTHORIZATION_POLICY.commands));
+// #5084: commands where a `pr_author` match is only actually granted when commandRateLimitPolicy is "hold" for
+// the repo -- checked in evaluateCommandAuthorization. Currently just `chat` (Ollama-only LLM generation);
+// deliberately a narrow, explicit allowlist rather than inferring this from isAiCostBearingCommand, so widening
+// it to another command later is a deliberate one-line addition, not an implicit side effect of an unrelated set.
+const PR_AUTHOR_RATE_LIMITED_COMMANDS = new Set(["chat"]);
 
 export type CommandAuthorizationDecision = {
   authorized: boolean;
@@ -117,11 +124,20 @@ export function evaluateCommandAuthorization(args: {
   commenterAssociation?: string | null | undefined;
   pullRequestAuthorLogin?: string | null | undefined;
   minerStatus?: "confirmed" | "not_found" | "unavailable" | undefined;
+  /** #5084: required (must be `"hold"`) for a bare `pr_author` match to actually authorize a command in
+   *  {@link PR_AUTHOR_RATE_LIMITED_COMMANDS} (currently just `chat`) -- unset/`"off"` denies exactly as if
+   *  `pr_author` weren't in the allowed-roles list at all, so a repo that hasn't turned on rate limiting
+   *  never grants contributor chat access no matter what `chat`'s configured roles say. */
+  commandRateLimitPolicy?: "off" | "hold" | undefined;
 }): CommandAuthorizationDecision {
   const allowedRoles = commandAuthorizationAllowedRoles(args.policy, args.commandName);
   const roles = actorRoles(args);
   const matchedRole = roles.find((role) => allowedRoles.includes(role)) ?? null;
-  if (matchedRole) {
+  const prAuthorRateLimitGated =
+    matchedRole === "pr_author" &&
+    PR_AUTHOR_RATE_LIMITED_COMMANDS.has(normalizeCommandName(args.commandName)) &&
+    args.commandRateLimitPolicy !== "hold";
+  if (matchedRole && !prAuthorRateLimitGated) {
     return {
       authorized: true,
       reason: authorizationReason(matchedRole),
@@ -129,6 +145,9 @@ export function evaluateCommandAuthorization(args: {
       matchedRole,
       allowedRoles,
     };
+  }
+  if (prAuthorRateLimitGated) {
+    return { authorized: false, reason: "pr_author_requires_rate_limiting", actorKind: "author", matchedRole: null, allowedRoles };
   }
   const ownPrAuthor = isSameLogin(args.commenterLogin, args.pullRequestAuthorLogin);
   if (ownPrAuthor && allowedRoles.includes("confirmed_miner")) {
@@ -168,7 +187,15 @@ export function summarizeCommandAuthorizationPolicy(policy: RepositoryCommandAut
 function normalizeCommandRoleList(commandName: string, roles: CommandAuthorizationRole[], warnings: string[]): CommandAuthorizationRole[] {
   if (!MAINTAINER_ONLY_DEFAULT_COMMANDS.has(commandName)) return roles;
 
-  const maintainerRoles = roles.filter((role) => MAINTAINER_COMMAND_AUTHORIZATION_ROLES.has(role));
+  // #5084: a role also survives the clamp if it's explicitly part of THIS command's own shipped default
+  // (chat's own default now includes pr_author) -- so a maintainer restating or narrowing a command's own
+  // default via yml never gets silently mangled, while every OTHER maintainer-only command whose own default
+  // excludes pr_author still can't have it added via override (this is a per-command union, not a blanket
+  // relaxation: the clamp still can't be conjured up on generate-tests/pause/etc.).
+  /* v8 ignore next -- defensive: MAINTAINER_ONLY_DEFAULT_COMMANDS is derived from these keys, so a maintainer-only command always resolves a default list. */
+  const commandOwnDefaultRoles = DEFAULT_COMMAND_AUTHORIZATION_POLICY.commands[commandName] ?? [];
+  const allowedClampRoles = new Set<CommandAuthorizationRole>([...MAINTAINER_COMMAND_AUTHORIZATION_ROLES, ...commandOwnDefaultRoles]);
+  const maintainerRoles = roles.filter((role) => allowedClampRoles.has(role));
   if (maintainerRoles.length === roles.length) return roles;
 
   warnings.push(`Ignored author command authorization roles for maintainer-only command: ${commandName}.`);

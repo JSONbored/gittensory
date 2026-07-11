@@ -12560,6 +12560,7 @@ async function maybeProcessGittensoryMentionCommand(
     pullRequestAuthorLogin: pullRequestAuthor,
     officialAuthorDetection: official,
     commandAuthorizationPolicy: settings.commandAuthorization,
+    commandRateLimitPolicy: settings.commandRateLimitPolicy,
   });
   if (!authorization.authorized) {
     await recordAuditEvent(env, {

@@ -382,6 +382,9 @@ export function isAuthorizedCommandActor(args: {
   pullRequestAuthorLogin?: string | null | undefined;
   officialAuthorDetection?: OfficialGittensorMinerDetection | undefined;
   commandAuthorizationPolicy?: RepositoryCommandAuthorizationPolicy | null | undefined;
+  /** #5084: required (must be `"hold"`) for a PR author to be authorized for `chat` -- see
+   *  PR_AUTHOR_RATE_LIMITED_COMMANDS in settings/command-authorization.ts. */
+  commandRateLimitPolicy?: "off" | "hold" | undefined;
 }): { authorized: boolean; reason: string; actorKind: "maintainer" | "author" | "none" } {
   const decision = evaluateCommandAuthorization({
     policy: args.commandAuthorizationPolicy,
@@ -390,6 +393,7 @@ export function isAuthorizedCommandActor(args: {
     commenterAssociation: args.commenterAssociation,
     pullRequestAuthorLogin: args.pullRequestAuthorLogin,
     minerStatus: args.officialAuthorDetection?.status,
+    commandRateLimitPolicy: args.commandRateLimitPolicy,
   });
   return { authorized: decision.authorized, reason: decision.reason, actorKind: decision.actorKind };
 }
