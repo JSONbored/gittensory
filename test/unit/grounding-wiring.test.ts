@@ -234,14 +234,18 @@ describe("review-grounding wired into the AI reviewer (flag GITTENSORY_REVIEW_GR
       AI_PUBLIC_COMMENTS_ENABLED: "true",
       AI_DAILY_NEURON_BUDGET: "100000",
     });
+    // Grounding is "allowlistRequired" (resolveConvergedFeature): the repo must be in GITTENSORY_REVIEW_REPOS
+    // regardless of the override, so this MUST use an allowlisted repo (createTestEnv's default includes
+    // "acme/widgets") — an un-allowlisted repo would short-circuit groundingActive to false before this
+    // branch is ever reached, silently no-op-ing the assertion below.
     // Register WITHOUT an installation id → (await getRepository(...))?.installationId is null → `?? null`.
-    await upsertRepositoryFromGitHub(env, { name: "noinst", full_name: "acme/noinst", private: true, owner: { login: "acme" } });
+    await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "acme/widgets", private: true, owner: { login: "acme" } });
     await env.DB.prepare(
       "INSERT INTO pull_request_files (repo_full_name, pull_number, path, status, additions, deletions, changes, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    ).bind("acme/noinst", 7, "src/a.ts", "modified", 1, 0, 1, JSON.stringify({ patch: "@@\n+export const A = 1;" })).run();
+    ).bind("acme/widgets", 7, "src/a.ts", "modified", 1, 0, 1, JSON.stringify({ patch: "@@\n+export const A = 1;" })).run();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 404 }));
     const adv: Advisory = {
-      id: "adv-g2", targetType: "pull_request", targetKey: "acme/noinst#7", repoFullName: "acme/noinst",
+      id: "adv-g2", targetType: "pull_request", targetKey: "acme/widgets#7", repoFullName: "acme/widgets",
       pullNumber: 7, headSha: "sha7", conclusion: "neutral", severity: "info",
       title: "Gittensory advisory available", summary: "ok", findings: [], generatedAt: "2026-06-20T00:00:00.000Z",
     };
@@ -249,7 +253,7 @@ describe("review-grounding wired into the AI reviewer (flag GITTENSORY_REVIEW_GR
       const result = await runAiReviewForAdvisory(env, {
         mode: "live",
         settings: { aiReviewMode: "advisory" } as RepositorySettings,
-        repoFullName: "acme/noinst",
+        repoFullName: "acme/widgets",
         pr: { number: 7, title: "Add a feature", body: "x" },
         author: "alice",
         confirmedContributor: true,

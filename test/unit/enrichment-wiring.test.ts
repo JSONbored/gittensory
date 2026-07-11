@@ -336,4 +336,63 @@ describe("review-enrichment wired into the processors review (flag GITTENSORY_RE
       fetchSpy.mockRestore();
     }
   });
+
+  it("a repo with NO installationId forwards the GITHUB_PUBLIC_TOKEN fallback, and a body-less PR omits body (?? undefined)", async () => {
+    // Covers resolveReviewEnrichmentGithubToken's `repo?.installationId ? ... : undefined` false-arm (no
+    // installation token to request, so it falls through to env.GITHUB_PUBLIC_TOKEN) AND both call sites'
+    // `args.pr.body ?? undefined` fallback (the enrichment POST and the main AI-review call) in one pass.
+    const run = vi.fn(async () => ({ response: notesJson }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+      GITHUB_PUBLIC_TOKEN: "public-read-token",
+    });
+    Object.assign(env, {
+      GITTENSORY_REVIEW_ENRICHMENT: "true",
+      REES_URL: "https://rees.example",
+      REES_SHARED_SECRET: "sek",
+      REES_FORWARD_GITHUB_TOKEN: "true",
+    });
+    // Register WITHOUT an installation id -- getRepository(...)?.installationId is null, so
+    // resolveReviewEnrichmentGithubToken has no installation to mint a token for.
+    await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "acme/widgets", private: true, owner: { login: "acme" } });
+    await env.DB.prepare(
+      "INSERT INTO pull_request_files (repo_full_name, pull_number, path, status, additions, deletions, changes, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind("acme/widgets", 7, "src/a.ts", "modified", 1, 0, 1, JSON.stringify({ patch: "@@\n+export const A = 1;" })).run();
+    let reesBody: { body?: string; githubToken?: string } | undefined;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (url, init) => {
+        if (String(url).includes("/v1/enrich")) {
+          reesBody = JSON.parse(String(init?.body ?? "{}")) as {
+            body?: string;
+            githubToken?: string;
+          };
+          return new Response(JSON.stringify({ promptSection: "brief" }), {
+            status: 200,
+          });
+        }
+        return new Response("nope", { status: 404 });
+      });
+    try {
+      const result = await runAiReviewForAdvisory(env, {
+        mode: "live",
+        settings: { aiReviewMode: "advisory" } as RepositorySettings,
+        repoFullName: "acme/widgets",
+        // No `body` at all -- args.pr.body is undefined, driving both `?? undefined` fallbacks.
+        pr: { number: 7, title: "Add a feature" },
+        author: "alice",
+        confirmedContributor: true,
+        advisory: adv("acme/widgets"),
+      });
+      expect(reesBody?.githubToken).toBe("public-read-token");
+      expect(reesBody?.body).toBeUndefined();
+      expect(result?.notes ?? "").toBeDefined();
+      expect(run).toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
