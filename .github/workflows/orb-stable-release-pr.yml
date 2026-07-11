@@ -105,7 +105,11 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B release-orb-stable
           git add orb-manifest.json
-          git commit -m "chore(release): cut orb-v${NEXT_VERSION}"
+          # --allow-empty: orb-manifest.json's version can already equal the proposed nextVersion (the common
+          # case right after a maintainer hand-bumps it ahead of landing the commits that warrant it) -- the
+          # branch/PR must still get created/refreshed as the reviewable release marker even when there's no
+          # manifest diff to stage.
+          git commit --allow-empty -m "chore(release): cut orb-v${NEXT_VERSION}"
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           gh auth setup-git
           git push --force origin release-orb-stable
