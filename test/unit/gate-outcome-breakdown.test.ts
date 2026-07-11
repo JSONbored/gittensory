@@ -48,6 +48,14 @@ describe("buildGateOutcomeBreakdown (#2203)", () => {
     expect(result.summary).toContain("No gate-outcome audit events");
   });
 
+  it("classifyGateOutcomeAuditBucket maps each terminal gate-outcome event type to its bucket", () => {
+    expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.merge", outcome: "success" })).toBe("autoMerged");
+    expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.merge", outcome: "completed" })).toBe("autoMerged");
+    expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.close", outcome: "success" })).toBe("autoClosed");
+    expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.close", outcome: "completed" })).toBe("autoClosed");
+    expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.hold", outcome: "success" })).toBe("held");
+  });
+
   it("classifyGateOutcomeAuditBucket ignores dry-run or non-terminal merge/close/hold rows", () => {
     expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.merge", outcome: "dry_run" })).toBeNull();
     expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.close", outcome: "denied" })).toBeNull();
