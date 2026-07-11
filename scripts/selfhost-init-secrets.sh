@@ -5,9 +5,21 @@
 # and is relying entirely on inline .env values (see secrets/README.md: an inline value always wins
 # over the file, so a placeholder here is a pure no-op for that operator).
 #
-# IDEMPOTENT AND NON-DESTRUCTIVE: only ever creates a MISSING file, empty, chmod 600. Never touches a
-# file that already exists (whether it's still an empty placeholder or a real secret an operator has
-# since populated) -- safe to run on every deploy, unconditionally.
+# MODE 644, NOT 600 (#secrets-uid-mismatch, a real incident on edge-nl-01 -- see docker-compose.yml's
+# own secrets: comment for the full "why"): standalone Compose secrets are a plain bind mount, which
+# cannot remap in-container ownership the way Swarm secrets can -- the container reads this file AS
+# ITS OWN uid (the Dockerfile's `USER node`, 1000), essentially never the deploying host user's uid, so
+# an owner-only 600 file is unreadable to the app and load-file-secrets.ts's readFileSync throws. 644
+# is the minimum that works portably across arbitrary host/container uid pairs without requiring the
+# operator's host to have a matching uid or group -- this trades host-local-user readability (a lower
+# bar: requires an actual shell on this machine) for what the original hardening was actually about:
+# no longer visible via `docker inspect`/`docker compose config`/full env-var dumps.
+#
+# IDEMPOTENT AND NON-DESTRUCTIVE: creates any MISSING file empty at 644. For a file that already exists,
+# self-heals the mode to 644 ONLY while it is still empty (a placeholder, never populated, so nothing to
+# protect via 600 in the first place) -- the instant an operator writes a real secret into it, its size is
+# no longer zero, so this leaves both its content AND whatever permissions they set entirely alone. Safe
+# to run on every deploy, unconditionally.
 #
 # Usage:
 #   ./scripts/selfhost-init-secrets.sh
@@ -35,17 +47,21 @@ SECRET_FILES=(
 mkdir -p "$SECRETS_DIR"
 
 created=0
+healed=0
 for name in "${SECRET_FILES[@]}"; do
   path="$SECRETS_DIR/$name"
   if [ ! -e "$path" ]; then
     : >"$path"
-    chmod 600 "$path"
+    chmod 644 "$path"
     created=$((created + 1))
+  elif [ ! -s "$path" ]; then
+    chmod 644 "$path"
+    healed=$((healed + 1))
   fi
 done
 
-if [ "$created" -gt 0 ]; then
-  echo "selfhost init-secrets: created $created empty placeholder file(s) in $SECRETS_DIR/"
+if [ "$created" -gt 0 ] || [ "$healed" -gt 0 ]; then
+  echo "selfhost init-secrets: created $created, mode-healed $healed empty placeholder file(s) in $SECRETS_DIR/"
 else
   echo "selfhost init-secrets: all secret files already present, nothing to do"
 fi

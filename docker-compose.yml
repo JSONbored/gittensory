@@ -148,6 +148,16 @@ services:
       - ./gittensory-config:/config:ro
     # Mounted read-only at /run/secrets/<name> (Compose's default target). See the top-level `secrets:`
     # block above and secrets/README.md.
+    #
+    # NOT uid/gid/mode-pinned (#secrets-uid-mismatch, confirmed against a real Compose v5.3.1 daemon, not
+    # just docs): standalone (non-Swarm) Compose secrets are a plain bind mount under the hood, and a bind
+    # mount cannot remap ownership -- Compose itself warns "secrets `uid`, `gid` and `mode` are not
+    # supported, they will be ignored" and silently no-ops them, so the in-container permissions are
+    # whatever the HOST file has. This is WHY scripts/selfhost-init-secrets.sh chmod 644s (not 600s) each
+    # placeholder -- see that script's own comment for the full reasoning (the Dockerfile's `USER node`
+    # runs as uid 1000/gid 1000, essentially never the deploying host user's own uid, so a host-owner-only
+    # file is unreadable to the container process; load-file-secrets.ts's readFileSync throws, surfaced as
+    # a Sentry-visible selfhost_secret_file_unreadable error -- first caught live on edge-nl-01).
     secrets:
       - github_app_private_key
       - github_webhook_secret

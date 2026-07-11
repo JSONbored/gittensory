@@ -11,6 +11,19 @@ Putting a real secret's *value* directly in `.env` means it's readable via `dock
 Mounting it as a **file** instead keeps the value out of both — the container only ever sees a
 path, and the app reads the file's contents itself at startup.
 
+**Tradeoff, stated plainly:** these files are `chmod 644` (world-readable on the host), not `600`.
+Standalone Docker Compose's `secrets:` is a plain bind mount under the hood — it cannot remap
+in-container ownership the way Swarm secrets can, and the container reads the file as its own uid
+(the image's `node` user), which is essentially never the uid of whoever deployed it. `600` would
+just make the file unreadable to the app itself (confirmed against a real deploy — this is exactly
+what happened the first time this shipped: every secret read failed with
+`selfhost_secret_file_unreadable`). `644` is the minimum that works without requiring your host to
+have a matching uid/group. In exchange you get: not visible via `docker inspect` / `docker compose
+config` / a full container env dump, at the cost of: readable by any OTHER local user with a shell
+on this host, not just the deploying account — a genuinely wider bar than `.env` itself (typically
+`600`, owner-only). If that tradeoff is unacceptable for your threat model (a shared/multi-tenant
+host), keep using inline `.env` values instead — this feature is entirely optional, see below.
+
 ## How it works
 
 Every secret below is optional and additive. **Nothing here is required** — if you're not ready to
@@ -36,9 +49,8 @@ To use a secret file instead of an inline `.env` value:
 3. Restart the `gittensory` service (`docker compose up -d --no-deps gittensory`, or run
    `./scripts/selfhost-update.sh`).
 
-Every file below is `chmod 600`-worthy — the init script that creates the empty placeholders
-(`scripts/selfhost-init-secrets.sh`) does this for you; keep that permission if you edit a file by
-hand afterward.
+Leave each file at the `644` the init script (`scripts/selfhost-init-secrets.sh`) sets by default —
+see the tradeoff explained above for why `600` breaks the app's own ability to read it back.
 
 ## Files
 
@@ -65,4 +77,6 @@ of those too; add a matching `secrets:` entry in `docker-compose.yml` (or a
 
 Everything in this directory except this README is gitignored. `scripts/selfhost-init-secrets.sh`
 only ever creates **empty** placeholder files (so `docker compose build`/`up` never fails on a
-missing file) — it never overwrites a file that already exists, so it's always safe to re-run.
+missing file) and only ever touches the *permissions* of a file that is still empty, never its
+content — the moment you write a real value into one, both the content and whatever mode you set
+are left alone on every future run. Always safe to re-run.
