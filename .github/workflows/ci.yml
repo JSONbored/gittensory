@@ -455,8 +455,6 @@ jobs:
         run: npm run build --workspace @jsonbored/gittensory-engine
       - name: Prepare test reports dir
         run: mkdir -p reports/junit
-      - name: Report runner CPU count (temporary diagnostic)
-        run: nproc
       - name: Test with coverage (shard ${{ matrix.shard }}/6)
         id: coverage
         env:
