@@ -479,7 +479,7 @@ describe("private-beta auth and rate limiting", () => {
     expect(JSON.parse(tokenAudit?.metadata_json ?? "{}")).toMatchObject({ retryAfterSeconds: 17 });
   });
 
-  it("REGRESSION (#5000): fails OPEN when the rate-limit Durable Object itself throws, instead of crashing the request with a bare framework 500", async () => {
+  it("REGRESSION (#5000): fails closed with a structured 503 when the rate-limit Durable Object itself throws", async () => {
     const throwingLimiter = {
       idFromName(name: string) {
         return name;
@@ -495,13 +495,16 @@ describe("private-beta auth and rate limiting", () => {
     const env = createTestEnv({ RATE_LIMITER: throwingLimiter as unknown as DurableObjectNamespace });
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    await expect(enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.9" }), "strict")).resolves.toBeNull();
+    const response = await enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.9" }), "strict");
 
+    expect(response?.status).toBe(503);
+    expect(response?.headers.get("retry-after")).toBe("5");
+    await expect(response?.json()).resolves.toMatchObject({ error: "rate_limiter_unavailable", routeClass: "strict", retryAfterSeconds: 5 });
     expect(errors.mock.calls.some(([line]) => typeof line === "string" && line.includes("rate_limit_check_failed") && line.includes("\"routeClass\":\"strict\""))).toBe(true);
     errors.mockRestore();
   });
 
-  it("REGRESSION (#5000): still fails open when the Durable Object rejects with a non-Error value", async () => {
+  it("REGRESSION (#5000): still fails closed when the Durable Object rejects with a non-Error value", async () => {
     const throwingLimiter = {
       idFromName(name: string) {
         return name;
@@ -509,7 +512,7 @@ describe("private-beta auth and rate limiting", () => {
       get() {
         return {
           async fetch() {
-            // Deliberately a non-Error rejection -- exercises the `error instanceof Error` false branch in the fail-open catch below.
+            // Deliberately a non-Error rejection -- exercises the `error instanceof Error` false branch in the structured fail-closed catch below.
             throw "not an Error instance";
           },
         };
@@ -518,8 +521,10 @@ describe("private-beta auth and rate limiting", () => {
     const env = createTestEnv({ RATE_LIMITER: throwingLimiter as unknown as DurableObjectNamespace });
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    await expect(enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.10" }), "strict")).resolves.toBeNull();
+    const response = await enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.10" }), "strict");
 
+    expect(response?.status).toBe(503);
+    await expect(response?.json()).resolves.toMatchObject({ error: "rate_limiter_unavailable", routeClass: "strict", retryAfterSeconds: 5 });
     expect(errors.mock.calls.some(([line]) => typeof line === "string" && line.includes("rate_limit_check_failed") && line.includes("not an Error instance"))).toBe(true);
     errors.mockRestore();
   });

@@ -66,13 +66,19 @@ export async function enforceRateLimit(c: Context<{ Bindings: Env }>, routeClass
       body: JSON.stringify({ key, ...config }),
     });
   } catch (error) {
-    // Fail OPEN (#5000): this middleware runs on every route ahead of the handler's own try/catch, and no
-    // app.onError is registered anywhere -- an uncaught Durable Object hiccup (eviction, migration, a
-    // rolling-deploy blip) previously escaped as Hono's bare, unstructured 500 for whatever route the caller
-    // happened to be hitting, indistinguishable from a real application bug in that route. The rate limiter
-    // exists to protect the app, not crash the request it's supposed to be gating.
+    // Fail closed with a structured response (#5000): limiter outages should not escape as Hono's
+    // bare 500, but they also must not disable the global abuse-control middleware for strict or
+    // expensive routes while authentication and route handlers continue.
     console.error(JSON.stringify({ level: "error", event: "rate_limit_check_failed", routeClass, message: error instanceof Error ? error.message : String(error) }));
-    return null;
+    return c.json(
+      {
+        error: "rate_limiter_unavailable",
+        routeClass,
+        retryAfterSeconds: 5,
+      },
+      503,
+      { "retry-after": "5" },
+    );
   }
   const decision = (await decisionResponse.json().catch(() => ({}))) as Partial<RateLimitDecision>;
   if (decisionResponse.status !== 429) {
@@ -81,8 +87,8 @@ export async function enforceRateLimit(c: Context<{ Bindings: Env }>, routeClass
     if (decision.resetAt) c.res.headers.set("x-ratelimit-reset", decision.resetAt);
     return null;
   }
-  // Best-effort: the 429 itself must still reach the caller even if this audit write fails (#5000, same
-  // fail-open reasoning as the DO call above).
+  // Best-effort: the 429 itself must still reach the caller even if this audit write fails (#5000);
+  // audit durability should not turn an already-denied request into a framework 500.
   await recordAuditEvent(c.env, {
     eventType: "rate_limit.denied",
     actor: await actorHint(c),
