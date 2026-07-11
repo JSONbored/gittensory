@@ -254,6 +254,8 @@ describe("generateChatQaAnswer", () => {
     expect(userMessage).not.toMatch(/\bopen_pr_pressure\b/);
     expect(userMessage).not.toMatch(/\bwallet\b/i);
     expect(userMessage).not.toMatch(/\blikely_duplicate\b/);
+    expect(userMessage).not.toContain('"why"');
+    expect(userMessage).not.toContain('"blockedBy"');
   });
 
   it("honors a custom model override and clamps output tokens", async () => {
@@ -342,11 +344,24 @@ describe("__chatQaInternals", () => {
     expect(redactGroundingText("perfectly safe text")).toBe("perfectly safe text");
   });
 
-  it("compacts a bundle to at most 5 actions and filters out blank why/blockedBy lines after redaction", () => {
-    const compact = compactChatSignalBundle(bundleFixture());
-    expect(compact.actions).toHaveLength(1);
-    expect(compact.actions[0]?.why).toHaveLength(2);
-    expect(compact.actions[0]?.why.every((line) => line.length > 0)).toBe(true);
+  it("compacts a bundle using only public-safe action summaries", () => {
+    const compact = compactChatSignalBundle(
+      bundleFixture(undefined, {
+        why: ["Closed PR rate is 35%.", "direct PR lane share 0.37"],
+        blockedBy: ["closed_pr_credibility"],
+        publicSafeSummary: "Use the public preflight summary for contributor-visible context.",
+      }),
+    );
+    expect(compact.actions).toEqual([
+      {
+        actionType: "cleanup_existing_prs",
+        status: "recommended",
+        publicSafeSummary: "Use the public preflight summary for contributor-visible context.",
+      },
+    ]);
+    expect(JSON.stringify(compact)).not.toContain("Closed PR rate");
+    expect(JSON.stringify(compact)).not.toContain("direct PR lane share");
+    expect(JSON.stringify(compact)).not.toContain("closed_pr_credibility");
     expect(compact.freshnessWarnings).toEqual(["fresh enough"]);
   });
 

@@ -51,8 +51,9 @@ const CHAT_QA_SYSTEM_PROMPT =
   "question, say so plainly and suggest running `@gittensory preflight` or `@gittensory blockers`.";
 
 // Private decision-pack blocker codes and boundary terms are redacted (not thrown on) before the grounding
-// bundle is ever put in a prompt -- publicSafeSummary is already public-safe, but raw `blockedBy`/`why` can
-// carry these. Mirrors github/commands.ts's publicBlockerDetail redaction intent without importing it.
+// bundle is ever put in a prompt. Chat grounding intentionally uses only public-safe summaries and omits raw
+// action rationale/blocker arrays, which can carry private readiness context. Mirrors github/commands.ts's
+// publicBlockerDetail redaction intent without importing it.
 const PRIVATE_DECISION_BLOCKER_PATTERN =
   /\b(?:open_pr_pressure|closed_pr_credibility|low_credibility|maintainer_lane|inactive_or_unknown_lane|issue_discovery_only|merged_pr_history_floor|issue_discovery_validity_floor)\b/gi;
 const PRIVATE_BOUNDARY_TERM_PATTERN =
@@ -67,8 +68,6 @@ type ChatGroundingAction = {
   actionType: string;
   status: string;
   publicSafeSummary: string;
-  why: string[];
-  blockedBy: string[];
 };
 
 type ChatGroundingBundle = {
@@ -189,8 +188,6 @@ function compactChatSignalBundle(bundle: AgentRunBundle): ChatGroundingBundle {
       actionType: action.actionType,
       status: action.status,
       publicSafeSummary: redactGroundingText(action.publicSafeSummary),
-      why: action.why.slice(0, 4).map(redactGroundingText).filter((line) => line.length > 0),
-      blockedBy: action.blockedBy.slice(0, 4).map(redactGroundingText).filter((line) => line.length > 0),
     })),
     freshnessWarnings: bundle.contextSnapshots.flatMap((snapshot) => snapshot.freshnessWarnings).slice(0, 8).map(redactGroundingText),
   };
