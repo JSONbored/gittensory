@@ -1,11 +1,31 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import Parser from "web-tree-sitter";
 import { describe, expect, it } from "vitest";
 import {
   buildRepoMap,
+  extractRepoMapSymbols,
   renderRepoMap,
   resolveRepoMapLanguage,
   type LoadRepoMapLanguageFn,
   type RepoMapFileEntry,
 } from "../../packages/gittensory-engine/src/index";
+
+// Test-only parser, independent of `buildRepoMap`'s internal (unexported) loader -- gives direct tests of
+// `extractRepoMapSymbols` a real `Parser.Tree` to call it with.
+const require = createRequire(import.meta.url);
+let tsParserReady: Promise<Parser.Language> | null = null;
+async function parseTypescript(sourceText: string): Promise<Parser.Tree> {
+  await Parser.init();
+  tsParserReady ??= Parser.Language.load(
+    readFileSync(
+      require.resolve("tree-sitter-wasms/out/tree-sitter-typescript.wasm"),
+    ),
+  );
+  const parser = new Parser();
+  parser.setLanguage(await tsParserReady);
+  return parser.parse(sourceText)!;
+}
 
 describe("resolveRepoMapLanguage (#4280)", () => {
   it("maps known extensions to their grammar name", () => {
@@ -116,6 +136,18 @@ describe("buildRepoMap + extractRepoMapSymbols (#4280)", () => {
     });
     expect(entry!.symbols[0]!.signature.endsWith("…")).toBe(true);
     expect(entry!.symbols[0]!.signature.length).toBe(31); // 30 chars + the ellipsis marker
+  });
+
+  it("does not truncate a short first line even when the full multi-line node span exceeds maxSignatureChars", async () => {
+    // The node's total span (signature line + a long body line + closing brace) is well over the default
+    // 120-char maxSignatureChars, but the *first line* -- the part signatureOf actually renders -- is short.
+    // Truncation should key off the rendered first line, not the node's total byte span.
+    const sourceText = ["function short() {", `  ${"x".repeat(200)}`, "}"].join(
+      "\n",
+    );
+    const [entry] = await buildRepoMap([{ path: "src/short-sig.ts", sourceText }]);
+    expect(entry!.symbols[0]!.signature).toBe("function short() {");
+    expect(entry!.symbols[0]!.signature.endsWith("…")).toBe(false);
   });
 
   it("reports an anonymous name for an unnamed class/function expression (e.g. export default class/function)", async () => {
@@ -468,5 +500,26 @@ describe("extractRepoMapSymbols default maxSignatureChars (#4280)", () => {
       { path: "src/short.js", sourceText: shortSource },
     ]);
     expect(entry!.symbols[0]!.signature).toBe(shortSource);
+  });
+});
+
+describe("extractRepoMapSymbols legacy (tree, maxSignatureChars?) overload (#4280)", () => {
+  // `buildRepoMap` only ever calls the newer (tree, sourceText, options) form, but this overload is
+  // exported public API (packages/gittensory-engine/src/index.ts) for direct callers that pre-date the
+  // sourceText-slicing rewrite -- exercise it directly so its fallback-to-`tree.rootNode.text` path stays covered.
+  it("falls back to tree.rootNode.text and the 120-char default when called with just a tree", async () => {
+    const tree = await parseTypescript("function plain(a) {}");
+    const symbols = extractRepoMapSymbols(tree);
+    expect(symbols).toEqual([
+      { kind: "function", name: "plain", signature: "function plain(a) {}", line: 1 },
+    ]);
+  });
+
+  it("honors an explicit numeric maxSignatureChars, still sourced from tree.rootNode.text", async () => {
+    const tree = await parseTypescript("function overlyLongDeclarationName(a) {}");
+    const symbols = extractRepoMapSymbols(tree, 10);
+    expect(symbols).not.toBeNull();
+    expect(symbols![0]!.signature.endsWith("…")).toBe(true);
+    expect(symbols![0]!.signature.length).toBe(11); // 10 chars + the ellipsis marker
   });
 });
