@@ -245,6 +245,15 @@ export {
   type SubmissionGateMode,
 } from "./miner/submission-gate.js";
 export {
+  DEFAULT_MAX_CONSECUTIVE_DISENGAGEMENTS,
+  DEFAULT_MAX_REENTRIES_PER_HOUR,
+  DEFAULT_MAX_REENTRIES_PER_SESSION,
+  shouldReenter,
+  type LoopReentryCandidate,
+  type LoopReentryDecision,
+  type LoopReentryOutcome,
+} from "./miner/loop-reentry-policy.js";
+export {
   codingAgentModeExecutes,
   isGlobalMinerCodingAgentPause,
   resolveCodingAgentExecutionMode,
