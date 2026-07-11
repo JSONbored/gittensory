@@ -13,11 +13,12 @@ import type { AgentRunBundle } from "./agent-orchestrator";
 // ALREADY-deterministic decision-pack facts in the bundle (PR verdict, which checks/findings are blocking,
 // what a finding means) into natural prose; it never synthesizes new claims.
 //
-// Ollama-ONLY, by hard requirement (#4595 requirement 5): unlike the four sibling advisoryAiRouting
-// capabilities (slop/e2eTestGen/planner/summaries), which silently fall back to the shared frontier env.AI when
-// their flag is off, this surface NEVER touches the frontier. It declines whenever advisoryAiRouting.chatQa is
-// not true or env.AI_ADVISORY is unconfigured -- it does not call withAdvisoryAiEnv(env, false) and let a
-// frontier token be spent.
+// Ollama-FIRST by default (#4595 requirement 5): unlike the four sibling advisoryAiRouting capabilities
+// (slop/e2eTestGen/planner/summaries), which silently fall back to the shared frontier env.AI whenever their
+// OWN flag is off, this surface declines instead of spending a frontier token when env.AI_ADVISORY is
+// unconfigured -- UNLESS the operator explicitly opts into advisoryAiRouting.chatQaFrontierFallback (a
+// self-hoster without a local GPU may prefer their own frontier subscription over declining outright). Default
+// false preserves the original Ollama-only behavior for every existing deployment.
 
 export type ChatQaResult =
   | { status: "disabled"; reason: string }
@@ -80,14 +81,21 @@ type ChatGroundingBundle = {
 };
 
 export async function generateChatQaAnswer(env: Env, req: ChatQaRequest): Promise<ChatQaResult> {
-  // (#4595 req 5) Ollama-only enablement. BOTH gates are hard declines, never a frontier fallback.
   if (req.advisoryAiRouting?.chatQa !== true) {
     return { status: "disabled", reason: "Chat Q&A is not enabled on this instance (settings.advisoryAiRouting.chatQa is off)." };
   }
-  if (!env.AI_ADVISORY) {
+  // Ollama-first: env.AI_ADVISORY is always preferred. env.AI (frontier) is only ever touched when the
+  // operator has explicitly opted in via advisoryAiRouting.chatQaFrontierFallback (#4595 follow-up) --
+  // otherwise this stays exactly as Ollama-only as it originally shipped.
+  const frontierFallbackAllowed = req.advisoryAiRouting?.chatQaFrontierFallback === true;
+  const ai = env.AI_ADVISORY ?? (frontierFallbackAllowed ? env.AI : undefined);
+  const usedFrontier = !env.AI_ADVISORY && ai !== undefined;
+  if (!ai) {
     return {
       status: "unavailable",
-      reason: "Local advisory inference (env.AI_ADVISORY) is not configured; chat Q&A never falls back to the frontier model.",
+      reason: frontierFallbackAllowed
+        ? "Neither local advisory inference (env.AI_ADVISORY) nor the frontier model (env.AI) is configured."
+        : "Local advisory inference (env.AI_ADVISORY) is not configured; chat Q&A does not fall back to the frontier model unless advisoryAiRouting.chatQaFrontierFallback is enabled.",
     };
   }
 
@@ -134,12 +142,13 @@ export async function generateChatQaAnswer(env: Env, req: ChatQaRequest): Promis
       status: "quota_exceeded",
       estimatedNeurons: 0,
       detail: `estimated ${estimatedNeurons} neurons exceeds remaining budget ${remainingBudget}`,
+      usedFrontier,
     });
     return { status: "quota_exceeded", model, estimatedNeurons, remainingBudget };
   }
 
   try {
-    const response = await env.AI_ADVISORY.run(model, {
+    const response = await ai.run(model, {
       messages: [
         { role: "system", content: CHAT_QA_SYSTEM_PROMPT },
         { role: "user", content: prompt },
@@ -150,14 +159,14 @@ export async function generateChatQaAnswer(env: Env, req: ChatQaRequest): Promis
     const rawText = extractAiText(response);
     if (!rawText) throw new Error("empty_chat_answer");
     if (containsPublicForbiddenText(rawText)) {
-      await recordChatAi(env, req, { model, status: "unsafe", estimatedNeurons, detail: "chat answer failed public sanitizer" });
+      await recordChatAi(env, req, { model, status: "unsafe", estimatedNeurons, detail: "chat answer failed public sanitizer", usedFrontier });
       return { status: "unsafe", model, estimatedNeurons, reason: "chat answer failed public sanitizer" };
     }
-    await recordChatAi(env, req, { model, status: "ok", estimatedNeurons, detail: "chat answer generated" });
+    await recordChatAi(env, req, { model, status: "ok", estimatedNeurons, detail: "chat answer generated", usedFrontier });
     return { status: "ok", model, estimatedNeurons, text: rawText.trim() };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "chat_answer_failed";
-    await recordChatAi(env, req, { model, status: "error", estimatedNeurons: 0, detail: reason });
+    await recordChatAi(env, req, { model, status: "error", estimatedNeurons: 0, detail: reason, usedFrontier });
     return { status: "error", model, estimatedNeurons, reason };
   }
 }
@@ -240,7 +249,7 @@ function auditOutcomeForAiStatus(status: string): "success" | "denied" | "error"
 async function recordChatAi(
   env: Env,
   req: ChatQaRequest,
-  event: { model: string; status: string; estimatedNeurons: number; detail: string },
+  event: { model: string; status: string; estimatedNeurons: number; detail: string; usedFrontier: boolean },
 ): Promise<void> {
   await recordAiUsageEvent(env, {
     feature: "chat_qa",
@@ -250,7 +259,9 @@ async function recordChatAi(
     status: event.status,
     estimatedNeurons: event.estimatedNeurons,
     detail: event.detail,
-    metadata: { repoFullName: req.repoFullName, issueNumber: req.issueNumber },
+    // provider is observability-only: lets an operator who opted into chatQaFrontierFallback see, per event,
+    // whether a given answer actually spent a frontier token or stayed on the (free) local GPU.
+    metadata: { repoFullName: req.repoFullName, issueNumber: req.issueNumber, provider: event.usedFrontier ? "frontier" : "advisory" },
   });
   await recordAuditEvent(env, {
     eventType: "ai.chat_qa",
@@ -258,7 +269,13 @@ async function recordChatAi(
     route: req.route,
     outcome: auditOutcomeForAiStatus(event.status),
     detail: event.detail,
-    metadata: { repoFullName: req.repoFullName, issueNumber: req.issueNumber, model: event.model, estimatedNeurons: event.estimatedNeurons },
+    metadata: {
+      repoFullName: req.repoFullName,
+      issueNumber: req.issueNumber,
+      model: event.model,
+      estimatedNeurons: event.estimatedNeurons,
+      provider: event.usedFrontier ? "frontier" : "advisory",
+    },
   });
 }
 

@@ -112,9 +112,13 @@ export type AdvisoryAiRoutingConfig = {
   e2eTestGen: boolean;
   planner: boolean;
   summaries: boolean;
-  /** Grounded `@gittensory chat <question>` LLM Q&A (#4595). Ollama-only: unlike the four fields above it NEVER
-   *  falls back to the frontier env.AI when off -- it simply declines. Default false. */
+  /** Grounded `@gittensory chat <question>` LLM Q&A (#4595). Ollama-first: declines when off or when
+   *  env.AI_ADVISORY is unconfigured and {@link chatQaFrontierFallback} is not also enabled. Default false. */
   chatQa: boolean;
+  /** Opt-in ONLY (#4595 follow-up): when true, chat falls back to the shared frontier env.AI chain if
+   *  env.AI_ADVISORY is unconfigured, instead of declining. Meaningless unless {@link chatQa} is also true.
+   *  Default false. */
+  chatQaFrontierFallback: boolean;
 };
 
 export type ContributorBlacklistEntry = {

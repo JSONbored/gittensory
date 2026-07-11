@@ -9170,7 +9170,11 @@
               },
               "chatQa": {
                 "type": "boolean",
-                "description": "Opt the `@gittensory chat <question>` grounded Q&A surface (#4595) into local Ollama inference. Ollama-only: unlike the four capabilities above it NEVER falls back to the frontier env.AI when off; it declines unless this is true AND env.AI_ADVISORY is configured. Co-requisite: set `commandRateLimitPolicy` to `hold` (it defaults to `off` fleet-wide) so the tighter `commandRateLimitAiMaxPerWindow` ceiling actually throttles this cost-bearing command."
+                "description": "Opt the `@gittensory chat <question>` grounded Q&A surface (#4595) into local Ollama inference. Ollama-first: unlike the four capabilities above, it declines instead of falling back to the frontier env.AI when env.AI_ADVISORY is unconfigured, unless `chatQaFrontierFallback` is also enabled. Co-requisite: set `commandRateLimitPolicy` to `hold` (it defaults to `off` fleet-wide) so the tighter `commandRateLimitAiMaxPerWindow` ceiling actually throttles this cost-bearing command."
+              },
+              "chatQaFrontierFallback": {
+                "type": "boolean",
+                "description": "Opt-in only (#4595 follow-up): when true, `@gittensory chat` falls back to the shared frontier env.AI chain if env.AI_ADVISORY is unconfigured, instead of declining. Meaningless unless `chatQa` is also true. Default false -- a self-hoster without a local GPU may enable this to use their own frontier subscription/tokens for chat instead."
               }
             },
             "required": [
@@ -9178,7 +9182,8 @@
               "e2eTestGen",
               "planner",
               "summaries",
-              "chatQa"
+              "chatQa",
+              "chatQaFrontierFallback"
             ]
           },
           "gittensorLabel": {

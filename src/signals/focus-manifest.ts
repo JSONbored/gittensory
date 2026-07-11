@@ -599,6 +599,7 @@ export function resolveEffectiveSettings(
       planner: advisoryAiRoutingOverride.planner ?? base.planner,
       summaries: advisoryAiRoutingOverride.summaries ?? base.summaries,
       chatQa: advisoryAiRoutingOverride.chatQa ?? base.chatQa,
+      chatQaFrontierFallback: advisoryAiRoutingOverride.chatQaFrontierFallback ?? base.chatQaFrontierFallback,
     };
   }
   applyGateConfigOverrides(effective, manifest.gate);

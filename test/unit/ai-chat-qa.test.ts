@@ -3,8 +3,9 @@ import { __chatQaInternals, CHAT_QA_FALLBACK_COMMAND, generateChatQaAnswer } fro
 import type { AgentRunBundle } from "../../src/services/agent-orchestrator";
 import { createTestEnv } from "../helpers/d1";
 
-const ADVISORY_ON = { slop: false, e2eTestGen: false, planner: false, summaries: false, chatQa: true };
-const ADVISORY_OFF = { slop: false, e2eTestGen: false, planner: false, summaries: false, chatQa: false };
+const ADVISORY_ON = { slop: false, e2eTestGen: false, planner: false, summaries: false, chatQa: true, chatQaFrontierFallback: false };
+const ADVISORY_OFF = { slop: false, e2eTestGen: false, planner: false, summaries: false, chatQa: false, chatQaFrontierFallback: false };
+const ADVISORY_ON_FRONTIER_FALLBACK = { slop: false, e2eTestGen: false, planner: false, summaries: false, chatQa: true, chatQaFrontierFallback: true };
 
 function bundleFixture(runOverrides?: Partial<AgentRunBundle["run"]>, actionOverrides?: Partial<AgentRunBundle["actions"][number]>): AgentRunBundle {
   return {
@@ -79,7 +80,7 @@ describe("generateChatQaAnswer", () => {
     expect(result.status).toBe("disabled");
   });
 
-  it("never falls back to the frontier chain: reports unavailable when chatQa is on but AI_ADVISORY is unconfigured", async () => {
+  it("by default (chatQaFrontierFallback off) never falls back to the frontier chain: reports unavailable when chatQa is on but AI_ADVISORY is unconfigured", async () => {
     const frontierRun = vi.fn();
     const env = createTestEnv({ AI: { run: frontierRun } as unknown as Ai });
     const result = await generateChatQaAnswer(env, {
@@ -90,7 +91,55 @@ describe("generateChatQaAnswer", () => {
       issueNumber: 1,
     });
     expect(result).toMatchObject({ status: "unavailable" });
+    expect(result.status === "unavailable" ? result.reason : "").toContain("does not fall back to the frontier model");
     expect(frontierRun).not.toHaveBeenCalled();
+  });
+
+  it("#4595 follow-up: falls back to the frontier chain when chatQaFrontierFallback is enabled and AI_ADVISORY is unconfigured", async () => {
+    const frontierRun = vi.fn(async () => ({ response: "Frontier-served answer." }));
+    const env = createTestEnv({ AI: { run: frontierRun } as unknown as Ai, AI_DAILY_NEURON_BUDGET: "10000" });
+    const result = await generateChatQaAnswer(env, {
+      bundle: bundleFixture(),
+      question: "why is this blocked?",
+      advisoryAiRouting: ADVISORY_ON_FRONTIER_FALLBACK,
+      repoFullName: "owner/repo",
+      issueNumber: 1,
+    });
+    expect(result).toMatchObject({ status: "ok", text: "Frontier-served answer." });
+    expect(frontierRun).toHaveBeenCalled();
+  });
+
+  it("#4595 follow-up: still prefers AI_ADVISORY (Ollama) over the frontier chain even when chatQaFrontierFallback is enabled", async () => {
+    const advisoryRun = vi.fn(async () => ({ response: "Ollama-served answer." }));
+    const frontierRun = vi.fn();
+    const env = createTestEnv({
+      AI_ADVISORY: { run: advisoryRun } as unknown as Ai,
+      AI: { run: frontierRun } as unknown as Ai,
+      AI_DAILY_NEURON_BUDGET: "10000",
+    });
+    const result = await generateChatQaAnswer(env, {
+      bundle: bundleFixture(),
+      question: "why is this blocked?",
+      advisoryAiRouting: ADVISORY_ON_FRONTIER_FALLBACK,
+      repoFullName: "owner/repo",
+      issueNumber: 1,
+    });
+    expect(result).toMatchObject({ status: "ok", text: "Ollama-served answer." });
+    expect(advisoryRun).toHaveBeenCalled();
+    expect(frontierRun).not.toHaveBeenCalled();
+  });
+
+  it("#4595 follow-up: reports unavailable with a distinct message when chatQaFrontierFallback is enabled but NEITHER provider is configured", async () => {
+    const env = createTestEnv({});
+    const result = await generateChatQaAnswer(env, {
+      bundle: bundleFixture(),
+      question: "why is this blocked?",
+      advisoryAiRouting: ADVISORY_ON_FRONTIER_FALLBACK,
+      repoFullName: "owner/repo",
+      issueNumber: 1,
+    });
+    expect(result).toMatchObject({ status: "unavailable" });
+    expect(result.status === "unavailable" ? result.reason : "").toContain("Neither local advisory inference");
   });
 
   it("declines when no question is supplied", async () => {

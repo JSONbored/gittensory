@@ -1281,18 +1281,25 @@ export type UnlinkedIssueGuardrailConfig = {
  *  settings.advisoryAiRouting` (global default in shared/root config, per-repo override); defaults all-false
  *  so an operator must deliberately opt each capability in.
  *
- *  `chatQa` (#4595) is the ONE capability that does NOT share the others' silent-frontier fallback: the four
- *  cost-optimizing capabilities above quietly fall back to the shared frontier env.AI when their flag is off,
- *  but the `@gittensory chat` grounded Q&A surface is "Ollama only" -- it declines/skips whenever
- *  `chatQa !== true` or `env.AI_ADVISORY` is unconfigured rather than ever spending a frontier token. */
+ *  `chatQa` (#4595) is the ONE capability that does NOT share the others' silent-frontier fallback BY DEFAULT:
+ *  the four cost-optimizing capabilities above quietly fall back to the shared frontier env.AI when their flag
+ *  is off, but the `@gittensory chat` grounded Q&A surface declines/skips whenever `chatQa !== true` or
+ *  `env.AI_ADVISORY` is unconfigured, rather than ever spending a frontier token -- UNLESS `chatQaFrontierFallback`
+ *  is also explicitly enabled (a self-hoster without a local GPU may prefer their own frontier subscription
+ *  over an outright decline). */
 export type AdvisoryAiRoutingConfig = {
   slop: boolean;
   e2eTestGen: boolean;
   planner: boolean;
   summaries: boolean;
-  /** Grounded `@gittensory chat <question>` LLM Q&A (#4595). Ollama-only: unlike the four fields above it NEVER
-   *  falls back to the frontier env.AI when off -- it simply declines. Default false. */
+  /** Grounded `@gittensory chat <question>` LLM Q&A (#4595). Ollama-first: declines when off or when
+   *  env.AI_ADVISORY is unconfigured and {@link chatQaFrontierFallback} is not also enabled. Default false. */
   chatQa: boolean;
+  /** Opt-in ONLY (#4595 follow-up): when true, chat falls back to the shared frontier env.AI chain if
+   *  env.AI_ADVISORY is unconfigured, instead of declining. Meaningless unless {@link chatQa} is also true.
+   *  Default false -- preserves the original Ollama-only behavior for every existing deployment; a self-hoster
+   *  without a local GPU may enable this to use their own frontier subscription/tokens for chat instead. */
+  chatQaFrontierFallback: boolean;
 };
 
 /** A blocked contributor (#1425, anti-abuse): a GitHub `login` plus optional maintainer metadata. The converged
