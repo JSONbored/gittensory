@@ -3388,14 +3388,14 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
   });
 
   it("resolveReviewPromptOverrides: non-null manifest passes the config through; null manifest → defaults", () => {
-    const manifest = parseFocusManifest({ review: { profile: "chill", security_focus: true, inline_comments: true, suggestions: true, changed_files_summary: true, effort_score: true, impact_map: true, culture_profile: true, finding_categories: true, comment_verbosity: "detailed", path_instructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", exclude_paths: ["**/*.lock"], path_filters: ["src/**", "!src/generated/**"] } });
-    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", tone: null, securityFocus: true, inlineComments: true, suggestions: true, changedFilesSummary: true, effortScore: true, impactMap: true, cultureProfile: true, findingCategories: true, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: "detailed", e2eTestDelivery: null, pathInstructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", excludePaths: ["**/*.lock"], pathFilters: ["src/**", "!src/generated/**"], selfHostAiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } });
+    const manifest = parseFocusManifest({ review: { profile: "chill", security_focus: true, inline_comments: true, suggestions: true, changed_files_summary: true, effort_score: true, auto_merge_summary: true, impact_map: true, culture_profile: true, finding_categories: true, comment_verbosity: "detailed", path_instructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", exclude_paths: ["**/*.lock"], path_filters: ["src/**", "!src/generated/**"] } });
+    expect(resolveReviewPromptOverrides(manifest)).toEqual({ profile: "chill", tone: null, securityFocus: true, inlineComments: true, suggestions: true, changedFilesSummary: true, effortScore: true, autoMergeSummary: true, impactMap: true, cultureProfile: true, findingCategories: true, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: "detailed", e2eTestDelivery: null, pathInstructions: [{ path: "src/**", instructions: "be strict" }], instructions: "Follow our async-error conventions.", excludePaths: ["**/*.lock"], pathFilters: ["src/**", "!src/generated/**"], selfHostAiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } });
     // A null manifest (load failure) yields the byte-identical defaults; inline comments + suggestions +
-    // changed-files summary + effort score + impact map + culture profile + finding categories + security focus
-    // all default OFF (strict false) — inlineComments collapses the same way as every sibling flag on this
-    // object (#4099: shouldRequestInlineFindings only ever checks `=== true`, so null/false/absent are
-    // functionally identical to it; no tri-state needed here).
-    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, tone: null, securityFocus: false, inlineComments: false, suggestions: false, changedFilesSummary: false, effortScore: false, impactMap: false, cultureProfile: false, findingCategories: false, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], selfHostAiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } });
+    // changed-files summary + effort score + auto-merge summary + impact map + culture profile + finding
+    // categories + security focus all default OFF (strict false) — inlineComments collapses the same way as
+    // every sibling flag on this object (#4099: shouldRequestInlineFindings only ever checks `=== true`, so
+    // null/false/absent are functionally identical to it; no tri-state needed here).
+    expect(resolveReviewPromptOverrides(null)).toEqual({ profile: null, tone: null, securityFocus: false, inlineComments: false, suggestions: false, changedFilesSummary: false, effortScore: false, autoMergeSummary: false, impactMap: false, cultureProfile: false, findingCategories: false, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, e2eTestDelivery: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], selfHostAiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG } });
     // An explicit false / absent toggle both resolve to the strict-boolean false.
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { inline_comments: false } })).inlineComments).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).inlineComments).toBe(false);
@@ -3405,6 +3405,8 @@ describe("resolveReviewPathInstructions (#review-path-instructions)", () => {
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).changedFilesSummary).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { effort_score: false } })).effortScore).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).effortScore).toBe(false);
+    expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { auto_merge_summary: false } })).autoMergeSummary).toBe(false);
+    expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).autoMergeSummary).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { impact_map: false } })).impactMap).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { profile: "chill" } })).impactMap).toBe(false);
     expect(resolveReviewPromptOverrides(parseFocusManifest({ review: { finding_categories: false } })).findingCategories).toBe(false);

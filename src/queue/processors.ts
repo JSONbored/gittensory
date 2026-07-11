@@ -9756,6 +9756,7 @@ async function maybePublishPrPublicSurface(
   let suggestionsEnabledForReview = false;
   let changedFilesSummaryEnabledForReview = false;
   let effortScoreEnabledForReview = false;
+  let autoMergeSummaryEnabledForReview = false;
   let reviewMemoryEnabledForReview = false;
   let findingCategoriesEnabledForReview = false;
   let fixHandoffEnabledForReview = false;
@@ -10340,6 +10341,7 @@ async function maybePublishPrPublicSurface(
     const deterministicReviewOverrides = resolveReviewPromptOverrides(reviewManifestForAutoReview);
     changedFilesSummaryEnabledForReview = deterministicReviewOverrides.changedFilesSummary;
     effortScoreEnabledForReview = deterministicReviewOverrides.effortScore;
+    autoMergeSummaryEnabledForReview = deterministicReviewOverrides.autoMergeSummary;
     minFindingSeverityForReview = deterministicReviewOverrides.minFindingSeverity;
     inlineCommentsPerCategoryForReview = deterministicReviewOverrides.inlineCommentsPerCategory;
     // review.memory (#2179, part of #1964): deterministic, no-AI -- resolved the same unconditional way as
@@ -11831,6 +11833,21 @@ async function maybePublishPrPublicSurface(
         ...(aiReview !== undefined ? { aiReview } : {}),
         advisoryFindings: advisory.findings,
         ...(linkedIssueSatisfaction !== null ? { linkedIssueSatisfaction } : {}),
+        // review.auto_merge_summary (#2051/#4147): deterministic, no-AI — reuses the SAME ciState/
+        // mergeStateLabel/gate/linkedIssues facts this pass already resolved for mergeReadiness and the gate
+        // verdict above, no extra fetch. gatePassing mirrors the gate's own "no hard blocker" definition
+        // (conclusion === "success"); linkedIssueValid mirrors missing_linked_issue's own "has at least one
+        // linked issue reference" check (pr.linkedIssues.length > 0).
+        ...(autoMergeSummaryEnabledForReview
+          ? {
+              autoMergeSummary: {
+                ciGreen: ciState === "passed",
+                gatePassing: renderedGate.conclusion === "success",
+                mergeableClean: mergeStateLabel === "clean",
+                linkedIssueValid: pr.linkedIssues.length > 0,
+              },
+            }
+          : {}),
         panelRows: rows,
         ...(reviewConfig?.fields !== undefined
           ? { reviewFields: reviewConfig.fields }

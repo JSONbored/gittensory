@@ -364,6 +364,31 @@ describe("buildUnifiedCommentBody", () => {
     expect(without).not.toContain("Linked issue satisfaction");
   });
 
+  it("renders the read-only auto-merge readiness collapsible when autoMergeSummary is present, and omits it otherwise (#2051/#4147)", () => {
+    const withSummary = buildUnifiedCommentBody({
+      gate: gate(),
+      aiReview: { notes: "Clean change." },
+      panelRows,
+      readinessTotal: 88,
+      changedFiles: 3,
+      footerMarkdown: footer,
+      autoMergeSummary: { ciGreen: true, gatePassing: true, mergeableClean: false, linkedIssueValid: true },
+    });
+    expect(withSummary).toContain("Auto-merge readiness");
+    expect(withSummary).toContain("CI checks green");
+    expect(withSummary).toContain("Branch mergeable (clean)");
+    expect(withSummary).toContain("_Read-only snapshot of the current auto-merge conditions");
+    const without = buildUnifiedCommentBody({
+      gate: gate(),
+      aiReview: { notes: "Clean change." },
+      panelRows,
+      readinessTotal: 88,
+      changedFiles: 3,
+      footerMarkdown: footer,
+    });
+    expect(without).not.toContain("Auto-merge readiness");
+  });
+
   it("forwards maxFindings caps into the rendered blocker/nit sections (#2049)", () => {
     const body = buildUnifiedCommentBody({
       gate: gate({

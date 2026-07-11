@@ -34,8 +34,10 @@ import { githubPrFileDiffUrl } from "./changed-files-diff-link";
 import { classifyFindingCategory, FINDING_CATEGORIES, type FindingCategory } from "./finding-category-classify";
 import type { FixHandoffBlock } from "./fix-handoff-render";
 import {
+  buildAutoMergeSummaryCollapsible,
   buildUnifiedReviewInput,
   renderUnifiedReviewComment,
+  type AutoMergeSummarySignals,
   type DualReviewNote,
   type MergeReadiness,
   type ReviewNotes,
@@ -346,6 +348,12 @@ export type UnifiedCommentBridgeArgs = {
    *  through to `buildUnifiedReviewInput`'s `reviewEffort`). No AI. Default OFF (the processor passes this only
    *  when the manifest opts in — see `resolveReviewPromptOverrides`'s `effortScore`). (#1955) */
   reviewEffort?: { band: 1 | 2 | 3 | 4 | 5; minutes: number } | undefined;
+  /** Read-only "auto-merge readiness" conditions table (review.auto_merge_summary port, #2051/#4147). When
+   *  present, an "Auto-merge readiness" collapsible listing which auto-merge conditions currently pass/fail
+   *  is appended — informational only, never a decision or a promise to merge (the gate/status chip above it
+   *  remains the actual verdict). No AI, no network. Default OFF (the processor passes this only when the
+   *  manifest opts in — see `resolveReviewPromptOverrides`'s `autoMergeSummary`). */
+  autoMergeSummary?: AutoMergeSummarySignals | undefined;
   /** Display-only caps from `review.max_findings` (#2049). */
   maxFindingsCaps?: { blockers: number | null; nits: number | null } | undefined;
   /** `review.comment_verbosity` port (#2047): how much collapsible detail renders — `quiet` drops the Nits
@@ -762,6 +770,13 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     args.manifestWarnings && args.manifestWarnings.length > 0 ? buildManifestValidationCollapsible(args.manifestWarnings) : null;
   const withManifestValidation =
     manifestValidationCollapsible !== null ? [manifestValidationCollapsible, ...(args.extraCollapsibles ?? [])] : args.extraCollapsibles;
+  // review.auto_merge_summary port (#2051/#4147): when the manifest opts in, the processor hands us the
+  // already-computed auto-merge condition signals here; append the read-only "Auto-merge readiness"
+  // collapsible right after manifest validation (decision-relevant, so ahead of the structural/visual
+  // summaries below). Flag-OFF (the processor passes undefined) ⇒ extraCollapsibles is unchanged.
+  const autoMergeSummaryCollapsible = args.autoMergeSummary !== undefined ? buildAutoMergeSummaryCollapsible(args.autoMergeSummary) : null;
+  const withAutoMergeSummary =
+    autoMergeSummaryCollapsible !== null ? [...(withManifestValidation ?? []), autoMergeSummaryCollapsible] : withManifestValidation;
   // review.changed_files_summary port: when the manifest opts in, the processor hands us every changed file's
   // path + deltas here; append the grouped "Changed files" collapsible ahead of the visual preview (structure
   // before pixels). Flag-OFF (the processor passes undefined) ⇒ extraCollapsibles is unchanged. (#1957)
@@ -770,7 +785,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
       ? buildChangedFilesSummaryCollapsible(args.changedFilesSummary, args.changedFilesSummaryContext)
       : null;
   const withChangedFiles =
-    changedFilesCollapsible !== null ? [...(withManifestValidation ?? []), changedFilesCollapsible] : withManifestValidation;
+    changedFilesCollapsible !== null ? [...(withAutoMergeSummary ?? []), changedFilesCollapsible] : withAutoMergeSummary;
   // review.finding_categories port: when the manifest opts in, the processor hands us this review's line-anchored
   // AI findings here; append the "Finding categories" collapsible right after Changed files (both are structural
   // review-shape summaries, ahead of the visual preview). Flag-OFF (the processor passes undefined) ⇒
