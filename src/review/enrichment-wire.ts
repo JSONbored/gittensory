@@ -53,6 +53,32 @@ function sharedSecretWasNormalized(
   return (normalized ?? "") !== raw;
 }
 
+// REES's own /v1/ping returns 503 specifically to mean "not configured/ready yet" (server.ts: no
+// REES_SHARED_SECRET set on that side) -- the same benign startup-ordering race probeReesSecretAtStartup's
+// catch block already extends grace to for a refused connection (GITTENSORY-1J: 7 Sentry events, all in one
+// ~5h window, never recurring -- consistent with a one-time deploy/restart race, not a persistent
+// misconfiguration). Retry a few times before escalating; any other status is final on the first response.
+const REES_PING_NOT_READY_RETRIES = 2;
+const REES_PING_NOT_READY_RETRY_DELAY_MS = 500;
+
+async function fetchReesPingWithRetry(url: string, secret: string): Promise<Response> {
+  const request = () =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "user-agent": "gittensory-selfhost/1.0",
+        authorization: `Bearer ${secret}`,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+  let response = await request();
+  for (let attempt = 0; attempt < REES_PING_NOT_READY_RETRIES && response.status === 503; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, REES_PING_NOT_READY_RETRY_DELAY_MS));
+    response = await request();
+  }
+  return response;
+}
+
 // Set true once the startup probe confirms REES rejects the shared secret (401/403). Once set,
 // buildReviewEnrichment skips every /v1/enrich call for the rest of this process's lifetime instead of
 // repeating a call that's confirmed to fail on every PR review, each one logging review_context_fetch_failed.
@@ -104,17 +130,7 @@ export function probeReesSecretAtStartup(env: Env): void {
   // Probe asynchronously — never block the server from starting.
   void (async () => {
     try {
-      const response = await fetch(
-        `${base.replace(/\/+$/, "")}/v1/ping`,
-        {
-          method: "POST",
-          headers: {
-            "user-agent": "gittensory-selfhost/1.0",
-            authorization: `Bearer ${sharedSecret}`,
-          },
-          signal: AbortSignal.timeout(5000),
-        },
-      );
+      const response = await fetchReesPingWithRetry(`${base.replace(/\/+$/, "")}/v1/ping`, sharedSecret);
       if (response.ok) {
         console.log(
           JSON.stringify({

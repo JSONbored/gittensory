@@ -144,6 +144,46 @@ describe("probeReesSecretAtStartup", () => {
     errSpy.mockRestore();
   });
 
+  it("REGRESSION (#5006, GITTENSORY-1J): retries a 503 ('not ready yet') a few times before escalating to rees_ping_error", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: false, status: 503 }) as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: "s3cret" }));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(fetchSpy).toHaveBeenCalledTimes(3); // the first attempt + 2 retries, all still 503
+    const parsed = errSpy.mock.calls.map((c) => JSON.parse(c[0] as string));
+    expect(parsed.some((p) => p.event === "rees_ping_error" && p.status === 503)).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("REGRESSION (#5006): a 503 that clears on retry succeeds without ever escalating to rees_ping_error", async () => {
+    let calls = 0;
+    const fetchSpy = vi.fn(async () => {
+      calls += 1;
+      return (calls < 2 ? { ok: false, status: 503 } : { ok: true }) as Response;
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: "s3cret" }));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy.mock.calls.some((c) => JSON.parse(c[0] as string).event === "rees_ping_ok")).toBe(true);
+    expect(errSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("does not retry a non-503 non-ok status — a single attempt is final", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: false, status: 500 }) as Response);
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    probeReesSecretAtStartup(env({ REES_URL: "https://rees.example", REES_SHARED_SECRET: "s3cret" }));
+    await flush();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    errSpy.mockRestore();
+  });
+
   it("warns rees_ping_error (not throw) when the fetch itself rejects — REES may not be up yet", async () => {
     const fetchSpy = vi.fn(async () => {
       throw new Error("connect ECONNREFUSED");
