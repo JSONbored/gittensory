@@ -101,10 +101,17 @@ async function readCommitHistory(exec, repoPath, commitSha) {
     });
 }
 
+// Lightweight tags have no tag object of their own, so `%(creatordate)` falls back to the POINTED-TO commit's
+// date rather than a genuine tag-creation date -- git has no record of when a lightweight tag was actually
+// created at all. That means a lightweight tag added long after T, but pointing at an ancestor of T, would
+// silently pass validateSnapshotFreshness's date check every time (its reported "date" is always <= T's, by
+// construction of --merged). Since this can never be verified, lightweight tags are excluded from the export
+// entirely -- `%(objecttype)` is "tag" only for an annotated tag's own tag object, "commit" for a lightweight
+// tag's direct target, which is how the two are told apart.
 async function readReachableTags(exec, repoPath, commitSha) {
   const result = await exec(
     "git",
-    ["tag", "--merged", commitSha, `--format=%(refname:short)${FIELD_SEP}%(creatordate:iso-strict)${FIELD_SEP}%(objectname)`],
+    ["tag", "--merged", commitSha, `--format=%(refname:short)${FIELD_SEP}%(creatordate:iso-strict)${FIELD_SEP}%(objectname)${FIELD_SEP}%(objecttype)`],
     { cwd: repoPath },
   );
   const stdout = assertExecResult(result, "git_tag_merged_failed");
@@ -112,9 +119,11 @@ async function readReachableTags(exec, repoPath, commitSha) {
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [name, date, targetSha] = line.split(FIELD_SEP);
-      return { name, date, targetSha };
-    });
+      const [name, date, targetSha, objectType] = line.split(FIELD_SEP);
+      return { name, date, targetSha, objectType };
+    })
+    .filter((tag) => tag.objectType === "tag")
+    .map(({ objectType, ...tag }) => tag);
 }
 
 /** Finds the repo-root README (any casing/extension) at commitSha and returns its content, or null if none
@@ -250,14 +259,25 @@ export async function exportReplaySnapshot(input, deps) {
   const worktreePath = planReplaySnapshotPath({ repoPath, commitSha });
   await addDetachedWorktree(exec, repoPath, worktreePath, commitSha);
 
-  const targetDate = await readTargetCommitDate(exec, repoPath, commitSha);
-  const commits = await readCommitHistory(exec, repoPath, commitSha);
-  const tags = await readReachableTags(exec, repoPath, commitSha);
-  const readme = await readReadmeAtCommit(exec, repoPath, commitSha);
+  // Everything below can fail (a bad git read, or a deliberate freshness violation) after the worktree already
+  // exists on disk at the deterministic path above. Left behind, a retry for the same (repo, commit) pair would
+  // hit `git worktree add`'s own "path already exists" refusal instead of the real error, permanently masking
+  // it. Clean up the worktree on any failure here before rethrowing, so a retry starts from a clean slate.
+  try {
+    const targetDate = await readTargetCommitDate(exec, repoPath, commitSha);
+    const commits = await readCommitHistory(exec, repoPath, commitSha);
+    const tags = await readReachableTags(exec, repoPath, commitSha);
+    const readme = await readReadmeAtCommit(exec, repoPath, commitSha);
 
-  validateSnapshotFreshness({ targetDate, commits, tags });
+    validateSnapshotFreshness({ targetDate, commits, tags });
 
-  return store.saveSnapshot({ repoFullName, commitSha, worktreePath, targetDate, commits, tags, readme });
+    return store.saveSnapshot({ repoFullName, commitSha, worktreePath, targetDate, commits, tags, readme });
+  } catch (error) {
+    await removeReplaySnapshotWorktree(exec, repoPath, worktreePath).catch(() => {
+      /* best-effort cleanup -- the original error below is the one that matters to the caller */
+    });
+    throw error;
+  }
 }
 
 /** Tear down a replay snapshot's working-tree export (the cached context-bundle row is left in place -- it is

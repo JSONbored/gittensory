@@ -48,7 +48,7 @@ function happyPathScripts(overrides: Array<{ match: (args: readonly string[]) =>
     { match: isWorktreeAdd, result: ok() },
     { match: isTargetDate, result: ok("2026-01-05T00:00:00+00:00\n") },
     { match: isHistory, result: ok(`abc123${FIELD_SEP}2026-01-05T00:00:00+00:00${FIELD_SEP}the target commit\n`) },
-    { match: isTag, result: ok(`v1.0.0${FIELD_SEP}2026-01-01T00:00:00+00:00${FIELD_SEP}abc000\n`) },
+    { match: isTag, result: ok(`v1.0.0${FIELD_SEP}2026-01-01T00:00:00+00:00${FIELD_SEP}abc000${FIELD_SEP}tag\n`) },
     { match: isLsTree, result: ok("README.md\nsrc\npackage.json\n") },
     { match: isShow, result: ok("# hello\n") },
   ];
@@ -162,10 +162,10 @@ describe("exportReplaySnapshot (#3010)", () => {
     expect(snapshot.tags).toEqual([]);
   });
 
-  it("a repo with MULTIPLE tags parses every reachable tag", async () => {
+  it("a repo with MULTIPLE annotated tags parses every reachable tag", async () => {
     const tagStdout = [
-      `v1.0.0${FIELD_SEP}2025-12-01T00:00:00+00:00${FIELD_SEP}sha1`,
-      `v1.1.0${FIELD_SEP}2026-01-01T00:00:00+00:00${FIELD_SEP}sha2`,
+      `v1.0.0${FIELD_SEP}2025-12-01T00:00:00+00:00${FIELD_SEP}sha1${FIELD_SEP}tag`,
+      `v1.1.0${FIELD_SEP}2026-01-01T00:00:00+00:00${FIELD_SEP}sha2${FIELD_SEP}tag`,
     ].join("\n") + "\n";
     const { exec } = scriptedExec(happyPathScripts([{ match: isTag, result: ok(tagStdout) }]));
     const store = tempStore();
@@ -176,6 +176,19 @@ describe("exportReplaySnapshot (#3010)", () => {
       { name: "v1.0.0", date: "2025-12-01T00:00:00+00:00", targetSha: "sha1" },
       { name: "v1.1.0", date: "2026-01-01T00:00:00+00:00", targetSha: "sha2" },
     ]);
+  });
+
+  it("excludes a lightweight tag from the export -- its reported date is the pointed-to commit's, not a verifiable tag-creation date", async () => {
+    const tagStdout = [
+      `v1.0.0${FIELD_SEP}2025-12-01T00:00:00+00:00${FIELD_SEP}sha1${FIELD_SEP}tag`, // annotated -- kept
+      `v-lightweight${FIELD_SEP}2026-01-01T00:00:00+00:00${FIELD_SEP}sha2${FIELD_SEP}commit`, // lightweight -- dropped
+    ].join("\n") + "\n";
+    const { exec } = scriptedExec(happyPathScripts([{ match: isTag, result: ok(tagStdout) }]));
+    const store = tempStore();
+
+    const snapshot = await exportReplaySnapshot({ repoPath: "/repo", repoFullName: "acme/widgets", commitSha: "abc123" }, { exec, store });
+
+    expect(snapshot.tags).toEqual([{ name: "v1.0.0", date: "2025-12-01T00:00:00+00:00", targetSha: "sha1" }]);
   });
 
   it("a commit at the very first commit of history: git log returns exactly one entry, no parents to walk", async () => {
@@ -212,14 +225,41 @@ describe("exportReplaySnapshot (#3010)", () => {
     expect(snapshot.readme?.filename).toBe("Readme.rst");
   });
 
-  it("throws a freshness violation and never persists when a tag postdates the target commit", async () => {
-    const { exec } = scriptedExec(happyPathScripts([{ match: isTag, result: ok(`v-future${FIELD_SEP}2026-06-01T00:00:00+00:00${FIELD_SEP}abc000\n`) }]));
+  it("throws a freshness violation, never persists, AND removes the worktree it already created -- a retry for the same pair must not hit a stale 'path already exists'", async () => {
+    const { exec, calls } = scriptedExec(happyPathScripts([{ match: isTag, result: ok(`v-future${FIELD_SEP}2026-06-01T00:00:00+00:00${FIELD_SEP}abc000${FIELD_SEP}tag\n`) }]));
     const store = tempStore();
 
     await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "acme/widgets", commitSha: "abc123" }, { exec, store })).rejects.toThrow(
       /replay_snapshot_freshness_violation/,
     );
     expect(store.getSnapshot("acme/widgets", "abc123")).toBeNull();
+    const removeCall = calls.find((c) => c.args[0] === "worktree" && c.args[1] === "remove");
+    expect(removeCall?.args).toEqual(["worktree", "remove", "--force", "/repo/.gittensory-replay-snapshots/abc123"]);
+  });
+
+  it("removes the worktree and rethrows the ORIGINAL error (not a cleanup error) when a git read after the worktree exists fails", async () => {
+    const { exec, calls } = scriptedExec(happyPathScripts([{ match: isHistory, result: { code: 1, stderr: "fatal: history read failed" } }]));
+    const store = tempStore();
+
+    await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "acme/widgets", commitSha: "abc123" }, { exec, store })).rejects.toThrow(
+      /git_log_history_failed/,
+    );
+    const removeCall = calls.find((c) => c.args[0] === "worktree" && c.args[1] === "remove");
+    expect(removeCall).toBeDefined();
+  });
+
+  it("still rethrows the original error even when the best-effort cleanup itself fails", async () => {
+    const { exec } = scriptedExec(
+      happyPathScripts([
+        { match: isHistory, result: { code: 1, stderr: "fatal: history read failed" } },
+        { match: (args) => args[0] === "worktree" && args[1] === "remove", result: { code: 1, stderr: "fatal: cleanup also failed" } },
+      ]),
+    );
+    const store = tempStore();
+
+    await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "acme/widgets", commitSha: "abc123" }, { exec, store })).rejects.toThrow(
+      /git_log_history_failed/,
+    );
   });
 
   it("tolerates a successful exec result with no stdout captured at all (e.g. worktree add, whose output is unused)", async () => {
