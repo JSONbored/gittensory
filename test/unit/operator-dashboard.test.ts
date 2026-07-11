@@ -50,6 +50,12 @@ describe("operator dashboard payload", () => {
       recentAutoActions: 0,
       reversedTargets: [],
     });
+    // #2196: org-wide slop-band calibration fails safe to an empty calibration when no resolved PR carries a band.
+    expect(payload.slopCalibration).toMatchObject({
+      totalResolved: 0,
+      overallMergeRate: null,
+      discriminates: null,
+    });
     // Empty fleet → instanceCount 0, null precision card ("—"), no-outlier delta.
     expect(payload.fleetMetrics.instanceCount).toBe(0);
     expect(payload.metrics).toEqual(

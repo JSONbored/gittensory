@@ -4,6 +4,7 @@ import {
   getCommandUsefulnessSummary,
   getLatestScoringModelSnapshot,
   getProductUsageRollupStatus,
+  listAllPullRequests,
   listInstallationHealth,
   listInstallations,
   listLatestGitHubRateLimitObservations,
@@ -32,6 +33,7 @@ import { computeCycleTimeAggregate, type CycleTimeAggregate } from "../review/st
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
 import { buildRecommendationQualityReport, type RecommendationQualityReport } from "./recommendation-quality-report";
+import { buildSlopOutcomeCalibration, type SlopOutcomeCalibration } from "./outcome-calibration";
 import { buildWeeklyValueReport } from "./weekly-value-report";
 
 export type OperatorDashboardMetric = {
@@ -71,6 +73,9 @@ export type OperatorDashboardPayload = {
   calibration: Calibration;
   // Agent reversal health (#2193): how often humans reopened/reverted bot auto-actions (ops.ts AgentHealth).
   agentHealth: AgentHealth;
+  // Slop-band calibration (#2196): org-wide per-band merge/close rates over resolved PRs carrying a persisted
+  // slop band — is the deterministic slop score predictive? Bands only, never raw scores. Fails safe to empty.
+  slopCalibration: SlopOutcomeCalibration;
 };
 
 const USAGE_WINDOW_DAYS = 7;
@@ -98,6 +103,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     cycleTime,
     calibration,
     agentHealth,
+    slopCalibration,
   ] = await Promise.all([
     listRepositories(env),
     listInstallations(env),
@@ -121,6 +127,11 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     computeCycleTimeAggregate(env, { days: 90, nowMs: Date.now() }),
     computeCalibration(env, operatorAgentConfig(env)),
     computeAgentHealth(env, operatorAgentConfig(env)),
+    // #2196: org-wide slop-band calibration from persisted slop bands on resolved PRs; fails safe to an empty
+    // calibration on any read error (mirrors the sibling reads) so one DB hiccup never fails the whole dashboard.
+    listAllPullRequests(env)
+      .then(buildSlopOutcomeCalibration)
+      .catch(() => buildSlopOutcomeCalibration([])),
   ]);
   const weeklyValueReport = buildWeeklyValueReport({
     generatedAt: nowIso(),
@@ -224,6 +235,7 @@ export async function buildOperatorDashboardPayload(env: Env): Promise<OperatorD
     cycleTime,
     calibration,
     agentHealth,
+    slopCalibration,
   };
 }
 
