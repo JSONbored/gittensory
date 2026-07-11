@@ -171,8 +171,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          # Full history so Codecov can resolve the merge base for patch coverage.
-          fetch-depth: 0
+          # Shallow (default depth): this job no longer uploads to Codecov -- that moved to validate-tests
+          # (#ci-shard-coverage) -- so it has no reason to fetch full history anymore.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Neutralize untrusted npm config
         run: rm -f .npmrc
@@ -435,6 +435,8 @@ jobs:
         run: npm run build --workspace @jsonbored/gittensory-engine
       - name: Prepare test reports dir
         run: mkdir -p reports/junit
+      - name: Report runner CPU count (temporary diagnostic)
+        run: nproc
       - name: Test with coverage (shard ${{ matrix.shard }}/6)
         id: coverage
         env:
