@@ -13,7 +13,9 @@ const ALLOWED = [
 ];
 const REQUIRED = ["bin/gittensory-miner.js", "package.json"];
 const FORBIDDEN_PATH = /(^|\/)(\.dev\.vars|\.env|\.npmrc|.*\.pem|.*private.*key.*|.*secret.*)$/i;
-const FORBIDDEN_CONTENT =
+// Exported (#5199) so the MCP read-only-tool contract suite reuses the exact same secret-shape matcher instead
+// of writing a second detector that could drift from this one.
+export const FORBIDDEN_CONTENT =
   /(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+|gts_[0-9a-f]{64}|[A-Z0-9_]*(TOKEN|SECRET|PRIVATE_KEY)=)/;
 
 export function validateMinerPackFileList(files, readContent) {
