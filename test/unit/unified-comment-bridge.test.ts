@@ -814,6 +814,49 @@ describe("gate blockers render in 'Why this is blocked' (FIX D1)", () => {
     expect(body).not.toMatch(/trust score/i);
     expect(body).toContain("[context]");
   });
+
+  // gittensory PR #5347: the real-world `summary` evaluateGateCheckCore produces for a "failure" conclusion is
+  // LITERALLY `blockers.map(f => title + action).join("; ")` -- not the short hand-authored string the tests
+  // above use. The earlier tests in this describe block never exercise that realistic value, so they never
+  // caught this. Reproduce it exactly here.
+  it("does NOT print the blocker text twice when gate.summary is the REALISTIC blockers-restated string (#5347)", () => {
+    const blockerTitle = "schema-version.js:42 applies multiple migrations before stamping once";
+    const blockerAction = "wrap the migration loop and the stamp in one transaction";
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "failure",
+        title: `Gittensory Orb Review Agent: ${blockerTitle}`,
+        // The exact shape evaluateGateCheckCore's `summary` field produces: blockers restated, title + action.
+        summary: `${blockerTitle} — ${blockerAction}.`,
+        blockers: [{ code: "ai_consensus_defect", severity: "critical", title: blockerTitle, detail: blockerAction, action: blockerAction }],
+      }),
+      advisoryFindings: [{ code: "ai_consensus_defect", severity: "critical", title: blockerTitle, detail: blockerAction }],
+      panelRows,
+      readinessTotal: 100,
+      changedFiles: 10,
+      footerMarkdown: footer,
+    });
+    // Exactly once: under "Why this is blocked" only, never ALSO restated under "Suggested Action".
+    expect(body.split(blockerTitle).length - 1).toBe(1);
+    expect(body).toContain("Why this is blocked");
+  });
+
+  it("a manual-review HOLD (no gate blockers) still shows its own top-level reason, unaffected by the #5347 fix", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "neutral",
+        title: "Gittensory Orb Review Agent — held for manual review",
+        summary: "A repo-configured guardrail path was touched.",
+        blockers: [],
+        warnings: [{ code: "guardrail_hold", severity: "warning", title: "Guardrail path touched", detail: "wrangler.jsonc" }],
+      }),
+      panelRows,
+      readinessTotal: 50,
+      changedFiles: 1,
+      footerMarkdown: footer,
+    });
+    expect(body).toContain("Guardrail path touched: wrangler.jsonc");
+  });
 });
 
 describe("buildUnifiedCommentBody: visual findings render in their OWN section, never duplicated as a generic Nit (#4111)", () => {
@@ -1037,10 +1080,13 @@ describe("privacy invariant: the private 'Maintainer notes' internals never reac
       footerMarkdown: footer,
     });
     expect(body).not.toContain("Maintainer notes");
-    // Sanity: the new depth IS present (so this isn't passing on an empty body).
+    // Sanity: the new depth IS present (so this isn't passing on an empty body). Since gate.blockers is
+    // non-empty here, gateVerdictReason omits the redundant gate.summary fallback (#5347) — the real blocker
+    // titles below are the actual populated content, not the generic "A hard blocker was found." placeholder.
     expect(body).toContain("Why this is blocked");
     expect(body).toContain("CI checks failing");
-    expect(body).toContain("A hard blocker was found.");
+    expect(body).toContain("Real bug");
+    expect(body).toContain("No linked issue");
   });
 });
 
