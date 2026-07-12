@@ -13,7 +13,6 @@ import type { Advisory, PullRequestRecord, RepositorySettings } from "../../src/
 function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
   return {
     commentMode: "detected_contributors_only",
-    gateCheckMode: "enabled",
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "block",
     qualityGateMode: "advisory",
@@ -44,17 +43,16 @@ describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
     const eff = resolveEffectiveSettings(settings({ linkedIssueGateMode: "block" }), parseFocusManifest(null));
     expect(eff.linkedIssueGateMode).toBe("block");
     expect(eff.duplicatePrGateMode).toBe("block");
-    expect(eff.gateCheckMode).toBe("enabled");
   });
 
-  it("overlays the friendly gate: alias over DB settings (incl. gate.enabled -> gateCheckMode)", () => {
+  it("overlays the friendly gate: alias over DB settings (incl. gate.enabled -> reviewCheckMode)", () => {
     const eff = resolveEffectiveSettings(
-      settings({ gateCheckMode: "enabled", linkedIssueGateMode: "advisory", duplicatePrGateMode: "block", qualityGateMode: "off", qualityGateMinScore: 10 }),
+      settings({ reviewCheckMode: "required", linkedIssueGateMode: "advisory", duplicatePrGateMode: "block", qualityGateMode: "off", qualityGateMinScore: 10 }),
       // readiness.mode: "block" is downgraded to "advisory" at parse time (#2267) — readiness/quality can
       // never hard-block, so this exercises the SAME downgrade flowing through resolveEffectiveSettings.
       parseFocusManifest({ gate: { enabled: false, linkedIssue: "block", duplicates: "off", readiness: { mode: "block", minScore: 70 } } }),
     );
-    expect(eff.gateCheckMode).toBe("off"); // gate.enabled: false disables from config
+    expect(eff.reviewCheckMode).toBe("disabled"); // gate.enabled: false disables from config
     expect(eff.linkedIssueGateMode).toBe("block");
     expect(eff.duplicatePrGateMode).toBe("off");
     expect(eff.qualityGateMode).toBe("advisory");
@@ -63,12 +61,12 @@ describe(".gittensory.yml settings override (resolveEffectiveSettings)", () => {
 
   it("overlays the generic settings: block over DB, and gate: wins for gate fields", () => {
     const eff = resolveEffectiveSettings(
-      settings({ commentMode: "off", publicSurface: "off", gateCheckMode: "off", linkedIssueGateMode: "off" }),
+      settings({ commentMode: "off", publicSurface: "off", reviewCheckMode: "disabled", linkedIssueGateMode: "off" }),
       parseFocusManifest({ settings: { commentMode: "all_prs", publicSurface: "comment_only", gateCheckMode: "enabled", linkedIssueGateMode: "advisory" }, gate: { linkedIssue: "block" } }),
     );
     expect(eff.commentMode).toBe("all_prs"); // settings: override
     expect(eff.publicSurface).toBe("comment_only"); // settings: override
-    expect(eff.gateCheckMode).toBe("enabled"); // settings: override (config enables the gate)
+    expect(eff.reviewCheckMode).toBe("required"); // settings.gateCheckMode: enabled -> reviewCheckMode: required (engine-level back-compat parse, #5373 stage 2.10)
     expect(eff.linkedIssueGateMode).toBe("block"); // gate: wins over settings:
   });
 

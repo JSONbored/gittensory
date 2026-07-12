@@ -670,9 +670,6 @@ export const RepositorySettingsSchema = z
     publicSignalLevel: z.enum(["minimal", "standard"]),
     checkRunMode: z.enum(["off", "enabled"]),
     checkRunDetailLevel: z.enum(["minimal", "standard"]),
-    // @deprecated (#4618, tracked for removal in #5373): computed read-back of reviewCheckMode kept only
-    // for API/dashboard back-compat display -- read reviewCheckMode instead.
-    gateCheckMode: z.enum(["off", "enabled"]).optional(),
     regateSweepOrderMode: z.enum(["staleness", "oldest-first"]),
     reviewCheckMode: z.enum(["required", "visible", "disabled"]),
     autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
@@ -2711,7 +2708,7 @@ export const AgentRunBundleSchema = z
 export const HealthSchema = z
   .object({
     status: z.literal("ok"),
-    service: z.literal("gittensory-api"),
+    service: z.literal("loopover-api"),
     time: z.string(),
     minMcpVersion: z.string(),
     latestRecommendedMcpVersion: z.string(),
@@ -2721,7 +2718,7 @@ export const HealthSchema = z
 export const McpCompatibilitySchema = z
   .object({
     status: z.literal("ok"),
-    service: z.literal("gittensory-api"),
+    service: z.literal("loopover-api"),
     apiVersion: z.string(),
     mcp: z.object({
       packageName: z.string(),

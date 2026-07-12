@@ -19,7 +19,7 @@
           "service": {
             "type": "string",
             "enum": [
-              "gittensory-api"
+              "loopover-api"
             ]
           },
           "time": {
@@ -52,7 +52,7 @@
           "service": {
             "type": "string",
             "enum": [
-              "gittensory-api"
+              "loopover-api"
             ]
           },
           "apiVersion": {
@@ -8729,13 +8729,6 @@
             "enum": [
               "minimal",
               "standard"
-            ]
-          },
-          "gateCheckMode": {
-            "type": "string",
-            "enum": [
-              "off",
-              "enabled"
             ]
           },
           "regateSweepOrderMode": {

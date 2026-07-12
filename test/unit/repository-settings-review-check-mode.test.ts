@@ -2,47 +2,26 @@ import { describe, expect, it } from "vitest";
 import { getRepositorySettings, upsertRepositorySettings } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
-// #2852/#4618: reviewCheckMode is the sole runtime authority for the "Gittensory Orb Review Agent" check-run
-// publish decision (required/visible/disabled). gateCheckMode (off/enabled) is deprecated: a computed
-// read-back value only, derived from reviewCheckMode on every read, and it has NO effect as a write input to
-// upsertRepositorySettings -- the legacy dual-write sync now lives only at the yml settings.gateCheckMode
-// parse step (packages/gittensory-engine/src/focus-manifest.ts), not in the DB/API layer.
-describe("repository_settings: reviewCheckMode default + gateCheckMode read-only derivation (#2852, #4618)", () => {
+// #2852/#5373: reviewCheckMode is the sole runtime authority for the "Gittensory Orb Review Agent" check-run
+// publish decision (required/visible/disabled). A prior gateCheckMode (off/enabled) field was a deprecated
+// computed read-back of reviewCheckMode with no effect as a write input; it has since been removed from
+// RepositorySettings entirely (#5373) -- passing it to upsertRepositorySettings is now a compile-time error,
+// not just a runtime no-op, so the tests that used to prove "gateCheckMode is ignored as a write input" no
+// longer apply (the type system enforces it more strongly than a runtime assertion ever could). The legacy
+// yml settings.gateCheckMode -> reviewCheckMode dual-write sync still exists one layer up, at
+// packages/gittensory-engine/src/focus-manifest.ts's parse step (tracked separately for removal).
+describe("repository_settings: reviewCheckMode default (#2852)", () => {
   it("getRepositorySettings returns disabled for a repo with no DB row at all (conservative, opt-in default)", async () => {
     const env = createTestEnv();
     const settings = await getRepositorySettings(env, "acme/brand-new-repo");
     expect(settings.reviewCheckMode).toBe("disabled");
-    expect(settings.gateCheckMode).toBe("off");
   });
 
-  it("upsertRepositorySettings persists disabled when the caller omits reviewCheckMode AND gateCheckMode entirely", async () => {
+  it("upsertRepositorySettings persists disabled when the caller omits reviewCheckMode entirely", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "acme/omits-both" });
     const settings = await getRepositorySettings(env, "acme/omits-both");
     expect(settings.reviewCheckMode).toBe("disabled");
-  });
-
-  it("a caller that sets ONLY gateCheckMode: enabled (never touching reviewCheckMode) is ignored -- gateCheckMode is not a write input", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/legacy-enable", gateCheckMode: "enabled" });
-    const settings = await getRepositorySettings(env, "acme/legacy-enable");
-    expect(settings.reviewCheckMode).toBe("disabled");
-    expect(settings.gateCheckMode).toBe("off"); // re-derived from reviewCheckMode, not the caller's stale input
-  });
-
-  it("a caller that sets ONLY gateCheckMode: off (never touching reviewCheckMode) stays disabled", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/legacy-disable", gateCheckMode: "off" });
-    const settings = await getRepositorySettings(env, "acme/legacy-disable");
-    expect(settings.reviewCheckMode).toBe("disabled");
-  });
-
-  it("reviewCheckMode is honored regardless of a gateCheckMode also passed in the same call (gateCheckMode is a no-op input)", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/explicit-wins", gateCheckMode: "off", reviewCheckMode: "visible" });
-    const settings = await getRepositorySettings(env, "acme/explicit-wins");
-    expect(settings.reviewCheckMode).toBe("visible");
-    expect(settings.gateCheckMode).toBe("enabled"); // derived from reviewCheckMode ("visible" !== "disabled"), not the "off" input
   });
 
   it("an explicit required/visible/disabled opt-in round-trips through a re-upsert that carries it forward explicitly", async () => {

@@ -2,7 +2,7 @@
 # workflow (.github/workflows/release-selfhost.yml) calls the "Generate release notes content" API
 # with this repo's default branch as context, which groups merged PRs since the previous orb-v tag
 # into the categories below by label. `gittensor:feature` and `gittensor:bug` are applied
-# automatically by gittensory's own review engine on every merged PR, so this works without any
+# automatically by loopover's own review engine on every merged PR, so this works without any
 # separate manual-labeling process.
 #
 # `exclude.authors` matches the exact GitHub API login, which for a bot account includes the `[bot]`

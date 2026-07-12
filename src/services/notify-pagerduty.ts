@@ -8,7 +8,7 @@ import { errorMessage } from "../utils/json";
 // var is declared on the strict Env type (same asymmetry as DISCORD_REPO_WEBHOOKS) — a free-form per-repo
 // JSON map isn't worth a formal interface field; the global fallbacks are, and are declared in env.d.ts.
 //
-// ALERT FATIGUE: paging is the loudest, most disruptive channel gittensory has — unlike a Discord post or a
+// ALERT FATIGUE: paging is the loudest, most disruptive channel loopover has — unlike a Discord post or a
 // Sentry issue, it can wake someone up. Two independent controls keep it from crying wolf, on top of
 // PagerDuty's own `dedup_key` coalescing (which prevents duplicate *incidents* but not duplicate *pages* for
 // a still-open one):
@@ -127,7 +127,7 @@ async function auditPagerDutyNotification(
 ): Promise<void> {
   await recordAuditEvent(env, {
     eventType: "external_notification.pagerduty",
-    actor: "gittensory",
+    actor: "loopover",
     targetKey: params.dedupKey,
     outcome,
     detail,
@@ -175,7 +175,15 @@ export async function triggerPagerDutyIncident(
 
   const cooldownMinutes = resolvePagerDutyCooldownMinutes(env, params.repoFullName);
   const cooldownSinceIso = new Date(Date.now() - cooldownMinutes * 60 * 1000).toISOString();
-  const recentPages = await countRecentAuditEventsForActorAndTarget(env, "gittensory", "external_notification.pagerduty", params.dedupKey, cooldownSinceIso);
+  // Also count the pre-rebrand "gittensory" actor: a page recorded under the OLD actor value just before this
+  // rebrand deployed must still suppress a duplicate page after it, for as long as the configured cooldown
+  // window can reach back across the deploy boundary. Querying both actors costs one extra indexed count and
+  // removes the whole risk category rather than requiring a precisely-timed follow-up cleanup.
+  const [recentPagesNewActor, recentPagesLegacyActor] = await Promise.all([
+    countRecentAuditEventsForActorAndTarget(env, "loopover", "external_notification.pagerduty", params.dedupKey, cooldownSinceIso),
+    countRecentAuditEventsForActorAndTarget(env, "gittensory", "external_notification.pagerduty", params.dedupKey, cooldownSinceIso),
+  ]);
+  const recentPages = recentPagesNewActor + recentPagesLegacyActor;
   if (recentPages > 0) {
     await auditPagerDutyNotification(env, { repoFullName: params.repoFullName, dedupKey: params.dedupKey }, "denied", "cooldown_active", { cooldownMinutes });
     return;
@@ -191,7 +199,7 @@ export async function triggerPagerDutyIncident(
         dedup_key: params.dedupKey,
         payload: {
           summary: params.summary.slice(0, 1024),
-          source: "gittensory",
+          source: "loopover",
           severity: params.severity,
           timestamp: new Date().toISOString(),
           component: params.repoFullName,

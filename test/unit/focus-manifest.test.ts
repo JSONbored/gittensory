@@ -2518,11 +2518,11 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
       expect(eff.reviewCheckMode).toBe("visible");
     });
 
-    // #4618: gateCheckMode is deprecated -- a computed read-back value only. It is no longer independently
-    // settable via any DB/API write path, but the yml settings.gateCheckMode key still parses (back-compat)
-    // and effective.gateCheckMode is always re-derived from the resolved reviewCheckMode, never trusted as
-    // its own source of truth.
-    describe("gateCheckMode deprecation (#4618)", () => {
+    // #4618/#5373: the RepositorySettings.gateCheckMode field (a computed read-back of reviewCheckMode) was
+    // removed entirely in #5373 -- resolveEffectiveSettings no longer derives or exposes it. The yml
+    // settings.gateCheckMode key still parses at the gittensory-engine layer (back-compat, tracked separately
+    // for removal), always resolving to reviewCheckMode rather than being trusted as its own source of truth.
+    describe("settings.gateCheckMode back-compat parsing (#4618)", () => {
       it("settings.gateCheckMode alone (no reviewCheckMode) derives reviewCheckMode, keeping its historical effect", () => {
         const enabled = parseFocusManifest({ settings: { gateCheckMode: "enabled" } });
         expect(enabled.settings.reviewCheckMode).toBe("required");
@@ -2535,18 +2535,18 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
         expect(m.settings.reviewCheckMode).toBe("visible");
       });
 
-      it("resolveEffectiveSettings re-derives gateCheckMode from gate.checkMode alone, not just gate.enabled (regression)", () => {
-        // Before #4618, gateCheckMode was only mutated in the gate.enabled branch, so a manifest setting ONLY
-        // gate.checkMode left effective.gateCheckMode stale (still the DB's, potentially "off" while the check
-        // actually publishes) -- a latent lie in the back-compat display field.
-        const eff = resolveEffectiveSettings({ reviewCheckMode: "disabled", gateCheckMode: "off" } as unknown as RepositorySettings, parseFocusManifest({ gate: { checkMode: "visible" } }));
+      it("resolveEffectiveSettings resolves reviewCheckMode from gate.checkMode alone, not just gate.enabled (regression)", () => {
+        // Before #4618, the (since-removed) gateCheckMode display field was only mutated in the gate.enabled
+        // branch, so a manifest setting ONLY gate.checkMode left it stale. That field is gone now (#5373), but
+        // the underlying regression -- gate.checkMode alone must still resolve reviewCheckMode correctly,
+        // independent of whatever the DB settings held -- remains real and worth guarding.
+        const eff = resolveEffectiveSettings({ reviewCheckMode: "disabled" } as unknown as RepositorySettings, parseFocusManifest({ gate: { checkMode: "visible" } }));
         expect(eff.reviewCheckMode).toBe("visible");
-        expect(eff.gateCheckMode).toBe("enabled");
       });
 
-      it("resolveEffectiveSettings re-derives gateCheckMode to off when reviewCheckMode resolves to disabled", () => {
-        const eff = resolveEffectiveSettings({ reviewCheckMode: "required", gateCheckMode: "enabled" } as unknown as RepositorySettings, parseFocusManifest({ gate: { checkMode: "disabled" } }));
-        expect(eff.gateCheckMode).toBe("off");
+      it("resolveEffectiveSettings resolves reviewCheckMode to disabled via gate.checkMode, overriding an initially-required DB value", () => {
+        const eff = resolveEffectiveSettings({ reviewCheckMode: "required" } as unknown as RepositorySettings, parseFocusManifest({ gate: { checkMode: "disabled" } }));
+        expect(eff.reviewCheckMode).toBe("disabled");
       });
     });
   });
@@ -2627,14 +2627,14 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
   });
 
   it("resolveEffectiveSettings overlays settings: over DB and lets gate: win for gate fields", () => {
-    const db = { commentMode: "off", gateCheckMode: "off", linkedIssueGateMode: "off", duplicatePrGateMode: "off", autoLabelEnabled: true } as unknown as RepositorySettings;
+    const db = { commentMode: "off", reviewCheckMode: "disabled", linkedIssueGateMode: "off", duplicatePrGateMode: "off", autoLabelEnabled: true } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(
       db,
       parseFocusManifest({ settings: { commentMode: "all_prs", linkedIssueGateMode: "advisory", autoLabelEnabled: false }, gate: { enabled: true, linkedIssue: "block" } }),
     );
     expect(eff.commentMode).toBe("all_prs"); // settings: override
     expect(eff.autoLabelEnabled).toBe(false); // settings: override (boolean)
-    expect(eff.gateCheckMode).toBe("enabled"); // gate.enabled
+    expect(eff.reviewCheckMode).toBe("required"); // gate.enabled: true
     expect(eff.linkedIssueGateMode).toBe("block"); // gate: wins over settings:
   });
 
