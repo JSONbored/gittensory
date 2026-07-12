@@ -41,12 +41,58 @@ function fakeQueue(rows: unknown[]): { listQueue(): unknown[]; close(): void } {
   return { listQueue: () => rows, close: () => {} };
 }
 
+const CLAIM_ROWS = [
+  { id: 1, repoFullName: "acme/api", issueNumber: 10, claimedAt: "2026-01-01T00:00:00Z", status: "active", note: null },
+  { id: 2, repoFullName: "acme/api", issueNumber: 11, claimedAt: "2026-01-02T00:00:00Z", status: "released", note: "done" },
+  { id: 3, repoFullName: "acme/web", issueNumber: 12, claimedAt: "2026-01-03T00:00:00Z", status: "active", note: null },
+];
+
+type ClaimFilter = { repoFullName?: string | null; status?: string | null };
+type FakeLedger = {
+  calls: string[];
+  listClaims(filter?: ClaimFilter): unknown[];
+  close(): void;
+  recordClaim(): never;
+  claimIssue(): never;
+  releaseClaim(): never;
+  expireClaim(): never;
+};
+
+// Fake claim ledger that records every method call and throws from any mutator, so a test can assert the
+// list-claims tool reaches only read methods. listClaims applies the same repo/status filter the real one does.
+function fakeLedger(rows: Array<{ repoFullName: string; status: string }>): FakeLedger {
+  const calls: string[] = [];
+  const mutation = (name: string) => (): never => {
+    calls.push(name);
+    throw new Error(`mutation ${name} must not be reachable via the read tool`);
+  };
+  return {
+    calls,
+    listClaims(filter: ClaimFilter = {}) {
+      calls.push("listClaims");
+      return rows.filter(
+        (row) =>
+          (filter.repoFullName == null || row.repoFullName === filter.repoFullName) &&
+          (filter.status == null || row.status === filter.status),
+      );
+    },
+    close() {
+      calls.push("close");
+    },
+    recordClaim: mutation("recordClaim"),
+    claimIssue: mutation("claimIssue"),
+    releaseClaim: mutation("releaseClaim"),
+    expireClaim: mutation("expireClaim"),
+  };
+}
+
 describe("gittensory-miner MCP server (#5153 scaffold)", () => {
-  it("exposes the ping and portfolio-dashboard tools", async () => {
+  it("exposes the ping, portfolio-dashboard, and list-claims tools", async () => {
     const client = await connectedClient();
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "gittensory_miner_get_portfolio_dashboard",
+      "gittensory_miner_list_claims",
       "gittensory_miner_ping",
     ]);
   });
@@ -112,5 +158,44 @@ describe("gittensory_miner_get_portfolio_dashboard (#5155)", () => {
     })) as Content;
     const direct = collectPortfolioDashboard({ portfolioQueue: fakeQueue(QUEUE_ROWS) }, { nowMs: NOW_MS });
     expect(JSON.parse(toolText(result))).toEqual(direct);
+  });
+});
+
+describe("gittensory_miner_list_claims (#5156)", () => {
+  function claimsClient(ledger: FakeLedger): Promise<Client> {
+    return connectedClient({ openClaimLedger: () => ledger });
+  }
+  async function callList(client: Client, args: Record<string, unknown> = {}): Promise<unknown[]> {
+    const result = (await client.callTool({ name: "gittensory_miner_list_claims", arguments: args })) as Content;
+    return JSON.parse(toolText(result));
+  }
+
+  it("lists every claim (all statuses) when no filter is given", async () => {
+    const claims = await callList(await claimsClient(fakeLedger(CLAIM_ROWS)));
+    expect(claims).toEqual(CLAIM_ROWS);
+  });
+
+  it("passes an optional repoFullName filter through to listClaims", async () => {
+    const claims = await callList(await claimsClient(fakeLedger(CLAIM_ROWS)), { repoFullName: "acme/web" });
+    expect(claims).toEqual([CLAIM_ROWS[2]]);
+  });
+
+  it("passes an optional status filter through to listClaims", async () => {
+    const claims = await callList(await claimsClient(fakeLedger(CLAIM_ROWS)), { status: "active" });
+    expect((claims as Array<{ issueNumber: number }>).map((claim) => claim.issueNumber)).toEqual([10, 12]);
+  });
+
+  it("returns an empty list for an empty ledger", async () => {
+    const claims = await callList(await claimsClient(fakeLedger([])));
+    expect(claims).toEqual([]);
+  });
+
+  it("only reads — never reaches a mutating claim-ledger method (invariant)", async () => {
+    const ledger = fakeLedger(CLAIM_ROWS);
+    await callList(await claimsClient(ledger), { status: "active" });
+    expect(ledger.calls).toEqual(["listClaims"]);
+    for (const mutator of ["recordClaim", "claimIssue", "releaseClaim", "expireClaim"]) {
+      expect(ledger.calls).not.toContain(mutator);
+    }
   });
 });

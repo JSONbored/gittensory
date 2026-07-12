@@ -138,8 +138,9 @@ It exposes these read-only tools:
 
 - `gittensory_miner_ping` (#5153) — a health check returning a static `{ "status": "ok", "tool": "gittensory_miner_ping" }` object. Reads no AMS state, takes no arguments.
 - `gittensory_miner_get_portfolio_dashboard` (#5155) — the per-repo portfolio-queue backlog dashboard: status counts (queued / in_progress / done), totals, and the oldest-queued age. Wraps `collectPortfolioDashboard()` (no new logic) — the same data `gittensory-miner queue dashboard --json` prints locally. Read-only, takes no arguments.
+- `gittensory_miner_list_claims` (#5156) — lists the local claim ledger (repo, issue number, status, claimed-at, note) via `listClaims()`. Optional `repoFullName` / `status` filters pass through to the query. Read-only — exposes no claim/release mutation.
 
-Further AMS-state-reading tools (status/doctor diagnostics, claim-ledger listing, run-state, event/governor ledgers) land as follow-up PRs on top of this server.
+Further AMS-state-reading tools (status/doctor diagnostics, run-state, event/governor ledgers) land as follow-up PRs on top of this server.
 
 ## Version check
 

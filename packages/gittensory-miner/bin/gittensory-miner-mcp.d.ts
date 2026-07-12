@@ -9,6 +9,14 @@ export interface MinerMcpServerOptions {
    * Typed to the minimal read surface the dashboard tool uses, mirroring runPortfolioDashboard's own seam.
    */
   initPortfolioQueue?: () => { listQueue(repoFullName?: string | null): unknown[]; close(): void };
+  /**
+   * Override the claim-ledger opener (defaults to the real on-disk ledger); injection seam for tests. Typed to
+   * the minimal read surface the list-claims tool uses.
+   */
+  openClaimLedger?: () => {
+    listClaims(filter?: { repoFullName?: string | null; status?: string | null }): unknown[];
+    close(): void;
+  };
   /** Override the clock used for the oldest-queued age (defaults to Date.now()); injection seam for tests. */
   nowMs?: number;
 }

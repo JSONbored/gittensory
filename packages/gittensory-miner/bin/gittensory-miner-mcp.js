@@ -3,15 +3,19 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import { collectPortfolioDashboard } from "../lib/portfolio-dashboard.js";
 import { initPortfolioQueueStore } from "../lib/portfolio-queue.js";
+import { CLAIM_STATUSES, openClaimLedger } from "../lib/claim-ledger.js";
 
 // MCP stdio server for @jsonbored/gittensory-miner (scaffold #5153). Mirrors the packages/gittensory-mcp
 // harness (MCP SDK server + stdio transport). Tools:
 //   - gittensory_miner_ping (#5153): trivial static health check, reads no AMS state.
 //   - gittensory_miner_get_portfolio_dashboard (#5155): read-only per-repo backlog dashboard, wrapping the
 //     existing collectPortfolioDashboard aggregator (no new logic; same data as `queue dashboard --json`).
-// Remaining AMS-state-reading tools (status/doctor, claim-ledger listing, run-state, etc.) land as follow-ups.
+//   - gittensory_miner_list_claims (#5156): read-only listing of the local claim ledger (optional repo/status
+//     filter passed through to listClaims); exposes no claim/release mutation.
+// Remaining AMS-state-reading tools (status/doctor, run-state, event/governor ledgers, etc.) land as follow-ups.
 
 // Read the version from this package's own package.json (always shipped) rather than a hand-synced
 // literal, so a release bump never has a second place to forget -- same approach as the mcp harness.
@@ -21,9 +25,9 @@ const ownPackageJson = JSON.parse(readFileSync(new URL("../package.json", import
 export const MINER_PING_STATUS = { status: "ok", tool: "gittensory_miner_ping" };
 
 /**
- * Build the miner MCP server with its tools registered. `options.initPortfolioQueue` / `options.nowMs` are
- * injection seams for tests (default to the real portfolio-queue store and the wall clock); the ping tool needs
- * neither. The portfolio-dashboard tool opens the queue only when invoked and closes any store it opened.
+ * Build the miner MCP server with its tools registered. `options.initPortfolioQueue`, `options.openClaimLedger`,
+ * and `options.nowMs` are injection seams for tests (default to the real stores and the wall clock); the ping tool
+ * needs none. Each store-backed tool opens its store only when invoked and closes any store it opened.
  */
 export function createMinerMcpServer(options = {}) {
   const server = new McpServer({ name: "gittensory-miner", version: ownPackageJson.version });
@@ -54,6 +58,31 @@ export function createMinerMcpServer(options = {}) {
         return { content: [{ type: "text", text: JSON.stringify(summary) }] };
       } finally {
         if (ownsQueue) portfolioQueue.close();
+      }
+    },
+  );
+  server.registerTool(
+    "gittensory_miner_list_claims",
+    {
+      description:
+        "Read-only listing of the local claim ledger: which issues this miner has claimed (repo, issue number, " +
+        "status, claimed-at, note). Optional repoFullName/status filters pass through to the existing listClaims " +
+        "query. Exposes no claim/release mutation and no conflict-resolution logic.",
+      inputSchema: {
+        repoFullName: z.string().optional(),
+        status: z.enum(CLAIM_STATUSES).optional(),
+      },
+    },
+    async ({ repoFullName, status }) => {
+      const ownsLedger = options.openClaimLedger === undefined;
+      const ledger = (options.openClaimLedger ?? openClaimLedger)();
+      try {
+        const filter = {};
+        if (repoFullName !== undefined) filter.repoFullName = repoFullName;
+        if (status !== undefined) filter.status = status;
+        return { content: [{ type: "text", text: JSON.stringify(ledger.listClaims(filter)) }] };
+      } finally {
+        if (ownsLedger) ledger.close();
       }
     },
   );
