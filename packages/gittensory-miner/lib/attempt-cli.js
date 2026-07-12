@@ -22,6 +22,7 @@ import { initEventLedger } from "./event-ledger.js";
 import { initAttemptLog } from "./attempt-log.js";
 import { initGovernorLedger } from "./governor-ledger.js";
 import { openWorktreeAllocator } from "./worktree-allocator.js";
+import { resolveRejectionSignaled } from "./rejection-signal.js";
 
 const ATTEMPT_USAGE = "Usage: gittensory-miner attempt <owner/repo> <issue#> --miner-login <login> [--base <branch>] [--live] [--json]";
 
@@ -118,10 +119,10 @@ export function buildAttemptDeps(env, ledgers) {
 }
 
 /**
- * Run the `attempt` CLI subcommand. Acquires a real worktree slot (worktree-allocator.js's first
- * production caller), assembles real AttemptDeps, then -- since no SelfReviewContext fetcher or
- * coding-task-spec builder exists yet -- reports the block instead of calling runMinerAttempt with
- * fabricated data. See this file's header for why.
+ * Run the `attempt` CLI subcommand. Checks resolveRejectionSignaled first (before consuming a worktree
+ * slot), then acquires a real worktree slot (worktree-allocator.js's first production caller), assembles
+ * real AttemptDeps, then -- since no SelfReviewContext fetcher or coding-task-spec builder exists yet --
+ * reports the block instead of calling runMinerAttempt with fabricated data. See this file's header for why.
  */
 export async function runAttempt(args, options = {}) {
   const parsed = parseAttemptArgs(args);
@@ -157,6 +158,47 @@ export async function runAttempt(args, options = {}) {
     eventLedger = (options.initEventLedger ?? initEventLedger)();
     attemptLog = (options.initAttemptLog ?? initAttemptLog)();
     governorLedger = (options.initGovernorLedger ?? initGovernorLedger)();
+
+    // Checked before acquiring a worktree slot: a banned repo should never consume one. This resolves the
+    // first of rejectionSignaled's two documented triggers (an explicit AI-usage-policy ban, #5132 follow-up)
+    // -- the second (a prior own-submission rejection on this exact repo) remains a documented gap, see
+    // rejection-signal.js's own header for why.
+    const resolveRejection = options.resolveRejectionSignaled ?? resolveRejectionSignaled;
+    const rejectionSignaled = await resolveRejection(parsed.repoFullName, { fetchImpl: options.fetchImpl });
+    if (rejectionSignaled) {
+      const reason = "ai_usage_policy_ban";
+      attemptLog.appendAttemptLogEvent({
+        eventType: "attempt_aborted",
+        attemptId,
+        actionClass: "open_pr",
+        mode,
+        reason,
+        payload: { repoFullName: parsed.repoFullName, issueNumber: parsed.issueNumber },
+      });
+      eventLedger.appendEvent({
+        type: "attempt_blocked",
+        repoFullName: parsed.repoFullName,
+        payload: { issueNumber: parsed.issueNumber, reason },
+      });
+      const rejectedResult = {
+        outcome: "blocked_rejection_signaled",
+        reason,
+        repoFullName: parsed.repoFullName,
+        issueNumber: parsed.issueNumber,
+        minerLogin: parsed.minerLogin,
+        base: parsed.base,
+        mode,
+        attemptId,
+      };
+      if (parsed.json) {
+        console.log(JSON.stringify(rejectedResult, null, 2));
+      } else {
+        console.error(
+          `Attempt for ${parsed.repoFullName}#${parsed.issueNumber} is blocked: this repo's AI-usage policy bans automated/AI-authored contributions.`,
+        );
+      }
+      return 5;
+    }
 
     allocation = allocator.acquire(attemptId, parsed.repoFullName);
 

@@ -5,6 +5,8 @@ import type { EventLedger } from "./event-ledger.js";
 import type { AttemptLog } from "./attempt-log.js";
 import type { GovernorLedger } from "./governor-ledger.js";
 import type { WorktreeAllocator } from "./worktree-allocator.js";
+import type { resolveRejectionSignaled } from "./rejection-signal.js";
+import type { SelfReviewContextFetch } from "./self-review-context.js";
 
 export type ParsedAttemptArgs =
   | { error: string }
@@ -28,6 +30,8 @@ export type RunAttemptOptions = {
   initAttemptLog?: () => AttemptLog;
   initGovernorLedger?: () => GovernorLedger;
   buildAttemptDeps?: typeof buildAttemptDeps;
+  resolveRejectionSignaled?: typeof resolveRejectionSignaled;
+  fetchImpl?: SelfReviewContextFetch;
 };
 
 export function runAttempt(args: string[], options?: RunAttemptOptions): Promise<number>;

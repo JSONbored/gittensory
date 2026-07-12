@@ -205,6 +205,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: async () => false,
     });
 
     expect(exitCode).toBe(4);
@@ -240,6 +241,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: async () => false,
     });
 
     expect(exitCode).toBe(4);
@@ -257,6 +259,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: async () => false,
     });
 
     expect(exitCode).toBe(4);
@@ -278,6 +281,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: async () => false,
     });
 
     expect(exitCode).toBe(3);
@@ -310,10 +314,81 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: async () => false,
     });
 
     expect(exitCode).toBe(2);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("no_free_worktree_slots"));
     expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("blocks on a rejection-signaled repo before ever acquiring a worktree slot, without fabricating a run", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const acquireSpy = vi.spyOn(allocator, "acquire");
+    const appendAttemptLogEventSpy = vi.spyOn(attemptLog, "appendAttemptLogEvent");
+    const appendEventSpy = vi.spyOn(eventLedger, "appendEvent");
+    const resolveRejectionSignaledSpy = vi.fn().mockResolvedValue(true);
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      attemptId: "rejected-attempt",
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: resolveRejectionSignaledSpy,
+    });
+
+    expect(exitCode).toBe(5);
+    expect(resolveRejectionSignaledSpy).toHaveBeenCalledWith("acme/widgets", expect.objectContaining({ fetchImpl: undefined }));
+    // No worktree slot was ever acquired for a repo we already know rejects AI contributions.
+    expect(acquireSpy).not.toHaveBeenCalled();
+    expect(appendAttemptLogEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "attempt_aborted", attemptId: "rejected-attempt", reason: "ai_usage_policy_ban" }),
+    );
+    expect(appendEventSpy).toHaveBeenCalledWith(expect.objectContaining({ type: "attempt_blocked", repoFullName: "acme/widgets" }));
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("blocks on a rejection-signaled repo with a human-readable message by default", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: async () => true,
+    });
+
+    expect(exitCode).toBe(5);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("AI-usage policy bans automated/AI-authored contributions"));
+  });
+
+  it("passes options.fetchImpl through to resolveRejectionSignaled", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const resolveRejectionSignaledSpy = vi.fn().mockResolvedValue(false);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fetchImpl = vi.fn();
+
+    await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      resolveRejectionSignaled: resolveRejectionSignaledSpy,
+      fetchImpl,
+    });
+
+    expect(resolveRejectionSignaledSpy).toHaveBeenCalledWith("acme/widgets", { fetchImpl });
+    expect(log).toHaveBeenCalled();
   });
 });
