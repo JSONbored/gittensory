@@ -604,9 +604,9 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     publicSignalLevel: row.publicSignalLevel === "minimal" ? "minimal" : "standard",
     checkRunMode: parseCheckRunMode(row.checkRunMode),
     checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
-    // #4618: gateCheckMode is a computed read-back value, never its own stored source of truth -- derive it
-    // from the real authority (reviewCheckMode) on every read instead of trusting the DB column, so a row
-    // whose gate_check_mode column has drifted (e.g. pre-#4618 data) self-heals on the very next read.
+    // #4618/#5373: gateCheckMode is a computed field, not its own stored source of truth -- always derive it
+    // from the real authority (reviewCheckMode) rather than a stored value. The gate_check_mode column itself
+    // was dropped (#5373, migrations/0146) since it never carried any information a fresh derivation didn't.
     gateCheckMode: parseReviewCheckMode(row.reviewCheckMode) === "disabled" ? "off" : "enabled",
     regateSweepOrderMode: parseRegateSweepOrderMode(row.regateSweepOrderMode),
     reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
@@ -725,9 +725,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     publicSignalLevel: settings.publicSignalLevel ?? "standard",
     checkRunMode: settings.checkRunMode ?? "off",
     checkRunDetailLevel: settings.checkRunDetailLevel ?? "minimal",
-    // #4618: gateCheckMode is no longer an independent write input (dropped from every write schema) --
-    // derive it from reviewCheckMode below so the DB column stays a self-consistent read-back value.
-    gateCheckMode: (settings.reviewCheckMode ?? "disabled") === "disabled" ? "off" : "enabled",
     regateSweepOrderMode: settings.regateSweepOrderMode ?? "staleness",
     reviewCheckMode: settings.reviewCheckMode ?? "disabled",
     autoProjectMilestoneMatch: settings.autoProjectMilestoneMatch ?? "off",
@@ -810,7 +807,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       publicSignalLevel: resolved.publicSignalLevel,
       checkRunMode: resolved.checkRunMode,
       checkRunDetailLevel: resolved.checkRunDetailLevel,
-      gateCheckMode: resolved.gateCheckMode,
       regateSweepOrderMode: resolved.regateSweepOrderMode,
       reviewCheckMode: resolved.reviewCheckMode,
       projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
@@ -899,7 +895,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         publicSignalLevel: resolved.publicSignalLevel,
         checkRunMode: resolved.checkRunMode,
         checkRunDetailLevel: resolved.checkRunDetailLevel,
-        gateCheckMode: resolved.gateCheckMode,
         regateSweepOrderMode: resolved.regateSweepOrderMode,
         reviewCheckMode: resolved.reviewCheckMode,
       projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,

@@ -2500,7 +2500,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       slopGateMode: "off", // dashboard slop disabled…
       mergeReadinessGateMode: "advisory", // …but readiness keeps the live score in play
@@ -2579,7 +2579,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       duplicatePrGateMode: "block",
       slopGateMode: "advisory",
@@ -2643,7 +2643,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       duplicatePrGateMode: "block",
       slopGateMode: "advisory",
@@ -2706,7 +2706,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       duplicatePrGateMode: "block",
       slopGateMode: "advisory",
@@ -2770,7 +2770,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -2848,10 +2848,10 @@ describe("queue processors", () => {
     expect(audit).toMatchObject({ event_type: "github_app.gate_overridden", actor: "maintainer", target_key: "JSONbored/gittensory#90", outcome: "completed" });
     const usageEvents = await listProductUsageEvents(env, { limit: 10 });
     expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ surface: "github_app", eventName: "gate_overridden", outcome: "completed" })]));
-    // No override state is persisted: the gate stays "enabled" and the override does NOT persist an advisory,
+    // No override state is persisted: the gate stays "required" and the override does NOT persist an advisory,
     // so a follow-up synchronize re-evaluates the Gate from scratch (no permanent bypass).
-    const settingsAfter = await env.DB.prepare("select gate_check_mode from repository_settings where repo_full_name = ?").bind("JSONbored/gittensory").first<{ gate_check_mode: string }>();
-    expect(settingsAfter?.gate_check_mode).toBe("enabled");
+    const settingsAfter = await env.DB.prepare("select review_check_mode from repository_settings where repo_full_name = ?").bind("JSONbored/gittensory").first<{ review_check_mode: string }>();
+    expect(settingsAfter?.review_check_mode).toBe("required");
     const overrideAdvisory = await env.DB.prepare("select id from advisories where target_key = ?").bind("JSONbored/gittensory#90").first<{ id: string }>();
     expect(overrideAdvisory ?? null).toBeNull();
   });
@@ -2865,7 +2865,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -2925,7 +2925,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       agentPaused: true,
     });
@@ -2996,7 +2996,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       agentDryRun: true,
     });
@@ -3067,7 +3067,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     // The stored row still carries the OLD head; a new commit ("live-sha") landed between the comment and now.
@@ -3148,7 +3148,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     // A cached row with no head SHA (never detail-synced); the live fetch also yields no head.
@@ -3206,7 +3206,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -3273,7 +3273,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -3350,7 +3350,7 @@ describe("queue processors", () => {
         publicSurface: "off",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         requireLinkedIssue: true,
         linkedIssueGateMode: "advisory",
         aiReviewMode: "advisory",
@@ -3792,7 +3792,7 @@ describe("queue processors", () => {
       const repoFullName = "JSONbored/resolve-1970-dry-run";
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_MEMORY: "true" });
       await seedResolvePr(env, repoFullName, 1970, "resolve-1970-dry-run");
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: true, linkedIssueGateMode: "advisory", agentDryRun: true });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: true, linkedIssueGateMode: "advisory", agentDryRun: true });
       await upsertRepoFocusManifest(env, repoFullName, { review: { memory: true } });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         const url = input.toString();
@@ -3823,7 +3823,7 @@ describe("queue processors", () => {
       const repoFullName = "JSONbored/resolve-1971-paused";
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_MEMORY: "true" });
       await seedResolvePr(env, repoFullName, 1971, "resolve-1971-paused");
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: true, linkedIssueGateMode: "advisory", agentPaused: true });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: true, linkedIssueGateMode: "advisory", agentPaused: true });
       await upsertRepoFocusManifest(env, repoFullName, { review: { memory: true } });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         const url = input.toString();
@@ -3857,7 +3857,7 @@ describe("queue processors", () => {
       const owner = repoFullName.slice(0, slash);
       const name = repoFullName.slice(slash + 1);
       await upsertRepositoryFromGitHub(env, { name, full_name: repoFullName, private: false, owner: { login: owner } }, 123);
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: true, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: true, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
       await upsertPullRequestFromGitHub(env, repoFullName, { number: prNumber, title: "Explain me", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: headSha }, labels: [], body: "No linked issue on purpose" });
     }
     const explainWebhook = (repoFullName: string, prNumber: number, body: string, actor: string, opts: { association?: string; bot?: boolean; action?: string } = {}) => ({
@@ -4024,7 +4024,7 @@ describe("queue processors", () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       // Register the repo + settings but NOT the PR row, so getPullRequest returns null.
       await upsertRepositoryFromGitHub(env, { name: "explain-2169-nopr", full_name: repoFullName, private: false, owner: { login: "JSONbored" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName, gateCheckMode: "enabled", reviewCheckMode: "required", aiReviewMode: "advisory" });
+      await upsertRepositorySettings(env, { repoFullName, reviewCheckMode: "required", aiReviewMode: "advisory" });
       let posted = false;
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         if (input.toString().includes("/comments")) posted = true;
@@ -4076,7 +4076,7 @@ describe("queue processors", () => {
       const owner = repoFullName.slice(0, slash);
       const name = repoFullName.slice(slash + 1);
       await upsertRepositoryFromGitHub(env, { name, full_name: repoFullName, private: false, owner: { login: owner } }, 123);
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
       await upsertPullRequestFromGitHub(env, repoFullName, { number: prNumber, title: "Add retry to checkout", state: "open", user: { login: authorLogin }, author_association: "CONTRIBUTOR", head: { sha: headSha, ref: opts.headRef ?? "feature/checkout-retry" }, labels: [], body: "Retries the payment call once on a 5xx." });
       await upsertPullRequestFile(env, { repoFullName, pullNumber: prNumber, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
       // A renamed-with-no-patch file (GitHub omits `patch` for pure renames) -- exercises the
@@ -4226,7 +4226,7 @@ describe("queue processors", () => {
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
       const slash = repoFullName.indexOf("/");
       await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
       await upsertPullRequestFromGitHub(env, repoFullName, { number: 4198, title: "x", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "gen-tests-4195-disabled" }, labels: [], body: "x" });
       // Deliberately no upsertRepoFocusManifest features.e2eTests override -- stays off (no allowlist either).
       let postedBody = "";
@@ -4345,7 +4345,7 @@ describe("queue processors", () => {
       // aiReviewProvider set AND matching the stored key's provider -- exercises the "explicit provider
       // pin agrees with the stored key" arm, distinct from the (also-tested-elsewhere) "no pin configured"
       // default arm.
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", aiReviewByok: true, aiReviewProvider: "anthropic" });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", aiReviewByok: true, aiReviewProvider: "anthropic" });
       await upsertRepositoryAiKey(env, { repoFullName, provider: "anthropic", key: "sk-ant-byok-gen-tests-9999", model: null });
       let postedBody = "";
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4404,7 +4404,7 @@ describe("queue processors", () => {
       });
       const slash = repoFullName.indexOf("/");
       await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
       await upsertPullRequestFromGitHub(env, repoFullName, { number: 4205, title: "Add retry to checkout", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", head: { sha: "gen-tests-4195-allowlist" }, labels: [], body: "x" });
       await upsertPullRequestFile(env, { repoFullName, pullNumber: 4205, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
       let postedBody = "";
@@ -4552,7 +4552,7 @@ describe("queue processors", () => {
         });
         const slash = repoFullName.indexOf("/");
         await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
-        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
         // No head sha/ref cached at all on this PR record.
         await upsertPullRequestFromGitHub(env, repoFullName, { number: 4210, title: "Add retry to checkout", state: "open", user: { login: "contributor" }, author_association: "CONTRIBUTOR", labels: [], body: "x" });
         await upsertPullRequestFile(env, { repoFullName, pullNumber: 4210, path: "src/checkout.ts", status: "modified", additions: 3, deletions: 0, changes: 3, payload: { patch: "+function retryPayment() {\n+  return true;\n+}" } });
@@ -4618,7 +4618,7 @@ describe("queue processors", () => {
         });
         const slash = repoFullName.indexOf("/");
         await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
-        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
+        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory" });
         // Deliberately no `user` field at all -- the cached PR's authorLogin resolves to null, exercising the
         // ternary's not-found arm (`pr.authorLogin ? ... : { status: "not_found" }`) instead of ever calling
         // getCachedOfficialMinerDetection.
@@ -4653,7 +4653,7 @@ describe("queue processors", () => {
         const run = vi.fn();
         const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
         await seedGenerateTestsPr(env, repoFullName, 4211, "dryrun-head-sha", "contributor", { headRef: "feature/checkout-retry", e2eTestDelivery: "commit" });
-        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", agentDryRun: true });
+        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", agentDryRun: true });
         vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
           const url = input.toString();
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
@@ -4675,7 +4675,7 @@ describe("queue processors", () => {
         const run = vi.fn();
         const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
         await seedGenerateTestsPr(env, repoFullName, 4212, "paused-head-sha", "contributor", { headRef: "feature/checkout-retry", e2eTestDelivery: "commit" });
-        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", agentPaused: true });
+        await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "advisory", aiReviewMode: "advisory", agentPaused: true });
         vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
           const url = input.toString();
           if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
@@ -4720,7 +4720,7 @@ describe("queue processors", () => {
         // block this auto-trigger lives inside is downstream of) requires a truthy reviewCheckMode + a headSha.
         // With reviewCheckMode: "disabled" the function bails out via its own early-return before ever reaching
         // guidance.
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         requireLinkedIssue: false,
         linkedIssueGateMode: "off",
         manifestPolicyGateMode: opts.manifestPolicyGateMode ?? "advisory",
@@ -4790,7 +4790,7 @@ describe("queue processors", () => {
         const method = init?.method ?? "GET";
         if (url === "https://api.gittensor.io/miners") return Response.json([]);
         if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-        // gateCheckMode: "enabled" means this pass ALSO publishes/updates a gate check-run -- these three
+        // reviewCheckMode: "required" means this pass ALSO publishes/updates a gate check-run -- these three
         // endpoints back that unrelated publish, not the e2e-test-gen comment itself.
         if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
         if (url.includes("/check-runs") && method === "POST") return Response.json({ id: prNumber * 100 }, { status: 201 });
@@ -5034,7 +5034,7 @@ describe("queue processors", () => {
       const run = vi.fn();
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
       await seedAutoTriggerPr(env, repoFullName, 5008, "auto-4196-paused-sha");
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentPaused: true });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentPaused: true });
       const posted = { count: 0, body: "" };
       stubAutoTriggerFetch(5008, posted);
 
@@ -5051,7 +5051,7 @@ describe("queue processors", () => {
       const run = vi.fn();
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
       await seedAutoTriggerPr(env, repoFullName, 5009, "auto-4196-dryrun-sha");
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentDryRun: true });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentDryRun: true });
       const posted = { count: 0, body: "" };
       stubAutoTriggerFetch(5009, posted);
 
@@ -5074,7 +5074,7 @@ describe("queue processors", () => {
       });
       const slash = repoFullName.indexOf("/");
       await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: repoFullName.slice(0, slash) } }, 123);
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off" });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off" });
       // Deliberately no `user` field at all -- authorLogin resolves to null, exercising the `author ?? "the PR
       // author"` fallback arm (the explicit command's own `actor` is always a real commenter login, so this
       // branch is reachable only from the auto-trigger, which has no comment-invoker to fall back on).
@@ -5128,7 +5128,6 @@ describe("queue processors", () => {
         publicSurface: "off",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        gateCheckMode: "off",
         requireLinkedIssue: false,
         linkedIssueGateMode: "off",
         manifestPolicyGateMode: "advisory",
@@ -5274,7 +5273,6 @@ describe("queue processors", () => {
         publicSurface: "off",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        gateCheckMode: "off",
         requireLinkedIssue: false,
         linkedIssueGateMode: "off",
         manifestPolicyGateMode: "advisory",
@@ -5311,7 +5309,6 @@ describe("queue processors", () => {
         publicSurface: "off",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        gateCheckMode: "off",
         requireLinkedIssue: false,
         linkedIssueGateMode: "off",
         manifestPolicyGateMode: "advisory",
@@ -5451,7 +5448,7 @@ describe("queue processors", () => {
       const run = vi.fn();
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
       await seedCheckboxPr(env, repoFullName, 6008, "checkbox-4589-paused-sha");
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "off", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentPaused: true });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentPaused: true });
       const posted = { count: 0, body: "" };
       stubCheckboxFetch(6008, "maintainer", "admin", posted);
 
@@ -5470,7 +5467,7 @@ describe("queue processors", () => {
       const run = vi.fn();
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai, GITTENSORY_REVIEW_E2E_TESTS: "true", AI_SUMMARIES_ENABLED: "true", AI_PUBLIC_COMMENTS_ENABLED: "true" });
       await seedCheckboxPr(env, repoFullName, 6010, "checkbox-4589-dryrun-sha");
-      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "off", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentDryRun: true });
+      await upsertRepositorySettings(env, { repoFullName, commentMode: "off", publicSurface: "off", autoLabelEnabled: false, checkRunMode: "off", requireLinkedIssue: false, linkedIssueGateMode: "off", manifestPolicyGateMode: "advisory", aiReviewMode: "off", agentDryRun: true });
       const posted = { count: 0, body: "" };
       stubCheckboxFetch(6010, "maintainer", "admin", posted);
 
@@ -5557,12 +5554,12 @@ describe("queue processors", () => {
         publicSurface: "comment_and_label",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        // gateCheckMode MUST be "enabled" (not "off") -- maybePublishPrPublicSurface only takes the UNIFIED
-        // renderer branch when BOTH unifiedCommentAllowed AND gateEvaluation are truthy; gateEvaluation is
-        // never computed at all when the gate is off, silently falling back to the legacy panel (which has
+        // reviewCheckMode MUST be "required" (not "disabled") -- maybePublishPrPublicSurface only takes the
+        // UNIFIED renderer branch when BOTH unifiedCommentAllowed AND gateEvaluation are truthy; gateEvaluation
+        // is never computed at all when the gate is off, silently falling back to the legacy panel (which has
         // neither the Test coverage collapsible nor the generate-tests checkbox). Mirrors the settings shape
         // of the pre-existing "renders the unified PR-review comment..." test above.
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         requireLinkedIssue: false,
         linkedIssueGateMode: "off",
         manifestPolicyGateMode: "advisory",
@@ -5838,7 +5835,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -5873,7 +5870,7 @@ describe("queue processors", () => {
         autoLabelEnabled: false,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -5938,7 +5935,7 @@ describe("queue processors", () => {
         // (which has the gate off, so it returns before ever reaching the type-label decision): with the
         // gate ENABLED, the function does NOT bail out early, so this is the only path that actually
         // exercises `decision.skipReason === "not_official_gittensor_miner"` at the type-label gate.
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -5974,7 +5971,7 @@ describe("queue processors", () => {
         typeLabelsEnabled: false,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6009,7 +6006,7 @@ describe("queue processors", () => {
         includeMaintainerAuthors: false,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6042,7 +6039,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6075,7 +6072,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
         // A self-host taxonomy well beyond the built-in bug/feature/priority triad (#label-modularity):
@@ -6113,7 +6110,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6146,7 +6143,7 @@ describe("queue processors", () => {
         typeLabelsEnabled: false,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6179,7 +6176,6 @@ describe("queue processors", () => {
         autoLabelEnabled: false,
         typeLabelsEnabled: false,
         checkRunMode: "enabled",
-        gateCheckMode: "off",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6255,7 +6251,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
         linkedIssueLabelPropagation: {
@@ -6300,7 +6296,6 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "off",
         reviewCheckMode: "disabled",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
@@ -6376,7 +6371,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
         linkedIssueLabelPropagation: {
@@ -6424,7 +6419,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
         linkedIssueLabelPropagation: {
@@ -6470,7 +6465,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
         linkedIssueLabelPropagation: {
@@ -6530,7 +6525,7 @@ describe("queue processors", () => {
             autoLabelEnabled: true,
             createMissingLabel: false,
             checkRunMode: "off",
-            gateCheckMode: "enabled", reviewCheckMode: "required",
+            reviewCheckMode: "required",
             linkedIssueGateMode: "off",
             aiReviewMode: "off",
             linkedIssueLabelPropagation: {
@@ -6588,7 +6583,7 @@ describe("queue processors", () => {
           autoLabelEnabled: true,
           createMissingLabel: false,
           checkRunMode: "off",
-          gateCheckMode: "enabled", reviewCheckMode: "required",
+          reviewCheckMode: "required",
           linkedIssueGateMode: "off",
           aiReviewMode: "off",
           linkedIssueLabelPropagation: {
@@ -6658,7 +6653,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
         // linkedIssueLabelPropagation intentionally omitted -- defaults to disabled.
@@ -6693,7 +6688,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6730,7 +6725,7 @@ describe("queue processors", () => {
         autoLabelEnabled: true,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });
@@ -6765,7 +6760,7 @@ describe("queue processors", () => {
         typeLabelsEnabled: false,
         createMissingLabel: false,
         checkRunMode: "off",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         linkedIssueGateMode: "off",
         aiReviewMode: "off",
       });

@@ -45,14 +45,6 @@ describe("repository_settings: reviewCheckMode default + gateCheckMode read-only
     expect(settings.gateCheckMode).toBe("enabled"); // derived from reviewCheckMode ("visible" !== "disabled"), not the "off" input
   });
 
-  it("gateCheckMode self-heals on read even if a pre-#4618 row has a stale/divergent gate_check_mode column", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/stale-column", reviewCheckMode: "required" });
-    await env.DB.prepare("UPDATE repository_settings SET gate_check_mode = ? WHERE repo_full_name = ?").bind("off", "acme/stale-column").run();
-    const settings = await getRepositorySettings(env, "acme/stale-column");
-    expect(settings.gateCheckMode).toBe("enabled"); // ignores the stale DB column, derives from reviewCheckMode
-  });
-
   it("an explicit required/visible/disabled opt-in round-trips through a re-upsert that carries it forward explicitly", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "acme/round-trip", reviewCheckMode: "visible" });
