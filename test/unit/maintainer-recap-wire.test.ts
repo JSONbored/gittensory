@@ -192,11 +192,7 @@ describe("runMaintainerRecapJob — cross-repo digest (#1963, #2248)", () => {
     expect(posted).toHaveLength(1);
   });
 
-  // #4521: runMaintainerRecapJob always opts loadGatePrecisionReport into includeCohorts -- proves the split
-  // actually reaches the finished report/formatted digest, not just that the wiring doesn't crash (every
-  // OTHER test in this file also exercises includeCohorts implicitly since it's now unconditional, but none
-  // of them seed a gate block or a miner author, so none would catch a real miner-vs-human misclassification).
-  it("populates totals.cohorts end-to-end when a blocked PR's author is a confirmed miner", async () => {
+  it("keeps miner cohort diagnostics out of the scheduled external recap", async () => {
     const env = createTestEnv({ DISCORD_WEBHOOK_URL: HOOK });
     await seedRegisteredRepo(env, "owner/alpha");
     await upsertPullRequestFromGitHub(env, "owner/alpha", { number: 1, title: "miner PR", state: "closed", user: { login: "miner-alice" } });
@@ -211,13 +207,11 @@ describe("runMaintainerRecapJob — cross-repo digest (#1963, #2248)", () => {
 
     const { report, formatted } = ranRecap(await runMaintainerRecapJob(env));
 
-    expect(report.totals.cohorts).toMatchObject({ miner: { blocked: 1 }, human: { blocked: 1 } });
-    expect(report.repos[0]?.cohorts).toMatchObject({ miner: { blocked: 1 }, human: { blocked: 1 } });
-    expect(formatted).toContain("## Cohorts");
-    // Neither PR merged (both stay "closed"), so blockedThenMerged is 0 for both cohorts -- only `blocked`
-    // differs from zero here.
-    expect(formatted).toContain("Miner-originated: 0/1 gate false positives");
-    expect(formatted).toContain("Human-originated: 0/1 gate false positives");
+    expect(report.totals.cohorts).toBeUndefined();
+    expect(report.repos[0]?.cohorts).toBeUndefined();
+    expect(formatted).not.toContain("## Cohorts");
+    expect(formatted).not.toContain("Miner-originated");
+    expect(formatted).not.toContain("Human-originated");
   });
 
   it("threads a custom windowDays through to the report and the per-repo aggregators", async () => {

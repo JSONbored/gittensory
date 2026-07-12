@@ -3,7 +3,7 @@
 // `isPublicSafeText` first, so a single regex governs redaction and new surfaces cannot drift their own copy.
 //
 // It rejects gittensor economic/identity signals (rewards, raw/trust score, wallet/hotkey/coldkey/mnemonic,
-// farming, payout, ranking, (private) reviewability) and local filesystem paths.
+// farming, payout, ranking, cohort diagnostics, (private) reviewability) and local filesystem paths.
 //
 // The pattern is intentionally NON-GLOBAL so `.test()` stays stateless (no `lastIndex` carry-over between
 // calls) and the exported constant can be reused safely across call sites and modules.
@@ -20,7 +20,7 @@
 // estimate" and extra terms like "seed phrase"/"private key" for cleaner output, and deliberately do not
 // redact a bare "score"/"reward"). Those are curated for their surface, not drift of this core, so they are
 // intentionally NOT collapsed onto `PUBLIC_UNSAFE_TERMS`.
-export const PUBLIC_UNSAFE_TERMS = String.raw`(?:reward|score|wallet|hotkey|coldkey|mnemonic|payout|ranking)\w*|farming|raw[-_\s]?trust|trust[-_\s]?score|private[-_\s]?reviewability|reviewability`;
+export const PUBLIC_UNSAFE_TERMS = String.raw`(?:reward|score|wallet|hotkey|coldkey|mnemonic|payout|ranking|cohort)\w*|miner[-_\s]?originated|human[-_\s]?originated|farming|raw[-_\s]?trust|trust[-_\s]?score|private[-_\s]?reviewability|reviewability`;
 
 // `PUBLIC_LOCAL_PATH_INLINE` is the canonical local-filesystem-root vocabulary (alternation source only —
 // no flags, no anchors), the path analogue of `PUBLIC_UNSAFE_TERMS`. Public surfaces that detect or scrub

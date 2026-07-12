@@ -136,8 +136,9 @@ describe("buildMaintainerRecap cohort split (#4521)", () => {
       miner: { blocked: 2, gateFalsePositives: 1, gateFalsePositiveRate: 0.5 },
       human: { blocked: 4, gateFalsePositives: 1, gateFalsePositiveRate: 0.25 },
     });
-    expect(report.summary[3]).toContain("Miner-originated: 2 blocked (50% false-positive)");
-    expect(report.summary[3]).toContain("Human-originated: 4 blocked (25% false-positive)");
+    expect(report.summary).toHaveLength(3);
+    expect(report.summary.join("\n")).not.toContain("Miner-originated");
+    expect(report.summary.join("\n")).not.toContain("Human-originated");
   });
 
   it("sums cohorts ACROSS repos, correctly reporting n/a for a zero-blocked cohort", () => {

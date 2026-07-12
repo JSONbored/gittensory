@@ -1,7 +1,7 @@
 // Metadata-only prompt-packet builder (#2321): four analyze-phase text fields scrubbed with the same PUBLIC_UNSAFE_TERMS / PUBLIC_LOCAL_PATH_INLINE vocabulary as src/signals/redaction.ts (duplicated here so gittensory-engine stays standalone).
 
 /** Canonical economic/identity term vocabulary (alternation source only — mirrors `PUBLIC_UNSAFE_TERMS`). */
-const PUBLIC_UNSAFE_TERMS = String.raw`(?:reward|score|wallet|hotkey|coldkey|mnemonic|payout|ranking)\w*|farming|raw[-_\s]?trust|trust[-_\s]?score|private[-_\s]?reviewability|reviewability`;
+const PUBLIC_UNSAFE_TERMS = String.raw`(?:reward|score|wallet|hotkey|coldkey|mnemonic|payout|ranking|cohort)\w*|miner[-_\s]?originated|human[-_\s]?originated|farming|raw[-_\s]?trust|trust[-_\s]?score|private[-_\s]?reviewability|reviewability`;
 
 /** Canonical local-filesystem-root vocabulary (alternation source only — mirrors `PUBLIC_LOCAL_PATH_INLINE`). */
 const PUBLIC_LOCAL_PATH_INLINE = String.raw`/Users/|/home/|/root/|/var/|/opt/|/tmp/|/private/|[A-Za-z]:[\\/]Users[\\/]|[A-Za-z]:[\\/]Program Files[\\/]`;

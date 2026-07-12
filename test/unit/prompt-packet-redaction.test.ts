@@ -50,6 +50,14 @@ function enumerateUnsafeTermFamilies(source: string): Array<{ id: string; sample
       }
       continue;
     }
+    if (branch === "miner[-_\\s]?originated") {
+      families.push({ id: "miner-originated", sample: "miner-originated" });
+      continue;
+    }
+    if (branch === "human[-_\\s]?originated") {
+      families.push({ id: "human-originated", sample: "human_originated" });
+      continue;
+    }
     if (branch === "raw[-_\\s]?trust") {
       families.push({ id: "raw-trust", sample: "raw-trust" });
       continue;
@@ -88,7 +96,7 @@ const LOCAL_PATH_SAMPLES = enumerateLocalPathSamples(PUBLIC_LOCAL_PATH_INLINE);
 describe("buildPromptPacket redaction (#2321 adversarial allowlist)", () => {
   it("enumerates every unsafe-term family from PUBLIC_UNSAFE_TERMS", () => {
     expect(UNSAFE_TERM_FAMILIES.map((entry) => entry.id).sort()).toEqual(
-      ["coldkey", "farming", "hotkey", "mnemonic", "payout", "private-reviewability", "ranking", "raw-trust", "reviewability", "reward", "score", "trust-score", "wallet"].sort(),
+      ["cohort", "coldkey", "farming", "hotkey", "human-originated", "miner-originated", "mnemonic", "payout", "private-reviewability", "ranking", "raw-trust", "reviewability", "reward", "score", "trust-score", "wallet"].sort(),
     );
   });
 

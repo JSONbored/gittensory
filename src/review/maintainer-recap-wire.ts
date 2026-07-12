@@ -180,10 +180,9 @@ export async function runMaintainerRecapJob(
   for (const repoFullName of repoNames) {
     try {
       const [gatePrecision, calibration] = await Promise.all([
-        // #4521: a periodic digest is exactly the "occasional aggregate view" includeCohorts was designed
-        // for -- unlike a hot webhook path, one extra Gittensor API call per repo per recap run is a small,
-        // bounded cost, so this call site opts in by default rather than needing its own separate flag.
-        loadGatePrecisionReport(env, repoFullName, { windowDays: resolvedWindowDays, includeCohorts: true }),
+        // Keep scheduled notification digests on the public-safe aggregate path: cohort splits are
+        // maintainer-authenticated diagnostics, not Discord/Slack recap content.
+        loadGatePrecisionReport(env, repoFullName, { windowDays: resolvedWindowDays }),
         buildRepoOutcomeCalibration(env, repoFullName, resolvedWindowDays),
       ]);
       repos.push({ gatePrecision, calibration });
