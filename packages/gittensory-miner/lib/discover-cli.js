@@ -6,6 +6,7 @@ import {
   searchCandidateIssuesWithSummary,
 } from "./opportunity-fanout.js";
 import { rankCandidateIssuesWithSummary } from "./opportunity-ranker.js";
+import { initPolicyDocCacheStore } from "./policy-doc-cache.js";
 import { enqueueRankedDiscovery } from "./portfolio-discovery.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 
@@ -149,7 +150,6 @@ export async function runDiscover(args, options = {}) {
   // A `--api-base-url` flag (or `options.apiBaseUrl`) surfaces the fan-out's existing forge-host override at the CLI
   // (#4784); `options.forge` carries any remaining per-tenant forge knobs for a programmatic caller.
   const apiBaseUrl = parsed.apiBaseUrl ?? options.apiBaseUrl;
-  const fanOutOptions = { apiBaseUrl, forge: options.forge };
   const fetchTargets = options.fetchCandidateIssuesWithSummary ?? fetchCandidateIssuesWithSummary;
   const searchTargets = options.searchCandidateIssuesWithSummary ?? searchCandidateIssuesWithSummary;
   const rankIssues = options.rankCandidateIssuesWithSummary ?? rankCandidateIssuesWithSummary;
@@ -158,7 +158,14 @@ export async function runDiscover(args, options = {}) {
   const ownsPortfolioQueue = options.initPortfolioQueue === undefined;
   const portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
 
+  // Local ETag cache so a repeated discover revalidates each repo's policy docs with a conditional GET instead of
+  // re-downloading them (#4842). Owned + closed here exactly like the portfolio queue above; an injected factory
+  // lets tests supply a temp/in-memory store instead of the real on-disk one.
+  const ownsPolicyDocCache = options.initPolicyDocCache === undefined;
+  const policyDocCache = (options.initPolicyDocCache ?? initPolicyDocCacheStore)();
+
   try {
+    const fanOutOptions = { apiBaseUrl, forge: options.forge, policyDocCache };
     const fanOut =
       parsed.search !== null
         ? await searchTargets(parsed.search, githubToken, fanOutOptions)
@@ -195,5 +202,6 @@ export async function runDiscover(args, options = {}) {
     return 2;
   } finally {
     if (ownsPortfolioQueue) portfolioQueue.close();
+    if (ownsPolicyDocCache) policyDocCache.close();
   }
 }
