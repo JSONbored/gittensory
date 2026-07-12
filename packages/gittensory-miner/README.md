@@ -91,6 +91,8 @@ See [`docs/discovery-plane-operator-guide.md`](docs/discovery-plane-operator-gui
 
 See [`DEPLOYMENT.md`](DEPLOYMENT.md) for laptop vs fleet deployment.
 
+See [`docs/operations-runbook.md`](docs/operations-runbook.md) for SQLite concurrency guarantees, corruption recovery, multi-process collision response, and post-upgrade ledger migration ([#4875](https://github.com/JSONbored/gittensory/issues/4875)).
+
 ### Laptop-mode quickstart
 
 Zero-infra local install — no Docker, Redis, or Postgres required:
