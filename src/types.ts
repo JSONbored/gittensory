@@ -706,6 +706,11 @@ export type RepositorySettings = {
   commentMode: "off" | "detected_contributors_only" | "all_prs";
   publicAudienceMode: "oss_maintainer" | "gittensor_only";
   publicSignalLevel: "minimal" | "standard";
+  /** Publishes the SEPARATE, always-advisory "Gittensory Context" check-run (#2691) -- entirely independent
+   *  of {@link reviewCheckMode}, which governs the "Gittensory Orb Review Agent" gate check. Despite the
+   *  similar name and shape, this is NOT a sibling/legacy-alias of reviewCheckMode; the two checks are
+   *  different check-runs with different controlling fields (a mismatch already caused real doc drift --
+   *  see the disambiguation in README's "Check-run and comment surfaces" section). */
   checkRunMode: "off" | "enabled";
   // #4620: "deep" removed -- it was never wired to any different behavior than "standard" (formatCheckRunOutput
   // and buildCheckRunAnnotations in rules/advisory.ts both branch only on `=== "minimal"` vs not).
