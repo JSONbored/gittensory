@@ -3082,7 +3082,7 @@ describe("pure helpers", () => {
     warnSpy.mockRestore();
   });
 
-  it("logs unparseable exhaustion separately when the model runs but returns unparseable output, including a response snippet for diagnosis (#observability-unparseable)", async () => {
+  it("logs unparseable exhaustion separately without raw provider output (#observability-unparseable)", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const run = vi.fn(async () => ({ response: "not json at all" }));
     const env = createTestEnv({ AI: { run } as unknown as Ai });
@@ -3097,28 +3097,35 @@ describe("pure helpers", () => {
       .map((c) => c[0])
       .find((l) => typeof l === "string" && l.includes("ai_review_provider_unparseable_exhausted"));
     expect(exhausted).toBeDefined();
-    expect(JSON.parse(exhausted as string)).toMatchObject({
+    const payload = JSON.parse(exhausted as string);
+    expect(payload).toMatchObject({
       event: "ai_review_provider_unparseable_exhausted",
-      responseSnippet: "not json at all",
+      responseChars: "not json at all".length,
+      hasJsonObject: false,
     });
+    expect(payload).not.toHaveProperty("responseSnippet");
     logSpy.mockRestore();
   });
 
-  it("truncates the unparseable-output response snippet to 400 chars instead of logging the full response (#observability-unparseable), and never puts it on the returned diagnostics (#4111-style public/private boundary)", async () => {
+  it("withholds raw unparseable provider output from diagnostics and structured logs (#observability-unparseable)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const longResponse = "not json, ".repeat(60); // 600 chars, well over the 400-char cap
-    const run = vi.fn(async () => ({ response: longResponse }));
+    const rawResponse = "not json with private repo context and alice@example.com";
+    const run = vi.fn(async () => ({ response: rawResponse }));
     const env = createTestEnv({ AI: { run } as unknown as Ai });
     const diagnostics: AiReviewDiagnostic[] = [];
     await runWorkersOpinion(env, "primary-model", "primary-model", "sys", "user", 256, diagnostics);
-    // reviewDiagnostics flows into result/Sentry context that must never carry raw provider text (see the
-    // "withholds unsafe provider and reviewer fallback text" test) -- the snippet only ever reaches the log.
     expect(diagnostics[0]).not.toHaveProperty("responseSnippet");
     const firstWarn = warnSpy.mock.calls
       .map((c) => c[0])
       .find((l) => typeof l === "string" && l.includes("ai_review_provider_unparseable_output"));
-    expect(JSON.parse(firstWarn as string).responseSnippet).toBe(longResponse.slice(0, 400));
-    expect(JSON.parse(firstWarn as string).responseSnippet.length).toBe(400);
+    const payload = JSON.parse(firstWarn as string);
+    expect(payload).toMatchObject({
+      event: "ai_review_provider_unparseable_output",
+      responseChars: rawResponse.length,
+      hasJsonObject: false,
+    });
+    expect(payload).not.toHaveProperty("responseSnippet");
+    expect(firstWarn).not.toContain(rawResponse);
     warnSpy.mockRestore();
   });
 

@@ -1007,11 +1007,6 @@ function isSubscriptionCliTimeout(error: unknown): boolean {
   return error instanceof Error && error.message === "subscription_cli_timeout";
 }
 
-/** Cap on the diagnostic prefix logged for an unparseable model response (#observability-unparseable) -- long
- *  enough to tell a markdown-fenced/truncated-mid-JSON/plain-prose response apart, short enough to never dump
- *  a large chunk of model output into Sentry/audit context. */
-const UNPARSEABLE_RESPONSE_SNIPPET_MAX_CHARS = 400;
-
 /** One reviewer opinion (whichever provider `env.AI` resolves to — self-host Codex/Claude Code/etc, or the
  *  legacy Workers-AI pair) with a per-slot reliable fallback and a 3× retry on the primary. */
 async function runWorkersOpinion(
@@ -1041,9 +1036,7 @@ async function runWorkersOpinion(
   // Track the last provider error so we can fail-LOUD once ALL models × attempts are exhausted (below). Per-attempt
   // logs are warn (noisy retries, skipped by the central Sentry forwarder); the exhausted summary is error (#26).
   let lastError: unknown;
-  let lastUnparseable:
-    | { model: string; attempt: number; responseChars: number; hasJsonObject: boolean; responseSnippet: string }
-    | undefined;
+  let lastUnparseable: { model: string; attempt: number; responseChars: number; hasJsonObject: boolean } | undefined;
   const models = fallback && fallback !== primary ? [primary, fallback] : [primary];
   for (const [modelIndex, model] of models.entries()) {
     if (modelIndex > 0) {
@@ -1094,11 +1087,7 @@ async function runWorkersOpinion(
         const status = trimmedText ? "unparseable_output" : "empty_output";
         diagnostics.push({ model, attempt, status, responseChars: text.length, hasJsonObject, ...usageFields });
         if (trimmedText) {
-          // NOT added to the diagnostics entry above: reviewDiagnostics flows into result/Sentry context that
-          // must never carry raw provider text (see the "withholds unsafe provider and reviewer fallback text"
-          // test) -- logged here instead, which reaches only the structured-log Sentry forwarder, never `result`.
-          const responseSnippet = trimmedText.slice(0, UNPARSEABLE_RESPONSE_SNIPPET_MAX_CHARS);
-          lastUnparseable = { model, attempt, responseChars: text.length, hasJsonObject, responseSnippet };
+          lastUnparseable = { model, attempt, responseChars: text.length, hasJsonObject };
           console.warn(
             JSON.stringify({
               level: "warn",
@@ -1107,7 +1096,6 @@ async function runWorkersOpinion(
               attempt,
               responseChars: text.length,
               hasJsonObject,
-              responseSnippet,
             }),
           );
         }
@@ -1160,7 +1148,6 @@ async function runWorkersOpinion(
         attempt: lastUnparseable.attempt,
         responseChars: lastUnparseable.responseChars,
         hasJsonObject: lastUnparseable.hasJsonObject,
-        responseSnippet: lastUnparseable.responseSnippet,
       }),
     );
   }
