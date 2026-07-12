@@ -186,6 +186,13 @@ CLAUDE_AI_EFFORT=medium`}
         instead:
       </p>
       <CodeBlock code={`docker compose up -d --no-deps gittensory`} />
+      <p>
+        Prefer not pasting the raw token into <code>.env</code>? Write it into{" "}
+        <code>secrets/claude_code_oauth_token.txt</code> instead (see{" "}
+        <Link to="/docs/self-hosting-security">Security</Link>'s secret-file section) and leave{" "}
+        <code>CLAUDE_CODE_OAUTH_TOKEN</code> unset in <code>.env</code> — the same recreate step
+        above picks it up either way.
+      </p>
 
       <h2>Codex (subscription)</h2>
       <p>
@@ -216,7 +223,7 @@ CLAUDE_AI_EFFORT=medium`}
           {
             title: "claude_code_no_oauth_token",
             description:
-              "CLAUDE_CODE_OAUTH_TOKEN is unset. Add it to .env and recreate the service.",
+              "CLAUDE_CODE_OAUTH_TOKEN is unset and no secrets/claude_code_oauth_token.txt file is populated. Set either and recreate the service.",
           },
           {
             title: "claude_code_error_401",

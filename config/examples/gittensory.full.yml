@@ -1119,13 +1119,17 @@ settings:
 # an operator who sets nothing keeps today's behavior). Exception: `safety` is force-on-only -- an untrusted
 # repo-controlled `false` is treated as "no opinion" rather than an active force-off (#2269), since a
 # lower-trust actor must never be able to silently defeat the operator's own security-hardening enablement.
-# `e2eTests` (#4190), `screenshots` (#4616), and `improvementSignal` (#4738, foundation phase of the #4737
-# PR-improvement-signal epic) are plain symmetric overrides like rag/reputation/unifiedComment -- none carries
-# a security-hardening or full-file-fetch rationale (unlike safety/grounding) that would justify a force-on/
-# force-off asymmetry. `screenshots` sits UNDER the separate, richer `review.visual.*` block further below
-# (route/preview-URL config, and `review.visual.enabled: false` as an always-available additional force-off);
-# this key only answers "does capture run for this repo at all," the same question its siblings answer for
-# their own feature. `improvementSignal` is activation wiring only for now -- no tier reads the resolved
+# `screenshots` (#4616) is ALSO asymmetric as of #4990: allowlisted is now a hard requirement for force-ON,
+# the same as safety/grounding -- real Browserless rendering cost and a publicly-rendered PR image mean a
+# lower-trust repo must not be able to self-activate capture just by setting this to `true` in its own
+# config; a repo-level `false` can still force it OFF within an allowlisted repo. `screenshots` sits UNDER
+# the separate, richer `review.visual.*` block further below (route/preview-URL config, and
+# `review.visual.enabled: false` as an always-available additional force-off); this key only answers "does
+# capture run for this repo at all," the same question its siblings answer for their own feature.
+# `e2eTests` (#4190) and `improvementSignal` (#4738, foundation phase of the #4737 PR-improvement-signal
+# epic) remain plain symmetric overrides like rag/reputation/unifiedComment -- neither carries a
+# security-hardening or full-file-fetch rationale that would justify a force-on/force-off asymmetry.
+# `improvementSignal` is activation wiring only for now -- no tier reads the resolved
 # value yet.
 # features:
 #   rag: true
