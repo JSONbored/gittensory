@@ -11,6 +11,8 @@ export type FanoutOptions = {
   apiBaseUrl?: string;
   forge?: Partial<ForgeConfig>;
   concurrency?: number;
+  rateLimitLowWaterMark?: number;
+  rateLimitHighWaterMark?: number;
   perPage?: number;
   maxPages?: number;
   sleepFn?: (ms: number) => Promise<unknown>;
@@ -43,6 +45,14 @@ export type CandidateIssueSummary = {
   rateLimitResetAt: string | null;
   warnings: CandidateIssueWarning[];
 };
+
+export function mapWithConcurrency<T, R>(
+  items: T[],
+  maxConcurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+  resolveLimit: () => number,
+  sleepFn?: (ms: number) => Promise<unknown>,
+): Promise<R[]>;
 
 export function fetchCandidateIssuesWithSummary(
   targets: FanoutTarget[],
