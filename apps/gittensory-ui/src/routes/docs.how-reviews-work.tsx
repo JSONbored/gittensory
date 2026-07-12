@@ -299,8 +299,8 @@ function HowReviewsWork() {
         <strong>Gittensory Context</strong> check, not the Orb Review Agent gate check:{" "}
         <code>checkRunMode</code> (<code>off</code> / <code>enabled</code>) publishes it, and{" "}
         <code>checkRunDetailLevel</code> (<code>minimal</code> / <code>standard</code>) sets how
-        much the check summary spells out. <strong>Gittensory Orb Review Agent</strong> is
-        published separately, controlled by <code>reviewCheckMode</code> (see above).
+        much the check summary spells out. <strong>Gittensory Orb Review Agent</strong> is published
+        separately, controlled by <code>reviewCheckMode</code> (see above).
       </p>
 
       <h2>Putting it together</h2>

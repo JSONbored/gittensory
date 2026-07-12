@@ -150,9 +150,9 @@ GET /v1/installations/:id/repair`}
         <code>disabled</code>). <strong>Gittensory Context</strong> is the separate advisory
         companion, controlled by its own <code>checkRunMode</code> (<code>off</code> /{" "}
         <code>enabled</code>) — these two switches are independent axes, not one setting for both
-        checks. <code>checkRunDetailLevel</code> (<code>minimal</code> / <code>standard</code>)
-        only affects <strong>Gittensory Context</strong>'s output depth; it has no effect on the
-        Orb Review Agent check.
+        checks. <code>checkRunDetailLevel</code> (<code>minimal</code> / <code>standard</code>) only
+        affects <strong>Gittensory Context</strong>'s output depth; it has no effect on the Orb
+        Review Agent check.
       </p>
       <p>
         <strong>Gittensory Context</strong> is advisory and should not be required in branch
