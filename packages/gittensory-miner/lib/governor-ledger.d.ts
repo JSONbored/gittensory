@@ -22,10 +22,24 @@ export type ReadGovernorEventsFilter = {
   repoFullName?: string | null;
 };
 
+export type ReadGovernorDecisionsFilter = {
+  repoFullName?: string | null;
+};
+
+export type GovernorDecisionEntry = {
+  ts: string;
+  eventType: string;
+  repoFullName: string | null;
+  actionClass: string;
+  decision: string;
+  reason: string;
+};
+
 export type GovernorLedger = {
   dbPath: string;
   appendGovernorEvent(event: AppendGovernorEventInput): GovernorLedgerEntry;
   readGovernorEvents(filter?: ReadGovernorEventsFilter): GovernorLedgerEntry[];
+  readGovernorDecisions(filter?: ReadGovernorDecisionsFilter): GovernorDecisionEntry[];
   close(): void;
 };
 

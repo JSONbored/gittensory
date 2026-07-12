@@ -10,6 +10,11 @@ import {
   normalizeAuditFeedMcpFilter,
 } from "../lib/event-ledger-cli.js";
 import { initEventLedger } from "../lib/event-ledger.js";
+import {
+  collectGovernorLedgerDecisions,
+  normalizeGovernorDecisionMcpFilter,
+} from "../lib/governor-ledger-cli.js";
+import { initGovernorLedger } from "../lib/governor-ledger.js";
 import { collectPortfolioDashboard } from "../lib/portfolio-dashboard.js";
 import { initPortfolioQueueStore } from "../lib/portfolio-queue.js";
 import { initRunStateStore } from "../lib/run-state.js";
@@ -28,7 +33,10 @@ import { PLAN_STATUSES, openPlanStore } from "../lib/plan-store.js";
 //     listRunStates (read-only analog of ORB's gittensory_get_automation_state; no state-set mutation).
 //   - gittensory_miner_list_plans / gittensory_miner_get_plan (#5161): read-only access to the persisted
 //     plan store via plan-store.js's listPlans/loadPlan (distinct from ORB's stateless gittensory_plan_status).
-// Remaining AMS-state-reading tools (status/doctor, governor ledger, etc.) land as follow-ups.
+//   - gittensory_miner_get_governor_decisions (#5159): read-only projection of the governor decision ledger via
+//     collectGovernorLedgerDecisions(); an explicit named-column SELECT that excludes payload_json (and any
+//     future column on that table) by construction; same repo/type filters as `governor list`.
+// Remaining AMS-state-reading tools (status/doctor, etc.) land as follow-ups.
 
 // Read the version from this package's own package.json (always shipped) rather than a hand-synced
 // literal, so a release bump never has a second place to forget -- same approach as the mcp harness.
@@ -211,6 +219,44 @@ export function createMinerMcpServer(options = {}) {
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } finally {
         if (ownsStore) store.close();
+      }
+    },
+  );
+  server.registerTool(
+    "gittensory_miner_get_governor_decisions",
+    {
+      description:
+        "Read-only projection of the local governor decision ledger: ts, eventType, repoFullName, actionClass, " +
+        "decision, reason per row. Uses an explicit named-column SELECT that excludes payload_json -- and any " +
+        "future column added to that table -- BY CONSTRUCTION, so internal/sensitive payload data is never " +
+        "returned. Optional repoFullName/type filters mirror `gittensory-miner governor list`. Never writes to " +
+        "or mutates the governor ledger.",
+      inputSchema: {
+        repoFullName: z.string().min(1).optional(),
+        type: z.string().min(1).optional(),
+      },
+    },
+    async (input) => {
+      const ownsLedger = options.initGovernorLedger === undefined;
+      const governorLedger = (options.initGovernorLedger ?? initGovernorLedger)();
+      try {
+        const filter = normalizeGovernorDecisionMcpFilter(input ?? {});
+        const feed = collectGovernorLedgerDecisions(governorLedger, filter);
+        return { content: [{ type: "text", text: JSON.stringify(feed) }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        };
+      } finally {
+        if (ownsLedger) governorLedger.close();
       }
     },
   );

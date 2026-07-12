@@ -66,6 +66,58 @@ export function filterGovernorEvents(events, options = {}) {
   return events.filter((entry) => entry.eventType === type);
 }
 
+/** Decision-log columns exposed by the governor-decisions MCP tool (#5159) -- never payload_json. */
+export const GOVERNOR_DECISION_ENTRY_FIELDS = Object.freeze([
+  "ts",
+  "eventType",
+  "repoFullName",
+  "actionClass",
+  "decision",
+  "reason",
+]);
+
+/**
+ * Normalize optional MCP/JSON filter args for the governor-decisions tool into the shape `governor list`
+ * already supports (repo + event type). Mirrors normalizeAuditFeedMcpFilter's validation style (#5159).
+ */
+export function normalizeGovernorDecisionMcpFilter(input = {}) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("filter must be an object");
+  }
+  const filter = { repoFullName: null, type: null };
+  if (input.repoFullName !== undefined && input.repoFullName !== null) {
+    const repo = parseRepoArg(String(input.repoFullName), "repoFullName must be in owner/repo form.");
+    if ("error" in repo) throw new Error(repo.error);
+    filter.repoFullName = repo.repoFullName;
+  }
+  if (input.type !== undefined && input.type !== null) {
+    const trimmed = String(input.type).trim();
+    if (!GOVERNOR_LEDGER_EVENT_TYPES.includes(trimmed)) {
+      throw new Error(
+        `Invalid type: ${trimmed}. Expected one of ${GOVERNOR_LEDGER_EVENT_TYPES.join(", ")}.`,
+      );
+    }
+    filter.type = trimmed;
+  }
+  return filter;
+}
+
+/**
+ * Read-only governor decision-log projection shared by the MCP governor-decisions tool (#5159). Reads through
+ * the ledger's explicit-column readGovernorDecisions() (payload_json excluded by construction) and applies the
+ * same optional event-type filter `governor list` supports.
+ */
+export function collectGovernorLedgerDecisions(governorLedger, filter = {}) {
+  const decisions = filterGovernorEvents(
+    governorLedger.readGovernorDecisions({ repoFullName: filter.repoFullName }),
+    { type: filter.type },
+  );
+  return {
+    ...(filter.repoFullName ? { repoFullName: filter.repoFullName } : {}),
+    decisions,
+  };
+}
+
 function display(value) {
   if (value === null || value === undefined) return "-";
   return String(value);
