@@ -47,13 +47,17 @@ export function isRepoRelativePath(target) {
   return !NON_REPO_LINK_PATTERN.test(target);
 }
 
-/** Sorted, de-duplicated repo-relative file paths DEPLOYMENT.md links to (external issue links excluded). */
+/** Sorted, de-duplicated repo-relative file paths DEPLOYMENT.md links to (external issue links excluded).
+ *  An in-file anchor fragment (`file.md#heading`) is stripped before the path is recorded -- the fragment
+ *  names a heading inside the target file, not a filesystem entry, so checking it against `pathExists`
+ *  verbatim would always fail even when the linked file (and heading) both genuinely exist. */
 export function extractFilePathClaims(markdown) {
   const paths = new Set();
   for (const match of markdown.matchAll(MARKDOWN_LINK_PATTERN)) {
     const target = match[1].trim();
     if (isRepoRelativePath(target)) {
-      paths.add(target);
+      const [pathOnly] = target.split("#");
+      paths.add(pathOnly);
     }
   }
   return [...paths].sort();

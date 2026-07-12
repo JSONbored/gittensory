@@ -20,15 +20,26 @@ const DEPLOYMENT_MD = resolve(MINER_DIR, "DEPLOYMENT.md");
 const BIN_DIR = resolve(MINER_DIR, "bin");
 const BIN_ENTRY = resolve(BIN_DIR, "gittensory-miner.js");
 const LIB_DIR = resolve(MINER_DIR, "lib");
+// gittensory-miner's coding-agent driver construction (MINER_CODING_AGENT_*) is implemented in the
+// gittensory-engine package it depends on, not under packages/gittensory-miner/** -- an env var read only
+// there would otherwise false-positive as undocumented-in-code. Source (not dist/, which is gitignored and
+// may not be built) so this stays accurate on a fresh checkout without a build step.
+const ENGINE_MINER_DIR = resolve(REPO_ROOT, "packages/gittensory-engine/src/miner");
 
-function readJsFiles(dir: string): string[] {
+function readFilesWithExtension(dir: string, extension: string): string[] {
   return readdirSync(dir)
-    .filter((name) => name.endsWith(".js"))
+    .filter((name) => name.endsWith(extension))
     .map((name) => readFileSync(join(dir, name), "utf8"));
 }
 
 function buildLiveReality(): DeploymentDocsReality {
-  const envReads = scanEnvVarTokens([...readJsFiles(LIB_DIR), ...readJsFiles(BIN_DIR)].join("\n"));
+  const envReads = scanEnvVarTokens(
+    [
+      ...readFilesWithExtension(LIB_DIR, ".js"),
+      ...readFilesWithExtension(BIN_DIR, ".js"),
+      ...readFilesWithExtension(ENGINE_MINER_DIR, ".ts"),
+    ].join("\n"),
+  );
   const registered = scanRegisteredCommands(readFileSync(BIN_ENTRY, "utf8"));
   return {
     hasEnvRead: (name) => envReads.has(name),
@@ -57,6 +68,17 @@ describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
     expect(result.failures).toEqual([]);
   });
 
+  it("REGRESSION: sees env var reads implemented in gittensory-engine's miner source, not just packages/gittensory-miner/**", () => {
+    // MINER_CODING_AGENT_CLAUDE_MODEL / MINER_CODING_AGENT_CODEX_MODEL / MINER_CODING_AGENT_TIMEOUT_MS are
+    // read in packages/gittensory-engine/src/miner/driver-factory.ts, a real dependency of gittensory-miner
+    // for coding-agent driver construction -- scanning only LIB_DIR/BIN_DIR previously false-flagged them
+    // as undocumented-in-code even though they are genuinely live, functioning env vars.
+    const reality = buildLiveReality();
+    expect(reality.hasEnvRead("MINER_CODING_AGENT_CLAUDE_MODEL")).toBe(true);
+    expect(reality.hasEnvRead("MINER_CODING_AGENT_CODEX_MODEL")).toBe(true);
+    expect(reality.hasEnvRead("MINER_CODING_AGENT_TIMEOUT_MS")).toBe(true);
+  });
+
   it("extracts every documented GITTENSORY_MINER_* / MINER_* env var", () => {
     expect(claims.envVars).toContain("GITTENSORY_MINER_CONFIG_DIR");
     expect(claims.envVars.every((name) => /^(?:GITTENSORY_MINER|MINER)_/.test(name))).toBe(true);
@@ -67,6 +89,18 @@ describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
     expect(claims.filePaths).toContain("../../docker-compose.yml");
     expect(claims.filePaths).toContain("../../k8s/");
     expect(claims.filePaths.some((path) => path.startsWith("http"))).toBe(false);
+  });
+
+  it("REGRESSION: strips an in-file anchor fragment from a file-path claim (README.md#heading)", () => {
+    // DEPLOYMENT.md links to README.md#coding-agent-driver-configuration; the fragment names a heading
+    // inside README.md, not a filesystem entry, so the recorded claim must be the bare file path -- checking
+    // "README.md#coding-agent-driver-configuration" against existsSync would always false-positive as missing.
+    expect(claims.filePaths).toContain("README.md");
+    expect(claims.filePaths.some((path) => path.includes("#"))).toBe(false);
+  });
+
+  it("extractFilePathClaims strips an anchor fragment from a synthetic file#heading link", () => {
+    expect(extractFilePathClaims("See [details](guide.md#some-heading) for more.")).toEqual(["guide.md"]);
   });
 
   it("extracts documented CLI subcommands, not the npm package spelling", () => {
