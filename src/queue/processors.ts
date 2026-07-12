@@ -3787,7 +3787,21 @@ async function wakeOverCapSiblingPullRequests(
 ): Promise<void> {
   await Promise.all(
     siblingPrNumbers.map(async (prNumber) => {
-      const key = `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}`;
+      // #5385-sentry (GITTENSORY-1D): keyed by the sibling's CURRENT head SHA (not just its number) and held for
+      // a much longer cooldown than the 60s CI-completion-burst window CI_COALESCE_WINDOW_SECONDS was designed
+      // for -- a repeat over-cap discovery for an UNCHANGED head within the cooldown has nothing new to learn
+      // from a fresh full re-review; a new commit changes the head SHA and naturally resets the guard, mirroring
+      // the identical "a new commit resets the CI-stuck-finalize guard" idiom used above (#orb-ci-stuck-repeat).
+      // Without this, a contributor who repeatedly opens (and has auto-closed) near-duplicate PRs re-triggers
+      // THIS sibling's full review/gate republish every time the cap is recomputed, even though nothing about
+      // the sibling itself changed -- confirmed live: one PR published 27 redundant review surfaces in 2 hours
+      // this way, driven entirely by a different PR's open/close churn. Fail open to the tighter, headSha-less
+      // key on a lookup miss (PR not found locally) rather than skip the wake outright.
+      const sibling = await getPullRequest(env, repoFullName, prNumber).catch(() => null);
+      const key = sibling?.headSha
+        ? `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}#${sibling.headSha}`
+        : `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}`;
+      const cooldownSeconds = sibling?.headSha ? Math.round(AI_REVIEW_NON_CACHEABLE_RETRY_COOLDOWN_MS / 1000) : CI_COALESCE_WINDOW_SECONDS;
       if (await getTransientKey(env, key)) return;
       try {
         await env.JOBS.send({
@@ -3808,7 +3822,7 @@ async function wakeOverCapSiblingPullRequests(
         );
         return; // do NOT claim — a later discovery should retry the enqueue
       }
-      await putTransientKey(env, key, "1", CI_COALESCE_WINDOW_SECONDS);
+      await putTransientKey(env, key, "1", cooldownSeconds);
     }),
   );
 }
