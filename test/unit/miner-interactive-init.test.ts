@@ -16,9 +16,16 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 const { createInterfaceMock } = vi.hoisted(() => ({
   createInterfaceMock: vi.fn(),
 }));
+const { runDoctorMock } = vi.hoisted(() => ({
+  runDoctorMock: vi.fn(),
+}));
 
 vi.mock("node:readline/promises", () => ({
   createInterface: createInterfaceMock,
+}));
+
+vi.mock("../../packages/gittensory-miner/lib/status.js", () => ({
+  runDoctor: runDoctorMock,
 }));
 
 let createInteractiveInitPrompt: typeof import("../../packages/gittensory-miner/lib/laptop-init.js").createInteractiveInitPrompt;
@@ -211,5 +218,74 @@ describe("gittensory-miner interactive init raw TTY path (#5176)", () => {
         String(chunk).includes("\n"),
       ),
     ).toBe(true);
+  });
+
+  it("runInit interactive flow falls back to the built-in doctor import when no doctor is injected", async () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+    const env = {
+      GITTENSORY_MINER_CONFIG_DIR: stateDir,
+      MINER_CODING_AGENT_PROVIDER: "agent-sdk",
+    };
+    mkdirSync(stateDir, { recursive: true });
+    const stdin = new FakeStdin();
+    const stdout = makeFakeStdout();
+    createInterfaceMock.mockImplementation(() => {
+      const question = vi.fn(async () => "agent-sdk");
+      const close = vi.fn();
+      return { question, close };
+    });
+    runDoctorMock.mockResolvedValueOnce(0);
+    const prompts = {
+      askSecret: vi.fn(async () => "gitto"),
+      askChoice: vi.fn(async () => "agent-sdk"),
+      askQuestion: vi.fn(),
+    };
+
+    expect(
+      await runInit(["--interactive"], env, {
+        interactivePrompt: prompts,
+        stdin: stdin as never,
+        stdout: stdout as never,
+        cwd: root,
+      }),
+    ).toBe(0);
+    expect(runDoctorMock).toHaveBeenCalledTimes(1);
+    expect(runDoctorMock).toHaveBeenCalledWith(
+      [],
+      {
+        ...env,
+        GITHUB_TOKEN: "gitto",
+        MINER_CODING_AGENT_PROVIDER: "agent-sdk",
+      },
+      root,
+    );
+  });
+
+  it("runInit interactive flow refuses an empty GITHUB_TOKEN before doctor execution", async () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+    const env = { GITTENSORY_MINER_CONFIG_DIR: stateDir };
+    mkdirSync(stateDir, { recursive: true });
+    const stdin = new FakeStdin();
+    const stdout = makeFakeStdout();
+    const prompts = {
+      askSecret: vi.fn(async () => ""),
+      askChoice: vi.fn(),
+      askQuestion: vi.fn(),
+    };
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    runDoctorMock.mockReset();
+
+    expect(
+      await runInit(["--interactive"], env, {
+        interactivePrompt: prompts,
+        stdin: stdin as never,
+        stdout: stdout as never,
+        cwd: root,
+      }),
+    ).toBe(1);
+    expect(runDoctorMock).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("GITHUB_TOKEN is required");
   });
 });

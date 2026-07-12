@@ -296,7 +296,6 @@ function renderInteractiveEnvFile(entries) {
     "# Keep this file private; it contains the operator's token and miner config.",
   ];
   for (const [name, value] of entries) {
-    if (value === undefined) continue;
     lines.push(`${name}=${formatEnvFileValue(value)}`);
   }
   return `${lines.join("\n")}\n`;
