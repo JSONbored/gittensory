@@ -114,6 +114,20 @@ npm --workspace @jsonbored/gittensory-miner run build
 npm link --workspace @jsonbored/gittensory-miner
 ```
 
+### Coding-agent driver configuration
+
+The production driver is selected by `MINER_CODING_AGENT_PROVIDER`. The value is a comma-separated preference list:
+the first configured name wins, unknown names are skipped, and an empty/unset list leaves production driver
+construction fail-closed. See [`docs/coding-agent-driver.md`](docs/coding-agent-driver.md) for the interface-level
+contract and provider behavior.
+
+| Env var | Accepted values | Default / behavior |
+| --- | --- | --- |
+| `MINER_CODING_AGENT_PROVIDER` | `noop`, `claude-cli`, `codex-cli`, `agent-sdk` | Unset / empty means no provider is configured; the miner fails closed until a valid provider name is supplied. |
+| `MINER_CODING_AGENT_CLAUDE_MODEL` | Any Claude model string accepted by the local `claude` CLI | Unset means `claude-cli` uses the CLI's own default model. Ignored by `noop`, `codex-cli`, and `agent-sdk`. |
+| `MINER_CODING_AGENT_CODEX_MODEL` | Any Codex model string accepted by the local `codex` CLI | Unset means `codex-cli` uses the CLI's own default model. Ignored by `noop`, `claude-cli`, and `agent-sdk`. |
+| `MINER_CODING_AGENT_TIMEOUT_MS` | Positive integer milliseconds | Unset or invalid falls back to the CLI driver's default wall-clock timeout of `120000` ms. Ignored by `noop` and `agent-sdk`. |
+
 ## Commands
 
 ```sh

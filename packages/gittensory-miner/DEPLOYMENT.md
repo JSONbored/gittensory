@@ -10,6 +10,19 @@ Two form factors for running `@jsonbored/gittensory-miner`: **laptop mode** (sin
 | **Setup**        | `npm install -g @jsonbored/gittensory-miner` or workspace build                                | `docker build` + `docker run` with env + volume (see below)                       |
 | **Footprint**    | One Node process, local disk for ledgers/queues                                                | One container per worker; scale horizontally by adding containers                 |
 
+## Coding-agent provider configuration
+
+For provider selection and model/timeout knobs, see the README section on
+[coding-agent driver configuration](README.md#coding-agent-driver-configuration) and the
+interface-level contract in [`docs/coding-agent-driver.md`](docs/coding-agent-driver.md).
+The short version is:
+
+- `MINER_CODING_AGENT_PROVIDER` is a comma-separated preference list; the first configured name wins.
+- Valid provider names are `noop`, `claude-cli`, `codex-cli`, and `agent-sdk`.
+- `MINER_CODING_AGENT_CLAUDE_MODEL` and `MINER_CODING_AGENT_CODEX_MODEL` only affect their matching CLI providers.
+- `MINER_CODING_AGENT_TIMEOUT_MS` only affects the CLI providers and falls back to `120000` ms when unset or invalid.
+- `noop` and `agent-sdk` ignore the model and timeout knobs.
+
 ## Laptop mode walkthrough
 
 1. Install Node.js 22.13+ and the package:
