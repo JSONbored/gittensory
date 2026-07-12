@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { initEventLedger } from "./event-ledger.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { initRunStateStore } from "./run-state.js";
@@ -207,7 +208,7 @@ export function parseManageStatusArgs(args = []) {
 export function runManageStatus(args = [], options = {}) {
   const parsed = parseManageStatusArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 

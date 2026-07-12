@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { CLAIM_STATUSES, openClaimLedger } from "./claim-ledger.js";
 
 const CLAIM_CLAIM_USAGE =
@@ -183,7 +184,7 @@ function withClaimLedger(options, run) {
 export function runClaimClaim(args, options = {}) {
   const parsed = parseClaimClaimArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -202,7 +203,7 @@ export function runClaimClaim(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -210,7 +211,7 @@ export function runClaimClaim(args, options = {}) {
 export function runClaimRelease(args, options = {}) {
   const parsed = parseClaimReleaseArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -229,7 +230,7 @@ export function runClaimRelease(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -237,7 +238,7 @@ export function runClaimRelease(args, options = {}) {
 export function runClaimList(args, options = {}) {
   const parsed = parseClaimListArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -255,7 +256,7 @@ export function runClaimList(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }

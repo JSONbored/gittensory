@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { RUN_STATES, getRunState, setRunState } from "./run-state.js";
 
 const STATE_GET_USAGE = "Usage: gittensory-miner state get <owner/repo> [--json]";
@@ -76,7 +77,7 @@ export function parseStateSetArgs(args) {
 export function runStateGet(args) {
   const parsed = parseStateGetArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -89,7 +90,7 @@ export function runStateGet(args) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -97,7 +98,7 @@ export function runStateGet(args) {
 export function runStateSet(args) {
   const parsed = parseStateSetArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -110,7 +111,7 @@ export function runStateSet(args) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }

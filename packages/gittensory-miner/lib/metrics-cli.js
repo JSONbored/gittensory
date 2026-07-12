@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { renderMinerPredictionMetrics } from "@jsonbored/gittensory-engine";
 import { initPredictionLedger } from "./prediction-ledger.js";
 
@@ -45,7 +46,7 @@ export function runMetrics(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }

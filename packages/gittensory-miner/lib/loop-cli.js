@@ -25,6 +25,7 @@
 // a durable version needs attempt-log.js to grow a repo+issue index, the same separate schema change
 // attempt-input-builder.js's header already flags as out of scope here).
 
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { checkMinerKillSwitch } from "./governor-kill-switch.js";
 import { evaluateRunLoopBoundaryGate } from "./governor-run-halt.js";
 import { openGovernorState } from "./governor-state.js";
@@ -195,7 +196,7 @@ function zeroConvergence() {
 export async function runLoop(args, options = {}) {
   const parsed = parseLoopArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -469,7 +470,7 @@ export async function runLoop(args, options = {}) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   } finally {
     governorState.close();

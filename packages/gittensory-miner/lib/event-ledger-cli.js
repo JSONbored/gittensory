@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { initEventLedger } from "./event-ledger.js";
 
 const LEDGER_LIST_USAGE =
@@ -217,7 +218,7 @@ function withEventLedger(options, run) {
 export function runLedgerList(args, options = {}) {
   const parsed = parseLedgerListArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -238,7 +239,7 @@ export function runLedgerList(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }

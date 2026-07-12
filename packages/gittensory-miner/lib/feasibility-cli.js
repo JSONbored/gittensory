@@ -1,6 +1,7 @@
 /** `feasibility` CLI command (#4270): a thin parse -> execute -> render wrapper around the engine's pure
  * `buildFeasibilityVerdict` composer. Purely local — no network, no filesystem — so it never needs the
  * npm-registry update check other subcommands opt into. */
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { buildFeasibilityVerdict } from "@jsonbored/gittensory-engine";
 
 const CLAIM_STATUSES = ["unclaimed", "claimed", "solved", "unknown"];
@@ -59,7 +60,7 @@ export function parseFeasibilityArgs(args) {
 export function runFeasibilityCli(args, options = {}) {
   const parsed = parseFeasibilityArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 

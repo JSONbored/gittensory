@@ -122,6 +122,14 @@ describe("runFeasibilityCli (#4270)", () => {
     });
     expect(log).toHaveBeenCalledWith("go: fake verdict");
   });
+
+  it("emits a parseable JSON error object on a parse failure when --json is set (#4836)", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runFeasibilityCli(["bogus", "none", "ready", "--json"])).toBe(2);
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toEqual({
+      error: "claimStatus must be one of: unclaimed, claimed, solved, unknown.",
+    });
+  });
 });
 
 describe("gittensory-miner feasibility CLI entrypoint (#4270)", () => {

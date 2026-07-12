@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { pollCheckRuns } from "./ci-poller.js";
 import { initEventLedger } from "./event-ledger.js";
 import {
@@ -162,7 +163,7 @@ export async function recordManagePollSnapshot(input, options = {}) {
 export async function runManagePoll(args = [], options = {}) {
   const parsed = parseManagePollArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -201,7 +202,7 @@ export async function runManagePoll(args = [], options = {}) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   } finally {
     if (ownsEventLedger) eventLedger.close();

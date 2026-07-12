@@ -1,5 +1,6 @@
 /** `discover` CLI command (#4247): wires the existing fanout -> rank -> enqueue pipeline together so a miner
  * can actually run it. Every piece already exists and is independently tested; this module only composes them. */
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { resolveForgeConfig } from "./forge-config.js";
 import {
   fetchCandidateIssuesWithSummary,
@@ -136,7 +137,7 @@ export function renderDiscoverSummary(result) {
 export async function runDiscover(args, options = {}) {
   const parsed = parseDiscoverArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -191,7 +192,7 @@ export async function runDiscover(args, options = {}) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   } finally {
     if (ownsPortfolioQueue) portfolioQueue.close();

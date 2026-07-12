@@ -8,6 +8,7 @@
 // local SQLite file with no local-reachable channel a GitHub-page content script can read today. The pure
 // collector below is factored so it is directly reusable once such a channel exists.
 
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 
 const QUEUE_STATUS_KEYS = ["queued", "in_progress", "done"];
@@ -90,7 +91,7 @@ export function parsePortfolioDashboardArgs(args = []) {
 export function runPortfolioDashboard(args = [], options = {}) {
   const parsed = parsePortfolioDashboardArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
   const ownsQueue = options.initPortfolioQueue === undefined;

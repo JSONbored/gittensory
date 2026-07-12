@@ -12,6 +12,7 @@
 // governor.convergenceInput is an honest first-attempt-shaped literal, not a real per-issue attempt-history
 // query (attempt-log.js's schema has no repo+issue index, and reenqueue counts aren't tracked anywhere yet).
 
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { resolveCodingAgentModeFromConfig } from "@jsonbored/gittensory-engine";
 import { constructProductionCodingAgentDriver } from "./coding-agent-construction.js";
 import { runSlopAssessment } from "./slop-assessment.js";
@@ -139,7 +140,7 @@ export function buildAttemptDeps(env, ledgers) {
 export async function runAttempt(args, options = {}) {
   const parsed = parseAttemptArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -461,7 +462,7 @@ export async function runAttempt(args, options = {}) {
         return 2;
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   } finally {
     // worktreeResult.attemptOk is set to the REAL runMinerAttempt outcome (submitted = true) once that call

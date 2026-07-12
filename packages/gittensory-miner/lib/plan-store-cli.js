@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { PLAN_STATUSES, openPlanStore } from "./plan-store.js";
 
 const PLAN_LIST_USAGE =
@@ -101,7 +102,7 @@ function withPlanStore(options, run) {
 export function runPlanList(args, options = {}) {
   const parsed = parsePlanListArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -116,7 +117,7 @@ export function runPlanList(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -124,7 +125,7 @@ export function runPlanList(args, options = {}) {
 export function runPlanShow(args, options = {}) {
   const parsed = parsePlanShowArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -143,7 +144,7 @@ export function runPlanShow(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }

@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { evaluateDenyHooks } from "./deny-hooks.js";
 
 const DENY_CHECK_USAGE =
@@ -59,7 +60,7 @@ export function parseDenyCheckArgs(args) {
 export function runDenyCheck(args) {
   const parsed = parseDenyCheckArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 

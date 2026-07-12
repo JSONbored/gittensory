@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -157,7 +158,7 @@ export function parseOrbExportArgs(args) {
 export function runOrbExportCli(args, options = {}) {
   const parsed = parseOrbExportArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -180,7 +181,7 @@ export function runOrbExportCli(args, options = {}) {
     else console.log(`${batch.length} anonymized event(s)`);
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   } finally {
     if (ownsStore) store?.close();

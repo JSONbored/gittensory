@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { initPortfolioQueueManager } from "./portfolio-queue-manager.js";
 import { runPortfolioDashboard } from "./portfolio-dashboard.js";
@@ -140,7 +141,7 @@ function withPortfolioQueue(options, run) {
 export function runQueueList(args, options = {}) {
   const parsed = parseQueueListArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -155,7 +156,7 @@ export function runQueueList(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -163,7 +164,7 @@ export function runQueueList(args, options = {}) {
 export function runQueueNext(args, options = {}) {
   const parsed = parseQueueNextArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -178,7 +179,7 @@ export function runQueueNext(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -186,7 +187,7 @@ export function runQueueNext(args, options = {}) {
 export function runQueueDone(args, options = {}) {
   const parsed = parseQueueDoneArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -205,7 +206,7 @@ export function runQueueDone(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
@@ -238,7 +239,7 @@ export function parseQueueClaimBatchArgs(args) {
 export function runQueueClaimBatch(args, options = {}) {
   const parsed = parseQueueClaimBatchArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -258,7 +259,7 @@ export function runQueueClaimBatch(args, options = {}) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   } finally {
     if (ownsManager) manager?.close();

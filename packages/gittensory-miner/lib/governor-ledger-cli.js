@@ -1,3 +1,4 @@
+import { emitCliError, wantsJsonOutput } from "./cli-error.js";
 /** Must match `GOVERNOR_LEDGER_EVENT_TYPES` in `@jsonbored/gittensory-engine`. */
 const GOVERNOR_LEDGER_EVENT_TYPES = Object.freeze([
   "allowed",
@@ -109,7 +110,7 @@ async function withGovernorLedger(options, run) {
 export async function runGovernorList(args, options = {}) {
   const parsed = parseGovernorListArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
+    emitCliError(parsed.error, { json: wantsJsonOutput(args) });
     return 2;
   }
 
@@ -129,7 +130,7 @@ export async function runGovernorList(args, options = {}) {
       return 0;
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    emitCliError(error instanceof Error ? error.message : String(error), { json: wantsJsonOutput(args) });
     return 2;
   }
 }
