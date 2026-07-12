@@ -34,6 +34,10 @@ review-enrichment
 .DS_Store
 *.tsbuildinfo
 # Never ship secrets into the build context
+# Compose secret files live under ./secrets for local self-host deploys; keep raw
+# token values out of Docker build contexts/layers/cache just like .env files.
+secrets
+secrets/**
 .env
 .env.*
 .dev.vars
