@@ -6,13 +6,13 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/branch-analysis")({
   head: () => ({
     meta: [
-      { title: "Branch analysis — Gittensory docs" },
+      { title: "Branch analysis — LoopOver docs" },
       {
         name: "description",
         content:
           "Metadata-only analysis of a branch. Inputs, outputs, and the privacy boundary explained.",
       },
-      { property: "og:title", content: "Branch analysis — Gittensory docs" },
+      { property: "og:title", content: "Branch analysis — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -30,7 +30,7 @@ function BranchAnalysis() {
     <DocsPage
       eyebrow="Core concepts"
       title="Branch analysis"
-      description="Gittensory analyzes branches using metadata only. Your source code never leaves your machine."
+      description="LoopOver analyzes branches using metadata only. Your source code never leaves your machine."
     >
       <h2>Inputs</h2>
       <ul>

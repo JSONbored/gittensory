@@ -6,13 +6,13 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/miner-quickstart")({
   head: () => ({
     meta: [
-      { title: "Miner quickstart by lane — Gittensory docs" },
+      { title: "Miner quickstart by lane — LoopOver docs" },
       {
         name: "description",
         content:
           "Pick a contribution lane, install @jsonbored/gittensory-mcp, sign in, and run plan → preflight → packet. Lane-by-lane commands with JSON output and redaction notes.",
       },
-      { property: "og:title", content: "Miner quickstart by lane — Gittensory docs" },
+      { property: "og:title", content: "Miner quickstart by lane — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -33,19 +33,19 @@ function MinerQuickstart() {
       description="Choose how you want to contribute, then follow the same loop — install, sign in, doctor, plan, preflight, packet — with the flags that fit your lane. About five minutes per lane."
     >
       <p>
-        Gittensory is copilot-only. It ranks and explains your options and drafts public-safe PR
+        LoopOver is copilot-only. It ranks and explains your options and drafts public-safe PR
         packets. It does not edit code, open PRs, or post comments for you, it makes no earnings
         promises, and it never predicts a public number. Every command below also accepts{" "}
         <code>--json</code> for machine-readable output, and your source never leaves your machine —
-        only branch metadata (changed file paths, commit messages) is sent to authenticated
-        Gittensory MCP/API responses.
+        only branch metadata (changed file paths, commit messages) is sent to authenticated LoopOver
+        MCP/API responses.
       </p>
 
       <h2>0. Install and sign in (every lane)</h2>
       <p>
         The MCP is published as <code>@jsonbored/gittensory-mcp</code>. Run it with <code>npx</code>{" "}
-        or install it globally, then authenticate with GitHub Device Flow — Gittensory never asks
-        for a Personal Access Token.
+        or install it globally, then authenticate with GitHub Device Flow — LoopOver never asks for
+        a Personal Access Token.
       </p>
       <CodeBlock
         code={`# install (one-off, or global)
@@ -61,7 +61,7 @@ gittensory-mcp status --json
 gittensory-mcp doctor --json`}
       />
       <Callout variant="safety">
-        Session tokens are <strong>Gittensory tokens backed by GitHub identity</strong>, not your
+        Session tokens are <strong>LoopOver tokens backed by GitHub identity</strong>, not your
         GitHub PATs. Source upload stays disabled (<code>GITTENSORY_UPLOAD_SOURCE=false</code>) and
         local absolute paths are redacted from anything that leaves your machine. Log out anytime
         with <code>gittensory-mcp logout</code>.

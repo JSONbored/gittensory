@@ -6,17 +6,17 @@ import { Callout, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/maintainer-self-hosting")({
   head: () => ({
     meta: [
-      { title: "Self-hosted reviews — Gittensory docs" },
+      { title: "Self-hosted reviews — LoopOver docs" },
       {
         name: "description",
         content:
-          "A maintainer guide to self-hosting the Gittensory review service, with dedicated pages for setup, configuration, AI, REES, RAG, operations, releases, security, and troubleshooting.",
+          "A maintainer guide to self-hosting the LoopOver review service, with dedicated pages for setup, configuration, AI, REES, RAG, operations, releases, security, and troubleshooting.",
       },
-      { property: "og:title", content: "Self-hosted reviews — Gittensory docs" },
+      { property: "og:title", content: "Self-hosted reviews — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "A maintainer guide to self-hosting the Gittensory review service, with dedicated pages for setup, configuration, AI, REES, RAG, operations, releases, security, and troubleshooting.",
+          "A maintainer guide to self-hosting the LoopOver review service, with dedicated pages for setup, configuration, AI, REES, RAG, operations, releases, security, and troubleshooting.",
       },
       { property: "og:url", content: "/docs/maintainer-self-hosting" },
     ],
@@ -113,7 +113,7 @@ function MaintainerSelfHosting() {
     <DocsPage
       eyebrow="Maintainers"
       title="Self-hosted reviews"
-      description="Run the Gittensory review service on your own infrastructure, with your own data store, GitHub App, AI provider, enrichment service, observability, and private repo policy."
+      description="Run the LoopOver review service on your own infrastructure, with your own data store, GitHub App, AI provider, enrichment service, observability, and private repo policy."
     >
       <Callout variant="safety" title="Self-hosting is a maintainer surface">
         Treat the self-host stack like production infrastructure. Keep secrets out of images and
@@ -279,15 +279,22 @@ function MaintainerSelfHosting() {
       </p>
 
       <h2>Moving a repo between hosted and self-host</h2>
-      <p>
+      <Callout variant="note" title="Hosted is currently paused">
         &quot;Hosted&quot; here means the private managed-beta shared <code>gittensory</code> App
-        described in <Link to="/docs/github-app">GitHub App configuration</Link> — a repo installed
-        there is reviewed by gittensory&apos;s own cloud Worker and its own database.
-        &quot;Self-host&quot; means your own container from{" "}
+        described in <Link to="/docs/github-app">GitHub App configuration</Link> — it previously
+        accepted new installs and is currently paused while self-hosted Orb is the primary way to
+        run LoopOver. A new centrally hosted offering is planned for the future. "Switching from
+        hosted to self-host" below still applies to any repo already installed on the hosted App;
+        "switching back to hosted" isn't possible until hosted installs reopen, but the steps are
+        kept here for when they do.
+      </Callout>
+      <p>
+        A repo installed on the hosted App is reviewed by LoopOver&apos;s own cloud Worker and its
+        own database. &quot;Self-host&quot; means your own container from{" "}
         <Link to="/docs/self-hosting-quickstart">Quickstart</Link>, with its own GitHub App (or
         brokered Orb enrollment) and its own data store. There is{" "}
-        <strong>no automated migration path between the two</strong> today — moving a repo is a
-        manual App swap plus re-creating whatever settings you had, not a toggle.
+        <strong>no automated migration path between the two</strong> — moving a repo is a manual App
+        swap plus re-creating whatever settings you had, not a toggle.
       </p>
 
       <h3>Switching a repo from hosted to self-host</h3>
@@ -301,7 +308,7 @@ function MaintainerSelfHosting() {
           Create <strong>your own</strong> GitHub App via the self-host{" "}
           <Link to="/docs/self-hosting-github-app">setup wizard</Link> (or brokered Orb enrollment).
           You cannot repoint the existing shared hosted App at your self-host container — the shared
-          App&apos;s credentials belong to gittensory&apos;s cloud Worker, and{" "}
+          App&apos;s credentials belong to LoopOver&apos;s cloud Worker, and{" "}
           <code>src/selfhost/setup-wizard.ts</code> always mints a distinct App tied to your
           instance&apos;s own webhook URL.
         </li>
@@ -319,7 +326,7 @@ function MaintainerSelfHosting() {
 
       <h3>What does not carry over automatically</h3>
       <p>
-        Hosted-side settings live in gittensory&apos;s own cloud database, keyed by repo full name —{" "}
+        Hosted-side settings live in LoopOver&apos;s own cloud database, keyed by repo full name —{" "}
         <code>resolveRepositorySettings</code> (<code>src/settings/repository-settings.ts</code>)
         reads them from <code>env.DB</code>, which is a completely different database instance than
         your self-host container&apos;s. A self-host instance has no access to, and no import path
@@ -339,7 +346,7 @@ function MaintainerSelfHosting() {
         App starts reviewing, with nothing to re-enter.
       </p>
       <Callout variant="warn" title="Review history does not move">
-        Past review comments, check-run history, and any per-PR state gittensory recorded while the
+        Past review comments, check-run history, and any per-PR state LoopOver recorded while the
         hosted App was active stay wherever they were created — GitHub comments and check runs are
         never deleted or copied by an uninstall/install, but nothing in the self-host database is
         backfilled from the hosted side. A migrated repo starts its self-host review history from
@@ -356,8 +363,9 @@ function MaintainerSelfHosting() {
 
       <h3>Switching a repo from self-host back to hosted</h3>
       <p>
-        The reverse migration has the same shape and the same gap: uninstall your self-host App from
-        the repo, install the shared hosted App (if you have managed-beta access — see{" "}
+        Hosted installs are currently paused — this direction isn't possible until the shared App
+        reopens (see the callout above). Once it does, the reverse migration has the same shape and
+        the same gap: uninstall your self-host App from the repo, install the shared hosted App (see{" "}
         <Link to="/docs/github-app">GitHub App configuration</Link>), and re-create any DB-backed
         settings on the hosted side. <code>.gittensory.yml</code> again carries over for free since
         it travels with the repo; nothing else does. Your self-host instance&apos;s data volumes are

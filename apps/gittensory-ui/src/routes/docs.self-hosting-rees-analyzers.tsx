@@ -7,17 +7,17 @@ import { REES_ANALYZERS, REES_ANALYZER_NAMES, REES_PROFILES } from "@/lib/rees-a
 export const Route = createFileRoute("/docs/self-hosting-rees-analyzers")({
   head: () => ({
     meta: [
-      { title: "REES analyzer reference — Gittensory docs" },
+      { title: "REES analyzer reference — LoopOver docs" },
       {
         name: "description",
         content:
-          "Reference for every REES analyzer available to self-hosted Gittensory review engines, including analyzer names, inputs, network behavior, and findings.",
+          "Reference for every REES analyzer available to self-hosted LoopOver review engines, including analyzer names, inputs, network behavior, and findings.",
       },
-      { property: "og:title", content: "REES analyzer reference — Gittensory docs" },
+      { property: "og:title", content: "REES analyzer reference — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Reference for every REES analyzer available to self-hosted Gittensory review engines, including analyzer names, inputs, network behavior, and findings.",
+          "Reference for every REES analyzer available to self-hosted LoopOver review engines, including analyzer names, inputs, network behavior, and findings.",
       },
       { property: "og:url", content: "/docs/self-hosting-rees-analyzers" },
     ],

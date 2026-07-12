@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-ai-providers")({
   head: () => ({
     meta: [
-      { title: "Self-host AI providers — Gittensory docs" },
+      { title: "Self-host AI providers — LoopOver docs" },
       {
         name: "description",
         content:
-          "Configure AI providers for self-hosted Gittensory reviews, including Anthropic, OpenAI-compatible endpoints, Ollama, Claude Code, and Codex.",
+          "Configure AI providers for self-hosted LoopOver reviews, including Anthropic, OpenAI-compatible endpoints, Ollama, Claude Code, and Codex.",
       },
-      { property: "og:title", content: "Self-host AI providers — Gittensory docs" },
+      { property: "og:title", content: "Self-host AI providers — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Configure AI providers for self-hosted Gittensory reviews, including Anthropic, OpenAI-compatible endpoints, Ollama, Claude Code, and Codex.",
+          "Configure AI providers for self-hosted LoopOver reviews, including Anthropic, OpenAI-compatible endpoints, Ollama, Claude Code, and Codex.",
       },
       { property: "og:url", content: "/docs/self-hosting-ai-providers" },
     ],

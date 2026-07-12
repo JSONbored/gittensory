@@ -6,13 +6,13 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/quickstart")({
   head: () => ({
     meta: [
-      { title: "Quickstart — Gittensory docs" },
+      { title: "Quickstart — LoopOver docs" },
       {
         name: "description",
         content:
           "Install @jsonbored/gittensory-mcp, sign in with GitHub Device Flow, and analyze your branch in two commands.",
       },
-      { property: "og:title", content: "Quickstart — Gittensory docs" },
+      { property: "og:title", content: "Quickstart — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -47,8 +47,8 @@ npm i -g @jsonbored/gittensory-mcp@latest`}
 
       <h2>2. Sign in (GitHub Device Flow)</h2>
       <p>
-        Gittensory never asks for a Personal Access Token. The CLI walks you through GitHub's Device
-        Flow and exchanges the result for a Gittensory session token.
+        LoopOver never asks for a Personal Access Token. The CLI walks you through GitHub's Device
+        Flow and exchanges the result for a LoopOver session token.
       </p>
       <CodeBlock
         code={`gittensory-mcp login
@@ -56,7 +56,7 @@ gittensory-mcp whoami
 gittensory-mcp status`}
       />
       <Callout variant="safety">
-        Session tokens are <strong>Gittensory tokens backed by GitHub identity</strong>, not your
+        Session tokens are <strong>LoopOver tokens backed by GitHub identity</strong>, not your
         GitHub PATs. You can log out anytime with <code>gittensory-mcp logout</code>.
       </Callout>
 

@@ -27,6 +27,6 @@ For conduct issues, use the expectations in `CODE_OF_CONDUCT.md`.
 
 ## Expected Response Posture
 
-Gittensory is maintained as a Cloudflare Worker, frontend, GitHub App, and agent-integration
+LoopOver is maintained as a Cloudflare Worker, frontend, GitHub App, and agent-integration
 project. Support should keep the same boundaries as the product: no public wallet data, no raw
 trust scores, no public reward estimates, and no source-code upload by default.

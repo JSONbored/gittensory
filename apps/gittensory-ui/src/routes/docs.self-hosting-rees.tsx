@@ -7,17 +7,17 @@ import { REES_ANALYZER_NAMES } from "@/lib/rees-analyzers";
 export const Route = createFileRoute("/docs/self-hosting-rees")({
   head: () => ({
     meta: [
-      { title: "REES enrichment — Gittensory docs" },
+      { title: "REES enrichment — LoopOver docs" },
       {
         name: "description",
         content:
-          "Configure REES for self-hosted Gittensory reviews, including service auth, analyzer selection, result visibility, and troubleshooting.",
+          "Configure REES for self-hosted LoopOver reviews, including service auth, analyzer selection, result visibility, and troubleshooting.",
       },
-      { property: "og:title", content: "REES enrichment — Gittensory docs" },
+      { property: "og:title", content: "REES enrichment — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Configure REES for self-hosted Gittensory reviews, including service auth, analyzer selection, result visibility, and troubleshooting.",
+          "Configure REES for self-hosted LoopOver reviews, including service auth, analyzer selection, result visibility, and troubleshooting.",
       },
       { property: "og:url", content: "/docs/self-hosting-rees" },
     ],

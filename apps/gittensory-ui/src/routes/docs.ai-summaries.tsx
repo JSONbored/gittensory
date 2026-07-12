@@ -6,17 +6,17 @@ import { Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/ai-summaries")({
   head: () => ({
     meta: [
-      { title: "AI summaries — Gittensory docs" },
+      { title: "AI summaries — LoopOver docs" },
       {
         name: "description",
         content:
-          "How Gittensory uses AI: only over deterministic signals, never as a source of truth, with strict public/private boundaries.",
+          "How LoopOver uses AI: only over deterministic signals, never as a source of truth, with strict public/private boundaries.",
       },
-      { property: "og:title", content: "AI summaries — Gittensory docs" },
+      { property: "og:title", content: "AI summaries — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "How Gittensory uses AI: only over deterministic signals, never as a source of truth, with strict public/private boundaries.",
+          "How LoopOver uses AI: only over deterministic signals, never as a source of truth, with strict public/private boundaries.",
       },
       { property: "og:url", content: "/docs/ai-summaries" },
     ],
@@ -34,7 +34,7 @@ function AiSummariesDoc() {
     >
       <h2>The rule</h2>
       <p>
-        Gittensory is deterministic. When AI summaries are enabled, they sit
+        LoopOver is deterministic. When AI summaries are enabled, they sit
         <em> on top of</em> the structured response — they never replace it, never add facts that
         aren&apos;t in the response, and never change ranked actions, blockers, or scoreability
         numbers.

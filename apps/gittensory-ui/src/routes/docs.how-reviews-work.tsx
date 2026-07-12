@@ -6,17 +6,17 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/how-reviews-work")({
   head: () => ({
     meta: [
-      { title: "How reviews work — Gittensory docs" },
+      { title: "How reviews work — LoopOver docs" },
       {
         name: "description",
         content:
-          "How gittensory reviews a pull request: the deterministic gate, the dual-AI review and consensus, the unified review comment, and the signals behind a verdict.",
+          "How LoopOver reviews a pull request: the deterministic gate, the dual-AI review and consensus, the unified review comment, and the signals behind a verdict.",
       },
-      { property: "og:title", content: "How reviews work — Gittensory docs" },
+      { property: "og:title", content: "How reviews work — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "How gittensory reviews a pull request: the deterministic gate, the dual-AI review and consensus, the unified review comment, and the signals behind a verdict.",
+          "How LoopOver reviews a pull request: the deterministic gate, the dual-AI review and consensus, the unified review comment, and the signals behind a verdict.",
       },
       { property: "og:url", content: "/docs/how-reviews-work" },
     ],
@@ -30,11 +30,11 @@ function HowReviewsWork() {
     <DocsPage
       eyebrow="Reviews"
       title="How reviews work"
-      description="What gittensory does when a pull request opens — the gate, the dual-AI review and consensus, and the single comment that surfaces it."
+      description="What LoopOver does when a pull request opens — the gate, the dual-AI review and consensus, and the single comment that surfaces it."
     >
       <h2>The shape of a review</h2>
       <p>
-        When a pull request opens or updates, <strong>gittensory CI</strong> runs a review in two
+        When a pull request opens or updates, <strong>LoopOver CI</strong> runs a review in two
         layers and reports the result in one place:
       </p>
       <ol>

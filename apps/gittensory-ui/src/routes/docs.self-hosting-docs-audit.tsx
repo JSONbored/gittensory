@@ -12,13 +12,13 @@ import {
 export const Route = createFileRoute("/docs/self-hosting-docs-audit")({
   head: () => ({
     meta: [
-      { title: "Self-host docs accuracy audit — Gittensory docs" },
+      { title: "Self-host docs accuracy audit — LoopOver docs" },
       {
         name: "description",
         content:
           "Checklist mapping self-host website docs to runtime sources of truth — compose defaults, env vars, releases, observability, backup, and drift guards.",
       },
-      { property: "og:title", content: "Self-host docs accuracy audit — Gittensory docs" },
+      { property: "og:title", content: "Self-host docs accuracy audit — LoopOver docs" },
       {
         property: "og:description",
         content:

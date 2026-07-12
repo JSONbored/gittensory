@@ -6,13 +6,13 @@ import { Callout, CodeBlock } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/troubleshooting")({
   head: () => ({
     meta: [
-      { title: "Troubleshooting — Gittensory docs" },
+      { title: "Troubleshooting — LoopOver docs" },
       {
         name: "description",
         content:
           "Diagnose MCP/CLI issues with doctor, status, and whoami. Common errors and fixes.",
       },
-      { property: "og:title", content: "Troubleshooting — Gittensory docs" },
+      { property: "og:title", content: "Troubleshooting — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -92,14 +92,14 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`}
 
       <h3>401 Unauthorized from the API</h3>
       <p>
-        Your Gittensory session expired. Run <code>gittensory-mcp login</code> again. Static bearer
+        Your LoopOver session expired. Run <code>gittensory-mcp login</code> again. Static bearer
         tokens are not user-facing.
       </p>
 
       <h2 id="api-status">API status &amp; offline mode</h2>
       <p>
-        The site continuously monitors the Gittensory API and surfaces problems through a banner
-        under the header and a single deduped toast with a <strong>Recheck</strong> button.
+        The site continuously monitors the LoopOver API and surfaces problems through a banner under
+        the header and a single deduped toast with a <strong>Recheck</strong> button.
       </p>
       <h3 id="offline">You're offline</h3>
       <p>

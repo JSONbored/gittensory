@@ -6,13 +6,13 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/owner-checklist")({
   head: () => ({
     meta: [
-      { title: "Repo-owner onboarding checklist — Gittensory docs" },
+      { title: "Repo-owner onboarding checklist — LoopOver docs" },
       {
         name: "description",
         content:
           "A pre-flight checklist for repo owners: registration, config quality, labels, issue quality, contribution lanes, validation, maintainer capacity, and the public/private boundary — with honest tradeoffs.",
       },
-      { property: "og:title", content: "Repo-owner onboarding checklist — Gittensory docs" },
+      { property: "og:title", content: "Repo-owner onboarding checklist — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -30,10 +30,10 @@ function OwnerChecklist() {
     <DocsPage
       eyebrow="Repo owners"
       title="Repo-owner onboarding checklist"
-      description="Work through this before you invite Gittensory contribution traffic. It mirrors the readiness report exactly, so each item is something the platform actually checks — and each comes with the honest tradeoff you are opting into."
+      description="Work through this before you invite LoopOver contribution traffic. It mirrors the readiness report exactly, so each item is something the platform actually checks — and each comes with the honest tradeoff you are opting into."
     >
       <p>
-        Gittensory is <strong>quiet by default</strong>: it installs without posting comments or
+        LoopOver is <strong>quiet by default</strong>: it installs without posting comments or
         adding labels until you turn those surfaces on. This checklist is what to confirm first.
         Everything owner-only runs through the private API or the{" "}
         <Link to="/app/owner">owner console</Link>; readiness is reported as bands and statuses,
@@ -56,7 +56,7 @@ GET /v1/repos/:owner/:repo/gittensor-config-recommendation`}
 
       <h2>1. Repository registration</h2>
       <p>
-        Confirm the repo is in the current Gittensory registry. If it is not, that is the first{" "}
+        Confirm the repo is in the current LoopOver registry. If it is not, that is the first{" "}
         <code>blocker</code> in the readiness report and nothing else applies yet. Register and
         review from the <Link to="/app/owner">owner console</Link>.
       </p>

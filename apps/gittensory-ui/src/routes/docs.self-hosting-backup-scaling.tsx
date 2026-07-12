@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-backup-scaling")({
   head: () => ({
     meta: [
-      { title: "Self-host backup and scaling — Gittensory docs" },
+      { title: "Self-host backup and scaling — LoopOver docs" },
       {
         name: "description",
         content:
-          "Back up and scale the self-hosted Gittensory review service with SQLite, Litestream, Postgres, Redis, and restore checks.",
+          "Back up and scale the self-hosted LoopOver review service with SQLite, Litestream, Postgres, Redis, and restore checks.",
       },
-      { property: "og:title", content: "Self-host backup and scaling — Gittensory docs" },
+      { property: "og:title", content: "Self-host backup and scaling — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Back up and scale the self-hosted Gittensory review service with SQLite, Litestream, Postgres, Redis, and restore checks.",
+          "Back up and scale the self-hosted LoopOver review service with SQLite, Litestream, Postgres, Redis, and restore checks.",
       },
       { property: "og:url", content: "/docs/self-hosting-backup-scaling" },
     ],

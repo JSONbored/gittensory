@@ -7,13 +7,13 @@ import { SELFHOST_ENV_REFERENCE_MARKDOWN } from "@/lib/selfhost-env-reference";
 export const Route = createFileRoute("/docs/self-hosting-configuration")({
   head: () => ({
     meta: [
-      { title: "Self-host configuration — Gittensory docs" },
+      { title: "Self-host configuration — LoopOver docs" },
       {
         name: "description",
         content:
           "Configure the self-host review service: env vars, private repo config, feature flags, review modes, and safe defaults.",
       },
-      { property: "og:title", content: "Self-host configuration — Gittensory docs" },
+      { property: "og:title", content: "Self-host configuration — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -533,17 +533,17 @@ features:
       />
       <Callout variant="warn" title="Remove the branch-protection requirement first">
         Before switching to <code>disabled</code>, remove <code>Gittensory Orb Review Agent</code>{" "}
-        from this repo&apos;s branch-protection or ruleset required-status-checks list — Gittensory
+        from this repo&apos;s branch-protection or ruleset required-status-checks list — LoopOver
         cannot do this on your behalf, and leaving it required with nothing to satisfy it means
         GitHub shows a pending status forever. Keep your real CI/Codecov/security checks required;
-        this setting only ever affects Gittensory&apos;s own check-run.
+        this setting only ever affects LoopOver&apos;s own check-run.
       </Callout>
       <p>
         For a repo that has never been configured, the default is <code>disabled</code>; an
         already-configured repo keeps its current effective behavior. Self-hosters running
         high-volume autonomous review should prefer <code>visible</code> or <code>disabled</code>{" "}
-        over <code>required</code> — Gittensory&apos;s own merge/close decisions never depend on
-        this check either way.
+        over <code>required</code> — LoopOver&apos;s own merge/close decisions never depend on this
+        check either way.
       </p>
 
       <h3>Other gate-only fields</h3>
@@ -551,7 +551,7 @@ features:
         <li>
           <code>gate.cla</code> — sub-object for the CLA gate (<code>gate.claMode</code>, documented
           on <Link to="/docs/tuning">Tuning your reviews</Link>): <code>consentPhrase</code> (a
-          case-insensitive substring gittensory looks for in the PR description),{" "}
+          case-insensitive substring LoopOver looks for in the PR description),{" "}
           <code>checkRunName</code> (an existing CLA-bot check-run name that also satisfies
           consent), and <code>checkRunAppSlug</code> (the trusted App slug required to have produced
           that check-run, so a contributor-controlled same-name check can&apos;t satisfy a blocking
@@ -666,8 +666,8 @@ features:
 
       <h3>contentLane</h3>
       <p>
-        Lets a self-hosted maintainer point Gittensory at their own structured registry (a
-        subnet/plugin/package catalog, for example) without a Gittensory code change — reviewing
+        Lets a self-hosted maintainer point LoopOver at their own structured registry (a
+        subnet/plugin/package catalog, for example) without a LoopOver code change — reviewing
         additions to a data file the same way it reviews code. Unconfigured by default; uncomment
         and set at least <code>entryFileGlob</code> and <code>collectionField</code> (both required
         — the whole block is ignored with a warning if either is missing).
@@ -687,9 +687,9 @@ features:
 
       <h3>repoDocGeneration</h3>
       <p>
-        Lets gittensory open a pull request that refreshes this repo&apos;s own{" "}
-        <code>AGENTS.md</code>/<code>CLAUDE.md</code> (and, additively, a skill file) on a schedule
-        — never a direct commit. Disabled by default: an unconfigured repo, or an explicit{" "}
+        Lets LoopOver open a pull request that refreshes this repo&apos;s own <code>AGENTS.md</code>
+        /<code>CLAUDE.md</code> (and, additively, a skill file) on a schedule — never a direct
+        commit. Disabled by default: an unconfigured repo, or an explicit{" "}
         <code>enabled: false</code>, means no repo-doc refresh ever runs for it.
       </p>
       <CodeBlock
