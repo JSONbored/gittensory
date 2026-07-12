@@ -31,7 +31,7 @@ function fakeWorktreeResult(): Extract<PrepareAttemptWorktreeResult, { ok: true 
 function fakeReviewContext() {
   return {
     manifest: parseFocusManifest(undefined),
-    repo: { name: "widgets", fullName: "acme/widgets", private: false, htmlUrl: "https://github.com/acme/widgets", defaultBranch: "main", ownerLogin: "acme" },
+    repo: { fullName: "acme/widgets", owner: "acme", name: "widgets", isInstalled: true, isRegistered: true, isPrivate: false, htmlUrl: "https://github.com/acme/widgets", defaultBranch: "main" },
     issues: [{ repoFullName: "acme/widgets", number: 7, title: "Uploads should retry on 5xx", state: "open", labels: ["bug"], linkedPrs: [], body: "Uploads fail silently." }],
     pullRequests: [],
   };

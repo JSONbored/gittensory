@@ -25,7 +25,7 @@ function codingTaskSpec(overrides: Record<string, unknown> = {}) {
 function reviewContext() {
   return {
     manifest: parseFocusManifest(undefined),
-    repo: { name: "widgets", fullName: "acme/widgets", private: false, htmlUrl: "https://github.com/acme/widgets", defaultBranch: "main", ownerLogin: "acme" },
+    repo: { fullName: "acme/widgets", owner: "acme", name: "widgets", isInstalled: true, isRegistered: true, isPrivate: false, htmlUrl: "https://github.com/acme/widgets", defaultBranch: "main" },
     issues: [],
     pullRequests: [],
   };
