@@ -193,4 +193,151 @@ describe("gittensory-miner doctor — coding-agent CLI checks (#4304)", () => {
       expect(missingOtherProvider.ok).toBe(true);
     });
   });
+
+  describe("four-state coding-agent CLI matrix (#5195)", () => {
+    const CLAUDE_PATH = "/usr/bin/claude";
+    const CODEX_PATH = "/usr/bin/codex";
+    const ADVISORY_MISSING = "not installed (optional until a coding-agent driver is configured)";
+    const CLAUDE_CONFIGURED_MISSING =
+      "not installed — MINER_CODING_AGENT_PROVIDER is set to claude-cli, every attempt will fail without it";
+    const CODEX_CONFIGURED_MISSING =
+      "not installed — MINER_CODING_AGENT_PROVIDER is set to codex-cli, every attempt will fail without it";
+    const CLAUDE_UNAUTH_ADVISORY = `found at ${CLAUDE_PATH} (not authenticated: set CLAUDE_CODE_OAUTH_TOKEN)`;
+    const CODEX_UNAUTH_ADVISORY = `found at ${CODEX_PATH} (not authenticated: run \`codex auth\`)`;
+    const CODEX_CONFIGURED_UNAUTH =
+      `found at ${CODEX_PATH} but auth.json is missing or expired — run \`codex auth\` to authenticate before attempts run`;
+
+    type MatrixCase = {
+      label: string;
+      run: (authPath: string) => { ok: boolean; detail: string };
+      expectedOk: boolean;
+      expectedDetail: string;
+    };
+
+    const matrix: MatrixCase[] = [
+      {
+        label: "claude: no provider configured + CLI missing",
+        run: () => checkClaudeCliPresent({ env: {}, resolveClaudePath: () => null }),
+        expectedOk: true,
+        expectedDetail: ADVISORY_MISSING,
+      },
+      {
+        label: "claude: no provider configured + CLI present but unauthenticated",
+        run: () => checkClaudeCliPresent({ env: {}, resolveClaudePath: () => CLAUDE_PATH }),
+        expectedOk: true,
+        expectedDetail: CLAUDE_UNAUTH_ADVISORY,
+      },
+      {
+        label: "claude: claude-cli configured + CLI missing",
+        run: () =>
+          checkClaudeCliPresent({
+            env: { MINER_CODING_AGENT_PROVIDER: "claude-cli" },
+            resolveClaudePath: () => null,
+          }),
+        expectedOk: false,
+        expectedDetail: CLAUDE_CONFIGURED_MISSING,
+      },
+      {
+        label: "claude: claude-cli configured + CLI present but unauthenticated",
+        run: () =>
+          checkClaudeCliPresent({
+            env: { MINER_CODING_AGENT_PROVIDER: "claude-cli" },
+            resolveClaudePath: () => CLAUDE_PATH,
+          }),
+        // Auth probe stays advisory when the CLI binary is present (#5165) — only absence is a hard failure.
+        expectedOk: true,
+        expectedDetail: CLAUDE_UNAUTH_ADVISORY,
+      },
+      {
+        label: "codex: no provider configured + CLI missing",
+        run: () => checkCodexCliPresent({ env: {}, resolveCodexPath: () => null }),
+        expectedOk: true,
+        expectedDetail: ADVISORY_MISSING,
+      },
+      {
+        label: "codex: no provider configured + CLI present but unauthenticated",
+        run: (authPath) =>
+          checkCodexCliPresent({
+            env: {},
+            resolveCodexPath: () => CODEX_PATH,
+            resolveCodexAuthPath: () => authPath,
+          }),
+        expectedOk: true,
+        expectedDetail: CODEX_UNAUTH_ADVISORY,
+      },
+      {
+        label: "codex: codex-cli configured + CLI missing",
+        run: () =>
+          checkCodexCliPresent({
+            env: { MINER_CODING_AGENT_PROVIDER: "codex-cli" },
+            resolveCodexPath: () => null,
+          }),
+        expectedOk: false,
+        expectedDetail: CODEX_CONFIGURED_MISSING,
+      },
+      {
+        label: "codex: codex-cli configured + CLI present but unauthenticated",
+        run: (authPath) =>
+          checkCodexCliPresent({
+            env: { MINER_CODING_AGENT_PROVIDER: "codex-cli" },
+            resolveCodexPath: () => CODEX_PATH,
+            resolveCodexAuthPath: () => authPath,
+          }),
+        // CLI present but auth.json missing: actionable remediation, still advisory ok (#5165/#5166).
+        expectedOk: true,
+        expectedDetail: CODEX_CONFIGURED_UNAUTH,
+      },
+    ];
+
+    it.each(matrix)("$label => ok:$expectedOk with exact detail", ({ run, expectedOk, expectedDetail }) => {
+      const authPath = join(tempRoot(), "missing-auth.json");
+      const check = run(authPath);
+      expect(check.ok).toBe(expectedOk);
+      expect(check.detail).toBe(expectedDetail);
+    });
+
+    it("invariant: ok is false only when the configured provider's CLI binary is absent — never for an unconfigured or differently-configured provider, and never when the CLI is present but unauthenticated (#5195)", () => {
+      const authPath = join(tempRoot(), "missing-auth.json");
+      const hardFailures = [
+        checkClaudeCliPresent({
+          env: { MINER_CODING_AGENT_PROVIDER: "claude-cli" },
+          resolveClaudePath: () => null,
+        }),
+        checkCodexCliPresent({
+          env: { MINER_CODING_AGENT_PROVIDER: "codex-cli" },
+          resolveCodexPath: () => null,
+        }),
+      ];
+      const alwaysAdvisory = [
+        checkClaudeCliPresent({ env: {}, resolveClaudePath: () => null }),
+        checkClaudeCliPresent({ env: {}, resolveClaudePath: () => CLAUDE_PATH }),
+        checkClaudeCliPresent({
+          env: { MINER_CODING_AGENT_PROVIDER: "claude-cli" },
+          resolveClaudePath: () => CLAUDE_PATH,
+        }),
+        checkCodexCliPresent({ env: {}, resolveCodexPath: () => null }),
+        checkCodexCliPresent({
+          env: {},
+          resolveCodexPath: () => CODEX_PATH,
+          resolveCodexAuthPath: () => authPath,
+        }),
+        checkCodexCliPresent({
+          env: { MINER_CODING_AGENT_PROVIDER: "codex-cli" },
+          resolveCodexPath: () => CODEX_PATH,
+          resolveCodexAuthPath: () => authPath,
+        }),
+        checkClaudeCliPresent({
+          env: { MINER_CODING_AGENT_PROVIDER: "codex-cli" },
+          resolveClaudePath: () => null,
+        }),
+        checkCodexCliPresent({
+          env: { MINER_CODING_AGENT_PROVIDER: "claude-cli" },
+          resolveCodexPath: () => null,
+        }),
+      ];
+
+      for (const check of hardFailures) expect(check.ok).toBe(false);
+      for (const check of alwaysAdvisory) expect(check.ok).toBe(true);
+    });
+  });
 });
