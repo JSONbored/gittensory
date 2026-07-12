@@ -8,6 +8,7 @@
 // Transport + contract here; the analysis lives in brief.ts (orchestrator) + analyzers/*, with each analyzer
 // filling one findings key for renderer/prompt consumption.
 import { serve } from "@hono/node-server";
+import { pathToFileURL } from "node:url";
 import { Hono } from "hono";
 import { normalizeSharedSecret, verifyBearer } from "./auth.js";
 import { buildBrief } from "./brief.js";
@@ -46,7 +47,13 @@ app.get("/health", (c) =>
   c.json({ status: "ok", service: "review-enrichment" }),
 );
 app.get("/ready", (c) => c.json({ ready: true }));
-app.get("/metrics", (c) => c.text(renderMetrics()));
+app.get("/metrics", (c) => {
+  const secret = normalizeSharedSecret(process.env.REES_SHARED_SECRET);
+  if (!secret) return c.json({ error: "service_not_configured" }, 503);
+  if (!verifyBearer(c.req.header("authorization"), secret))
+    return c.json({ error: "unauthorized" }, 401);
+  return c.text(renderMetrics());
+});
 
 function recordEnrichOutcome(status: string, startedAtMs: number): void {
   incr("rees_enrich_requests_total", { status });
@@ -108,22 +115,24 @@ app.post("/v1/enrich", async (c) => {
   }
 });
 
-const port = Number(process.env.PORT ?? "8080");
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(JSON.stringify({ event: "rees_listening", port: info.port }));
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const port = Number(process.env.PORT ?? "8080");
+  serve({ fetch: app.fetch, port }, (info) => {
+    console.log(JSON.stringify({ event: "rees_listening", port: info.port }));
+  });
 
-process.on("unhandledRejection", (reason) => {
-  captureUnhandledError(reason, { event: "rees_unhandled_rejection" });
-});
+  process.on("unhandledRejection", (reason) => {
+    captureUnhandledError(reason, { event: "rees_unhandled_rejection" });
+  });
 
-process.on("uncaughtException", (error) => {
-  captureUnhandledError(error, { event: "rees_uncaught_exception" });
-  void flushSentry().finally(() => process.exit(1));
-});
+  process.on("uncaughtException", (error) => {
+    captureUnhandledError(error, { event: "rees_uncaught_exception" });
+    void flushSentry().finally(() => process.exit(1));
+  });
 
-process.on("SIGTERM", () => {
-  void flushSentry().finally(() => process.exit(0));
-});
+  process.on("SIGTERM", () => {
+    void flushSentry().finally(() => process.exit(0));
+  });
+}
 
 export { app };
