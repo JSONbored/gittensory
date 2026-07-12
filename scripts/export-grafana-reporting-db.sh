@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 
+# Bump whenever this script's own mapping/export LOGIC changes (not just when a new table is added --
+# any change to how existing columns are derived, e.g. the status/verdict CASE statements below). The
+# incremental fast-path below only fingerprints SOURCE DATA, so a logic-only edit with no new source rows
+# would otherwise serve the previous run's output forever -- this constant, folded into the fingerprint,
+# forces a full rebuild the next time this script runs after such an edit ships. Overridable via env var
+# purely so a test can simulate "the script logic changed" without editing this file.
+SCRIPT_VERSION="${GITTENSORY_REPORTING_SCRIPT_VERSION:-2}"
+
 APP_DB="${GITTENSORY_REPORTING_SOURCE_DB:-/appdb/gittensory.sqlite}"
 PG_DB="${GITTENSORY_REPORTING_SOURCE_DATABASE_URL:-${DATABASE_URL:-}}"
 OUT_DIR="${GITTENSORY_REPORTING_DIR:-/reporting}"
@@ -174,8 +182,8 @@ sqlite_append_only_fingerprint() {
 
 sqlite_source_fingerprint() {
   [ -s "$APP_DB" ] || return 1
-  fp=""
-  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events"; do
+  fp="script=$SCRIPT_VERSION"
+  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events" "issues"; do
     if source_table_exists "$tbl"; then
       case "$tbl" in
         review_audit | ai_usage_events) val="$(sqlite_append_only_fingerprint "$tbl")" || return 1 ;;
@@ -197,8 +205,8 @@ pg_append_only_fingerprint() {
 }
 
 pg_source_fingerprint() {
-  fp=""
-  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events"; do
+  fp="script=$SCRIPT_VERSION"
+  for tbl in "pull_requests" "review_audit" "review_targets" "ai_usage_events" "issues"; do
     if pg_table_exists "$tbl"; then
       case "$tbl" in
         review_audit | ai_usage_events) val="$(pg_append_only_fingerprint "$tbl")" || return 1 ;;
@@ -264,6 +272,20 @@ CREATE INDEX review_targets_updated_idx ON review_targets(updated_at);
 CREATE INDEX review_targets_status_idx ON review_targets(status);
 CREATE INDEX review_targets_verdict_idx ON review_targets(verdict);
 
+CREATE TABLE issues (
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  author TEXT,
+  state TEXT NOT NULL,
+  title TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX issues_repo_idx ON issues(repo);
+CREATE INDEX issues_state_idx ON issues(state);
+CREATE INDEX issues_created_idx ON issues(created_at);
+CREATE INDEX issues_updated_idx ON issues(updated_at);
+
 CREATE TABLE ai_usage_events (
   feature TEXT NOT NULL,
   model TEXT NOT NULL,
@@ -296,7 +318,8 @@ if pg_enabled; then
      ! pg_table_exists "advisories" &&
      ! pg_table_exists "review_targets" &&
      ! pg_table_exists "ai_usage_events" &&
-     ! pg_table_exists "review_audit"; then
+     ! pg_table_exists "review_audit" &&
+     ! pg_table_exists "issues"; then
     if [ -s "$OUT_DB" ]; then
       rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
       echo "reporting export skipped: no reporting source tables in Postgres; preserving last good $OUT_DB" >&2
@@ -397,6 +420,22 @@ WHERE t.kind = 'pull_request'
     sqlite_import_csv "$LEGACY_CSV" "review_targets"
   fi
 
+  if pg_table_exists "issues"; then
+    ISSUES_CSV="$(csv_temp_file "issues")"
+    pg_copy_csv "
+SELECT
+  repo_full_name AS repo,
+  number,
+  author_login AS author,
+  state,
+  title,
+  created_at,
+  updated_at
+FROM issues
+" "$ISSUES_CSV"
+    sqlite_import_csv "$ISSUES_CSV" "issues"
+  fi
+
   if pg_table_exists "ai_usage_events"; then
     AI_CSV="$(csv_temp_file "ai-usage-events")"
     if pg_column_exists "ai_usage_events" "estimated_neurons"; then
@@ -459,7 +498,8 @@ if ! source_table_exists "pull_requests" &&
    ! source_table_exists "advisories" &&
    ! source_table_exists "review_targets" &&
    ! source_table_exists "ai_usage_events" &&
-   ! source_table_exists "review_audit"; then
+   ! source_table_exists "review_audit" &&
+   ! source_table_exists "issues"; then
   if [ -s "$OUT_DB" ]; then
     rm -f "$TMP_DB" "$TMP_DB-wal" "$TMP_DB-shm"
     echo "reporting export skipped: no reporting source tables in $APP_DB; preserving last good $OUT_DB" >&2
@@ -571,6 +611,31 @@ WHERE t.kind = 'pull_request'
     WHERE r.repo = t.repo
       AND r.number = t.number
   );
+DETACH report;
+"
+fi
+
+if source_table_exists "issues"; then
+  sqlite3 -cmd ".timeout 5000" "$APP_DB" "
+ATTACH '$TMP_DB_SQL' AS report;
+INSERT INTO report.issues (
+  repo,
+  number,
+  author,
+  state,
+  title,
+  created_at,
+  updated_at
+)
+SELECT
+  repo_full_name,
+  number,
+  author_login,
+  state,
+  title,
+  created_at,
+  updated_at
+FROM main.issues;
 DETACH report;
 "
 fi

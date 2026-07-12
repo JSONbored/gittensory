@@ -72,7 +72,7 @@ case "$args" in
     echo 'unexpected psql meta-command copy' >&2
     exit 9
     ;;
-  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*|*"information_schema.tables"*"review_audit"*)
+  *"information_schema.tables"*"pull_requests"*|*"information_schema.tables"*"advisories"*|*"information_schema.tables"*"review_targets"*|*"information_schema.tables"*"ai_usage_events"*|*"information_schema.tables"*"review_audit"*|*"information_schema.tables"*"issues"*)
     printf '1\\n'
     ;;
   *"information_schema.columns"*"ai_usage_events"*"estimated_neurons"*|\
@@ -90,6 +90,9 @@ case "$args" in
     ;;
   *"FROM review_targets t"*)
     printf '"JSONbored/gittensory",1049,bohdansolovie,closed,close,"historical PR",2026-06-22T17:28:56Z,2026-06-22T17:28:56Z\\n'
+    ;;
+  *"repo_full_name AS repo"*"FROM issues"*)
+    printf '"JSONbored/gittensory",42,alice,open,"a real issue",2026-06-28T12:00:00Z,2026-06-28T12:00:00Z\\n'
     ;;
   *"FROM ai_usage_events"*)
     printf 'ai_review_pr,codex:gpt-5.5,codex,medium,ok,42,120,15,135,0.25,done,"{""repoFullName"" : ""JSONbored/gittensory"", ""pullNumber"" : 1678}",2026-06-28T00:00:00Z\\n'
@@ -469,6 +472,35 @@ esac
     );
   });
 
+  it("exports the local, webhook-observed issues table into the redacted reporting database (#3716)", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE issues (
+        repo_full_name TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        state TEXT NOT NULL,
+        author_login TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO issues (repo_full_name, number, title, state, author_login, created_at, updated_at)
+      VALUES
+        ('JSONbored/gittensory', 42, 'a real issue', 'open', 'alice', '2026-06-28T12:00:00Z', '2026-06-28T12:00:00Z'),
+        ('JSONbored/gittensory', 43, 'a closed issue', 'closed', 'bob', '2026-06-01T00:00:00Z', '2026-06-29T00:00:00Z');
+    `);
+
+    runExporter(root, appDb, outDb);
+
+    expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
+    expect(sqlite(outDb, "SELECT count(*) FROM issues;")).toBe("2");
+    expect(sqlite(outDb, "SELECT repo || '|' || number || '|' || author || '|' || state || '|' || title FROM issues WHERE number = 42;")).toBe(
+      "JSONbored/gittensory|42|alice|open|a real issue",
+    );
+  });
+
   it("copies durable AI usage estimate rows into the redacted reporting database", () => {
     const root = tmpRoot();
     const appDb = join(root, "app.sqlite");
@@ -552,6 +584,10 @@ esac
     expect(sqlite(outDb, "SELECT provider || '|' || effort || '|' || input_tokens || '|' || output_tokens || '|' || total_tokens || '|' || cost_usd FROM ai_usage_events ORDER BY created_at;")).toBe("codex|medium|120|15|135|0.25\ncodex|medium|50|10|60|0.05");
     expect(sqlite(outDb, "SELECT DISTINCT json_extract(metadata_json, '$.repoFullName') FROM ai_usage_events;")).toBe("JSONbored/gittensory");
     expect(sqlite(outDb, "SELECT group_concat(json_extract(metadata_json, '$.private') IS NULL, '|') FROM ai_usage_events;")).toBe("1|1");
+    expect(sqlite(outDb, "SELECT count(*) FROM issues;")).toBe("1");
+    expect(sqlite(outDb, "SELECT repo || '|' || number || '|' || author || '|' || state || '|' || title FROM issues;")).toBe(
+      "JSONbored/gittensory|42|alice|open|a real issue",
+    );
     expect(readdirSync(csvTmp)).toEqual([]);
   });
 
@@ -666,6 +702,38 @@ esac
     // The last-good snapshot is untouched, not silently emptied or corrupted by the skip.
     expect(sqlite(outDb, "PRAGMA quick_check;")).toBe("ok");
     expect(sqlite(outDb, "SELECT count(*) FROM review_targets;")).toBe("1");
+  });
+
+  it("forces a fresh rebuild when the script's own logic version changes, even with the source data completely unchanged (2026-07 staleness fix)", () => {
+    const root = tmpRoot();
+    const appDb = join(root, "app.sqlite");
+    const outDb = join(root, "reporting.sqlite");
+    sqlite(appDb, `
+      CREATE TABLE pull_requests (
+        repo_full_name TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+        author_login TEXT, merged_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO pull_requests (repo_full_name, number, title, state, author_login, merged_at, created_at, updated_at)
+      VALUES ('JSONbored/gittensory', 6001, 'unchanged PR', 'open', 'JSONbored', NULL, '2026-07-06T00:00:00Z', '2026-07-06T00:00:00Z');
+
+      CREATE TABLE review_audit (
+        id TEXT NOT NULL, target_id TEXT NOT NULL, event_type TEXT NOT NULL, decision TEXT,
+        source TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+    `);
+
+    const first = runExporter(root, appDb, outDb, { GITTENSORY_REPORTING_SCRIPT_VERSION: "test-v1" });
+    expect(first).toContain("reporting export complete");
+
+    // Same source data, same script version -- the normal incremental fast-path applies.
+    const second = runExporter(root, appDb, outDb, { GITTENSORY_REPORTING_SCRIPT_VERSION: "test-v1" });
+    expect(second).toContain("reporting export skipped: source unchanged since last export");
+
+    // Same source data, but the script's own logic "changed" (simulated by a different version string) --
+    // this must NOT skip, exactly the gap that let the dead 'ignored'/'ignore' values survive a real mapping
+    // migration for years without the reporting DB ever refreshing.
+    const third = runExporter(root, appDb, outDb, { GITTENSORY_REPORTING_SCRIPT_VERSION: "test-v2" });
+    expect(third).toContain("reporting export complete");
   });
 
   it("redoes the rebuild once the SQLite source actually changes, reflecting the new row", () => {

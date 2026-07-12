@@ -63,7 +63,11 @@ function targetForPanel(panelId: number): DashboardTarget {
 function expandGrafanaRange(query: string): string {
   const from = Math.floor(Date.parse("2026-06-29T20:00:00Z") / 1000);
   const to = Math.floor(Date.parse("2026-06-29T22:00:00Z") / 1000);
-  return query.replaceAll(timeFrom, String(from)).replaceAll(timeTo, String(to));
+  // Every panel's $repo variable also needs expanding for a real sqlite3 CLI run, same as the time
+  // placeholders above -- Grafana's own templating engine does this substitution normally, so a raw
+  // file-read + direct sqlite3 execution (what these tests do) has to simulate it. Default to "All
+  // repos" ('$__all' both sides of the OR) unless a caller substitutes a specific repo value first.
+  return query.replaceAll(timeFrom, String(from)).replaceAll(timeTo, String(to)).replaceAll("'$repo'", "'$__all'");
 }
 
 function tmpRoot(): string {
@@ -258,14 +262,14 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
     }
   });
 
-  it("explains the latest-update-in-window (not lifetime) semantics on Manual/Commented/Ignored (#3717)", () => {
+  it("explains the latest-update-in-window (not lifetime) semantics on Manual/Approved/Ignored (#3717)", () => {
     const dashboard = readDashboard();
     const panelsById = new Map(dashboard.panels.map((panel) => [panel.id, panel]));
 
     for (const [id, title] of [
       [5, "Manual review"],
-      [6, "Commented (advisory)"],
-      [7, "Ignored"],
+      [6, "Approved (pending merge)"],
+      [7, "Ignored (no gate decision yet)"],
     ] as const) {
       const panel = panelsById.get(id);
       expect(panel?.title).toBe(title);
@@ -274,31 +278,108 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
     }
   });
 
-  it("adds GitHub-API-backed issue-activity stat panels alongside the review_targets PR panels (#3716)", () => {
+  it("redefines 'Ignored' around verdict IS NULL, not the dead status='ignored'/verdict='ignore' values (2026-07 fix)", () => {
+    const target = targetForPanel(7);
+
+    expect(target.queryText).toContain("status='manual'");
+    expect(target.queryText).toContain("verdict IS NULL");
+    expect(target.queryText).not.toContain("status='ignored'");
+    expect(target.queryText).not.toContain("verdict='ignore'");
+  });
+
+  it("adds local, webhook-observed issue-activity stat panels alongside the review_targets PR panels (#3716, switched off the GitHub API 2026-07)", () => {
     const dashboard = readDashboard();
     const panelsById = new Map(dashboard.panels.map((panel) => [panel.id, panel]));
 
-    for (const [id, title, expectedQuery] of [
-      [12, "Issues opened", "org:JSONbored is:issue"],
-      [13, "Issues closed", "org:JSONbored is:issue is:closed"],
-      [14, "Issues open", "org:JSONbored is:issue is:open"],
+    for (const [id, title] of [
+      [12, "Issues opened"],
+      [13, "Issues closed"],
+      [14, "Issues open"],
     ] as const) {
       const panel = panelsById.get(id);
       expect(panel?.title).toBe(title);
-      expect(panel?.datasource?.type).toBe("grafana-github-datasource");
+      expect(panel?.datasource?.type).toBe("frser-sqlite-datasource");
       const target = panel?.targets?.[0];
-      expect(target?.queryType).toBe("Issues");
-      expect(target?.options?.query).toBe(expectedQuery);
-      // A live GitHub-API source (not review_targets) — never asserted to be time-window bound the way
-      // the SQL panels above are; "Issues open" is deliberately a state snapshot with no timeField at all.
+      expect(target?.queryType).toBe("table");
+      expect(target?.rawQueryText).toBe(target?.queryText);
+      expect(target?.queryText).toContain("FROM issues");
+      expect(target?.queryText).toContain("('$repo' = '$__all' OR repo = '$repo')");
       expect(panel?.description?.length ?? 0).toBeGreaterThan(0);
     }
 
-    // "Issues open" is a current-state snapshot (mirrors github-prs.json's own "Open issues" panel) —
-    // no timeField, unlike the opened/closed flow panels.
-    expect(panelsById.get(14)?.targets?.[0]?.options?.timeField).toBeUndefined();
-    expect(panelsById.get(12)?.targets?.[0]?.options?.timeField).toBe(1);
-    expect(panelsById.get(13)?.targets?.[0]?.options?.timeField).toBe(0);
+    // "Issues opened"/"Issues closed" are flow counts bound to the dashboard's selected time window, same as
+    // every review_targets panel above; "Issues open" is deliberately a current-state snapshot with no time
+    // filter at all (mirrors github-prs.json's own "Open issues" panel semantics).
+    expect(targetForPanel(12).queryText).toContain("unixepoch(created_at)");
+    expect(targetForPanel(12).queryText).toContain(timeFrom);
+    expect(targetForPanel(13).queryText).toContain("state='closed'");
+    expect(targetForPanel(13).queryText).toContain("unixepoch(updated_at)");
+    expect(targetForPanel(13).queryText).toContain(timeTo);
+    expect(targetForPanel(14).queryText).toContain("state='open'");
+    expect(targetForPanel(14).queryText).not.toContain("unixepoch");
+  });
+
+  it("scopes the issue-activity panels to the selected $repo, same as the PR panels", () => {
+    for (const id of [12, 13, 14] as const) {
+      expect(targetForPanel(id).queryText).toContain("('$repo' = '$__all' OR repo = '$repo')");
+    }
+  });
+
+  it("declares a dynamic, query-backed $repo template variable (not a hardcoded repo list)", () => {
+    const dashboard = readDashboard() as unknown as {
+      templating: { list: Array<{ name: string; type: string; datasource?: { type?: string }; query?: { rawQueryText?: string }; includeAll?: boolean }> };
+    };
+    const vars = dashboard.templating.list;
+
+    expect(vars).toHaveLength(1);
+    expect(vars[0]!.name).toBe("repo");
+    expect(vars[0]!.type).toBe("query");
+    expect(vars[0]!.includeAll).toBe(true);
+    expect(vars[0]!.datasource?.type).toBe("frser-sqlite-datasource");
+    expect(vars[0]!.query?.rawQueryText).toBe("SELECT DISTINCT repo FROM review_targets ORDER BY repo");
+  });
+
+  it("scopes every review_targets panel query to the selected $repo", () => {
+    const targets = reviewTargets();
+
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target.queryText).toContain("('$repo' = '$__all' OR repo = '$repo')");
+    }
+  });
+
+  (sqliteCliAvailable ? it : it.skip)("issue-activity panels count real rows correctly by state and window", () => {
+    const root = tmpRoot();
+    const db = join(root, "reporting.sqlite");
+    sqlite(db, `
+      CREATE TABLE issues (
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        author TEXT,
+        state TEXT NOT NULL,
+        title TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO issues (repo, number, author, state, title, created_at, updated_at)
+      VALUES
+        ('owner/repo', 1, 'alice', 'open', 'opened in window', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z'),
+        ('owner/repo', 2, 'bob', 'closed', 'closed in window', '2026-06-01T00:00:00Z', '2026-06-29T21:00:00Z'),
+        ('owner/repo', 3, 'carol', 'open', 'opened before window', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z'),
+        ('other/repo', 4, 'dave', 'open', 'different repo', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z');
+    `);
+
+    const opened = sqlite(db, expandGrafanaRange(targetForPanel(12).queryText!));
+    const closed = sqlite(db, expandGrafanaRange(targetForPanel(13).queryText!));
+    const open = sqlite(db, expandGrafanaRange(targetForPanel(14).queryText!));
+
+    // Issues #1 (owner/repo) and #4 (other/repo) were both created inside the window -- "All repos" is
+    // selected here (expandGrafanaRange's default), so the different-repo row still counts.
+    expect(opened).toBe("2");
+    // Only issue #2 is closed with an updated_at inside the window.
+    expect(closed).toBe("1");
+    // Open is a state snapshot across all repos/time: issues #1, #3, #4 are open.
+    expect(open).toBe("3");
   });
 
   (sqliteCliAvailable ? it : it.skip)("filters the pull request table to the selected time window", () => {
@@ -326,6 +407,40 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
 
     expect(rows).toContain("owner/repo|2|new|commented|comment|new row|2026-06-29T21:00:00Z");
     expect(rows).not.toContain("old row");
+  });
+
+  (sqliteCliAvailable ? it : it.skip)("actually narrows the PRs-tracked count to a selected $repo, and 'All' still includes every repo", () => {
+    const root = tmpRoot();
+    const db = join(root, "reporting.sqlite");
+    sqlite(db, `
+      CREATE TABLE review_targets (
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        submitter TEXT,
+        status TEXT NOT NULL,
+        verdict TEXT,
+        title TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO review_targets (repo, number, submitter, status, verdict, title, created_at, updated_at)
+      VALUES
+        ('owner/repo-a', 1, 'alice', 'merged', 'merge', 'in repo a', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z'),
+        ('owner/repo-b', 2, 'bob', 'merged', 'merge', 'in repo b', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z'),
+        ('owner/repo-b', 3, 'carol', 'merged', 'merge', 'also in repo b', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z');
+    `);
+
+    const trackedQuery = targetForPanel(2).queryText!;
+    const allRepos = sqlite(db, expandGrafanaRange(trackedQuery));
+    // A specific repo selection substitutes BOTH $repo occurrences with the same real repo value (never
+    // the literal "$__all" sentinel, which only appears when "All" is selected) -- simulate that directly
+    // on the raw query rather than going through expandGrafanaRange's own "All" default.
+    const repoAOnly = sqlite(db, expandGrafanaRange(trackedQuery.replaceAll("'$repo'", "'owner/repo-a'")));
+    const repoBOnly = sqlite(db, expandGrafanaRange(trackedQuery.replaceAll("'$repo'", "'owner/repo-b'")));
+
+    expect(allRepos).toBe("3");
+    expect(repoAOnly).toBe("1");
+    expect(repoBOnly).toBe("2");
   });
 
   it("excludes bot-authored PRs from every review_targets panel query, not just the table", () => {

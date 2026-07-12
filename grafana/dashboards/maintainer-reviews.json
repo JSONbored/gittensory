@@ -4,12 +4,28 @@
   "tags": ["gittensory", "maintainer"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 6,
+  "version": 7,
   "editable": false,
   "graphTooltip": 1,
   "refresh": "1m",
   "time": { "from": "now-90d", "to": "now" },
-  "templating": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "repo",
+        "label": "Repo",
+        "type": "query",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+        "query": { "queryType": "table", "rawQueryText": "SELECT DISTINCT repo FROM review_targets ORDER BY repo" },
+        "includeAll": true,
+        "allValue": "$__all",
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
   "annotations": { "list": [] },
   "links": [],
   "panels": [
@@ -29,7 +45,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -39,7 +55,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -49,7 +65,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -60,29 +76,29 @@
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
       "id": 6,
-      "title": "Commented (advisory)",
-      "description": "Counts PRs whose most recent status update falls in this window AND is currently 'commented' -- the same in-window-latest-state semantics as 'Manual review'. A PR that was commented on and later merged or closed within the same window shows only under Merged/Closed, so this under-reports total advisory-comment activity for anyone who resolves their queue promptly.",
+      "title": "Approved (pending merge)",
+      "description": "Counts PRs whose most recent status update falls in this window AND is currently 'commented' (the gate decided to merge but the PR hasn't merged yet) -- the same in-window-latest-state semantics as 'Manual review'. A PR that was approved and later actually merged or closed within the same window shows only under Merged/Closed, so this under-reports total approval activity for anyone who resolves their queue promptly.",
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
       "id": 7,
-      "title": "Ignored",
-      "description": "Counts PRs whose most recent status update falls in this window AND is currently 'ignored' -- the same in-window-latest-state semantics as 'Manual review'. If a PR's status changes again later in the same window (e.g. re-triaged into manual/commented/merged/closed), it moves out of this count entirely rather than accumulating, so this does not track how many times a PR was ever ignored.",
+      "title": "Ignored (no gate decision yet)",
+      "description": "Counts PRs whose most recent status update falls in this window AND the gate has never recorded a decision for (status='manual' with no hold/close verdict behind it -- distinct from a PR the gate actively held or closed). Redefined 2026-07 (was 'status=ignored OR verdict=ignore', values a #3511/#3535 migration to review_audit-based gate decisions stopped producing years ago -- the export can no longer set either).",
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='ignored' OR verdict='ignore') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='ignored' OR verdict='ignore') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='manual' AND verdict IS NULL AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='manual' AND verdict IS NULL AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "row",
@@ -95,34 +111,34 @@
       "type": "stat",
       "id": 12,
       "title": "Issues opened",
-      "description": "Live GitHub-API count via the grafana-github-datasource (org:JSONbored is:issue), not the local webhook-observed issues table -- upstream-accurate regardless of local sync gaps, at the cost of a different consistency model from the review_targets-backed PR panels above. See #3716 for the tradeoff.",
-      "datasource": { "type": "grafana-github-datasource", "uid": "github" },
+      "description": "Local, webhook-observed count via the gittensory-db issues table, same consistency model as the PR panels above (#3716's option 1) -- not a live GitHub-API census, so it inherits the same webhook-completeness caveat the PR data already has. Switched 2026-07 from the grafana-github-datasource live-API path (#3716's option 2), which hardcoded org:JSONbored (broken for any other self-hoster) and silently hit GitHub Search's 1000-result cap with no disclosure on this dashboard.",
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 6 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } },
-      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["count"], "fields": "/^number$/" } },
-      "targets": [{ "refId": "A", "queryType": "Issues", "owner": "", "repository": "", "options": { "query": "org:JSONbored is:issue", "timeField": 1 } }]
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS opened FROM issues WHERE ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS opened FROM issues WHERE ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
       "id": 13,
       "title": "Issues closed",
-      "description": "Live GitHub-API count via the grafana-github-datasource (org:JSONbored is:issue is:closed), not the local webhook-observed issues table. See #3716 for the tradeoff.",
-      "datasource": { "type": "grafana-github-datasource", "uid": "github" },
+      "description": "Local, webhook-observed count via the gittensory-db issues table -- see 'Issues opened' for the 2026-07 switch from the live GitHub-API path. Uses the issue's last-updated timestamp as the closing-transition signal (no separate closed_at column exists), the same approach the PR panels above already use for their own updated_at-based windowing.",
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 6 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } },
-      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["count"], "fields": "/^number$/" } },
-      "targets": [{ "refId": "A", "queryType": "Issues", "owner": "", "repository": "", "options": { "query": "org:JSONbored is:issue is:closed", "timeField": 0 } }]
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
       "id": 14,
       "title": "Issues open",
-      "description": "Current open-issue backlog (org:JSONbored is:issue is:open) -- a state snapshot, not filtered by the dashboard time window, mirroring github-prs.json's own 'Open issues' panel.",
-      "datasource": { "type": "grafana-github-datasource", "uid": "github" },
+      "description": "Current open-issue backlog from the local, webhook-observed issues table -- a state snapshot, not filtered by the dashboard time window, same semantics as the original live-API version of this panel.",
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 6 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } } },
-      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["count"], "fields": "/^number$/" } },
-      "targets": [{ "refId": "A", "queryType": "Issues", "owner": "", "repository": "", "options": { "query": "org:JSONbored is:issue is:open" } }]
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND ('$repo' = '$__all' OR repo = '$repo')", "rawQueryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND ('$repo' = '$__all' OR repo = '$repo')" }]
     },
     {
       "type": "table",
@@ -156,7 +172,7 @@
         ]
       },
       "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false }, "sortBy": [{ "displayName": "updated_at", "desc": true }] },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000", "rawQueryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000", "rawQueryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000" }]
     },
     {
       "type": "timeseries",
@@ -166,7 +182,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "none" } }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "time series", "timeColumns": ["time"], "queryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time", "rawQueryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "time series", "timeColumns": ["time"], "queryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time", "rawQueryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time" }]
     },
     {
       "type": "piechart",
@@ -176,7 +192,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "right", "showLegend": true, "values": ["value", "percent"] }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "tooltip": { "mode": "single", "sort": "none" } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC", "rawQueryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC", "rawQueryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND ('$repo' = '$__all' OR repo = '$repo') AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC" }]
     }
   ]
 }
