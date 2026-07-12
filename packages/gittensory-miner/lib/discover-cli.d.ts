@@ -4,6 +4,7 @@ import type {
   RawCandidateIssue,
 } from "./opportunity-fanout.js";
 import type { RankedCandidateIssue, RankedCandidateSummary } from "./opportunity-ranker.js";
+import type { PolicyDocCache, PolicyDocCacheStore } from "./policy-doc-cache.js";
 import type { EnqueueRankedDiscoverySummary } from "./portfolio-discovery.js";
 import type { PortfolioQueueStore } from "./portfolio-queue.js";
 
@@ -38,15 +39,16 @@ export type RunDiscoverOptions = {
   apiBaseUrl?: string;
   nowMs?: number;
   initPortfolioQueue?: () => PortfolioQueueStore;
+  initPolicyDocCache?: () => PolicyDocCacheStore;
   fetchCandidateIssuesWithSummary?: (
     targets: FanoutTarget[],
     githubToken: string,
-    options?: { apiBaseUrl?: string },
+    options?: { apiBaseUrl?: string; policyDocCache?: PolicyDocCache | null },
   ) => Promise<DiscoverFanOutSummary>;
   searchCandidateIssuesWithSummary?: (
     searchQuery: string,
     githubToken: string,
-    options?: { apiBaseUrl?: string },
+    options?: { apiBaseUrl?: string; policyDocCache?: PolicyDocCache | null },
   ) => Promise<DiscoverFanOutSummary>;
   rankCandidateIssuesWithSummary?: (
     candidates: RawCandidateIssue[],

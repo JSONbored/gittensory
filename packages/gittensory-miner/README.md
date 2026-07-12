@@ -59,7 +59,7 @@ Phase 6 of the same roadmap tracker and hasn't been scaffolded yet. (#4279)
 
 ## Local storage
 
-Four independent local SQLite stores back the commands above. Each keeps its own file, its own table, and its own
+Five independent local SQLite stores back the commands above. Each keeps its own file, its own table, and its own
 env-var override — this is a DRY pass over their shared path-resolution/open boilerplate (`local-store.js`), not a
 merge into one database. (#4272)
 
@@ -69,6 +69,13 @@ merge into one database. (#4272)
 | Claim ledger | `claim-ledger.sqlite3` | `miner_claims` | `claim-ledger.js` | `GITTENSORY_MINER_CLAIM_LEDGER_DB` |
 | Portfolio queue | `portfolio-queue.sqlite3` | `miner_portfolio_queue` | `portfolio-queue.js` | `GITTENSORY_MINER_PORTFOLIO_QUEUE_DB` |
 | Event ledger | `event-ledger.sqlite3` | `miner_event_ledger` | `event-ledger.js` | `GITTENSORY_MINER_EVENT_LEDGER_DB` |
+| Policy-doc cache | `policy-doc-cache.sqlite3` | `policy_doc_cache` | `policy-doc-cache.js` | `GITTENSORY_MINER_POLICY_DOC_CACHE_DB` |
+
+The policy-doc cache is the only one of the five that holds no miner state of its own: it caches the last-known
+ETag + body of each target repo's fetched policy docs (AI-USAGE.md/CONTRIBUTING.md) so a repeated `discover`
+revalidates them with a conditional GET (`If-None-Match`) instead of re-downloading static content, spending no
+extra rate-limit budget when GitHub answers `304 Not Modified`. It is pure optimization — deleting the file only
+forces the next run to refetch in full (#4842).
 
 Every store resolves its file the same way: the store-specific env var above, else `GITTENSORY_MINER_CONFIG_DIR`,
 else `XDG_CONFIG_HOME` (falling back to `~/.config`), joined with `gittensory-miner/<file>`. Every store also opens

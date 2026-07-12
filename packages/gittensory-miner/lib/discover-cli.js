@@ -5,6 +5,7 @@ import {
   searchCandidateIssuesWithSummary,
 } from "./opportunity-fanout.js";
 import { rankCandidateIssuesWithSummary } from "./opportunity-ranker.js";
+import { initPolicyDocCacheStore } from "./policy-doc-cache.js";
 import { enqueueRankedDiscovery } from "./portfolio-discovery.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 
@@ -108,11 +109,18 @@ export async function runDiscover(args, options = {}) {
   const ownsPortfolioQueue = options.initPortfolioQueue === undefined;
   const portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
 
+  // Local ETag cache so a repeated discover revalidates each repo's policy docs with a conditional GET instead of
+  // re-downloading them (#4842). Owned + closed here exactly like the portfolio queue above; an injected factory
+  // lets tests supply a temp/in-memory store instead of the real on-disk one.
+  const ownsPolicyDocCache = options.initPolicyDocCache === undefined;
+  const policyDocCache = (options.initPolicyDocCache ?? initPolicyDocCacheStore)();
+
   try {
+    const fanOutOptions = { apiBaseUrl: options.apiBaseUrl, policyDocCache };
     const fanOut =
       parsed.search !== null
-        ? await searchTargets(parsed.search, githubToken, { apiBaseUrl: options.apiBaseUrl })
-        : await fetchTargets(parsed.targets, githubToken, { apiBaseUrl: options.apiBaseUrl });
+        ? await searchTargets(parsed.search, githubToken, fanOutOptions)
+        : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
 
     const rankedSummary = rankIssues(fanOut.issues, { nowMs: options.nowMs });
     const enqueueSummary = enqueue(rankedSummary.issues, { queueStore: portfolioQueue });
@@ -135,5 +143,6 @@ export async function runDiscover(args, options = {}) {
     return 2;
   } finally {
     if (ownsPortfolioQueue) portfolioQueue.close();
+    if (ownsPolicyDocCache) policyDocCache.close();
   }
 }
