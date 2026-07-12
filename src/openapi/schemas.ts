@@ -828,7 +828,12 @@ export const RepositorySettingsSchema = z
     commandRateLimitMaxPerWindow: z.number().int().positive().optional(),
     commandRateLimitAiMaxPerWindow: z.number().int().positive().optional(),
     commandRateLimitWindowHours: z.number().int().positive().optional(),
-    moderationGateMode: z.enum(["inherit", "off", "enabled"]).optional(),
+    moderationGateMode: z
+      .enum(["inherit", "off", "enabled"])
+      .optional()
+      .describe(
+        "Gates ONLY the shared cross-repo violation tally -- does NOT disable the four underlying anti-abuse mechanisms (contributor cap, blacklist, review-nag, review-evasion), each of which runs on its own independent setting.",
+      ),
     moderationRules: z.array(z.enum(["contributor_cap", "blacklist", "review_nag", "review_evasion"])).optional(),
     moderationWarningLabel: z.string().optional(),
     moderationBannedLabel: z.string().optional(),

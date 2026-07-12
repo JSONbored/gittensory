@@ -1105,10 +1105,14 @@ export type RepositorySettings = {
    *  without lifting the fleet-wide brake. Never overrides the `AGENT_ACTIONS_PAUSED` env var, and
    *  {@link agentPaused} on this same repo still wins over it. Default false. */
   agentGlobalFreezeOverride?: boolean | undefined;
-  /** Moderation-rules engine (#selfhost-mod-engine): whether the whole layer runs on THIS repo. `"inherit"`
-   *  (the DB default) defers to `global_moderation_config.enabled`; `"off"`/`"enabled"` force this repo
-   *  regardless of the global default. Always populated by the DB layer; optional so existing settings
-   *  fixtures/callers need not be touched. */
+  /** Moderation-rules engine (#selfhost-mod-engine): gates ONLY the single shared, cross-repo violation
+   *  tally across the anti-abuse mechanisms that already short-circuit a PR/issue's disposition on their
+   *  own independent settings (contributor cap, blacklist, review-nag, review-evasion) -- it does NOT
+   *  disable those four mechanisms themselves, which run regardless of this field. `"inherit"` (the DB
+   *  default) defers to `global_moderation_config.enabled`; `"off"`/`"enabled"` force this repo's
+   *  participation in the tally, opting it in/out and narrowing which mechanisms feed it, regardless of
+   *  the global default. Always populated by the DB layer; optional so existing settings fixtures/callers
+   *  need not be touched. */
   moderationGateMode?: "inherit" | "off" | "enabled" | undefined;
   /** Moderation-rules engine: a per-repo override of WHICH of the anti-abuse mechanisms (contributor cap,
    *  blacklist, review-nag, review-evasion) feed a contributor's shared, cross-repo violation tally.

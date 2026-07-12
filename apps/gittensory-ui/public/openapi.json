@@ -9535,7 +9535,8 @@
               "inherit",
               "off",
               "enabled"
-            ]
+            ],
+            "description": "Gates ONLY the shared cross-repo violation tally -- does NOT disable the four underlying anti-abuse mechanisms (contributor cap, blacklist, review-nag, review-evasion), each of which runs on its own independent setting."
           },
           "moderationRules": {
             "type": "array",
