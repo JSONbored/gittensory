@@ -5,17 +5,32 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { collectPortfolioDashboard } from "../lib/portfolio-dashboard.js";
 import { initPortfolioQueueStore } from "../lib/portfolio-queue.js";
+import {
+  collectEventLedgerAuditFeed,
+  normalizeAuditFeedMcpFilter,
+} from "../lib/event-ledger-cli.js";
+import { initEventLedger } from "../lib/event-ledger.js";
+import { z } from "zod";
 
 // MCP stdio server for @jsonbored/gittensory-miner (scaffold #5153). Mirrors the packages/gittensory-mcp
 // harness (MCP SDK server + stdio transport). Tools:
 //   - gittensory_miner_ping (#5153): trivial static health check, reads no AMS state.
 //   - gittensory_miner_get_portfolio_dashboard (#5155): read-only per-repo backlog dashboard, wrapping the
 //     existing collectPortfolioDashboard aggregator (no new logic; same data as `queue dashboard --json`).
+//   - gittensory_miner_get_audit_feed (#5158): read-only metadata-only event-ledger audit feed via
+//     collectEventLedgerAuditFeed() (same filters as `ledger list`; never returns payload_json).
 // Remaining AMS-state-reading tools (status/doctor, claim-ledger listing, run-state, etc.) land as follow-ups.
 
 // Read the version from this package's own package.json (always shipped) rather than a hand-synced
 // literal, so a release bump never has a second place to forget -- same approach as the mcp harness.
 const ownPackageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
+/** Optional filters accepted by gittensory_miner_get_audit_feed (#5158). */
+const auditFeedInputSchema = {
+  repoFullName: z.string().min(1).optional(),
+  since: z.number().int().nonnegative().optional(),
+  type: z.string().min(1).optional(),
+};
 
 /** The static, non-secret payload the ping tool always returns, independent of any input or AMS state. */
 export const MINER_PING_STATUS = { status: "ok", tool: "gittensory_miner_ping" };
@@ -24,6 +39,7 @@ export const MINER_PING_STATUS = { status: "ok", tool: "gittensory_miner_ping" }
  * Build the miner MCP server with its tools registered. `options.initPortfolioQueue` / `options.nowMs` are
  * injection seams for tests (default to the real portfolio-queue store and the wall clock); the ping tool needs
  * neither. The portfolio-dashboard tool opens the queue only when invoked and closes any store it opened.
+ * `options.initEventLedger` injects the event-ledger store for the audit-feed tool.
  */
 export function createMinerMcpServer(options = {}) {
   const server = new McpServer({ name: "gittensory-miner", version: ownPackageJson.version });
@@ -54,6 +70,40 @@ export function createMinerMcpServer(options = {}) {
         return { content: [{ type: "text", text: JSON.stringify(summary) }] };
       } finally {
         if (ownsQueue) portfolioQueue.close();
+      }
+    },
+  );
+  server.registerTool(
+    "gittensory_miner_get_audit_feed",
+    {
+      description:
+        "Read-only, metadata-only audit feed from the local append-only event ledger: eventType, repoFullName, " +
+        "outcome, actor, detail, and createdAt per row. Wraps collectEventLedgerAuditFeed() (no new query logic) — " +
+        "the same read filters as `gittensory-miner ledger list` (--repo, --since, --type). Never returns " +
+        "payload_json or other raw ledger columns; never writes to the ledger.",
+      inputSchema: auditFeedInputSchema,
+    },
+    async (input) => {
+      const ownsLedger = options.initEventLedger === undefined;
+      const eventLedger = (options.initEventLedger ?? initEventLedger)();
+      try {
+        const filter = normalizeAuditFeedMcpFilter(input ?? {});
+        const feed = collectEventLedgerAuditFeed(eventLedger, filter);
+        return { content: [{ type: "text", text: JSON.stringify(feed) }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            },
+          ],
+          isError: true,
+        };
+      } finally {
+        if (ownsLedger) eventLedger.close();
       }
     },
   );
