@@ -688,7 +688,8 @@ settings:
   # Bool. Default: false.
   agentPaused: false
 
-  # Dry-run / shadow mode: compute everything but take no public action.
+  # Dry-run / shadow mode: suppresses the terminal GitHub-side write only. AI/LLM review calls still
+  # execute and still incur their normal provider cost -- this is NOT a cost-free preview.
   # Bool. Default: false.
   agentDryRun: false
 

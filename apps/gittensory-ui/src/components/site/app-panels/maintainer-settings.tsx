@@ -561,7 +561,7 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
               />
               <ToggleControl
                 label="Dry-run / shadow mode"
-                hint="Record what the agent would do, without performing it"
+                hint="Suppress GitHub writes only — AI review calls still run and still cost tokens"
                 value={settings.agentDryRun}
                 onChange={(v) => setField("agentDryRun", v)}
               />

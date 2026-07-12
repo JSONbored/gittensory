@@ -1089,7 +1089,10 @@ export type RepositorySettings = {
    *  global env switch overrides this too). Default false. */
   agentPaused?: boolean | undefined;
   /** Per-repo dry-run/shadow mode (#776): when true, the action layer records what it WOULD do without
-   *  performing any GitHub mutation. Default false. */
+   *  performing any GitHub mutation -- but this is NOT a cost-free preview: AI/LLM review calls still
+   *  execute and still incur their normal provider cost (deliberate design tagged `#token-bleed-spend-gate`
+   *  in `ai-review-orchestration.ts`/`agent-orchestrator.ts`/`processors.ts`; every spend gate checks only
+   *  `agentPaused`, never this field). Default false. */
   agentDryRun?: boolean | undefined;
   /** Per-repo override of the global DB-backed agent freeze (#4372): when true, this repo's actions execute
    *  even while `global_agent_controls.frozen` is set, so an operator can re-activate one repo at a time
