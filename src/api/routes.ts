@@ -5698,9 +5698,13 @@ const DEFAULT_CORS_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:4173",
   "http://localhost:5173",
+  // gittensory-ui's dev server (@lovable.dev/vite-tanstack-config) binds 8080, not Vite's 5173 default —
+  // without this, every local/preview dev server is CORS-blocked from /health and shows a false "API unreachable" banner.
+  "http://localhost:8080",
   "http://127.0.0.1:3000",
   "http://127.0.0.1:4173",
   "http://127.0.0.1:5173",
+  "http://127.0.0.1:8080",
 ] as const;
 
 function allowedCorsOrigin(env: Env, origin: string | undefined): string | null {

@@ -92,6 +92,17 @@ describe("api routes", () => {
     expect(dynamicPreflight.status).toBe(204);
     expect(dynamicPreflight.headers.get("access-control-allow-origin")).toBe("https://preview.gittensory.test");
 
+    // REGRESSION: gittensory-ui's dev server (@lovable.dev/vite-tanstack-config) binds 8080, not Vite's 5173
+    // default — without this in DEFAULT_CORS_ORIGINS, every local/preview dev server is CORS-blocked from
+    // /health and the ApiStatusBanner falsely reports "API unreachable" even when the API is healthy.
+    const devPortPreflight = await app.request("/health", { method: "OPTIONS", headers: { origin: "http://localhost:8080" } }, env);
+    expect(devPortPreflight.status).toBe(204);
+    expect(devPortPreflight.headers.get("access-control-allow-origin")).toBe("http://localhost:8080");
+
+    const devPortLoopbackPreflight = await app.request("/health", { method: "OPTIONS", headers: { origin: "http://127.0.0.1:8080" } }, env);
+    expect(devPortLoopbackPreflight.status).toBe(204);
+    expect(devPortLoopbackPreflight.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:8080");
+
     const health = await app.request("/health", {}, env);
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({
