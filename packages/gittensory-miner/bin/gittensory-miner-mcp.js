@@ -3,9 +3,11 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import { collectPortfolioDashboard } from "../lib/portfolio-dashboard.js";
 import { initPortfolioQueueStore } from "../lib/portfolio-queue.js";
 import { collectMinerDiagnostics } from "../lib/status.js";
+import { CLAIM_STATUSES, openClaimLedger } from "../lib/claim-ledger.js";
 
 // MCP stdio server for @jsonbored/gittensory-miner (scaffold #5153). Mirrors the packages/gittensory-mcp
 // harness (MCP SDK server + stdio transport). Tools:
@@ -15,6 +17,9 @@ import { collectMinerDiagnostics } from "../lib/status.js";
 //   - gittensory_miner_status (#5154): read-only status/doctor diagnostics via collectMinerDiagnostics()
 //     (same fields as `status`/`doctor --json`; no secret values). Driver-info fields follow #5164.
 // Remaining AMS-state-reading tools (claim-ledger listing, run-state, etc.) land as follow-ups.
+//   - gittensory_miner_list_claims (#5156): read-only listing of the local claim ledger (optional repo/status
+//     filter passed through to listClaims); exposes no claim/release mutation.
+// Remaining AMS-state-reading tools (status/doctor, run-state, event/governor ledgers, etc.) land as follow-ups.
 
 // Read the version from this package's own package.json (always shipped) rather than a hand-synced
 // literal, so a release bump never has a second place to forget -- same approach as the mcp harness.

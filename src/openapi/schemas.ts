@@ -697,7 +697,9 @@ export const RepositorySettingsSchema = z
     manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
     selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
-    firstTimeContributorGrace: z.boolean(),
+    firstTimeContributorGrace: z
+      .boolean()
+      .describe("Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."),
     slopGateMinScore: z.number().nullable().optional(),
     slopAiAdvisory: z.boolean(),
     aiReviewMode: z.enum(["off", "advisory", "block"]),
@@ -832,12 +834,22 @@ export const RepositorySettingsSchema = z
     commandRateLimitMaxPerWindow: z.number().int().positive().optional(),
     commandRateLimitAiMaxPerWindow: z.number().int().positive().optional(),
     commandRateLimitWindowHours: z.number().int().positive().optional(),
-    moderationGateMode: z.enum(["inherit", "off", "enabled"]).optional(),
+    moderationGateMode: z
+      .enum(["inherit", "off", "enabled"])
+      .optional()
+      .describe(
+        "Gates ONLY the shared cross-repo violation tally -- does NOT disable the four underlying anti-abuse mechanisms (contributor cap, blacklist, review-nag, review-evasion), each of which runs on its own independent setting.",
+      ),
     moderationRules: z.array(z.enum(["contributor_cap", "blacklist", "review_nag", "review_evasion"])).optional(),
     moderationWarningLabel: z.string().optional(),
     moderationBannedLabel: z.string().optional(),
     skipAutomationBotAuthors: z.enum(["inherit", "off", "enabled"]).optional(),
-    reviewEvasionProtection: z.enum(["off", "close"]).optional(),
+    reviewEvasionProtection: z
+      .enum(["off", "close"])
+      .optional()
+      .describe(
+        "Effective default is \"close\" as of #4011 -- \"off\" is an explicit opt-out, not the default. \"off\" only suppresses the enforcement close; the ready<->draft cycling counter keeps incrementing regardless, so re-enabling can immediately treat a historical off-period cycle as \"repeated.\"",
+      ),
     reviewEvasionLabel: z.string().nullable().optional(),
     reviewEvasionComment: z.boolean().optional(),
     mergeTrainMode: z.enum(["off", "audit", "enforce"]).optional(),
@@ -888,7 +900,9 @@ export const RepoSettingsPreviewSchema = z
       manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
       selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
       linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
-      firstTimeContributorGrace: z.boolean(),
+      firstTimeContributorGrace: z
+        .boolean()
+        .describe("Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."),
       slopGateMinScore: z.number().nullable().optional(),
       autoLabelEnabled: z.boolean(),
       typeLabelsEnabled: z.boolean(),

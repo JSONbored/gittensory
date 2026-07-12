@@ -141,6 +141,9 @@ It exposes these read-only tools:
 - `gittensory_miner_status` (#5154) — read-only status/doctor diagnostics: state-dir path, engine-version skew, Docker/Claude/Codex CLI presence booleans, config validity, and the full doctor check list. Wraps `collectMinerDiagnostics()` (no new logic) — the same fields `gittensory-miner status --json` and `doctor --json` expose locally. Returns env-var names and booleans only, never secret values. Read-only, takes no arguments.
 
 Further AMS-state-reading tools (claim-ledger listing, run-state, event/governor ledgers) land as follow-up PRs on top of this server. The resolved coding-agent driver section (`MINER_CODING_AGENT_PROVIDER`, model-env-var name, provider CLI presence) lands in #5164 and will be included here once that ships.
+- `gittensory_miner_list_claims` (#5156) — lists the local claim ledger (repo, issue number, status, claimed-at, note) via `listClaims()`. Optional `repoFullName` / `status` filters pass through to the query. Read-only — exposes no claim/release mutation.
+
+Further AMS-state-reading tools (status/doctor diagnostics, run-state, event/governor ledgers) land as follow-up PRs on top of this server.
 
 ## Version check
 

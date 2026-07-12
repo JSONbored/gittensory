@@ -799,7 +799,9 @@ export type RepositorySettings = {
   expectedCiContexts?: ReadonlyArray<string> | null | undefined;
   /** Dry-run disposition (#gate-dryrun). When true, the gate renders the would-be merge/close/manual verdict (every
    *  advisory sub-gate promoted to block) WITHOUT enforcing — the posted check stays non-blocking. Lets advisory mode
-   *  preview exactly what it would do before the maintainer flips to real enforcement. Default off. */
+   *  preview exactly what it would do before the maintainer flips to real enforcement. Default off.
+   *  Unrelated to {@link agentDryRun} despite the shared "dry run" name -- this only affects the check-run's
+   *  DISPLAY conclusion; it does NOT stop the agent action layer from performing real merges/closes/comments. */
   gateDryRun?: boolean | undefined;
   /** Live premerge migrations/** collision recheck (#2550). When true, an agent-driven merge of a PR that
    *  touches migrations/** is preceded by a fresh GitHub Trees-API read of the base branch's CURRENT migration
@@ -909,6 +911,10 @@ export type RepositorySettings = {
    *  PRs are exempt from auto-close (merge or manual-hold only). Per-repo configurable so maintainers choose
    *  rather than inheriting a hardwired opinion. */
   closeOwnerAuthors: boolean;
+  /** #label-decoupling: gates ONLY the base {@link gittensorLabel} context label (`shouldApplyPrLabel`/
+   *  `willLabel` in `signals/settings-preview.ts`) -- zero effect on TYPE/taxonomy labels
+   *  ({@link typeLabelsEnabled}), moderation/blacklist labels, or review-state labels. Four independent
+   *  label families exist; none of them gates or silently disables another. */
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;
@@ -1108,17 +1114,22 @@ export type RepositorySettings = {
    *  performing any GitHub mutation -- but this is NOT a cost-free preview: AI/LLM review calls still
    *  execute and still incur their normal provider cost (deliberate design tagged `#token-bleed-spend-gate`
    *  in `ai-review-orchestration.ts`/`agent-orchestrator.ts`/`processors.ts`; every spend gate checks only
-   *  `agentPaused`, never this field). Default false. */
+   *  `agentPaused`, never this field). Default false. Independent of the gate check's own {@link gateDryRun}
+   *  preview -- the two "dry run" fields gate entirely disjoint layers with no shared code path. */
   agentDryRun?: boolean | undefined;
   /** Per-repo override of the global DB-backed agent freeze (#4372): when true, this repo's actions execute
    *  even while `global_agent_controls.frozen` is set, so an operator can re-activate one repo at a time
    *  without lifting the fleet-wide brake. Never overrides the `AGENT_ACTIONS_PAUSED` env var, and
    *  {@link agentPaused} on this same repo still wins over it. Default false. */
   agentGlobalFreezeOverride?: boolean | undefined;
-  /** Moderation-rules engine (#selfhost-mod-engine): whether the whole layer runs on THIS repo. `"inherit"`
-   *  (the DB default) defers to `global_moderation_config.enabled`; `"off"`/`"enabled"` force this repo
-   *  regardless of the global default. Always populated by the DB layer; optional so existing settings
-   *  fixtures/callers need not be touched. */
+  /** Moderation-rules engine (#selfhost-mod-engine): gates ONLY the single shared, cross-repo violation
+   *  tally across the anti-abuse mechanisms that already short-circuit a PR/issue's disposition on their
+   *  own independent settings (contributor cap, blacklist, review-nag, review-evasion) -- it does NOT
+   *  disable those four mechanisms themselves, which run regardless of this field. `"inherit"` (the DB
+   *  default) defers to `global_moderation_config.enabled`; `"off"`/`"enabled"` force this repo's
+   *  participation in the tally, opting it in/out and narrowing which mechanisms feed it, regardless of
+   *  the global default. Always populated by the DB layer; optional so existing settings fixtures/callers
+   *  need not be touched. */
   moderationGateMode?: "inherit" | "off" | "enabled" | undefined;
   /** Moderation-rules engine: a per-repo override of WHICH of the anti-abuse mechanisms (contributor cap,
    *  blacklist, review-nag, review-evasion) feed a contributor's shared, cross-repo violation tally.
@@ -1141,9 +1152,14 @@ export type RepositorySettings = {
   skipAutomationBotAuthors?: "inherit" | "off" | "enabled" | undefined;
   /** Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN
    *  PR to draft while gittensory has an ACTIVE review pass running against it is dodging the one-shot
-   *  review process. `"off"` (the default) disables detection entirely; `"close"` reopens (if needed) and
-   *  re-closes as the App -- a close the contributor cannot themselves reopen (#one-shot-reopen) -- applies
-   *  the configured label/comment, and records a `review_evasion` moderation strike. */
+   *  review process. The effective default is `"close"` as of #4011 (see `normalizeReviewEvasionProtection`
+   *  in `db/repositories.ts`) -- `"off"` is now an explicit opt-out, not the default. `"close"` reopens (if
+   *  needed) and re-closes as the App -- a close the contributor cannot themselves reopen (#one-shot-reopen)
+   *  -- applies the configured label/comment, and records a `review_evasion` moderation strike. Note:
+   *  `"off"` only suppresses this ENFORCEMENT -- the ready&harr;draft cycling COUNTER (`processors.ts`'s
+   *  `converted_to_draft` handler, `bumpPullRequestDraftConversionCount`) keeps incrementing regardless, so a
+   *  repo re-enabling `"close"` (or removing an `"off"` override, which now also resolves to `"close"`) can
+   *  immediately treat a historical off-period cycle as "repeated" on the very next legitimate conversion. */
   reviewEvasionProtection?: "off" | "close" | undefined;
   /** Merge-train FIFO gate (#selfhost-merge-train): without this, a PR merges the instant its OWN gate
    *  clears, with zero awareness of an older sibling PR still open in the same repo -- proven live to cause
