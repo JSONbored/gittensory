@@ -83,6 +83,10 @@ export type FocusManifestGateConfig = {
   pack: GatePolicyPack | null;
   linkedIssue: GateRuleMode | null;
   duplicates: GateRuleMode | null;
+  /** `gate.readiness.mode`/`gate.readiness.minScore` -- this engine-layer pair folds into
+   *  `RepositorySettings.qualityGateMode`/`qualityGateMinScore` (src/signals/focus-manifest.ts), a third
+   *  spelling of the same concept alongside the yml key name; the `readiness` gate is distinct from the
+   *  separate `mergeReadiness` composite gate above. */
   readinessMode: GateRuleMode | null;
   readinessMinScore: number | null;
   slopMode: GateRuleMode | null;
