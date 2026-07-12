@@ -85,9 +85,10 @@ function Tuning() {
         <li>built-in safe defaults.</li>
       </ul>
       <p>
-        Path holds are explicit config-as-code only: omitted or empty{" "}
-        <code>settings.hardGuardrailGlobs</code> means no path guardrails, not a hidden engine
-        fallback.
+        Path holds are explicit config-as-code only: a configured{" "}
+        <code>settings.hardGuardrailGlobs</code> ADDS repo-specific globs on top of a fixed set of
+        built-in invariant guardrails that always apply and can never be disabled. Omitted or empty
+        means only those built-in invariants hold.
       </p>
       <p>
         The friendly <code>gate:</code> block in <code>.gittensory.yml</code> is a typed alias for

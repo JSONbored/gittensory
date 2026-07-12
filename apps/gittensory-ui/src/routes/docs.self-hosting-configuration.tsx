@@ -84,9 +84,11 @@ function SelfHostingConfiguration() {
         same fields — so a value written under both <code>gate.duplicates</code> and{" "}
         <code>settings.duplicates</code> resolves to whatever <code>gate.duplicates</code> says. One
         exception to the whole precedence chain: hard path guardrails (
-        <code>settings.hardGuardrailGlobs</code>) are config-as-code only — omitted or empty means
-        no path guardrails, never a hidden engine fallback, regardless of what the database row or
-        defaults would otherwise imply.
+        <code>settings.hardGuardrailGlobs</code>) are config-as-code only — a configured list ADDS
+        repo-specific globs on top of a fixed set of built-in invariant guardrails (config-as-code
+        files, CI workflows/scripts, and core engine-decision paths) that always apply and can never
+        be disabled. Omitted or empty means only those built-in invariants hold, regardless of what
+        the database row or defaults would otherwise imply.
       </p>
       <p>
         This page covers the environment layer and the shape of the config file. For the full field
