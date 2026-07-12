@@ -282,7 +282,7 @@ jobs:
       # TS2307 in CI while passing locally against a stale leftover dist/ -- first hit by PR #5082). Now ahead
       # of both.
       - name: Build engine package
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.ui == 'true' }}
         run: npm run build --workspace @jsonbored/gittensory-engine
       # .tsbuildinfo mutates every run (tsc's own incremental state), unlike node_modules above which is
       # immutable per lockfile -- so this needs the run_id-suffixed-key + restore-keys-prefix pattern (always
