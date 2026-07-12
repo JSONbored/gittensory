@@ -1,4 +1,4 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { discoverMinerGoalSpecPath, parseMinerGoalSpecContent } from "@jsonbored/gittensory-engine";
 
@@ -12,21 +12,29 @@ const MAX_MINER_GOAL_SPEC_BYTES = 32_768;
 // attempt-cli.js flow) -- no extra network round trip needed for a file that's already sitting in the
 // worktree.
 
+// Same convention as packages/gittensory-mcp/bin/gittensory-mcp.js's readCliTextFile: O_NOFOLLOW on open
+// atomically rejects a symlinked path (no separate pre-open lstat -- that would be a check-then-open race, since
+// a symlink can be swapped in between the lstat and the open). Bounds the READ itself, not just fstat's
+// reported size, since a regular file can still grow between fstatSync and the read below.
 function readRegularUtf8File(path, options) {
-  const lstatImpl = options.lstatSync ?? lstatSync;
   const openImpl = options.openSync ?? openSync;
   const fstatImpl = options.fstatSync ?? fstatSync;
-  const readImpl = options.readFileSync ?? readFileSync;
+  const readImpl = options.readSync ?? readSync;
   const closeImpl = options.closeSync ?? closeSync;
-
-  const entry = lstatImpl(path);
-  if (!entry.isFile() || entry.isSymbolicLink()) return null;
 
   const fd = openImpl(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    const opened = fstatImpl(fd);
-    if (!opened.isFile() || opened.size > MAX_MINER_GOAL_SPEC_BYTES) return null;
-    return readImpl(fd, "utf8");
+    const stats = fstatImpl(fd);
+    if (!stats.isFile() || stats.size > MAX_MINER_GOAL_SPEC_BYTES) return null;
+    const buffer = Buffer.alloc(MAX_MINER_GOAL_SPEC_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const n = readImpl(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (n === 0) break;
+      bytesRead += n;
+    }
+    if (bytesRead > MAX_MINER_GOAL_SPEC_BYTES) return null;
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } finally {
     closeImpl(fd);
   }
@@ -41,7 +49,7 @@ function readRegularUtf8File(path, options) {
  * functions), not a repoPath-relative candidate.
  *
  * @param {string} repoPath
- * @param {{ existsSync?: (path: string) => boolean, lstatSync?: (path: string) => import("node:fs").Stats, openSync?: (path: string, flags: number) => number, fstatSync?: (fd: number) => import("node:fs").Stats, readFileSync?: (path: string | number, encoding: "utf8") => string, closeSync?: (fd: number) => void }} [options]
+ * @param {{ existsSync?: (path: string) => boolean, openSync?: (path: string, flags: number) => number, fstatSync?: (fd: number) => import("node:fs").Stats, readSync?: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => number, closeSync?: (fd: number) => void }} [options]
  * @returns {import("@jsonbored/gittensory-engine").ParsedMinerGoalSpec}
  */
 export function resolveMinerGoalSpec(repoPath, options = {}) {
