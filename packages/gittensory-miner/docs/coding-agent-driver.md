@@ -81,24 +81,47 @@ To add a driver beyond the CLI-subprocess and Agent-SDK backends:
    injected backend, asserting identical SHAPE and edge-case handling (not identical output, which is inherently
    non-deterministic across backends).
 
-## A worked attempt lifecycle
+## A worked attempt lifecycle (the real production path)
+
+`runCodingAgentAttempt`/`invokeCodingAgentDriver` (driver-factory.ts/coding-agent-invoke.ts) are real, tested,
+and remain available as a lower-level composable, but **production does not call either of them today**. The
+real construction + invocation path, as actually wired into `packages/gittensory-miner`, is:
 
 ```
-runCodingAgentAttempt(options)
-  ├─ resolveCodingAgentExecutionMode(...)         → paused | dry_run | live
-  ├─ if !codingAgentModeExecutes(mode):           → record a shadow/no-op attempt-log event, return without spawning
-  │     (uses the noop driver stand-in — CLI providers do NOT require spawn/query deps in this branch)
-  ├─ createCodingAgentDriver({ name, ... })        → the configured driver
-  └─ invokeCodingAgentDriver(driver, task, mode, log)
-       ├─ log: attempt started
-       ├─ driver.run(task)                          → edits inside task.workingDirectory only, ≤ task.maxTurns
-       │      └─ (metering accumulates tokens/turns/wallClockMs/costUsd; evaluateAttemptBudget can abort)
-       ├─ log: attempt succeeded | failed           (append-only; formatAttemptLogJsonl dumps the trace)
-       └─ returns CodingAgentDriverResult { ok, changedFiles, summary, transcript?, turnsUsed? }
+constructProductionCodingAgentDriver(env)        (packages/gittensory-miner/lib/coding-agent-construction.js)
+  └─ createCodingAgentDriver({ providerName, spawn, ... })   (driver-factory.ts) → the configured CodingAgentDriver
+       │  (house-rule hooks attached by default for agent-sdk via buildHouseRulesAgentSdkHooks -- see below)
+       └─ becomes IterateLoopDeps.driver, handed to runIterateLoop (iterate-loop.ts)
+
+runIterateLoop(input, deps)                       (packages/gittensory-engine/src/miner/iterate-loop.ts)
+  └─ per iteration, runDriverSafely(input, deps, task):
+       ├─ if !codingAgentModeExecutes(input.mode):  → invokeCodingAgentDriver(deps.driver, mode, task, {...})
+       │     (paused/dry_run only -- records a shadow/no-op attempt-log event, never spawns the real driver)
+       └─ else (live):                              → deps.driver.run(task) directly, NOT via invokeCodingAgentDriver
+              → edits inside task.workingDirectory only, ≤ task.maxTurns
+       ├─ evaluateSelfReviewOutcome(...) → self-review the resulting diff
+       ├─ decideNextActionWithReason(state) → continue | handoff | abandon
+       └─ logDecision(...) records ONE attempt-log event per iteration (continue/handoff/abandon), not a
+              raw driver-start/succeed/fail pair the way invokeCodingAgentDriver's own wrapper would
 ```
 
-The attempt log (JSONL) and the metering totals are the durable, provider-independent record of what happened —
-independent of whichever backend's own transcript, and the input to the miner's manage-phase and self-improve loops.
+The attempt log (JSONL) is the durable, provider-independent record of what happened, independent of whichever
+backend's own transcript, and the input to the miner's manage-phase and self-improve loops.
+
+`packages/gittensory-miner/lib/coding-agent-house-rules.js`'s `runHouseRulesEnforcedCodingAgentAttempt` (a
+drop-in wrapper over `runCodingAgentAttempt`) exists for a caller that wants the alternate, non-iterate-loop
+path with house-rule enforcement built in by default -- no such caller exists in production today either; the
+real house-rule enforcement for the live `agent-sdk` provider happens via `buildHouseRulesAgentSdkHooks`,
+attached directly in `constructProductionCodingAgentDriver`.
+
+**Metering:** `attempt-metering.ts`'s `accumulateAttemptUsage`/`meterAttemptUsage`/`evaluateAttemptBudget`
+(tokens/turns/wallClockMs/costUsd, with mid-attempt budget-abort) have **zero production callers** as of this
+writing -- see [#5395](https://github.com/JSONbored/gittensory/issues/5395) for the tracked decision on
+whether to wire them in for real or remove them. What IS real today: `iterate-loop.ts` sums each iteration's
+real `driverResult.turnsUsed`/`costUsd` into `IterateLoopResult.totalTurnsUsed`/`totalCostUsd`, which
+`packages/gittensory-miner/lib/loop-cli.js` uses to increment the governor's persisted `GovernorCapUsage`
+between loop cycles -- an after-the-fact, cross-cycle total, not the per-iteration mid-attempt abort
+`attempt-metering.ts` was designed to provide.
 
 ## Related docs
 

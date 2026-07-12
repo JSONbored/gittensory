@@ -7,12 +7,18 @@
 // a future real call site does not need to remember to attach it itself, closing the exact gap
 // buildHouseRulesPreToolUseHook's own doc comment already anticipated ("the live interception wiring itself").
 //
-// This does not build a CLI entrypoint -- nothing in this package constructs a coding-agent driver in
-// production yet (verified: no caller of createCodingAgentDriver/runCodingAgentAttempt exists anywhere in
-// packages/gittensory-miner today). That is separate, larger follow-up work. What this DOES guarantee: once
-// such a call site exists, it only has to call `runHouseRulesEnforcedCodingAgentAttempt` (a drop-in
-// replacement for the engine's own `runCodingAgentAttempt`) to get real, unbypassable house-rule enforcement
-// automatically, rather than depending on that future author to remember to wire hooks by hand.
+// This does not build a CLI entrypoint. UPDATE (#5135/#5396): a real production call site now exists --
+// packages/gittensory-miner/lib/coding-agent-construction.js's `constructProductionCodingAgentDriver` calls
+// `createCodingAgentDriver` directly -- but it does NOT go through `runCodingAgentAttempt` or this module's
+// own `runHouseRulesEnforcedCodingAgentAttempt` wrapper below; the real invocation path is
+// `constructProductionCodingAgentDriver` -> the resulting driver becomes `IterateLoopDeps.driver` -> consumed
+// by `runIterateLoop` (packages/gittensory-engine/src/miner/iterate-loop.ts). House-rule enforcement for the
+// live `agent-sdk` provider is instead attached directly there, via this module's own
+// `buildHouseRulesAgentSdkHooks` export (called from `constructProductionCodingAgentDriver` -- so the
+// DEFAULT-attachment guarantee below still holds, just through a different real call site than originally
+// anticipated). `runHouseRulesEnforcedCodingAgentAttempt` itself remains real, tested, and callable, but has
+// no production caller today -- it's a lower-level composable for a hypothetical caller that wants the
+// non-iterate-loop path, not something this package currently needs.
 
 import { runCodingAgentAttempt } from "@jsonbored/gittensory-engine";
 import { buildHouseRulesPreToolUseHook } from "./pretooluse-hook.js";
