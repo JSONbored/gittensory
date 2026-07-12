@@ -461,11 +461,8 @@ import {
   type CheckFailureDetail,
   type MergeReadiness,
 } from "../review/unified-comment";
-import {
-  buildIssueSlopAssessment,
-  buildSlopAssessment,
-  type SlopBand,
-} from "../signals/slop";
+import { buildIssueSlopAssessment } from "../signals/issue-slop";
+import { buildSlopAssessment, type SlopBand } from "../signals/slop";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { runGittensoryLinkedIssueSatisfaction } from "../services/linked-issue-satisfaction-run";
 import { decidePublicSurface } from "../signals/settings-preview";

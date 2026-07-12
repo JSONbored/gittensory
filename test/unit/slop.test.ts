@@ -1,22 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { buildPullRequestAdvisory, evaluateGateCheck } from "../../src/rules/advisory";
 import {
-  buildDuplicateClusterFinding,
-  buildEmptyDescriptionFinding,
   buildEmptyIssueBodyFinding,
   buildIssueSlopAssessment,
+  buildTitleRestatementIssueFinding,
+  buildUnfilledIssueTemplateFinding,
+  ISSUE_SLOP_WEIGHTS,
+} from "../../src/signals/issue-slop";
+import {
+  buildDuplicateClusterFinding,
+  buildEmptyDescriptionFinding,
   buildLowQualityCommitMessageFinding,
   buildMissingTestEvidenceFinding,
   buildNoLinkedIssueRationaleFinding,
   buildNonSubstantivePaddingFinding,
   buildSlopAssessment,
-  buildTitleRestatementIssueFinding,
   buildTrivialWhitespaceChurnFinding,
-  buildUnfilledIssueTemplateFinding,
   hasClearNoIssueRationale,
   type SlopAssessmentInput,
   type SlopBand,
-  ISSUE_SLOP_WEIGHTS,
   SLOP_RUBRIC_MARKDOWN,
   SLOP_WEIGHTS,
 } from "../../src/signals/slop";

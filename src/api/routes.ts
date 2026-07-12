@@ -249,7 +249,8 @@ import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, bu
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
-import { buildSlopAssessment, buildIssueSlopAssessment, SLOP_RUBRIC_MARKDOWN, ISSUE_SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
+import { buildIssueSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN } from "../signals/issue-slop";
+import { buildSlopAssessment, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { computeContributorCalibration } from "../review/predicted-gate-calibration-ledger";
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
