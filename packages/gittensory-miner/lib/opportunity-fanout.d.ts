@@ -1,4 +1,5 @@
 import type { ForgeConfig } from "./forge-config.js";
+import type { PolicyDocCache } from "./policy-doc-cache.js";
 
 export type FanoutTarget = {
   owner: string;
@@ -6,7 +7,9 @@ export type FanoutTarget = {
 };
 
 /** Options shared by every fan-out entry point. `apiBaseUrl` is the legacy top-level forge-host override (it still
- * wins over `forge.apiBaseUrl`); `forge` (#4784) carries the rest of the per-tenant forge knobs. */
+ * wins over `forge.apiBaseUrl`); `forge` (#4784) carries the rest of the per-tenant forge knobs. `policyDocCache`,
+ * when supplied, lets discovery revalidate each repo's policy docs with a conditional GET instead of a full
+ * refetch (#4842). */
 export type FanoutOptions = {
   apiBaseUrl?: string;
   forge?: Partial<ForgeConfig>;
@@ -16,6 +19,7 @@ export type FanoutOptions = {
   perPage?: number;
   maxPages?: number;
   sleepFn?: (ms: number) => Promise<unknown>;
+  policyDocCache?: PolicyDocCache | null;
 };
 
 export type RawCandidateIssue = {

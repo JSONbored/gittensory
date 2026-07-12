@@ -119,13 +119,14 @@ function recordRateLimit(summary, response) {
   }
 }
 
-async function githubGetJson(url, githubToken, summary, options) {
+async function githubGetJson(url, githubToken, summary, options, extraHeaders = {}) {
   // Retry a transient 5xx from GitHub before dropping this target's results for the whole run (#4830) — the same
   // discipline as the CI/gate-verdict pollers. A thrown network error still propagates to each caller's try/catch.
+  // `extraHeaders` carries per-call additions (e.g. a policy-doc If-None-Match, #4842) on top of the base auth set.
   const response = await fetchWithRetry(
     fetch,
     url,
-    { method: "GET", headers: githubHeaders(githubToken, options.forge) },
+    { method: "GET", headers: { ...githubHeaders(githubToken, options.forge), ...extraHeaders } },
     { sleepFn: options?.sleepFn },
   );
   recordRateLimit(summary, response);
@@ -146,19 +147,52 @@ function warning(target, stage, message) {
   return { repoFullName: target.repoFullName, stage, message };
 }
 
+// Read a URL's prior ETag so an unchanged doc can be revalidated with a conditional GET (#4842). A cache that is
+// absent, or whose read throws (corrupt/locked file), is treated as a plain miss: the caller does a full fetch,
+// per the "never risk a stale policy" rule — the cache only ever makes discovery cheaper, never less correct.
+function readCachedPolicyDoc(cache, url) {
+  if (!cache) return null;
+  try {
+    return cache.get(url);
+  } catch {
+    return null;
+  }
+}
+
+// Persist the fresh ETag + body so the NEXT discover run can revalidate instead of re-downloading. Only a real
+// ETag paired with decoded content is stored, and a write that throws must never fail discovery (same stale-safe
+// rule) — it degrades to "not cached", so the next run simply refetches in full.
+function writeCachedPolicyDoc(cache, url, response, content) {
+  if (!cache || content === null) return;
+  const etag = response.headers.get("etag");
+  if (typeof etag !== "string" || !etag.trim()) return;
+  try {
+    cache.put(url, etag, content);
+  } catch {
+    // Leave this URL uncached; the next run refetches fully rather than serving anything stale.
+  }
+}
+
 async function fetchRepoDoc(target, path, githubToken, options, summary, warnings) {
   const url = apiUrl(
     options.apiBaseUrl,
     repoPath(options.forge, target, `/contents/${encodeURIComponent(path)}`),
   );
+  const cached = readCachedPolicyDoc(options.policyDocCache, url);
+  const conditionalHeaders = cached ? { "if-none-match": cached.etag } : {};
   try {
-    const { response, payload } = await githubGetJson(url, githubToken, summary, options);
+    const { response, payload } = await githubGetJson(url, githubToken, summary, options, conditionalHeaders);
+    // A 304 only ever follows the If-None-Match we send above, which we only send when `cached` exists — so the
+    // cached body is the GitHub-confirmed current content, served with no extra rate-limit spend.
+    if (response.status === 304) return cached.content;
     if (response.status === 404) return null;
     if (!response.ok) {
       warnings.push(warning(target, `policy:${path}`, `GitHub returned ${response.status}`));
       return null;
     }
-    return decodeContentPayload(payload);
+    const content = decodeContentPayload(payload);
+    writeCachedPolicyDoc(options.policyDocCache, url, response, content);
+    return content;
   } catch (error) {
     warnings.push(
       warning(target, `policy:${path}`, error instanceof Error ? error.message : "policy fetch failed"),
@@ -405,6 +439,9 @@ function normalizeOptions(options = {}) {
     maxPages: normalizeLimit(options.maxPages, defaultMaxPages, 1, 100),
     // Passed through to the per-fetch retry so tests can inject an instant sleep; undefined uses the real backoff.
     sleepFn: typeof options.sleepFn === "function" ? options.sleepFn : undefined,
+    // Optional local ETag cache for policy-doc revalidation (#4842). Absent (null) => every policy doc is fetched
+    // in full, exactly as before; discover-cli.js supplies the real on-disk store for a live run.
+    policyDocCache: options.policyDocCache ?? null,
   };
 }
 

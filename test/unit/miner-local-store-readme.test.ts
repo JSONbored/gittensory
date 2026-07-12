@@ -23,6 +23,7 @@ describe("gittensory-miner local storage README (#4272, #4876)", () => {
       ["deny-hook-synthesis.sqlite3", "deny_rule_proposals", "deny-hook-synthesis.js", "GITTENSORY_MINER_DENY_HOOK_SYNTHESIS_DB"],
       ["worktree-allocator.sqlite3", "worktree_slots", "worktree-allocator.js", "GITTENSORY_MINER_WORKTREE_ALLOCATOR_DB"],
       ["orb-export.sqlite3", "orb_export_meta", "orb-export.js", "GITTENSORY_MINER_ORB_EXPORT_DB"],
+      ["policy-doc-cache.sqlite3", "policy_doc_cache", "policy-doc-cache.js", "GITTENSORY_MINER_POLICY_DOC_CACHE_DB"],
     ]) {
       for (const token of row) expect(readme).toContain(token);
     }
