@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +23,11 @@ afterEach(() => {
 function tempDir() {
   const root = mkdtempSync(join(tmpdir(), "gittensory-miner-coding-task-spec-"));
   roots.push(root);
-  return root;
+  // Resolved once here, not just inside writeAcceptanceCriteriaFile: os.tmpdir() can itself sit behind a
+  // symlink (e.g. macOS's /var -> /private/var), so a RAW mkdtempSync path wouldn't byte-match the realpath
+  // writeAcceptanceCriteriaFile's own symlink defense already resolves to internally -- resolving here keeps
+  // every test's own path expectations meaningful on every platform, not just Linux CI runners.
+  return realpathSync(root);
 }
 
 function issue(overrides: Record<string, unknown> = {}) {
