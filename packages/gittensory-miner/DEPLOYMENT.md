@@ -80,6 +80,21 @@ docker compose -f docker-compose.miner.yml up -d --build
 
 **Scaling to N parallel workers.** `docker compose -f docker-compose.miner.yml up -d --scale miner=N` gives every replica the **same** `miner-data` volume — and the miner's SQLite ledgers are **not** safe for concurrent access, so N replicas on one volume will contend/corrupt. To run N **isolated** workers, give each its own state: run N separate compose projects (`docker compose -p miner-1 …`, `-p miner-2 …` — `-p` namespaces the volume) or point each at a distinct `GITTENSORY_MINER_CONFIG_DIR` on its own mount. For built-in isolated horizontal scaling, use the Kubernetes StatefulSet in [`k8s/`](../../k8s/) (per-pod volumes).
 
+## Bare-host (systemd, no Docker)
+
+To run the miner continuously on a plain Linux host without Docker, supervise `gittensory-miner loop` — the autonomous discover → attempt → manage daemon (#5135) — with systemd. [`systemd/gittensory-miner.service.example`](../../systemd/gittensory-miner.service.example) is a ready-to-adapt persistent unit; its header carries the full install steps:
+
+```sh
+npm install -g @jsonbored/gittensory-miner
+gittensory-miner init
+sudo cp systemd/gittensory-miner.service.example /etc/systemd/system/gittensory-miner.service
+sudo $EDITOR /etc/systemd/system/gittensory-miner.service   # set User / WorkingDirectory / ExecStart / secrets
+sudo systemctl daemon-reload
+sudo systemctl enable --now gittensory-miner.service
+```
+
+Because `loop` is a **long-running daemon that schedules its own cycles**, it is a persistent `Type=simple` service (with `Restart=on-failure`) — **not** a oneshot unit driven by a `.timer`, unlike the periodic `gittensory-docker-prune.*.example` hygiene job in [`systemd/`](../../systemd/). Keep `GITHUB_TOKEN` (and any coding-agent credentials) in a root-owned `0600` `EnvironmentFile`, never in the unit file. Follow the loop with `journalctl -u gittensory-miner -f`; `systemctl stop` sends SIGTERM, which the loop handles cleanly at its next kill-switch check.
+
 ## Invariants
 
 - Core miner bookkeeping (claims, plans, queues, ledgers) works offline after install.
