@@ -1,6 +1,8 @@
 import "./opportunity-badge.js";
+import "./toolbar-badge.js";
 
 const badgeApi = globalThis.__gittensoryMinerOpportunityBadge;
+const toolbarBadgeApi = globalThis.__gittensoryMinerToolbarBadge;
 
 const PING_MESSAGE = "gittensory-miner:ping";
 const ISSUE_CONTEXT_MESSAGE = "gittensory-miner:issue-context";
@@ -71,6 +73,24 @@ async function loadRankedCandidates() {
   return Array.isArray(stored.rankedCandidates) ? stored.rankedCandidates : [];
 }
 
+// Toolbar-icon badge (#5193). Reads `rankedCandidates` WITHOUT a default so `undefined` still means
+// "cache never populated" (a dash), distinct from a populated-but-empty `[]` (cleared text). Read-only.
+async function refreshToolbarBadge() {
+  const { rankedCandidates } = await chrome.storage.local.get("rankedCandidates");
+  const badge = toolbarBadgeApi.computeToolbarBadge(rankedCandidates);
+  await chrome.action.setBadgeText({ text: badge.text });
+  await chrome.action.setBadgeBackgroundColor({ color: badge.backgroundColor });
+}
+
+// Paint on service-worker startup, then keep it live as the miner rewrites the cache. Guarded so environments
+// without the action API surface (e.g. the unit-test harness) are a clean no-op.
+if (chrome.action && chrome.storage.onChanged) {
+  void refreshToolbarBadge();
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes && changes.rankedCandidates) void refreshToolbarBadge();
+  });
+}
+
 if (globalThis.__GITTENSORY_MINER_EXTENSION_TEST__) {
   globalThis.__gittensoryMinerBackgroundInternals = {
     PING_MESSAGE,
@@ -78,5 +98,6 @@ if (globalThis.__GITTENSORY_MINER_EXTENSION_TEST__) {
     loadIssueOpportunityContext,
     loadMinerExtensionSettings,
     loadRankedCandidates,
+    refreshToolbarBadge,
   };
 }
