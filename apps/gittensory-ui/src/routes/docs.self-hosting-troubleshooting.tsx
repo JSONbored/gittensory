@@ -299,6 +299,44 @@ curl -X DELETE "$QDRANT_URL/collections/gittensory"`}
         </li>
       </ul>
 
+      <h2>Grafana metrics/dashboards show no data</h2>
+      <p>
+        The metrics path is the app's own <code>/metrics</code> (scraped directly by Prometheus)
+        plus, for Claude Code's OTEL telemetry specifically, app or smoke process → OTEL collector →
+        its Prometheus exporter (<code>:8889</code>) → Prometheus.
+      </p>
+      <CodeBlock
+        lang="bash"
+        code={`docker compose --profile observability ps prometheus otel-collector grafana
+docker compose logs --tail=80 prometheus otel-collector grafana
+
+# Send one synthetic OTLP metric through the collector, read it back from its Prometheus exporter,
+# and sanity-check the app's own /metrics HELP/TYPE shape.
+npm run test:smoke:observability:metrics`}
+      />
+      <ul>
+        <li>
+          If the smoke command fails at <code>otel-collector:4318/v1/metrics</code>, the collector
+          is not reachable from the app container.
+        </li>
+        <li>
+          If it pushes successfully but cannot read it back from{" "}
+          <code>otel-collector:8889/metrics</code>, the collector's Prometheus exporter is unhealthy
+          or the pipeline in <code>otel/otel-collector-config.yml</code> is misconfigured.
+        </li>
+        <li>
+          If the app's own <code>/metrics</code> check fails, that is unrelated to the OTEL
+          collector — check the app container directly (<code>docker compose logs gittensory</code>
+          ).
+        </li>
+        <li>
+          If the smoke command passes but a Grafana dashboard panel is still blank, check that
+          panel's own PromQL expression against a metric name actually emitted in <code>src/</code>{" "}
+          — a renamed or removed metric a dashboard still references renders as a permanent
+          zero/no-data, not an error.
+        </li>
+      </ul>
+
       <h2>Grafana traces error or show no data</h2>
       <p>
         The trace path is app or smoke process → OTEL collector → Tempo → Grafana. Tempo is only

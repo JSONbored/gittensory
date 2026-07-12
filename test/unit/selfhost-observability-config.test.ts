@@ -89,6 +89,24 @@ describe("self-host observability trace config", () => {
     expect(script).toContain("selfhost.observability.smoke");
   });
 
+  it("ships an operator smoke probe that verifies collector-to-Prometheus-exporter metrics retrieval, plus the app's own /metrics shape (2026-07 fix)", () => {
+    const script = readFileSync(
+      join(process.cwd(), "scripts/smoke-observability-metrics.mjs"),
+      "utf8",
+    );
+
+    expect(script).toContain("http://otel-collector:4318/v1/metrics");
+    expect(script).toContain("http://otel-collector:8889/metrics");
+    expect(script).toContain("http://localhost:8787/metrics");
+    expect(script).toContain("gittensory-selfhost-smoke");
+    expect(script).toContain("# HELP gittensory_uptime_seconds");
+
+    const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+    expect(packageJson.scripts["test:smoke:observability:metrics"]).toBe(
+      "node scripts/smoke-observability-metrics.mjs",
+    );
+  });
+
   it("wires Postgres and backup exporters without starting them on SQLite-only observability", () => {
     const compose = record(readYaml("docker-compose.yml"));
     const services = record(compose.services);
