@@ -112,7 +112,7 @@ const DRIVER_HARNESSES: DriverHarness[] = [
               return;
             }
             yield { type: "assistant", message: { content: [{ type: "tool_use", name: "Edit", input: { file_path: "src/a.ts" } }] } };
-            yield { type: "result", subtype: "success", is_error: false, num_turns: 3, result: "edited src/a.ts" };
+            yield { type: "result", subtype: "success", is_error: false, num_turns: 3, total_cost_usd: 0.15, result: "edited src/a.ts" };
           })();
         },
       });
@@ -130,6 +130,7 @@ function expectDriverResultShape(result: CodingAgentDriverResult): void {
   expect(result.summary.length).toBeGreaterThan(0);
   if (result.transcript !== undefined) expect(typeof result.transcript).toBe("string");
   if (result.turnsUsed !== undefined) expect(typeof result.turnsUsed).toBe("number");
+  if (result.costUsd !== undefined) expect(typeof result.costUsd).toBe("number");
   if (result.error !== undefined) {
     expect(typeof result.error).toBe("string");
     expect(result.error.length).toBeGreaterThan(0);
@@ -228,5 +229,17 @@ describe("documented divergences, locked in explicitly", () => {
     const { driver } = DRIVER_HARNESSES[1]!.make("success");
     const result = await driver.run(task);
     expect(result.turnsUsed).toBe(3);
+  });
+
+  it("CLI driver reports no cost signal (a subprocess exposes none without --output-format json) — costUsd stays undefined", async () => {
+    const { driver } = DRIVER_HARNESSES[0]!.make("success");
+    const result = await driver.run(task);
+    expect(result.costUsd).toBeUndefined();
+  });
+
+  it("Agent-SDK driver reports the result frame's real total_cost_usd", async () => {
+    const { driver } = DRIVER_HARNESSES[1]!.make("success");
+    const result = await driver.run(task);
+    expect(result.costUsd).toBe(0.15);
   });
 });

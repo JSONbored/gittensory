@@ -38,6 +38,7 @@ export type AttemptCliResult =
       outcome: `attempt_${RunMinerAttemptResult["outcome"]}`;
       submissionMode: "observe" | "enforce";
       totalTurnsUsed: number;
+      totalCostUsd: number;
       iterationsUsed: number;
       reason?: string;
       decision?: unknown;

@@ -374,10 +374,14 @@ export async function runAttempt(args, options = {}) {
       mode,
       attemptId,
       submissionMode: amsPolicy.spec.submissionMode,
-      // Every runMinerAttempt outcome carries a real loopResult (#5135's loop needs its genuine turn-usage to
-      // save real GovernorCapUsage via governor-state.js's saveCapUsage -- nothing else in the codebase calls
-      // it yet). Surfaced flat rather than the whole loopResult object, matching this result's own shallow shape.
+      // Every runMinerAttempt outcome carries a real loopResult (#5135's loop needs its genuine turn-usage and
+      // cost to save real GovernorCapUsage via governor-state.js's saveCapUsage -- nothing else in the codebase
+      // calls it yet). Surfaced flat rather than the whole loopResult object, matching this result's own
+      // shallow shape. costUsd is real only for the agent-sdk provider (its own SDK result message reports
+      // total_cost_usd); CLI-subprocess providers (claude-cli/codex-cli) report no cost signal today, so this
+      // is 0 for those -- an honest absence, not a fabricated number.
       totalTurnsUsed: result.loopResult.totalTurnsUsed,
+      totalCostUsd: result.loopResult.totalCostUsd,
       iterationsUsed: result.loopResult.iterationsUsed,
       ...("reason" in result ? { reason: result.reason } : {}),
       ...("decision" in result ? { decision: result.decision } : {}),

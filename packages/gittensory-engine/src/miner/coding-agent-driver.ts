@@ -20,6 +20,9 @@ export type CodingAgentDriverResult = {
   /** Opaque provider transcript for operator inspection; absent when the driver did not run. */
   transcript?: string | undefined;
   turnsUsed?: number | undefined;
+  /** Real dollar cost of this driver run, when the provider reports one. Absent (not zero) when the provider
+   *  never got far enough to have a cost, or reports no cost signal at all -- never fabricated. */
+  costUsd?: number | undefined;
   error?: string | undefined;
 };
 

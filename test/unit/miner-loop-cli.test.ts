@@ -209,6 +209,7 @@ describe("runLoop (#5135)", () => {
         attemptId: "loop-attempt-1",
         submissionMode: "observe",
         totalTurnsUsed: 4,
+        totalCostUsd: 0.37,
         iterationsUsed: 1,
         execResult: { action: "open_pr", stdout: "https://github.com/acme/widgets/pull/123\n", stderr: "", code: 0, timedOut: false },
       });
@@ -249,8 +250,9 @@ describe("runLoop (#5135)", () => {
     // The claimed item resolved to done (real success), not left in_progress or requeued.
     expect(after.portfolioQueue.listQueue()).toEqual([expect.objectContaining({ identifier: "issue:7", status: "done" })]);
 
-    // Real governor cap usage was saved using runAttempt's own real totalTurnsUsed, not fabricated.
+    // Real governor cap usage was saved using runAttempt's own real totalTurnsUsed/totalCostUsd, not fabricated.
     expect(after.governorState.loadCapUsage().turnsTaken).toBe(4);
+    expect(after.governorState.loadCapUsage().budgetSpent).toBe(0.37);
 
     // Re-entry actually fired (a real loop_reentry_decision event, reentered on a merged outcome).
     const reentryEvents = after.eventLedger.readEvents({}).filter((e) => e.type === "loop_reentry_decision");
@@ -304,6 +306,9 @@ describe("runLoop (#5135)", () => {
     // The run-loop boundary gate released the in-flight item back to 'queued' on the fresh halt.
     expect(after.portfolioQueue.listQueue()).toHaveLength(1);
     expect(after.portfolioQueue.listQueue()[0]).toMatchObject({ status: "queued" });
+    // No totalCostUsd on any of these results (mirrors a CLI-subprocess provider, which reports no cost signal
+    // today) -- budgetSpent stays honestly at 0 across all 3 real attempts, never fabricated.
+    expect(after.governorState.loadCapUsage().budgetSpent).toBe(0);
   });
 
   it("REGRESSION: a permanent (AI-usage-policy) block marks the item done instead of re-queuing it forever", async () => {

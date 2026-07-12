@@ -144,6 +144,11 @@ export function createAgentSdkCodingAgentDriver(
 
       const turnsUsed =
         typeof resultMessage?.num_turns === "number" ? resultMessage.num_turns : undefined;
+      // Real dollar cost: the SDK's own SDKResultSuccess/SDKResultError message types both declare
+      // `total_cost_usd: number` unconditionally -- present whenever a result message arrived at all, success
+      // or not (the session was billed either way), absent only when the stream produced no result message.
+      const costUsd =
+        typeof resultMessage?.total_cost_usd === "number" ? resultMessage.total_cost_usd : undefined;
       const resultText =
         typeof resultMessage?.result === "string" ? redactSecrets(resultMessage.result) : "";
       const transcript = redactSecrets(
@@ -169,6 +174,7 @@ export function createAgentSdkCodingAgentDriver(
           summary: "agent sdk session did not complete successfully",
           transcript,
           turnsUsed,
+          costUsd,
           error: `agent_sdk_${subtype === "success" ? "errored" : subtype}`,
         };
       }
@@ -179,6 +185,7 @@ export function createAgentSdkCodingAgentDriver(
         summary: resultText.slice(0, MAX_REDACTED_TEXT_LENGTH) || `coding agent completed with ${changedFiles.size} changed file(s)`,
         transcript,
         turnsUsed,
+        costUsd,
       };
     },
   };

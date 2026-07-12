@@ -102,6 +102,10 @@ export type IterateLoopResult = {
   iterationsUsed: number;
   /** Cumulative `turnsUsed` summed across every iteration that ran. */
   totalTurnsUsed: number;
+  /** Cumulative real dollar cost summed across every iteration that ran, from each iteration's
+   *  `CodingAgentDriverResult.costUsd`. Only the `agent-sdk` provider reports this today (the CLI-subprocess
+   *  providers report no cost signal) -- always `0` for a provider that never reports one, never fabricated. */
+  totalCostUsd: number;
   iterations: readonly IterateLoopIterationRecord[];
   /** Populated only when `outcome === "handoff"`. */
   handoffPacket?: HandoffPacket | undefined;
@@ -228,7 +232,7 @@ function immediateAbandonNoIterationsPermitted(input: IterateLoopInput, deps: It
     reason: decision.reason,
     payload: { iterationNumber: 0, action: decision.action, abandonReason: decision.abandonReason },
   });
-  return { outcome: "abandon", finalDecision: decision, iterationsUsed: 0, totalTurnsUsed: 0, iterations: [] };
+  return { outcome: "abandon", finalDecision: decision, iterationsUsed: 0, totalTurnsUsed: 0, totalCostUsd: 0, iterations: [] };
 }
 
 /**
@@ -262,6 +266,7 @@ export async function runIterateLoop(input: IterateLoopInput, deps: IterateLoopD
   const iterations: IterateLoopIterationRecord[] = [];
   let previousBlockerCodes: readonly string[] | null = null;
   let totalTurnsUsed = 0;
+  let totalCostUsd = 0;
 
   for (let iterationNumber = 1; iterationNumber <= maxIterations; iterationNumber += 1) {
     const driverResult = await runDriverSafely(input, deps, {
@@ -272,6 +277,7 @@ export async function runIterateLoop(input: IterateLoopInput, deps: IterateLoopD
       maxTurns: input.maxTurnsPerIteration,
     });
     totalTurnsUsed += driverResult.turnsUsed ?? 0;
+    totalCostUsd += driverResult.costUsd ?? 0;
 
     const { outcome: selfReview, verdict } = evaluateSelfReviewOutcome(input, driverResult, deps);
 
@@ -296,12 +302,13 @@ export async function runIterateLoop(input: IterateLoopInput, deps: IterateLoopD
         finalDecision: decision,
         iterationsUsed: iterationNumber,
         totalTurnsUsed,
+        totalCostUsd,
         iterations,
         handoffPacket: buildHandoffPacket(input, verdict as SelfReviewVerdict, driverResult),
       };
     }
     if (decision.action === "abandon") {
-      return { outcome: "abandon", finalDecision: decision, iterationsUsed: iterationNumber, totalTurnsUsed, iterations };
+      return { outcome: "abandon", finalDecision: decision, iterationsUsed: iterationNumber, totalTurnsUsed, totalCostUsd, iterations };
     }
     previousBlockerCodes = blockerCodesFromContinuingOutcome(selfReview);
   }
@@ -313,5 +320,5 @@ export async function runIterateLoop(input: IterateLoopInput, deps: IterateLoopD
    * this package's fail-closed discipline, in case a future edit to the precedence ladder ever removes that
    * guarantee. */
   const fallbackDecision: IterateLoopDecision = { action: "abandon", abandonReason: "max_iterations_reached", reason: "Iterate loop exhausted its iteration budget." };
-  return { outcome: "abandon", finalDecision: fallbackDecision, iterationsUsed: maxIterations, totalTurnsUsed, iterations };
+  return { outcome: "abandon", finalDecision: fallbackDecision, iterationsUsed: maxIterations, totalTurnsUsed, totalCostUsd, iterations };
 }
