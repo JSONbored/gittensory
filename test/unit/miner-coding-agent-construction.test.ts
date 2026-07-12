@@ -97,34 +97,14 @@ describe("constructProductionCodingAgentDriver (#5131)", () => {
     expect(result.changedFiles).toEqual([]);
   });
 
-  it("constructs a claude-cli driver wired to an injected spawn, without invoking it during construction", async () => {
-    const calls: Array<{ cmd: string; args: readonly string[] }> = [];
-    const driver = constructProductionCodingAgentDriver(
-      { MINER_CODING_AGENT_PROVIDER: "claude-cli" },
-      {
-        spawn: async (cmd, args) => {
-          calls.push({ cmd, args });
-          return { stdout: "done", code: 0 };
-        },
-      },
-    );
-    expect(calls).toHaveLength(0); // construction alone must not spawn anything
-    const result = await driver.run(task);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.cmd).toBe("claude");
-    expect(result.ok).toBe(true);
-  });
-
-  it("defaults to a real (non-injected) spawn for a CLI provider when the caller supplies none", () => {
-    // Construction alone must succeed without ever invoking the real spawn (a real "claude" binary is not
-    // present in CI) — proving the `options.spawn ?? createRealCliSubprocessSpawn()` default branch is taken.
-    const driver = constructProductionCodingAgentDriver({ MINER_CODING_AGENT_PROVIDER: "claude-cli" });
-    expect(typeof driver.run).toBe("function");
-  });
-
-  it("REGRESSION: does NOT default-fill house-rule hooks for claude-cli/codex-cli — the default only applies to agent-sdk, the one provider that can enforce them", () => {
-    expect(() => constructProductionCodingAgentDriver({ MINER_CODING_AGENT_PROVIDER: "claude-cli" })).not.toThrow();
-    expect(() => constructProductionCodingAgentDriver({ MINER_CODING_AGENT_PROVIDER: "codex-cli" })).not.toThrow();
+  it("REGRESSION: fails closed for claude-cli/codex-cli by default because production house-rule hooks cannot be enforced there", () => {
+    const spawn = async () => ({ stdout: "done", code: 0 });
+    expect(() =>
+      constructProductionCodingAgentDriver({ MINER_CODING_AGENT_PROVIDER: "claude-cli" }, { spawn }),
+    ).toThrow(/unsupported_coding_agent_driver_hooks:claude-cli/);
+    expect(() =>
+      constructProductionCodingAgentDriver({ MINER_CODING_AGENT_PROVIDER: "codex-cli" }, { spawn }),
+    ).toThrow(/unsupported_coding_agent_driver_hooks:codex-cli/);
   });
 
   it("still fails closed for claude-cli/codex-cli when the caller EXPLICITLY supplies hooks (a real request the engine correctly rejects rather than silently dropping)", () => {
