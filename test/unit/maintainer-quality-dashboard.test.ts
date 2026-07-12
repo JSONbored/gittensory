@@ -49,6 +49,20 @@ describe("buildMaintainerQualityDashboard", () => {
     expect(dashboard.repoQuality[0]).toMatchObject({ repoFullName: "octo/demo", openPrCount: 2 });
     expect(["low", "medium", "high", "critical"]).toContain(dashboard.repoQuality[0]!.queueBand);
     expect(dashboard.qualitySignals).toMatchObject({ openPrs: 2, missingLinkedIssue: 0 });
+    // #2201: the aggregate queue-health folds the per-repo QueueHealth signals — open PRs match qualitySignals,
+    // and every burden band + age bucket is represented as an observable count.
+    expect(dashboard.queueHealth.openPullRequests).toBe(2);
+    expect(dashboard.queueHealth.bandCounts).toMatchObject({
+      low: expect.any(Number),
+      medium: expect.any(Number),
+      high: expect.any(Number),
+      critical: expect.any(Number),
+    });
+    expect(dashboard.queueHealth.ageBuckets).toMatchObject({
+      under7Days: expect.any(Number),
+      days7To30: expect.any(Number),
+      over30Days: expect.any(Number),
+    });
     expect(JSON.stringify(dashboard)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
     // The per-repo queue burden score is private — only the band is exposed.
     expect(JSON.stringify(dashboard)).not.toMatch(/"burdenScore"/);
