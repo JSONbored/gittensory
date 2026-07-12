@@ -16,7 +16,7 @@
         "label": "Repo",
         "type": "query",
         "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
-        "query": { "queryType": "table", "rawQueryText": "SELECT DISTINCT repo FROM review_targets ORDER BY repo" },
+        "query": { "queryType": "table", "queryText": "SELECT DISTINCT repo FROM review_targets ORDER BY repo", "rawQueryText": "SELECT DISTINCT repo FROM review_targets ORDER BY repo" },
         "includeAll": true,
         "allValue": "$__all",
         "multi": false,

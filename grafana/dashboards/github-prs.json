@@ -18,6 +18,7 @@
         "description": "Dynamic, never hardcoded: built from whichever repos are actually tracked in this self-hoster's own reporting DB. 'All repos' assumes a single-owner setup (the same assumption the dashboard's own GitHub-search-syntax scope always required, since GitHub search can't OR multiple repo: qualifiers in one query) — it widens to org:<owner> of the first tracked repo. A self-hoster tracking repos across multiple owners should pick a specific repo instead of 'All repos'.",
         "query": {
           "queryType": "table",
+          "queryText": "SELECT * FROM (SELECT 0 AS ord, 'All repos' AS \"__text\", (SELECT 'org:' || substr(repo, 1, instr(repo, '/') - 1) FROM review_targets LIMIT 1) AS \"__value\" UNION ALL SELECT 1 AS ord, repo AS \"__text\", 'repo:' || repo AS \"__value\" FROM (SELECT DISTINCT repo FROM review_targets ORDER BY repo)) ORDER BY ord, \"__text\"",
           "rawQueryText": "SELECT * FROM (SELECT 0 AS ord, 'All repos' AS \"__text\", (SELECT 'org:' || substr(repo, 1, instr(repo, '/') - 1) FROM review_targets LIMIT 1) AS \"__value\" UNION ALL SELECT 1 AS ord, repo AS \"__text\", 'repo:' || repo AS \"__value\" FROM (SELECT DISTINCT repo FROM review_targets ORDER BY repo)) ORDER BY ord, \"__text\""
         },
         "current": { "text": "All repos", "value": "org:JSONbored" },
