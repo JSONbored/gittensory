@@ -1,4 +1,5 @@
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
+import { applySchemaMigrations } from "./schema-version.js";
 
 // The miner's local portfolio/queue store (#2292): a 100% client-side, prioritized backlog of candidate work
 // items across every repo the miner has been pointed at ("what should I look at next, across everything I'm
@@ -88,12 +89,18 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
   // swept back to 'queued' by age (see portfolio-queue-expiry.js) instead of stranding the item forever — the same
   // recovery the claim-ledger and worktree-allocator stores already provide for their own tables (#4827). Additive
   // migration for stores created before this column: CREATE TABLE IF NOT EXISTS never adds a column to a pre-existing
-  // table, so add it idempotently.
-  const hasLeasedAtColumn = db
-    .prepare("PRAGMA table_info(miner_portfolio_queue)")
-    .all()
-    .some((column) => column.name === "leased_at");
-  if (!hasLeasedAtColumn) db.exec("ALTER TABLE miner_portfolio_queue ADD COLUMN leased_at TEXT");
+  // table, so add it idempotently. Expressed as the store's first schema migration (#4832): the baseline table is
+  // version 1; migration 1→2 adds `leased_at`. The migration stays defensive (checks table_info) so a version-0
+  // file that already ran the pre-convention ad-hoc ALTER is not re-altered into a duplicate-column error.
+  applySchemaMigrations(db, [
+    (migrationDb) => {
+      const hasLeasedAtColumn = migrationDb
+        .prepare("PRAGMA table_info(miner_portfolio_queue)")
+        .all()
+        .some((column) => column.name === "leased_at");
+      if (!hasLeasedAtColumn) migrationDb.exec("ALTER TABLE miner_portfolio_queue ADD COLUMN leased_at TEXT");
+    },
+  ]);
 
   // `rowid` is a stable, unique key assigned once at first insert (re-enqueue updates in place, never re-inserts),
   // so it is a deterministic total-order tie-break: two items sharing a priority AND an `enqueued_at` timestamp
