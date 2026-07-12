@@ -150,7 +150,9 @@ describe("runInit", () => {
 
     expect(exitCode).toBe(0);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(String(fetchSpy.mock.calls[0][0])).toBe("https://api.github.com/user");
+    const firstFetchCall = fetchSpy.mock.calls[0];
+    if (!firstFetchCall) throw new Error("expected one GitHub token verification call");
+    expect(String(firstFetchCall[0])).toBe("https://api.github.com/user");
     const firstInitLog = logSpy.mock.calls[0];
     const secondInitLog = logSpy.mock.calls[1];
     const tokenLog = logSpy.mock.calls[2];
