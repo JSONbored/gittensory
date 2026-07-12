@@ -50,7 +50,7 @@ describe("resolveSkipAutomationBotPullRequests", () => {
   });
 });
 
-describe("isTrustedAutomationBotAuthor (re-entry paths: stored author only)", () => {
+describe("isTrustedAutomationBotAuthor (re-entry paths: stored author precondition)", () => {
   it("true for every known automation login, case-insensitively", () => {
     expect(isTrustedAutomationBotAuthor("github-actions[bot]")).toBe(true);
     expect(isTrustedAutomationBotAuthor("Renovate[Bot]")).toBe(true);

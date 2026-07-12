@@ -3053,17 +3053,11 @@ export async function reReviewStoredPullRequest(
   ]);
   let pr = await getPullRequest(env, repoFullName, prNumber);
   if (!pr || pr.state !== "open") return;
-  // Waste elimination for known automation authors (settings/automation-bot-skip.ts): every re-entry path
-  // that can reach a PR without a fresh webhook (a scheduled sweep, CI-completion, or linked-issue-change
-  // re-review -- all funnel through this function via regatePullRequest) funnels through here, so this one
-  // check closes all of them. Uses the STORED author (isTrustedAutomationBotAuthor), not a live webhook
-  // sender -- see that function's own doc comment for why that's still safe: authorLogin is immutable,
-  // GitHub-attested metadata already verified against the actor at the original `opened` webhook.
-  if (
-    resolveSkipAutomationBotPullRequests(isSkipAutomationBotPullRequestsEnabledGlobally(env), settings.skipAutomationBotAuthors) &&
-    isTrustedAutomationBotAuthor(pr.authorLogin)
-  )
-    return;
+  const automationBotSkipEnabled = resolveSkipAutomationBotPullRequests(
+    isSkipAutomationBotPullRequestsEnabledGlobally(env),
+    settings.skipAutomationBotAuthors,
+  );
+  const storedHeadShaBeforeResync = pr.headSha;
   const autoreviewPaused = await hasAutoreviewPausedMarker(env, repoFullName, prNumber);
   const liveFacts = createLiveGithubFacts();
   // #sweep-resync: RESYNC the stored PR to its LIVE head before reviewing. The self-host relay can drop the
@@ -3110,6 +3104,15 @@ export async function reReviewStoredPullRequest(
     /* v8 ignore next -- the row was just upserted above, so the re-read always returns it; `?? pr` is belt-and-suspenders fail-open. */
     pr = (await getPullRequest(env, repoFullName, prNumber)) ?? pr;
   }
+  // Actorless re-entry paths may only skip a known bot-authored PR after the live-head resync proves the stored
+  // row was already current. If the live fetch fails, or if the live head drifted (the dropped-synchronize case
+  // this resync exists to recover), fail open into the full review/gate instead of trusting the immutable author.
+  if (
+    automationBotSkipEnabled &&
+    isTrustedAutomationBotAuthor(pr.authorLogin) &&
+    live?.head?.sha === storedHeadShaBeforeResync
+  )
+    return;
   // Operator review flow: rebase-if-behind → wait for ALL CI to finish → only THEN review. Defers (returns) when
   // a rebase fired a synchronize, or CI is still running — the synchronize / CI-completion webhook re-triggers
   // once the head is current and CI has settled (the sweep backstops a missed event). REST-budget dedup

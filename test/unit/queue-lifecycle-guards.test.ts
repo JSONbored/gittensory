@@ -4739,10 +4739,26 @@ describe("automation-bot-skip: end-to-end webhook + re-entry wiring (#automation
   // on EVERY webhook, not the "waste" this feature eliminates. The real signal is that NOTHING beyond that
   // touches the actual GitHub REST API (api.github.com) -- no installation-token fetch, no PR/files read, no
   // comment/check-run publish, no AI provider call.
-  async function fetchCallTracker() {
+  async function fetchCallTracker(livePulls: Record<number, { sha: string; state?: string }> = {}) {
     const state = { urls: [] as string[] };
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      state.urls.push(input.toString());
+      const url = input.toString();
+      state.urls.push(url);
+      const match = /\/repos\/owner\/bot-skip-repo\/pulls\/(\d+)$/.exec(url);
+      if (match) {
+        const live = livePulls[Number(match[1])];
+        if (live) {
+          return Response.json({
+            number: Number(match[1]),
+            title: "chore(deps): bump baz",
+            state: live.state ?? "open",
+            user: { login: "renovate[bot]", type: "Bot" },
+            head: { sha: live.sha },
+            labels: [],
+            body: "",
+          });
+        }
+      }
       return new Response("not found", { status: 404 });
     });
     return state;
@@ -4835,20 +4851,34 @@ describe("automation-bot-skip: end-to-end webhook + re-entry wiring (#automation
     expect(skipAudit?.n).toBe(1);
   });
 
-  it("the re-entry sweep path (agent-regate-pr) also respects the skip for a stored bot author, without even the live resync fetch", async () => {
+  it("the re-entry sweep path (agent-regate-pr) only skips a stored bot author after the live resync proves the head is unchanged", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9101, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "bot-skip-repo", full_name: "owner/bot-skip-repo", private: false, owner: { login: "owner" } }, 9101);
     await upsertPullRequestFromGitHub(env, "owner/bot-skip-repo", { number: 405, title: "chore(deps): bump baz", state: "open", user: { login: "renovate[bot]", type: "Bot" }, head: { sha: "sha405" }, labels: [], body: "" });
-    const calls = await fetchCallTracker();
+    const calls = await fetchCallTracker({ 405: { sha: "sha405" } });
 
     await processJob(env, { type: "agent-regate-pr", deliveryId: "bot-skip-sweep", repoFullName: "owner/bot-skip-repo", prNumber: 405, installationId: 9101 });
 
-    // The re-entry check runs BEFORE even the live-head resync GET, so a genuine bot author skips without any
-    // GitHub REST API call at all -- not merely without a comment/check-run publish.
-    expect(calls.urls.some((url) => url.includes("api.github.com"))).toBe(false);
+    // The actorless re-entry path must pay for the live-head resync before trusting a stored bot author; once the
+    // live head matches the stored head, it can still skip the later review/comment/check-run work.
+    expect(calls.urls.some((url) => url.endsWith("/repos/owner/bot-skip-repo/pulls/405"))).toBe(true);
     const stored = await getPullRequest(env, "owner/bot-skip-repo", 405);
     expect(stored?.headSha).toBe("sha405");
+  });
+
+  it("SECURITY: actorless re-entry does not skip a stored bot author when the live head drifted", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9101, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "bot-skip-repo", full_name: "owner/bot-skip-repo", private: false, owner: { login: "owner" } }, 9101);
+    await upsertPullRequestFromGitHub(env, "owner/bot-skip-repo", { number: 406, title: "chore(deps): bump baz", state: "open", user: { login: "renovate[bot]", type: "Bot" }, head: { sha: "bot-recorded-sha" }, labels: [], body: "" });
+    const calls = await fetchCallTracker({ 406: { sha: "human-pushed-sha" } });
+
+    await processJob(env, { type: "agent-regate-pr", deliveryId: "bot-skip-sweep-drift", repoFullName: "owner/bot-skip-repo", prNumber: 406, installationId: 9101 });
+
+    expect(calls.urls.some((url) => url.endsWith("/repos/owner/bot-skip-repo/pulls/406"))).toBe(true);
+    const stored = await getPullRequest(env, "owner/bot-skip-repo", 406);
+    expect(stored?.headSha).toBe("human-pushed-sha");
   });
 });
 

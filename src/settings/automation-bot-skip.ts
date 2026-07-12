@@ -62,12 +62,10 @@ export function isTrustedAutomationBotWebhookActor(
 }
 
 /**
- * Re-entry paths (a scheduled sweep, CI-completion, or linked-issue-change re-review -- all funnel through
- * `reReviewStoredPullRequest`) have no live webhook `sender` to check; they're re-evaluating an ALREADY
- * PERSISTED PR record, not processing a fresh, potentially actor-ambiguous event. The PR's stored author was
- * already verified against `isTrustedAutomationBotWebhookActor` (both `sender` AND author) at the ORIGINAL
- * `opened` webhook that created the row, and `authorLogin` is immutable GitHub-attested metadata (never
- * user-editable) -- re-checking just the stored author here is safe and consistent with that original check.
+ * Re-entry paths have no live webhook `sender`, so stored authorship is only a necessary precondition for the
+ * automation skip. Callers must first perform their own freshness/provenance check (for example, confirming the
+ * live PR head still matches the stored head) before using this result to bypass review. Original PR authorship
+ * alone does not prove that later commits on the branch were still produced by the trusted bot.
  */
 export function isTrustedAutomationBotAuthor(prAuthorLogin: string | null | undefined): boolean {
   return isProtectedAutomationAuthor(prAuthorLogin);
