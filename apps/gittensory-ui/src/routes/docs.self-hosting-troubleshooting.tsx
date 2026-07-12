@@ -6,17 +6,17 @@ import { CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-troubleshooting")({
   head: () => ({
     meta: [
-      { title: "Self-host troubleshooting — Gittensory docs" },
+      { title: "Self-host troubleshooting — LoopOver docs" },
       {
         name: "description",
         content:
-          "Troubleshoot self-hosted Gittensory reviews: webhook delivery, AI unavailable, REES silent, RAG empty, queue stuck, GitHub rate limits, Qdrant, Orb, AI provider circuit breakers, and readiness failures.",
+          "Troubleshoot self-hosted LoopOver reviews: webhook delivery, AI unavailable, REES silent, RAG empty, queue stuck, GitHub rate limits, Qdrant, Orb, AI provider circuit breakers, and readiness failures.",
       },
-      { property: "og:title", content: "Self-host troubleshooting — Gittensory docs" },
+      { property: "og:title", content: "Self-host troubleshooting — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Troubleshoot self-hosted Gittensory reviews: webhook delivery, AI unavailable, REES silent, RAG empty, queue stuck, GitHub rate limits, Qdrant, Orb, AI provider circuit breakers, and readiness failures.",
+          "Troubleshoot self-hosted LoopOver reviews: webhook delivery, AI unavailable, REES silent, RAG empty, queue stuck, GitHub rate limits, Qdrant, Orb, AI provider circuit breakers, and readiness failures.",
       },
       { property: "og:url", content: "/docs/self-hosting-troubleshooting" },
     ],

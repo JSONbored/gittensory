@@ -16,6 +16,51 @@ export function filterLedgerEvents(
   options?: { type?: string | null },
 ): LedgerEntry[];
 
+export const AUDIT_FEED_ENTRY_FIELDS: readonly [
+  "eventType",
+  "repoFullName",
+  "outcome",
+  "actor",
+  "detail",
+  "createdAt",
+];
+
+export function projectLedgerEventToAuditFeedEntry(entry: LedgerEntry): {
+  eventType: string;
+  repoFullName: string | null;
+  outcome: string | null;
+  actor: string | null;
+  detail: string | null;
+  createdAt: string;
+};
+
+export type AuditFeedMcpFilterInput = {
+  repoFullName?: string | null;
+  since?: number | null;
+  type?: string | null;
+};
+
+export function normalizeAuditFeedMcpFilter(input?: AuditFeedMcpFilterInput): {
+  repoFullName: string | null;
+  since: number | null;
+  type: string | null;
+};
+
+export function collectEventLedgerAuditFeed(
+  eventLedger: EventLedger,
+  filter?: { repoFullName?: string | null; since?: number | null; type?: string | null },
+): {
+  repoFullName?: string;
+  events: Array<{
+    eventType: string;
+    repoFullName: string | null;
+    outcome: string | null;
+    actor: string | null;
+    detail: string | null;
+    createdAt: string;
+  }>;
+};
+
 export function renderLedgerTable(events: LedgerEntry[]): string;
 
 export function runLedgerList(

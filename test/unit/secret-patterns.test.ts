@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADVISORY_ONLY_SECRET_KINDS,
   GENERIC_SECRET_ASSIGNMENT_PATTERN,
   HARD_SECRET_KINDS,
   hasGenericSecretAssignment,
   hasLongSequentialRun,
   isPlaceholderSecretValue,
+  looksLikeDescriptivePlaceholderPhrase,
   SECRET_PATTERNS,
+  secretPatternMatches,
 } from "../../src/review/secret-patterns";
 
 // Direct unit coverage of the shared module extracted in #4608. secrets-scan.test.ts and
@@ -13,6 +16,12 @@ import {
 // callers' public scanForSecrets()/scanSubmissionContent() surfaces (kept there, unmodified, as the
 // no-behavior-change regression guard for the extraction itself) — this file tests the primitives directly,
 // at the layer they now actually live at.
+
+// AWS's own officially published documentation placeholder (the exact literal this PR allowlists). Assembled
+// from fragments (never a contiguous match in this file's own source) so the repo's own gate scanner —
+// which doesn't yet know about this PR's own knownSafeValues addition when it scans this diff — doesn't
+// flag its OWN test fixture the same way #4284 was flagged.
+const AWS_EXAMPLE_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 
 describe("secret-patterns — shared secret-detection primitives (#4608)", () => {
   describe("SECRET_PATTERNS / HARD_SECRET_KINDS", () => {
@@ -22,18 +31,62 @@ describe("secret-patterns — shared secret-detection primitives (#4608)", () =>
       expect(new Set(names).size).toBe(names.length);
     });
 
-    it("HARD_SECRET_KINDS excludes the weak seed-phrase/bittensor-key heuristics", () => {
+    it("HARD_SECRET_KINDS excludes the weak seed-phrase/bittensor-key heuristics and generic_secret_assignment", () => {
       expect(HARD_SECRET_KINDS.has("seed_or_mnemonic")).toBe(false);
       expect(HARD_SECRET_KINDS.has("bittensor_key")).toBe(false);
-      expect(HARD_SECRET_KINDS.has("generic_secret_assignment")).toBe(true);
+      // generic_secret_assignment is a keyword-plus-quoted-value SHAPE heuristic, not a concrete credential
+      // format -- gittensory PR #5346 auto-closed a legitimate contributor PR over two inert test-fixture
+      // strings that matched this shape but weren't real secrets. Split out into ADVISORY_ONLY_SECRET_KINDS
+      // below (regression guard for that incident).
+      expect(HARD_SECRET_KINDS.has("generic_secret_assignment")).toBe(false);
     });
 
-    it("every non-generic HARD_SECRET_KINDS entry is a real SECRET_PATTERNS name", () => {
+    it("every HARD_SECRET_KINDS entry is a real SECRET_PATTERNS name", () => {
       const patternNames = new Set(SECRET_PATTERNS.map((pattern) => pattern.name));
       for (const kind of HARD_SECRET_KINDS) {
-        if (kind === "generic_secret_assignment") continue;
         expect(patternNames.has(kind)).toBe(true);
       }
+    });
+  });
+
+  describe("ADVISORY_ONLY_SECRET_KINDS", () => {
+    it("contains exactly generic_secret_assignment, disjoint from HARD_SECRET_KINDS", () => {
+      expect([...ADVISORY_ONLY_SECRET_KINDS]).toEqual(["generic_secret_assignment"]);
+      for (const kind of ADVISORY_ONLY_SECRET_KINDS) {
+        expect(HARD_SECRET_KINDS.has(kind)).toBe(false);
+      }
+    });
+  });
+
+  describe("secretPatternMatches", () => {
+    const awsPattern = SECRET_PATTERNS.find((pattern) => pattern.name === "aws_access_key")!;
+
+    it("is a plain .test() for a pattern with no knownSafeValues (byte-identical to before)", () => {
+      const githubPattern = SECRET_PATTERNS.find((pattern) => pattern.name === "github_token")!;
+      expect(githubPattern.knownSafeValues).toBeUndefined();
+      expect(secretPatternMatches(githubPattern, "token ghp_" + "a".repeat(30))).toBe(true);
+      expect(secretPatternMatches(githubPattern, "just prose")).toBe(false);
+    });
+
+    it("does NOT flag AWS's own officially published documentation example key (#4284 regression)", () => {
+      expect(secretPatternMatches(awsPattern, `const key = "${AWS_EXAMPLE_KEY}";`)).toBe(false);
+    });
+
+    it("still flags a real-shaped AWS access key that is not the known-safe literal", () => {
+      expect(secretPatternMatches(awsPattern, "AKIA" + "ABCDEFGHIJKLMNOP")).toBe(true);
+    });
+
+    it("still flags a genuine leak elsewhere in the same text, even alongside the known-safe example", () => {
+      const text = `const example = "${AWS_EXAMPLE_KEY}"; const real = "AKIA${"ABCDEFGHIJKLMNOP"}";`;
+      expect(secretPatternMatches(awsPattern, text)).toBe(true);
+    });
+
+    it("reuses an already-global-flagged pattern's regex as-is, rather than re-adding the g flag", () => {
+      // No live SECRET_PATTERNS entry carries the `g` flag today (a duplicate `gg` flag throws), but the
+      // branch that reuses an existing `g` flag instead of appending a second one must still be covered.
+      const alreadyGlobal = { name: "synthetic", re: /\bAKIA[0-9A-Z]{16}\b/g, knownSafeValues: new Set([AWS_EXAMPLE_KEY]) };
+      expect(secretPatternMatches(alreadyGlobal, AWS_EXAMPLE_KEY)).toBe(false);
+      expect(secretPatternMatches(alreadyGlobal, "AKIA" + "ABCDEFGHIJKLMNOP")).toBe(true);
     });
   });
 
@@ -112,6 +165,39 @@ describe("secret-patterns — shared secret-detection primitives (#4608)", () =>
     it("does NOT flag a genuinely high-entropy credential-shaped value", () => {
       expect(isPlaceholderSecretValue("aK9xQ2mZw7Ln4Rv8Pt3Bh6")).toBe(false);
     });
+
+    it("flags the two real false-positive fixture values from gittensory PR #5346/#5341 (regression)", () => {
+      // Neither contains a PLACEHOLDER_VALUE_PATTERN keyword (no "fake"/"dummy"/"sample"/etc.), so before
+      // looksLikeDescriptivePlaceholderPhrase these both slipped through as "looks like a secret" and
+      // hard-closed a legitimate contributor PR twice in a row.
+      expect(isPlaceholderSecretValue("present-value-not-a-real-token")).toBe(true);
+      expect(isPlaceholderSecretValue("test-value-should-never-appear-in-doctor-output")).toBe(true);
+    });
+  });
+
+  describe("looksLikeDescriptivePlaceholderPhrase", () => {
+    it("flags the two real false-positive fixture values from gittensory PR #5346/#5341 (regression)", () => {
+      expect(looksLikeDescriptivePlaceholderPhrase("present-value-not-a-real-token")).toBe(true);
+      expect(looksLikeDescriptivePlaceholderPhrase("test-value-should-never-appear-in-doctor-output")).toBe(true);
+    });
+
+    it("does NOT flag a short (<5-segment) phrase even if it contains a function word", () => {
+      expect(looksLikeDescriptivePlaceholderPhrase("is-not-real")).toBe(false);
+    });
+
+    it("does NOT flag a 5+ segment phrase with a non-lowercase-alpha segment (digits/mixed case)", () => {
+      // "abc123" fails the pure-lowercase-letters check even though the rest of the phrase reads as prose --
+      // a real high-entropy token embedded in a longer string must stay flagged.
+      expect(looksLikeDescriptivePlaceholderPhrase("abc123-is-not-a-real-token")).toBe(false);
+    });
+
+    it("does NOT flag a 5+ all-lowercase-word phrase with no function word (a genuine diceware-style passphrase)", () => {
+      expect(looksLikeDescriptivePlaceholderPhrase("correct-horse-battery-staple-secret")).toBe(false);
+    });
+
+    it("flags a 5+ all-lowercase-word phrase containing a function word, using underscores instead of hyphens", () => {
+      expect(looksLikeDescriptivePlaceholderPhrase("this_is_not_a_real_secret")).toBe(true);
+    });
   });
 
   describe("GENERIC_SECRET_ASSIGNMENT_PATTERN", () => {
@@ -137,6 +223,13 @@ describe("secret-patterns — shared secret-detection primitives (#4608)", () =>
 
     it("finds a match anywhere in a longer text, not just at the start", () => {
       expect(hasGenericSecretAssignment('benign prose first.\nsecret = "aK9xQ2mZw7Ln4Rv8Pt3Bh6"')).toBe(true);
+    });
+
+    it("returns false for the two real false-positive assignments from gittensory PR #5346/#5341 (regression)", () => {
+      expect(hasGenericSecretAssignment('GITHUB_TOKEN: "present-value-not-a-real-token"')).toBe(false);
+      expect(
+        hasGenericSecretAssignment('const secretToken = "test-value-should-never-appear-in-doctor-output";'),
+      ).toBe(false);
     });
 
     it("resets the shared regex's lastIndex on every call, so a prior call cannot corrupt the next scan", () => {

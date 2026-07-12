@@ -6,13 +6,13 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/beta-onboarding")({
   head: () => ({
     meta: [
-      { title: "Beta onboarding — Gittensory docs" },
+      { title: "Beta onboarding — LoopOver docs" },
       {
         name: "description",
         content:
           "Role-based beta paths for miners, maintainers, repo owners, and operators — first useful action, not just API reference.",
       },
-      { property: "og:title", content: "Beta onboarding — Gittensory docs" },
+      { property: "og:title", content: "Beta onboarding — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -30,10 +30,10 @@ function BetaOnboarding() {
     <DocsPage
       eyebrow="Get started"
       title="Beta onboarding by role"
-      description="Pick the lane that matches you. Each path ends in a concrete first win — install, configure, or read a report — without treating Gittensory as an official Gittensor product surface."
+      description="Pick the lane that matches you. Each path ends in a concrete first win — install, configure, or read a report — without treating LoopOver as an official Gittensor product surface."
     >
       <Callout>
-        <strong>Product positioning.</strong> Gittensory is a deterministic base-agent and
+        <strong>Product positioning.</strong> LoopOver is a deterministic base-agent and
         control-plane layer for the Gittensor ecosystem. It is{" "}
         <a href="https://github.com/jsonbored/gittensory" target="_blank" rel="noreferrer">
           jsonbored/gittensory
@@ -51,7 +51,7 @@ function BetaOnboarding() {
         Miners and contributors use the local MCP package. Source contents stay on your machine but
         branch metadata (such as branch names, SHAs, changed file paths, commit messages, validation
         details, labels, body text, linked issues, and scenario notes) is sent to authenticated
-        Gittensory MCP/API responses for analysis and packet preparation.
+        LoopOver MCP/API responses for analysis and packet preparation.
       </p>
       <ol>
         <li>

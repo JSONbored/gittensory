@@ -3,22 +3,20 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { DocsPage } from "@/components/site/docs-page";
 import { CodeBlock, Callout } from "@/components/site/primitives";
 
-const GITHUB_APP_INSTALL_URL = "https://github.com/apps/gittensory/installations/new";
-
 export const Route = createFileRoute("/docs/github-app")({
   head: () => ({
     meta: [
-      { title: "GitHub App configuration — Gittensory docs" },
+      { title: "GitHub App configuration — LoopOver docs" },
       {
         name: "description",
         content:
-          "How the Gittensory GitHub App reviews pull requests once installed — self-hosted (recommended) or via the private managed-beta shared app. The Gittensory Orb Review Agent check plus a review comment posted as gittensory[bot]. Choose repos, configure sticky PR panels, advisory checks, and optional review-agent enforcement.",
+          "How the LoopOver GitHub App reviews pull requests once installed. Self-hosting is the only currently available path; a shared, centrally hosted App is planned as a future offering. The Gittensory Orb Review Agent check plus a review comment posted as gittensory[bot]. Choose repos, configure sticky PR panels, advisory checks, and optional review-agent enforcement.",
       },
-      { property: "og:title", content: "GitHub App configuration — Gittensory docs" },
+      { property: "og:title", content: "GitHub App configuration — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "How the Gittensory GitHub App reviews pull requests once installed — self-hosted (recommended) or via the private managed-beta shared app. Choose repos, configure sticky PR panels, advisory checks, and optional review-agent enforcement.",
+          "How the LoopOver GitHub App reviews pull requests once installed. Self-hosting is the only currently available path; a shared, centrally hosted App is planned as a future offering. Choose repos, configure sticky PR panels, advisory checks, and optional review-agent enforcement.",
       },
       { property: "og:url", content: "/docs/github-app" },
     ],
@@ -32,59 +30,34 @@ function GithubApp() {
     <DocsPage
       eyebrow="Workflows"
       title="GitHub App configuration"
-      description="Install a Gittensory GitHub App on a repo so it reviews your pull requests, then choose whether it should stay advisory or enforce repo-configured PR quality rules."
+      description="Install a LoopOver GitHub App on a repo so it reviews your pull requests, then choose whether it should stay advisory or enforce repo-configured PR quality rules."
     >
       <p>
-        Once installed, a <strong>Gittensory GitHub App reviews every pull request</strong> on the
-        repos you select — whether that's your own self-hosted App (recommended; see{" "}
-        <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link>) or, for private
-        managed-beta operators, the shared <code>gittensory</code> App below. Each review produces
-        two surfaces: the <strong>Gittensory Orb Review Agent</strong> check run (and the advisory{" "}
+        Once installed, a <strong>LoopOver GitHub App reviews every pull request</strong> on the
+        repos you select. Self-hosting your own App (see{" "}
+        <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link>) is the only currently
+        available path. Each review produces two surfaces: the{" "}
+        <strong>Gittensory Orb Review Agent</strong> check run (and the advisory{" "}
         <strong>Gittensory Context</strong> check), and a single review comment posted by{" "}
         <code>gittensory[bot]</code> that updates in place as the PR evolves. The review behavior
-        below this page's Install section (PR panel, checks, gate modes, config-as-code) applies
-        identically whichever App you install — but the App's{" "}
-        <em>install steps and required permissions differ</em>, since a self-hosted App needs write
-        access the shared App does not.
+        below this page's Install section (PR panel, checks, gate modes, config-as-code) is the same
+        regardless of which connection mode your self-hosted App uses.
       </p>
 
       <h2>Install</h2>
       <p>
-        <strong>Self-hosting is the recommended, default path.</strong> Run the review stack
+        <strong>Self-hosting is the only currently available path.</strong> Run the review stack
         yourself, then install your own GitHub App on exactly the repos you choose using the
         self-host setup wizard. The direct App's required permissions and events are covered in{" "}
         <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link> — use that page's
-        checklist, not the one below, for a self-hosted install.
+        checklist for a self-hosted install.
       </p>
-      <p>
-        The shared <code>gittensory</code> App is <strong>private / managed-beta only</strong> — it
-        is not open for general public install. If you've been invited into the managed beta, start
-        from{" "}
-        <a href={GITHUB_APP_INSTALL_URL} target="_blank" rel="noreferrer">
-          the GitHub App install flow
-        </a>
-        , then choose only the repositories you want Gittensory to see.
-      </p>
-      <ol>
-        <li>Open the install flow and pick the owning account.</li>
-        <li>
-          Choose selected repositories instead of all repositories unless you are onboarding an org.
-        </li>
-        <li>
-          Approve <code>Metadata: read</code>, <code>Pull requests: read</code>, and{" "}
-          <code>Issues: write</code>. Enable <code>Checks: write</code> when Context or review-agent
-          check runs are enabled.
-        </li>
-        <li>
-          Keep webhook events enabled for <code>issues</code>, <code>issue_comment</code>,{" "}
-          <code>pull_request</code>, and <code>repository</code>.
-        </li>
-      </ol>
-      <Callout variant="note">
-        This checklist is for the shared managed-beta App only. A self-hosted App needs{" "}
-        <code>Pull requests: write</code> (not read) and <code>Checks: write</code> is mandatory,
-        not optional — see <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link> for
-        the direct App's exact permission and event list.
+      <Callout variant="note" title="Shared, centrally hosted App: not currently available">
+        LoopOver previously ran a private managed-beta shared App that repo owners could install
+        directly, without self-hosting. That shared install path is currently paused while
+        self-hosted Orb is the primary way to run LoopOver — a new centrally hosted offering is
+        planned for the future. If you previously used the shared managed-beta App, see{" "}
+        <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link> to move your repos over.
       </Callout>
 
       <h2>First 10 minutes</h2>
@@ -120,14 +93,14 @@ GET /v1/installations/:id/repair`}
 
       <h2>Default posture</h2>
       <p>
-        Gittensory is advisory-first. Public comments, labels, the Context check, and the
-        review-agent check are controlled per repo. Missing issue links, non-Gittensor contributors,
-        busy queues, and weak overlap signals do not block merge by default.
+        LoopOver is advisory-first. Public comments, labels, the Context check, and the review-agent
+        check are controlled per repo. Missing issue links, non-Gittensor contributors, busy queues,
+        and weak overlap signals do not block merge by default.
       </p>
 
       <h2>PR panel</h2>
       <p>
-        The PR panel is the review comment the gittensory app posts on each pull request. It is one
+        The PR panel is the review comment the LoopOver app posts on each pull request. It is one
         sticky comment authored by <code>gittensory[bot]</code> that updates in place — the app
         edits the same comment instead of adding new ones. It shows a public-safe readiness score,
         concrete signal evidence, and short actions for linked issues, related work, review load,
@@ -144,7 +117,7 @@ GET /v1/installations/:id/repair`}
 
       <h2>Checks</h2>
       <p>
-        The gittensory app publishes its review as check runs.{" "}
+        The LoopOver app publishes its review as check runs.{" "}
         <strong>Gittensory Orb Review Agent</strong> is the gate result, controlled by{" "}
         <code>reviewCheckMode</code> (<code>required</code> / <code>visible</code> /{" "}
         <code>disabled</code>). <strong>Gittensory Context</strong> is the separate advisory
@@ -168,7 +141,7 @@ GET /v1/installations/:id/repair`}
 
       <h2>Gate modes</h2>
       <p>
-        The deterministic gate is the heart of the gittensory review. Its master switch is{" "}
+        The deterministic gate is the heart of the LoopOver review. Its master switch is{" "}
         <code>reviewCheckMode</code> (<code>required</code> / <code>visible</code> /{" "}
         <code>disabled</code>); each dimension then refines an already-enabled gate with a tri-state
         mode — <code>off</code> (not evaluated), <code>advisory</code> (surfaced, never blocks), or{" "}
@@ -256,7 +229,7 @@ GET /v1/installations/:id/repair`}
         Every setting can be committed to <code>.gittensory.yml</code> at the repo root instead of,
         or layered over, the dashboard. Precedence is <code>.gittensory.yml</code> &gt; repository
         settings &gt; safe defaults; an unset field falls back to the next layer. It only chooses{" "}
-        <em>what</em> Gittensory does — a configured blocker gates every author identically,
+        <em>what</em> LoopOver does — a configured blocker gates every author identically,
         regardless of config.
       </p>
       <CodeBlock
@@ -287,9 +260,8 @@ review:
         always remain on the footer.
       </p>
       <p>
-        The per-repo settings above choose <em>what</em> Gittensory does on each PR. The next
-        section covers the deployment-wide capability switches that turn whole review features on or
-        off.
+        The per-repo settings above choose <em>what</em> LoopOver does on each PR. The next section
+        covers the deployment-wide capability switches that turn whole review features on or off.
       </p>
 
       <h2>
@@ -387,8 +359,7 @@ GITTENSORY_REVIEW_REPOS="JSONbored/gittensory"`}
       </p>
       <p>
         If the install route changes, check the deployed <code>GITHUB_APP_SLUG</code> before
-        publishing setup copy. Self-hosted deployments use whatever slug you chose during setup; for
-        the shared managed-beta app the expected slug is <code>gittensory</code>.
+        publishing setup copy. Self-hosted deployments use whatever slug you chose during setup.
       </p>
 
       <p>
@@ -400,7 +371,7 @@ GITTENSORY_REVIEW_REPOS="JSONbored/gittensory"`}
       </p>
 
       <Callout variant="safety">
-        Gittensory's GitHub App never requests source push, never stores repository contents, and
+        LoopOver's GitHub App never requests source push, never stores repository contents, and
         never publishes wallet, hotkey, payout, trust, reward, or private scoring language.
       </Callout>
     </DocsPage>

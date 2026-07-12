@@ -9,6 +9,7 @@ import {
   closeDefaultClaimLedger,
   listActiveClaims,
   openClaimLedger,
+  openClaimLedgerReadOnly,
   resolveClaimLedgerDbPath,
 } from "../../packages/gittensory-miner/lib/claim-ledger.js";
 
@@ -210,6 +211,89 @@ describe("gittensory-miner claim ledger (#2314)", () => {
       ),
     ).toThrow();
     writable.close();
+  });
+
+  describe("openClaimLedgerReadOnly (#5157)", () => {
+    it("lists active claims matching the writable ledger's own state, scoped to the given repo", () => {
+      const ledger = tempLedger();
+      ledger.claimIssue("acme/widgets", 42, "in progress");
+      ledger.claimIssue("acme/widgets", 7);
+      ledger.claimIssue("other/repo", 1);
+      ledger.releaseClaim("acme/widgets", 7);
+
+      const readOnly = openClaimLedgerReadOnly(ledger.dbPath);
+      try {
+        expect(readOnly.listActiveClaims("acme/widgets")).toEqual([
+          {
+            id: expect.any(Number),
+            repoFullName: "acme/widgets",
+            issueNumber: 42,
+            claimedAt: expect.any(String),
+            status: "active",
+            note: "in progress",
+          },
+        ]);
+        expect(readOnly.listActiveClaims("other/repo").map((c) => c.issueNumber)).toEqual([1]);
+      } finally {
+        readOnly.close();
+      }
+    });
+
+    it("returns an empty array when no active claim matches the repo", () => {
+      const ledger = tempLedger();
+      ledger.claimIssue("acme/widgets", 42);
+      const readOnly = openClaimLedgerReadOnly(ledger.dbPath);
+      try {
+        expect(readOnly.listActiveClaims("no/such-repo")).toEqual([]);
+      } finally {
+        readOnly.close();
+      }
+    });
+
+    it("rejects a malformed repoFullName the same way the writable ledger does", () => {
+      const ledger = tempLedger();
+      const readOnly = openClaimLedgerReadOnly(ledger.dbPath);
+      try {
+        expect(() => readOnly.listActiveClaims("no-slash")).toThrow("invalid_repo_full_name");
+      } finally {
+        readOnly.close();
+      }
+    });
+
+    it("throws when opening a path that doesn't exist (callers must existsSync-check first)", () => {
+      const root = tempRoot();
+      expect(() => openClaimLedgerReadOnly(join(root, "does-not-exist.sqlite3"))).toThrow();
+    });
+
+    it("regression: the underlying connection genuinely enforces read-only at the driver level (the readOnly vs. readonly key gotcha)", () => {
+      // Pins the exact bug this module's own code comment documents: node:sqlite silently ignores the
+      // lowercase `readonly` option key (opens read-write with no error), and only camelCase `readOnly`
+      // actually enforces it. If claim-ledger.js's implementation ever regresses back to the wrong key,
+      // this test starts failing because the write below would then silently succeed instead of throwing.
+      const ledger = tempLedger();
+      ledger.claimIssue("acme/widgets", 42);
+      const readOnlyConnection = new DatabaseSync(ledger.dbPath, { readOnly: true });
+      try {
+        expect(() => readOnlyConnection.exec("DELETE FROM miner_claims")).toThrow(/readonly/i);
+      } finally {
+        readOnlyConnection.close();
+      }
+    });
+
+    it("never creates the schema on an existing-but-empty SQLite file (no CREATE TABLE side effect)", () => {
+      const root = tempRoot();
+      const dbPath = join(root, "empty.sqlite3");
+      const setup = new DatabaseSync(dbPath);
+      setup.close();
+
+      expect(() => openClaimLedgerReadOnly(dbPath)).toThrow();
+
+      const inspect = new DatabaseSync(dbPath, { readOnly: true });
+      const tables = (inspect.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
+        .map((row) => row.name);
+      inspect.close();
+      expect(tables).toEqual([]);
+    });
   });
 });
 

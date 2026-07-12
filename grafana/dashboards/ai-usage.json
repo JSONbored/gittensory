@@ -15,7 +15,7 @@
         "label": "Provider",
         "type": "query",
         "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
-        "query": { "queryType": "table", "rawQueryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider" },
+        "query": { "queryType": "table", "queryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider", "rawQueryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider" },
         "includeAll": true,
         "allValue": "$__all",
         "multi": false,
@@ -28,7 +28,7 @@
         "label": "Feature",
         "type": "query",
         "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
-        "query": { "queryType": "table", "rawQueryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature" },
+        "query": { "queryType": "table", "queryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature", "rawQueryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature" },
         "includeAll": true,
         "allValue": "$__all",
         "multi": false,
@@ -43,6 +43,7 @@
         "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
         "query": {
           "queryType": "table",
+          "queryText": "SELECT DISTINCT model FROM ai_usage_events WHERE ('$provider' = '$__all' OR provider = '$provider') ORDER BY model",
           "rawQueryText": "SELECT DISTINCT model FROM ai_usage_events WHERE ('$provider' = '$__all' OR provider = '$provider') ORDER BY model"
         },
         "includeAll": true,

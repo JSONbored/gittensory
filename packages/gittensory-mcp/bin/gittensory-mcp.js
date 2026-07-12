@@ -201,7 +201,62 @@ const feasibilityGateShape = {
   duplicateClusterRisk: z.enum(["none", "low", "medium", "high"]),
   issueStatus: z.enum(["ready", "needs_proof", "hold", "do_not_use", "duplicate", "invalid", "missing"]),
   found: z.boolean().optional(),
+  // Optional: when both are supplied AND a local gittensory-miner install's claim ledger is present (#5157), claimStatus is
+  // read from that ledger instead of trusting this caller-supplied value. Omitting either falls back to
+  // today's caller-supplied-string behavior unchanged.
+  repoFullName: z.string().min(1).optional(),
+  issueNumber: z.number().int().positive().optional(),
 };
+
+/**
+ * Read-only lookup of the caller's own claim status from a local gittensory-miner install's claim ledger
+ * (#5157), so `gittensory_feasibility_gate` isn't purely trusting a caller-supplied `claimStatus` string.
+ * Returns `null` (fall back to the caller-supplied value unchanged) only when there is genuinely nothing to
+ * look up: no repo/issue supplied, no local install detected (the ledger DB file doesn't exist -- checked
+ * via `existsSync` BEFORE opening anything), or the sibling `@jsonbored/gittensory-miner` package isn't
+ * resolvable at all (a standalone gittensory-mcp install with no miner alongside it). When the ledger DB
+ * file DOES exist (a real local install IS present) but reading it fails -- corrupt, locked, permission
+ * denied -- this returns `"unknown"` rather than silently falling back to a caller-supplied string that
+ * ground-truth data (which we know exists but can't currently read) might contradict; `"unknown"` is an
+ * existing, honest claimStatus value the calculator already understands, not a guess.
+ *
+ * Uses `openClaimLedgerReadOnly` (not `openClaimLedger`), which opens the DB file in SQLite's own `readonly`
+ * mode -- a DRIVER-ENFORCED guarantee, not just a by-convention one. `openClaimLedger` always runs
+ * `CREATE TABLE IF NOT EXISTS` plus a schema-version stamp on open, which IS a write even against a file
+ * that merely exists but is empty/uninitialized; this tool never calls that, `recordClaim`,
+ * `releaseClaim`, or `expireClaim` -- it never gains any ability to block, cancel, or override a claim or
+ * attempt; real claim-conflict authority stays entirely with #4848's maintainer-only path.
+ */
+async function resolveLedgerClaimStatus(repoFullName, issueNumber) {
+  if (!repoFullName || !issueNumber) return null;
+  let claimLedgerModule;
+  try {
+    claimLedgerModule = await import("@jsonbored/gittensory-miner/lib/claim-ledger.js");
+  } catch {
+    /* v8 ignore next -- gittensory-miner genuinely unresolvable (not installed alongside gittensory-mcp); not
+       reproducible in this monorepo's workspace-hoisted test environment, where the sibling package always
+       resolves */
+    return null;
+  }
+  const { resolveClaimLedgerDbPath, openClaimLedgerReadOnly } = claimLedgerModule;
+  const dbPath = resolveClaimLedgerDbPath();
+  if (!existsSync(dbPath)) return null;
+  try {
+    const ledger = openClaimLedgerReadOnly(dbPath);
+    try {
+      const activeClaims = ledger.listActiveClaims(repoFullName);
+      return activeClaims.some((claim) => claim.issueNumber === issueNumber) ? "claimed" : "unclaimed";
+    } finally {
+      ledger.close();
+    }
+  } catch {
+    // The ledger DB file exists (a real local install IS present) but reading it failed -- corrupt, locked,
+    // a permission error, or not actually a claim-ledger database. Never silently trust a caller-supplied
+    // string that could contradict ground truth we know exists but can't currently read; "unknown" surfaces
+    // that honestly instead of guessing.
+    return "unknown";
+  }
+}
 
 const findOpportunitiesShape = {
   targets: z
@@ -521,7 +576,7 @@ const STDIO_TOOL_DESCRIPTORS = [
   },
   {
     name: "gittensory_feasibility_gate",
-    description: "Pure local go/raise/avoid feasibility verdict from claim status, duplicate-cluster risk, and issue quality/lifecycle status — the same discriminants the analyze-phase feasibility gate branches on. No API round-trip.",
+    description: "Pure local go/raise/avoid feasibility verdict from claim status, duplicate-cluster risk, and issue quality/lifecycle status — the same discriminants the analyze-phase feasibility gate branches on. When repoFullName/issueNumber are supplied and a local gittensory-miner install's claim ledger is present, claimStatus is read from that ledger instead of the caller-supplied value; otherwise falls back to the caller-supplied claimStatus unchanged. Advisory-only — never blocks, cancels, or overrides a claim or attempt; real claim-conflict resolution authority stays with the maintainer-only path. No API round-trip.",
   },
 ];
 
@@ -1194,11 +1249,13 @@ server.registerTool(
     description: stdioToolDescription("gittensory_feasibility_gate"),
     inputSchema: feasibilityGateShape,
   },
-  ({ claimStatus, duplicateClusterRisk, issueStatus, found }) =>
-    toolResult(
+  async ({ claimStatus, duplicateClusterRisk, issueStatus, found, repoFullName, issueNumber }) => {
+    const ledgerClaimStatus = await resolveLedgerClaimStatus(repoFullName, issueNumber);
+    return toolResult(
       "Gittensory feasibility gate.",
-      buildFeasibilityVerdict({ claimStatus, duplicateClusterRisk, issueStatus, found }),
-    ),
+      buildFeasibilityVerdict({ claimStatus: ledgerClaimStatus ?? claimStatus, duplicateClusterRisk, issueStatus, found }),
+    );
+  },
 );
 
 // ── Resources: decision-pack, doctor, compatibility, changelog (#292) ─────────

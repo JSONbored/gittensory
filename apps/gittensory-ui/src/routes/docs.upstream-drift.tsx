@@ -6,17 +6,17 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/upstream-drift")({
   head: () => ({
     meta: [
-      { title: "Upstream drift — Gittensory docs" },
+      { title: "Upstream drift — LoopOver docs" },
       {
         name: "description",
         content:
-          "Gittensory tracks versioned upstream Gittensor source/ruleset snapshots, hashes semantic payloads, and warns when assumptions drift.",
+          "LoopOver tracks versioned upstream Gittensor source/ruleset snapshots, hashes semantic payloads, and warns when assumptions drift.",
       },
-      { property: "og:title", content: "Upstream drift — Gittensory docs" },
+      { property: "og:title", content: "Upstream drift — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Gittensory tracks versioned upstream Gittensor source/ruleset snapshots, hashes semantic payloads, and warns when assumptions drift.",
+          "LoopOver tracks versioned upstream Gittensor source/ruleset snapshots, hashes semantic payloads, and warns when assumptions drift.",
       },
       { property: "og:url", content: "/docs/upstream-drift" },
     ],
@@ -30,11 +30,11 @@ function UpstreamDrift() {
     <DocsPage
       eyebrow="Core concepts"
       title="Upstream drift"
-      description="Gittensor moves. Gittensory tracks every meaningful change to scoring, registry, and issue-discovery so your decisions stay grounded."
+      description="Gittensor moves. LoopOver tracks every meaningful change to scoring, registry, and issue-discovery so your decisions stay grounded."
     >
       <h2>How drift works</h2>
       <p>
-        Gittensory stores versioned snapshots of the Gittensor source and ruleset from{" "}
+        LoopOver stores versioned snapshots of the Gittensor source and ruleset from{" "}
         <a href="https://github.com/entrius/gittensor" target="_blank" rel="noreferrer">
           entrius/gittensor:test
         </a>
@@ -44,7 +44,7 @@ function UpstreamDrift() {
 
       <Callout>
         <strong>Upstream relationship.</strong> <code>entrius/gittensor</code> is the upstream
-        project Gittensory analyzes. Gittensory is{" "}
+        project LoopOver analyzes. LoopOver is{" "}
         <a href="https://github.com/jsonbored/gittensory" target="_blank" rel="noreferrer">
           jsonbored/gittensory
         </a>{" "}

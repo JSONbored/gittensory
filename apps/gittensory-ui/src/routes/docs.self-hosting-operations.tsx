@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-operations")({
   head: () => ({
     meta: [
-      { title: "Self-host operations — Gittensory docs" },
+      { title: "Self-host operations — LoopOver docs" },
       {
         name: "description",
         content:
-          "Operate the self-hosted Gittensory review service: readiness, metrics, logs, dashboards, jobs, queues, routine checks, safe updates/rollback, and clean uninstall/decommissioning.",
+          "Operate the self-hosted LoopOver review service: readiness, metrics, logs, dashboards, jobs, queues, routine checks, safe updates/rollback, and clean uninstall/decommissioning.",
       },
-      { property: "og:title", content: "Self-host operations — Gittensory docs" },
+      { property: "og:title", content: "Self-host operations — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Operate the self-hosted Gittensory review service: readiness, metrics, logs, dashboards, jobs, queues, routine checks, safe updates/rollback, and clean uninstall/decommissioning.",
+          "Operate the self-hosted LoopOver review service: readiness, metrics, logs, dashboards, jobs, queues, routine checks, safe updates/rollback, and clean uninstall/decommissioning.",
       },
       { property: "og:url", content: "/docs/self-hosting-operations" },
     ],
@@ -1143,7 +1143,7 @@ docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q gittensory)"
         <strong>no self-service revocation endpoint today</strong> — the &quot;Minimum broker
         safeguards&quot; checklist on that page lists a revocation path as a prerequisite for a
         public brokered rollout that has not shipped yet. An enrollment record (
-        <code>orb_enrollments</code>) lives in gittensory&apos;s own central database, not your
+        <code>orb_enrollments</code>) lives in LoopOver&apos;s own central database, not your
         container, and nothing in this codebase writes a <code>revoked_at</code> value to it outside
         of tests. Practical steps until that exists:
       </p>

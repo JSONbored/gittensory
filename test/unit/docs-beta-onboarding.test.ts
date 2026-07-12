@@ -24,7 +24,7 @@ describe("docs beta onboarding page", () => {
     expect(source).toMatch(/branch metadata/);
     expect(source).toMatch(/changed file paths/);
     expect(source).toMatch(/commit messages/);
-    expect(normalizedSource).toMatch(/authenticated Gittensory MCP\/API responses/);
+    expect(normalizedSource).toMatch(/authenticated LoopOver MCP\/API responses/);
     expect(source).not.toMatch(/Metadata stays on your machine/);
   });
 

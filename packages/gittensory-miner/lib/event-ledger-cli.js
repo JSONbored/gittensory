@@ -71,6 +71,75 @@ export function filterLedgerEvents(events, options = {}) {
   return events.filter((entry) => entry.type === type);
 }
 
+/** Metadata-only audit-feed columns exposed by the MCP tool (#5158). */
+export const AUDIT_FEED_ENTRY_FIELDS = Object.freeze([
+  "eventType",
+  "repoFullName",
+  "outcome",
+  "actor",
+  "detail",
+  "createdAt",
+]);
+
+function optionalMetadataString(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+/** Project one ledger row to the public, metadata-only audit-feed shape — never returns payload_json. */
+export function projectLedgerEventToAuditFeedEntry(entry) {
+  const payload =
+    entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
+  return {
+    eventType: entry.type,
+    repoFullName: entry.repoFullName,
+    outcome: optionalMetadataString(payload.outcome),
+    actor: optionalMetadataString(payload.actor),
+    detail: optionalMetadataString(payload.detail),
+    createdAt: entry.createdAt,
+  };
+}
+
+/** Normalize optional MCP/JSON filter args into the shape `ledger list` already uses (#5158). */
+export function normalizeAuditFeedMcpFilter(input = {}) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("filter must be an object");
+  }
+  const filter = { repoFullName: null, since: null, type: null };
+  if (input.repoFullName !== undefined && input.repoFullName !== null) {
+    const repo = parseRepoArg(String(input.repoFullName), "repoFullName must be in owner/repo form.");
+    if ("error" in repo) throw new Error(repo.error);
+    filter.repoFullName = repo.repoFullName;
+  }
+  if (input.since !== undefined && input.since !== null) {
+    const parsedSince = parseSinceArg(String(input.since));
+    if ("error" in parsedSince) throw new Error(parsedSince.error);
+    filter.since = parsedSince.since;
+  }
+  if (input.type !== undefined && input.type !== null) {
+    const trimmed = String(input.type).trim();
+    if (!trimmed) throw new Error("type must be a non-empty string.");
+    filter.type = trimmed;
+  }
+  return filter;
+}
+
+/** Read-only audit feed shared by the MCP audit-feed tool (#5158). */
+export function collectEventLedgerAuditFeed(eventLedger, filter = {}) {
+  const events = filterLedgerEvents(
+    eventLedger.readEvents({
+      repoFullName: filter.repoFullName,
+      since: filter.since,
+    }),
+    { type: filter.type },
+  );
+  return {
+    ...(filter.repoFullName ? { repoFullName: filter.repoFullName } : {}),
+    events: events.map(projectLedgerEventToAuditFeedEntry),
+  };
+}
+
 function display(value) {
   if (value === null || value === undefined) return "-";
   return String(value);

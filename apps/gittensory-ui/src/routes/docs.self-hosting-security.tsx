@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-security")({
   head: () => ({
     meta: [
-      { title: "Self-host security — Gittensory docs" },
+      { title: "Self-host security — LoopOver docs" },
       {
         name: "description",
         content:
-          "Secure the self-hosted Gittensory review service: secrets, private rules, network exposure, public output boundaries, REES, AI credentials, and observability.",
+          "Secure the self-hosted LoopOver review service: secrets, private rules, network exposure, public output boundaries, REES, AI credentials, and observability.",
       },
-      { property: "og:title", content: "Self-host security — Gittensory docs" },
+      { property: "og:title", content: "Self-host security — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Secure the self-hosted Gittensory review service: secrets, private rules, network exposure, public output boundaries, REES, AI credentials, and observability.",
+          "Secure the self-hosted LoopOver review service: secrets, private rules, network exposure, public output boundaries, REES, AI credentials, and observability.",
       },
       { property: "og:url", content: "/docs/self-hosting-security" },
     ],

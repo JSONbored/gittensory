@@ -91,9 +91,15 @@ describe("gittensory-miner MCP server (#5153 scaffold)", () => {
     const client = await connectedClient();
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "gittensory_miner_get_audit_feed",
+      "gittensory_miner_get_governor_decisions",
+      "gittensory_miner_get_plan",
       "gittensory_miner_get_portfolio_dashboard",
+      "gittensory_miner_get_run_state",
       "gittensory_miner_list_claims",
+      "gittensory_miner_list_plans",
       "gittensory_miner_ping",
+      "gittensory_miner_status",
     ]);
   });
 
@@ -196,6 +202,184 @@ describe("gittensory_miner_list_claims (#5156)", () => {
     expect(ledger.calls).toEqual(["listClaims"]);
     for (const mutator of ["recordClaim", "claimIssue", "releaseClaim", "expireClaim"]) {
       expect(ledger.calls).not.toContain(mutator);
+    }
+  });
+});
+
+const RUN_STATE_ROWS = [
+  { repoFullName: "acme/api", state: "discovering" },
+  { repoFullName: "acme/web", state: "idle" },
+];
+
+// Fake run-state store that records calls and throws from the mutator, so a test can assert the read tool
+// reaches only getRunState/listRunStates and never triggers a state transition.
+function fakeRunStateStore(rows: Array<{ repoFullName: string; state: string }>) {
+  const calls: string[] = [];
+  return {
+    calls,
+    getRunState(repoFullName: string): string | null {
+      calls.push("getRunState");
+      return rows.find((row) => row.repoFullName === repoFullName)?.state ?? null;
+    },
+    listRunStates(): Array<{ repoFullName: string; state: string }> {
+      calls.push("listRunStates");
+      return rows;
+    },
+    setRunState(): never {
+      calls.push("setRunState");
+      throw new Error("setRunState must not be reachable via the read tool");
+    },
+    close(): void {
+      calls.push("close");
+    },
+  };
+}
+
+describe("gittensory_miner_get_run_state (#5160)", () => {
+  function runStateClient(store: ReturnType<typeof fakeRunStateStore>): Promise<Client> {
+    return connectedClient({ initRunStateStore: () => store });
+  }
+  async function callRunState(client: Client, args: Record<string, unknown> = {}): Promise<unknown> {
+    const result = (await client.callTool({ name: "gittensory_miner_get_run_state", arguments: args })) as Content;
+    return JSON.parse(toolText(result));
+  }
+
+  it("returns a single repo's state when repoFullName is given", async () => {
+    const out = await callRunState(await runStateClient(fakeRunStateStore(RUN_STATE_ROWS)), { repoFullName: "acme/api" });
+    expect(out).toEqual({ repoFullName: "acme/api", state: "discovering" });
+  });
+
+  it("returns a null state for an unknown / no-state-yet repo without throwing", async () => {
+    const out = await callRunState(await runStateClient(fakeRunStateStore(RUN_STATE_ROWS)), { repoFullName: "acme/nope" });
+    expect(out).toEqual({ repoFullName: "acme/nope", state: null });
+  });
+
+  it("lists every repo's state when repoFullName is omitted", async () => {
+    const out = await callRunState(await runStateClient(fakeRunStateStore(RUN_STATE_ROWS)));
+    expect(out).toEqual({ states: RUN_STATE_ROWS });
+  });
+
+  it("only reads — never triggers a state transition (invariant: no setRunState)", async () => {
+    const store = fakeRunStateStore(RUN_STATE_ROWS);
+    await callRunState(await runStateClient(store), { repoFullName: "acme/api" });
+    expect(store.calls).toEqual(["getRunState"]);
+    expect(store.calls).not.toContain("setRunState");
+  });
+});
+
+const PLAN_RECORDS = [
+  { planId: "p1", plan: { steps: [] }, status: "running", updatedAt: "2026-01-01T00:00:00Z" },
+  { planId: "p2", plan: { steps: [] }, status: "completed", updatedAt: "2026-01-02T00:00:00Z" },
+];
+
+// Fake plan store that records calls and throws from the mutator, so a test can assert the plan tools reach
+// only loadPlan/listPlans and never savePlan. listPlans applies the same optional status filter the real one does.
+function fakePlanStore(records: Array<{ planId: string; status: string }>) {
+  const calls: string[] = [];
+  return {
+    calls,
+    loadPlan(planId: string): unknown {
+      calls.push("loadPlan");
+      return records.find((record) => record.planId === planId) ?? null;
+    },
+    listPlans(filter: { status?: string | null } = {}): unknown[] {
+      calls.push("listPlans");
+      return records.filter((record) => filter.status == null || record.status === filter.status);
+    },
+    savePlan(): never {
+      calls.push("savePlan");
+      throw new Error("savePlan must not be reachable via a read tool");
+    },
+    close(): void {
+      calls.push("close");
+    },
+  };
+}
+
+describe("gittensory_miner_list_plans / get_plan (#5161)", () => {
+  function planClient(store: ReturnType<typeof fakePlanStore>): Promise<Client> {
+    return connectedClient({ openPlanStore: () => store });
+  }
+  async function callTool(client: Client, name: string, args: Record<string, unknown>): Promise<unknown> {
+    const result = (await client.callTool({ name, arguments: args })) as Content;
+    return JSON.parse(toolText(result));
+  }
+
+  it("list_plans returns every plan when no status filter is given", async () => {
+    const out = await callTool(await planClient(fakePlanStore(PLAN_RECORDS)), "gittensory_miner_list_plans", {});
+    expect(out).toEqual(PLAN_RECORDS);
+  });
+
+  it("list_plans passes an optional status filter through to listPlans", async () => {
+    const out = await callTool(await planClient(fakePlanStore(PLAN_RECORDS)), "gittensory_miner_list_plans", {
+      status: "running",
+    });
+    expect(out).toEqual([PLAN_RECORDS[0]]);
+  });
+
+  it("get_plan returns the full record for an existing planId", async () => {
+    const out = await callTool(await planClient(fakePlanStore(PLAN_RECORDS)), "gittensory_miner_get_plan", {
+      planId: "p2",
+    });
+    expect(out).toEqual({ found: true, plan: PLAN_RECORDS[1] });
+  });
+
+  it("get_plan returns an explicit not-found result for an unknown planId (no throw)", async () => {
+    const out = await callTool(await planClient(fakePlanStore(PLAN_RECORDS)), "gittensory_miner_get_plan", {
+      planId: "nope",
+    });
+    expect(out).toEqual({ planId: "nope", found: false });
+  });
+
+  it("only reads — neither tool reaches savePlan (invariant)", async () => {
+    const store = fakePlanStore(PLAN_RECORDS);
+    const client = await planClient(store);
+    await callTool(client, "gittensory_miner_list_plans", {});
+    await callTool(client, "gittensory_miner_get_plan", { planId: "p1" });
+    expect(store.calls).toEqual(["listPlans", "loadPlan"]);
+    expect(store.calls).not.toContain("savePlan");
+  });
+});
+
+const FAKE_STATUS = {
+  package: { name: "@jsonbored/gittensory-miner", version: "0.1.0" },
+  engine: { name: "@jsonbored/gittensory-engine", version: "1.0.0" },
+  node: "v22.13.0",
+  stateDir: "/home/miner/.config/gittensory-miner",
+  configFile: null,
+  driver: { provider: "claude-code", modelEnvVar: "MINER_CODING_AGENT_CLAUDE_MODEL", cliPresent: true },
+};
+const FAKE_DOCTOR = [
+  { name: "Node", ok: true, detail: "v22.13.0" },
+  { name: "Docker", ok: false, detail: "not installed" },
+  { name: "Claude CLI", ok: true, detail: "present" },
+];
+
+describe("gittensory_miner_status (#5154)", () => {
+  function statusClient(): Promise<Client> {
+    return connectedClient({ collectStatus: () => FAKE_STATUS, runDoctorChecks: () => FAKE_DOCTOR });
+  }
+  async function callStatus(client: Client): Promise<Record<string, unknown>> {
+    const result = (await client.callTool({ name: "gittensory_miner_status", arguments: {} })) as Content;
+    return JSON.parse(toolText(result)) as Record<string, unknown>;
+  }
+
+  it("returns { status, doctor } from the reused collectStatus / runDoctorChecks readers", async () => {
+    const out = await callStatus(await statusClient());
+    expect(out).toEqual({ status: FAKE_STATUS, doctor: FAKE_DOCTOR });
+  });
+
+  it("surfaces the driver's model ENV-VAR NAME and CLI-present boolean, never a secret value", async () => {
+    const out = await callStatus(await statusClient());
+    expect((out.status as { driver: unknown }).driver).toEqual({
+      provider: "claude-code",
+      modelEnvVar: "MINER_CODING_AGENT_CLAUDE_MODEL",
+      cliPresent: true,
+    });
+    // Only names / booleans / paths — no token/key-shaped secret anywhere in the serialized response.
+    const serialized = JSON.stringify(out);
+    for (const secretish of ["ghp_", "gho_", "github_pat_", "-----BEGIN"]) {
+      expect(serialized).not.toContain(secretish);
     }
   });
 });

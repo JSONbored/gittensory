@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-rag")({
   head: () => ({
     meta: [
-      { title: "Self-host RAG indexing — Gittensory docs" },
+      { title: "Self-host RAG indexing — LoopOver docs" },
       {
         name: "description",
         content:
-          "Configure retrieval-augmented review context for self-hosted Gittensory with embeddings, Qdrant, indexing jobs, and cold-index behavior.",
+          "Configure retrieval-augmented review context for self-hosted LoopOver with embeddings, Qdrant, indexing jobs, and cold-index behavior.",
       },
-      { property: "og:title", content: "Self-host RAG indexing — Gittensory docs" },
+      { property: "og:title", content: "Self-host RAG indexing — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Configure retrieval-augmented review context for self-hosted Gittensory with embeddings, Qdrant, indexing jobs, and cold-index behavior.",
+          "Configure retrieval-augmented review context for self-hosted LoopOver with embeddings, Qdrant, indexing jobs, and cold-index behavior.",
       },
       { property: "og:url", content: "/docs/self-hosting-rag" },
     ],

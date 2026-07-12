@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-releases")({
   head: () => ({
     meta: [
-      { title: "Self-host releases and images — Gittensory docs" },
+      { title: "Self-host releases and images — LoopOver docs" },
       {
         name: "description",
         content:
-          "Use official Gittensory self-host images, tags, source maps, custom builds, release notes, and upgrade checks.",
+          "Use official LoopOver self-host images, tags, source maps, custom builds, release notes, and upgrade checks.",
       },
-      { property: "og:title", content: "Self-host releases and images — Gittensory docs" },
+      { property: "og:title", content: "Self-host releases and images — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Use official Gittensory self-host images, tags, source maps, custom builds, release notes, and upgrade checks.",
+          "Use official LoopOver self-host images, tags, source maps, custom builds, release notes, and upgrade checks.",
       },
       { property: "og:url", content: "/docs/self-hosting-releases" },
     ],

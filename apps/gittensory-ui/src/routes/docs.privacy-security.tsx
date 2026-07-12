@@ -6,17 +6,17 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/privacy-security")({
   head: () => ({
     meta: [
-      { title: "Privacy & security — Gittensory docs" },
+      { title: "Privacy & security — LoopOver docs" },
       {
         name: "description",
         content:
-          "Gittensory's privacy posture: metadata-only MCP, no PATs, no wallet, no source upload, sanitized public output.",
+          "LoopOver's privacy posture: metadata-only MCP, no PATs, no wallet, no source upload, sanitized public output.",
       },
-      { property: "og:title", content: "Privacy & security — Gittensory docs" },
+      { property: "og:title", content: "Privacy & security — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Gittensory's privacy posture: metadata-only MCP, no PATs, no wallet, no source upload, sanitized public output.",
+          "LoopOver's privacy posture: metadata-only MCP, no PATs, no wallet, no source upload, sanitized public output.",
       },
       { property: "og:url", content: "/docs/privacy-security" },
     ],
@@ -46,7 +46,7 @@ function PrivacySecurity() {
 
       <h2>Open algorithm, private tuning</h2>
       <p>
-        Gittensory's review engine is built so the{" "}
+        LoopOver's review engine is built so the{" "}
         <strong>logic is public but the dial settings are not</strong>. The deterministic gate, the
         scoring signals, the slop detector, the grounding/RAG context builders, and the comment
         renderer all live in the open source tree — anyone can read exactly how a verdict is

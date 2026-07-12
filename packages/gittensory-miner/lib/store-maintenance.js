@@ -1,0 +1,134 @@
+// Local-store maintenance for the miner (#4834): SQLite integrity checks + append-only ledger retention.
+//
+// Two independent, side-effect-light helpers used by `doctor` and the ledgers:
+//   1. checkStoreIntegrity — run `PRAGMA integrity_check` on one store file and report health, so `doctor` can
+//      flag a corrupted store instead of only probing a single one with `SELECT 1`.
+//   2. resolveLedgerRetentionPolicy / pruneLedgerByRetention — an opt-in, age- and/or size-based retention
+//      policy for the unbounded append-only ledgers (event, governor, prediction), which otherwise grow forever.
+//      OFF by default: retention only runs when an operator sets the env opt-in.
+// Pure control flow over injected inputs (a DB handle, an env object, a caller-supplied clock) — no network, and
+// no internal clock read in the prune path so it stays deterministic and unit-testable.
+import { existsSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+
+/** Env opt-ins for ledger retention (unset ⇒ retention disabled). */
+export const LEDGER_RETENTION_DAYS_ENV = "GITTENSORY_MINER_LEDGER_RETENTION_DAYS";
+export const LEDGER_RETENTION_MAX_ROWS_ENV = "GITTENSORY_MINER_LEDGER_RETENTION_MAX_ROWS";
+
+/** Fixed retention specs for the three append-only ledgers. These identifiers are INTERNAL constants — never
+ *  caller/user text — and are validated as plain identifiers before interpolation as defence in depth. */
+export const EVENT_LEDGER_RETENTION_SPEC = { table: "miner_event_ledger", timestampColumn: "created_at", orderColumn: "id" };
+export const GOVERNOR_LEDGER_RETENTION_SPEC = { table: "governor_events", timestampColumn: "ts", orderColumn: "id" };
+export const PREDICTION_LEDGER_RETENTION_SPEC = { table: "predictions", timestampColumn: "ts", orderColumn: "id" };
+
+const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A readable message for a caught value, whether or not it is an Error. */
+export function describeError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Classify raw `PRAGMA integrity_check` rows. A healthy database yields a single `"ok"` row; a corrupt one yields
+ * one row per problem. Pure — extracted so both the healthy and problem paths are testable without a genuinely
+ * corrupt file (which SQLite typically refuses to open at all, i.e. the catch path below).
+ * @param {Array<{ integrity_check?: unknown }>} rows
+ * @returns {{ ok: boolean, note: string }}
+ */
+export function classifyIntegrityRows(rows) {
+  const problems = rows.map((row) => String(row.integrity_check)).filter((value) => value !== "ok");
+  return problems.length === 0 ? { ok: true, note: "ok" } : { ok: false, note: problems.join("; ") };
+}
+
+/**
+ * Run `PRAGMA integrity_check` on a single store file. A store that does not exist yet is healthy by absence
+ * (nothing to corrupt). Never throws: a store that cannot be opened or read is reported as not-ok, so one bad
+ * store cannot abort the whole doctor sweep.
+ * @param {string} name - the check label (e.g. "event-ledger").
+ * @param {string} dbPath - the store file path.
+ * @returns {{ name: string, ok: boolean, detail: string }}
+ */
+export function checkStoreIntegrity(name, dbPath) {
+  if (!existsSync(dbPath)) {
+    return { name, ok: true, detail: `${dbPath}: not created yet` };
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readonly: true });
+    const { ok, note } = classifyIntegrityRows(db.prepare("PRAGMA integrity_check").all());
+    return { name, ok, detail: `${dbPath}: ${note}` };
+  } catch (error) {
+    return { name, ok: false, detail: `${dbPath}: ${describeError(error)}` };
+  } finally {
+    db?.close();
+  }
+}
+
+/** Coerce an env value to a positive integer, or null (unset/blank/zero/negative/non-finite ⇒ null ⇒ disabled).
+ *  Floors BEFORE the positivity test, so a fractional value below 1 (e.g. "0.5") floors to 0 and disables the
+ *  bound rather than becoming a dangerous 0 that would prune the whole ledger. */
+function positiveIntOrNull(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+  const numeric = Math.floor(Number(raw));
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+/**
+ * Resolve the opt-in ledger retention policy from an env object. OFF by default: returns null unless at least
+ * one bound is set to a positive value. A zero/negative/non-numeric value is treated as unset. When set, returns
+ * `{ maxAgeMs? }` (from a day count) and/or `{ maxRows? }`.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ maxAgeMs?: number, maxRows?: number } | null}
+ */
+export function resolveLedgerRetentionPolicy(env = process.env) {
+  const maxAgeDays = positiveIntOrNull(env[LEDGER_RETENTION_DAYS_ENV]);
+  const maxRows = positiveIntOrNull(env[LEDGER_RETENTION_MAX_ROWS_ENV]);
+  if (maxAgeDays === null && maxRows === null) return null;
+  const policy = {};
+  if (maxAgeDays !== null) policy.maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  if (maxRows !== null) policy.maxRows = maxRows;
+  return policy;
+}
+
+/**
+ * Prune one append-only ledger per a resolved retention policy: delete rows older than the age bound AND rows
+ * beyond the row-count bound (keeping the newest `maxRows` by `orderColumn`), atomically. A null policy is a
+ * no-op. `nowMs` is caller-supplied (no internal clock). Timestamp columns are UTC ISO-8601 strings, which sort
+ * lexicographically in chronological order, so a string comparison against the ISO cutoff selects older rows.
+ * @param {import("node:sqlite").DatabaseSync} db
+ * @param {{ table: string, timestampColumn: string, orderColumn: string }} spec
+ * @param {{ maxAgeMs?: number, maxRows?: number } | null} policy
+ * @param {number} nowMs
+ * @returns {number} rows deleted
+ */
+export function pruneLedgerByRetention(db, spec, policy, nowMs) {
+  if (!policy) return 0;
+  for (const identifier of [spec.table, spec.timestampColumn, spec.orderColumn]) {
+    if (!SQL_IDENTIFIER.test(identifier)) throw new Error(`unsafe SQL identifier: ${identifier}`);
+  }
+  let deleted = 0;
+  db.exec("BEGIN");
+  try {
+    // Both bounds are guarded to be strictly positive as defence in depth: a 0 age would prune everything older
+    // than `now`, and a 0 row-cap makes `LIMIT 0` match no rows so `NOT IN (empty)` would delete the whole ledger.
+    if (policy.maxAgeMs !== undefined && policy.maxAgeMs > 0) {
+      const cutoff = new Date(nowMs - policy.maxAgeMs).toISOString();
+      const info = db.prepare(`DELETE FROM ${spec.table} WHERE ${spec.timestampColumn} < ?`).run(cutoff);
+      deleted += Number(info.changes);
+    }
+    if (policy.maxRows !== undefined && policy.maxRows >= 1) {
+      const info = db
+        .prepare(
+          `DELETE FROM ${spec.table} WHERE ${spec.orderColumn} NOT IN ` +
+            `(SELECT ${spec.orderColumn} FROM ${spec.table} ORDER BY ${spec.orderColumn} DESC LIMIT ?)`,
+        )
+        .run(policy.maxRows);
+      deleted += Number(info.changes);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return deleted;
+}

@@ -92,8 +92,8 @@ function driverReturning(result: CodingAgentDriverResult): CodingAgentDriver {
   return { async run() { return result; } };
 }
 
-function okDriverResult(changedFiles: string[] = ["src/upload.ts"], turnsUsed = 5): CodingAgentDriverResult {
-  return { ok: true, changedFiles, summary: "added retry logic", turnsUsed };
+function okDriverResult(changedFiles: string[] = ["src/upload.ts"], turnsUsed = 5, costUsd = 0.42): CodingAgentDriverResult {
+  return { ok: true, changedFiles, summary: "added retry logic", turnsUsed, costUsd };
 }
 
 // ── Governor "everything allows" fixture, mirroring test/unit/miner-governor-chokepoint.test.ts's own ────────
@@ -160,6 +160,8 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
     expect(result.spec.command).toContain("'miner/attempt-1'");
     expect(result.execResult).toEqual({ ranAt: 10_000 });
     expect(result.loopResult.outcome).toBe("handoff");
+    // Real per-iteration driver costUsd summed into the loop result (#5135's loop needs this for budgetSpent).
+    expect(result.loopResult.totalCostUsd).toBe(0.42);
   });
 
   it("defaults the open_pr body to an empty string when the loop input never set one", async () => {
@@ -178,6 +180,20 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
 
     expect(result.outcome).toBe("abandon");
     expect(claimLedgerListClaims).not.toHaveBeenCalled();
+  });
+
+  it("abandon mid-loop: a real iteration ran (and was billed) before the ceiling forced abandon", async () => {
+    // maxIterations: 1 with a driver that never produces a passing self-review runs ONE real iteration, then
+    // decideNextActionWithReason's own iterationNumber>=maxIterations check abandons -- a genuinely different
+    // code path from the maxIterations:0 case above (that one never invokes the driver at all).
+    const failingDriverResult: CodingAgentDriverResult = { ok: false, changedFiles: [], summary: "driver failed", turnsUsed: 2, costUsd: 0.11, error: "driver_error" };
+    const deps = baseDeps({ driver: driverReturning(failingDriverResult) });
+    const result = await runMinerAttempt(baseAttemptInput({ loopInput: passingLoopInput({ maxIterations: 1 }) }), deps);
+
+    expect(result.outcome).toBe("abandon");
+    // The failed iteration's real turnsUsed/costUsd still counted -- an abandoned attempt was still billed.
+    expect(result.loopResult.totalTurnsUsed).toBe(2);
+    expect(result.loopResult.totalCostUsd).toBe(0.11);
   });
 
   it("stale: a superseded claim aborts before the submission-gate or governor ever run", async () => {

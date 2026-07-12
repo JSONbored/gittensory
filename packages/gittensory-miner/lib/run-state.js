@@ -1,4 +1,5 @@
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
+import { applySchemaMigrations } from "./schema-version.js";
 
 export const RUN_STATES = Object.freeze(["idle", "discovering", "planning", "preparing"]);
 
@@ -41,6 +42,8 @@ export function initRunStateStore(dbPath = resolveRunStateDbPath()) {
       updated_at TEXT NOT NULL
     )
   `);
+  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
+  applySchemaMigrations(db, []);
 
   const getStatement = db.prepare(
     "SELECT state FROM miner_run_state WHERE repo_full_name = ?",

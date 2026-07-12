@@ -91,6 +91,8 @@ See [`docs/discovery-plane-operator-guide.md`](docs/discovery-plane-operator-gui
 
 See [`DEPLOYMENT.md`](DEPLOYMENT.md) for laptop vs fleet deployment.
 
+See [`docs/operations-runbook.md`](docs/operations-runbook.md) for SQLite concurrency guarantees, corruption recovery, multi-process collision response, and post-upgrade ledger migration ([#4875](https://github.com/JSONbored/gittensory/issues/4875)).
+
 ### Laptop-mode quickstart
 
 Zero-infra local install — no Docker, Redis, or Postgres required:
@@ -139,8 +141,38 @@ It exposes these read-only tools:
 - `gittensory_miner_ping` (#5153) — a health check returning a static `{ "status": "ok", "tool": "gittensory_miner_ping" }` object. Reads no AMS state, takes no arguments.
 - `gittensory_miner_get_portfolio_dashboard` (#5155) — the per-repo portfolio-queue backlog dashboard: status counts (queued / in_progress / done), totals, and the oldest-queued age. Wraps `collectPortfolioDashboard()` (no new logic) — the same data `gittensory-miner queue dashboard --json` prints locally. Read-only, takes no arguments.
 - `gittensory_miner_list_claims` (#5156) — lists the local claim ledger (repo, issue number, status, claimed-at, note) via `listClaims()`. Optional `repoFullName` / `status` filters pass through to the query. Read-only — exposes no claim/release mutation.
+- `gittensory_miner_get_audit_feed` (#5158) — read-only, metadata-only event-ledger audit feed (`eventType`, `repoFullName`, `outcome`, `actor`, `detail`, `createdAt`). Wraps `collectEventLedgerAuditFeed()` with the same filters as `gittensory-miner ledger list` (`--repo`, `--since`, `--type`). Never returns `payload_json` or other raw ledger columns.
 
-Further AMS-state-reading tools (status/doctor diagnostics, run-state, event/governor ledgers) land as follow-up PRs on top of this server.
+- `gittensory_miner_get_run_state` (#5160) — read-only per-repo run-state (`idle` / `discovering` / `planning` / `preparing`) via `getRunState` / `listRunStates`. Pass `repoFullName` for one repo (a null state means none recorded yet), or omit it to list all. The read-only analog of ORB's `gittensory_get_automation_state`; adds no state-set mutation.
+
+- `gittensory_miner_list_plans` / `gittensory_miner_get_plan` (#5161) — read-only access to the persisted plan store (`planId`, plan DAG, status, `updatedAt`) via `listPlans` / `loadPlan`; `list_plans` takes an optional `status` filter, `get_plan` takes a `planId` and returns an explicit `{ planId, found: false }` for an unknown id. These read the store-backed AMS plan store — distinct from ORB's stateless `gittensory_plan_status` tool.
+
+- `gittensory_miner_get_governor_decisions` (#5159) — read-only projection of the governor decision log (`id`, `ts`, `eventType`, `repoFullName`, `actionClass`, `decision`, `reason`), optionally filtered by `repoFullName`. The projection **excludes the sensitive `payload_json` column by construction** — `governor-ledger.js` reads it with an explicit named-column SELECT, never `SELECT *`.
+
+- `gittensory_miner_status` (#5154) — read-only status + doctor diagnostics, returning `{ status, doctor }`: `status` = package/engine versions (and skew), node version, state-dir + config-file paths, and the resolved coding-agent driver (provider name, the model **env-var NAME** never its value, CLI-present boolean); `doctor` = the checks `gittensory-miner doctor` runs (Docker/CLI presence, config validity, …) as `{ name, ok, detail }`. Reuses `collectStatus` / `runDoctorChecks` so it can't drift from the CLI, and returns only names / booleans / paths — never any env-var value, token, or credential.
+
+This completes the read-only AMS MCP tool surface (status, portfolio, claims, event-ledger, governor-ledger, run-state, plan-store).
+
+### Client config
+
+`gittensory-mcp` (ORB's hosted contributor-workflow tools) and `gittensory-miner-mcp` (AMS's own local state-visibility tools above) can run as two separate stdio servers in the same MCP client session — useful for a dual-role operator running both ORB and AMS on the same box. Generate ORB's half with `gittensory-mcp init-client --print claude` (see the [`@jsonbored/gittensory-mcp` README](../gittensory-mcp/README.md#client-config)); `gittensory-miner-mcp` takes no flags, so its entry is just the bin name. Combined, a Claude Desktop / Claude Code style config looks like:
+
+```json
+{
+  "mcpServers": {
+    "gittensory": {
+      "command": "gittensory-mcp",
+      "args": ["--stdio"]
+    },
+    "gittensory-miner": {
+      "command": "gittensory-miner-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+`gittensory` exposes ORB's hosted contributor-workflow tools (issue ranking, PR packet prep, decision packs). `gittensory-miner` exposes AMS's own local state-visibility tools listed above (portfolio dashboard, claims, audit feed, run state, plans) — a fully separate, 100% local tool surface with no shared code or network calls between the two. Both follow the same `gittensory_*` tool-naming convention (`gittensory_...` vs. `gittensory_miner_...`), but back onto different stores: ORB's tools read the hosted gittensory backend, AMS's tools read this machine's own local SQLite files (see [Local storage](#local-storage)) — a handful of AMS tools even name the ORB tool they mirror (e.g. `gittensory_miner_get_run_state` is the read-only analog of `gittensory_get_automation_state`) so the relationship is explicit at the point of use, not just here.
 
 ## Version check
 

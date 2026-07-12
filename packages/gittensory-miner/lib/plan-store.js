@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { applySchemaMigrations } from "./schema-version.js";
 
 // Local SQLite persistence for the stateless MCP plan DAG (#2318). `gittensory_build_plan`/`plan_status`/
 // `record_step_result` are stateless — the caller holds the plan and passes it back each call — so a miner running
@@ -164,6 +165,8 @@ export function openPlanStore(dbPath = resolvePlanStoreDbPath()) {
       updated_at TEXT NOT NULL
     )
   `);
+  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
+  applySchemaMigrations(db, []);
 
   const saveStatement = db.prepare(`
     INSERT INTO miner_plans (plan_id, plan_json, status, updated_at)

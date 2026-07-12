@@ -6,13 +6,13 @@ import { Callout, CodeBlock } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/scoreability")({
   head: () => ({
     meta: [
-      { title: "Scoreability — Gittensory docs" },
+      { title: "Scoreability — LoopOver docs" },
       {
         name: "description",
         content:
           "Scoreability scenarios explained: current gated, underlying potential, clean-gate, after-pending-merges, linked-issue-fixed, best-reasonable. Estimates only.",
       },
-      { property: "og:title", content: "Scoreability — Gittensory docs" },
+      { property: "og:title", content: "Scoreability — LoopOver docs" },
       {
         property: "og:description",
         content:
@@ -30,7 +30,7 @@ function Scoreability() {
     <DocsPage
       eyebrow="Core concepts"
       title="Scoreability"
-      description="Gittensory projects how scoreable your branch is under several scenarios. These are estimates, never guarantees."
+      description="LoopOver projects how scoreable your branch is under several scenarios. These are estimates, never guarantees."
     >
       <h2>The seven scenarios</h2>
       <p>

@@ -1,9 +1,11 @@
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildEngineVersionSkewCheck,
+  checkConfigContent,
   collectStatus,
   compareInstalledEngineVersion,
   readExpectedEnginePackageVersion,
@@ -81,7 +83,8 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state") };
     initLaptopState(env);
-    const checks = runDoctorChecks(env);
+    const cwd = tempRoot(); // a config-less working dir ⇒ config-content check is a clean pass
+    const checks = runDoctorChecks(env, cwd);
     expect(checks.every((check) => check.ok)).toBe(true);
     expect(checks.map((check) => check.name)).toEqual([
       "node-version",
@@ -92,9 +95,71 @@ describe("gittensory-miner status/doctor (#2288)", () => {
       "docker-present",
       "claude-cli-present",
       "codex-cli-present",
+      "config-content",
+      "store-integrity:event-ledger",
+      "store-integrity:governor-ledger",
+      "store-integrity:prediction-ledger",
+      "store-integrity:portfolio-queue",
+      "store-integrity:claim-ledger",
+      "store-integrity:run-state",
+      "store-integrity:plan-store",
     ]);
-    expect(runDoctor([], env)).toBe(0);
+    expect(runDoctor([], env, cwd)).toBe(0);
     expect(log).toHaveBeenCalled();
+  });
+
+  it("doctor flags a corrupted store (#4834)", () => {
+    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state") };
+    const eventLedgerPath = resolveEventLedgerDbPath(env);
+    mkdirSync(dirname(eventLedgerPath), { recursive: true });
+    writeFileSync(eventLedgerPath, "this is not a sqlite database");
+    const checks = runDoctorChecks(env);
+    expect(checks.find((check) => check.name === "store-integrity:event-ledger")?.ok).toBe(false);
+    expect(runDoctor([], env)).toBe(1); // a failed check makes doctor exit non-zero
+  });
+
+  describe("checkConfigContent (#4873)", () => {
+    it("is a clean pass when no config file is present (defaults apply)", () => {
+      const result = checkConfigContent(tempRoot());
+      expect(result).toMatchObject({ name: "config-content", ok: true });
+      expect(result.detail).toContain("no .gittensory-miner config");
+    });
+
+    it("passes a well-formed config", () => {
+      const cwd = tempRoot();
+      writeFileSync(join(cwd, ".gittensory-miner.yml"), "wantedPaths:\n  - src\n");
+      const result = checkConfigContent(cwd);
+      expect(result.ok).toBe(true);
+      expect(result.detail).toContain("valid");
+    });
+
+    it("flags a malformed config with the parser's specific warnings", () => {
+      const cwd = tempRoot();
+      // wantedPaths must be a list; a scalar triggers a parser warning rather than a silent default.
+      writeFileSync(join(cwd, ".gittensory-miner.yml"), "wantedPaths: not-a-list\n");
+      const result = checkConfigContent(cwd);
+      expect(result.ok).toBe(false);
+      expect(result.detail).toMatch(/wantedPaths/);
+    });
+
+    it("reports a read failure (config discovered but unreadable)", () => {
+      const cwd = tempRoot();
+      writeFileSync(join(cwd, ".gittensory-miner.yml"), "wantedPaths:\n  - src\n");
+      const throwingRead = () => {
+        throw new Error("EACCES: permission denied");
+      };
+      const result = checkConfigContent(cwd, throwingRead);
+      expect(result.ok).toBe(false);
+      expect(result.detail).toContain("permission denied");
+    });
+  });
+
+  it("doctor flags a malformed config file (#4873)", () => {
+    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state") };
+    const cwd = tempRoot();
+    writeFileSync(join(cwd, ".gittensory-miner.yml"), "wantedPaths: not-a-list\n");
+    expect(runDoctorChecks(env, cwd).find((check) => check.name === "config-content")?.ok).toBe(false);
+    expect(runDoctor([], env, cwd)).toBe(1);
   });
 
   it("engine version skew helpers compare installed vs expected semver", () => {

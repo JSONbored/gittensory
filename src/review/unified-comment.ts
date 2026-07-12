@@ -477,6 +477,18 @@ function taskList(items: string[]): string {
     .join("\n");
 }
 
+/** A single copy-paste-ready plain-text prompt combining every blocker into one instruction an AI coding
+ *  agent can act on directly — mirrors CodeRabbit's combined "Prompt for AI agents" feature (per their own
+ *  docs: gathers every fix prompt from a review into ONE structured instruction instead of one per finding,
+ *  specifically to cut the repeated copy-paste this produced before). A GitHub-rendered fenced code block
+ *  gets its own copy icon for free — no custom JS needed, just plain text inside the fence. The sole caller
+ *  only invokes this inside its own `blockersAll.length` guard, so an empty list never reaches here. */
+function buildAiContextBlock(blockers: string[], open: boolean): string {
+  const items = blockers.map((line, i) => `${i + 1}. ${line}`).join("\n\n");
+  const body = "```\nFix the following blocker(s) from this PR review:\n\n" + items + "\n```";
+  return details("📋 Copy for AI agents", body, "paste into your coding agent", open);
+}
+
 function actionReasonBullets(reason: string): string {
   const reasons = reason
     .split(/[;\n]+/)
@@ -661,6 +673,10 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
       ? appendMoreFooter(bullets(blockersTrunc.shown), blockersTrunc.hiddenCount)
       : `_+${blockersTrunc.hiddenCount} more_`;
     blocks.push(`**${heading}**\n${blockersBody}`);
+    // The FULL (pre-display-truncation) blocker set, not blockersTrunc.shown -- an AI agent benefits from
+    // every blocker, not just the human-scannable capped subset shown above. Never gated by verbosity: this
+    // is an extension of the blockers themselves (never gated), not decorative detail like Nits.
+    blocks.push(buildAiContextBlock(blockersAll, collapsiblesOpen));
   }
 
   // Category breakdown (#2150): a compact, deterministic one-liner of the finding mix (e.g. "2 correctness ·

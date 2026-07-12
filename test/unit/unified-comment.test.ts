@@ -241,7 +241,9 @@ describe("renderUnifiedReviewComment", () => {
       { ...base, decision: "close", blockers: ["Same issue", "same issue", "Same issue"] },
       {},
     );
-    expect(md.match(/Same issue/gi)?.length).toBe(1);
+    // Deduped down to ONE unique blocker, which then legitimately renders in TWO places: the "Why this is
+    // blocked" bullet list, and once more inside the "Copy for AI agents" code block.
+    expect(md.match(/Same issue/gi)?.length).toBe(2);
   });
 
   it("omits optional chrome when the host provides none", () => {
@@ -481,7 +483,8 @@ describe("renderUnifiedReviewComment", () => {
 
   it("skips empty blocker lines and caps long nit lists at 12", () => {
     const withEmpty = renderUnifiedReviewComment({ ...base, decision: "close", blockers: ["", "   ", "Real blocker"] }, {});
-    expect(withEmpty.match(/Real blocker/g)?.length).toBe(1);
+    // The one real blocker renders in TWO places: "Why this is blocked" and the "Copy for AI agents" block.
+    expect(withEmpty.match(/Real blocker/g)?.length).toBe(2);
     const capped = renderUnifiedReviewComment({ ...base, decision: "merge", nits: Array.from({ length: 13 }, (_, i) => `Distinct nit ${i + 1}`) }, {});
     expect(capped).toContain("Distinct nit 12");
     expect(capped).not.toContain("Distinct nit 13");
@@ -532,6 +535,59 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("<details><summary><b>Nits</b> — 1 non-blocking</summary>");
     expect(md).not.toContain("Safe summary </details>");
     expect(md).not.toContain("Body <!-- comment -->");
+  });
+});
+
+describe("'Copy for AI agents' block", () => {
+  it("omits the section entirely when there are no blockers", () => {
+    const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, {});
+    expect(md).not.toContain("Copy for AI agents");
+  });
+
+  it("renders every blocker as a numbered item inside a fenced code block", () => {
+    const md = renderUnifiedReviewComment({ ...base, decision: "close", blockers: ["First issue.", "Second issue."] }, {});
+    expect(md).toContain("<details><summary><b>📋 Copy for AI agents</b> — paste into your coding agent</summary>");
+    // The whole comment is wrapped in a `> ` blockquote alert, so each line below carries that prefix.
+    expect(md).toContain("> ```\n> Fix the following blocker(s) from this PR review:");
+    expect(md).toContain("> 1. First issue.");
+    expect(md).toContain("> 2. Second issue.");
+  });
+
+  it("uses the FULL blocker set, not the display-truncated one, when maxFindingsCaps.blockers is set", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "close", blockers: ["Alpha", "Beta", "Gamma"], maxFindingsCaps: { blockers: 1, nits: null } },
+      {},
+    );
+    // Human-facing bullets are capped at 1 (plus a "+N more" footer)...
+    expect(md).toMatch(/Alpha[\s\S]*_\+2 more_/);
+    // ...but the AI-context block still gets every blocker, since an agent benefits from full context.
+    const aiSection = md.split("📋 Copy for AI agents")[1]!;
+    expect(aiSection).toContain("Alpha");
+    expect(aiSection).toContain("Beta");
+    expect(aiSection).toContain("Gamma");
+  });
+
+  it("is NOT dropped by comment_verbosity: quiet (it extends the never-gated blockers, not decorative detail)", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "close", blockers: ["a real blocker"] },
+      { commentVerbosity: "quiet" },
+    );
+    expect(md).toContain("Copy for AI agents");
+  });
+
+  it("renders pre-expanded (<details open>) under comment_verbosity: detailed, matching every other collapsible", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "close", blockers: ["a real blocker"] },
+      { commentVerbosity: "detailed" },
+    );
+    expect(md).toContain("<details open><summary><b>📋 Copy for AI agents</b>");
+  });
+
+  it("escapes angle brackets inside the fenced block, same as every other public-facing field", () => {
+    const md = renderUnifiedReviewComment({ ...base, decision: "close", blockers: ["Uses <script>alert(1)</script>."] }, {});
+    const aiSection = md.split("📋 Copy for AI agents")[1]!;
+    expect(aiSection).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(aiSection).not.toContain("<script>");
   });
 });
 

@@ -25,9 +25,11 @@ export function collectStatus(env?: Record<string, string | undefined>, cwd?: st
 
 export function runStatus(args?: string[], env?: Record<string, string | undefined>, cwd?: string): number;
 
-export function runDoctorChecks(env?: Record<string, string | undefined>): DoctorCheck[];
+export function checkConfigContent(cwd: string, readImpl?: (path: string, encoding: "utf8") => string): DoctorCheck;
 
-export function runDoctor(args?: string[], env?: Record<string, string | undefined>): number;
+export function runDoctorChecks(env?: Record<string, string | undefined>, cwd?: string): DoctorCheck[];
+
+export function runDoctor(args?: string[], env?: Record<string, string | undefined>, cwd?: string): number;
 
 export function readInstalledEnginePackageVersionFromPaths(
   resolvedEntry: string,
