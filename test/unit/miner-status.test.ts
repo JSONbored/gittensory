@@ -1,6 +1,7 @@
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildEngineVersionSkewCheck,
@@ -92,9 +93,26 @@ describe("gittensory-miner status/doctor (#2288)", () => {
       "docker-present",
       "claude-cli-present",
       "codex-cli-present",
+      "store-integrity:event-ledger",
+      "store-integrity:governor-ledger",
+      "store-integrity:prediction-ledger",
+      "store-integrity:portfolio-queue",
+      "store-integrity:claim-ledger",
+      "store-integrity:run-state",
+      "store-integrity:plan-store",
     ]);
     expect(runDoctor([], env)).toBe(0);
     expect(log).toHaveBeenCalled();
+  });
+
+  it("doctor flags a corrupted store (#4834)", () => {
+    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state") };
+    const eventLedgerPath = resolveEventLedgerDbPath(env);
+    mkdirSync(dirname(eventLedgerPath), { recursive: true });
+    writeFileSync(eventLedgerPath, "this is not a sqlite database");
+    const checks = runDoctorChecks(env);
+    expect(checks.find((check) => check.name === "store-integrity:event-ledger")?.ok).toBe(false);
+    expect(runDoctor([], env)).toBe(1); // a failed check makes doctor exit non-zero
   });
 
   it("engine version skew helpers compare installed vs expected semver", () => {

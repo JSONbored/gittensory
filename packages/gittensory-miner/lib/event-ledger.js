@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 import { applySchemaMigrations } from "./schema-version.js";
+import { pruneLedgerByRetention, resolveLedgerRetentionPolicy, EVENT_LEDGER_RETENTION_SPEC } from "./store-maintenance.js";
 
 // The miner's local, append-only event ledger (#2290): an immutable audit trail of every significant miner-loop
 // event (discovered_issue, plan_built, plan_step_completed, pr_prepared, … — a small fixed vocabulary for this
@@ -106,6 +107,8 @@ export function initEventLedger(dbPath = resolveEventLedgerDbPath()) {
   `);
   // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
   applySchemaMigrations(db, []);
+  // Opt-in retention (#4834): prune aged/excess rows when an operator has enabled it; a no-op by default.
+  pruneLedgerByRetention(db, EVENT_LEDGER_RETENTION_SPEC, resolveLedgerRetentionPolicy(), Date.now());
 
   const nextSeqStatement = db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS nextSeq FROM miner_event_ledger");
   const appendStatement = db.prepare(`

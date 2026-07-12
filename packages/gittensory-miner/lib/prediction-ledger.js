@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pruneLedgerByRetention, resolveLedgerRetentionPolicy, PREDICTION_LEDGER_RETENTION_SPEC } from "./store-maintenance.js";
 
 // Append-only prediction ledger (#4263): every predicted-gate verdict the miner computes for a target lands in
 // a local SQLite table so a later self-improve pass can score the prediction against the realized pr_outcome.
@@ -145,6 +146,8 @@ export function initPredictionLedger(dbPath = resolvePredictionLedgerDbPath()) {
     )
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_predictions_repo ON predictions (repo_full_name, id)");
+  // Opt-in retention (#4834): prune aged/excess rows when an operator has enabled it; a no-op by default.
+  pruneLedgerByRetention(db, PREDICTION_LEDGER_RETENTION_SPEC, resolveLedgerRetentionPolicy(), Date.now());
 
   const appendStatement = db.prepare(`
     INSERT INTO predictions

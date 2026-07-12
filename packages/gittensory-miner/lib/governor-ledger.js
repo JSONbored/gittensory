@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { normalizeGovernorLedgerEvent } from "@jsonbored/gittensory-engine";
 import { applySchemaMigrations } from "./schema-version.js";
+import { pruneLedgerByRetention, resolveLedgerRetentionPolicy, GOVERNOR_LEDGER_RETENTION_SPEC } from "./store-maintenance.js";
 
 // Append-only governor decision ledger (#2328): every allowed/denied/throttled/kill-switch outcome lands in a
 // local SQLite table for contributor audit. IMMUTABILITY INVARIANT: INSERT + SELECT only — never UPDATE/DELETE.
@@ -90,6 +91,8 @@ export function initGovernorLedger(dbPath = resolveGovernorLedgerDbPath()) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_governor_events_repo ON governor_events (repo_full_name, id)");
   // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
   applySchemaMigrations(db, []);
+  // Opt-in retention (#4834): prune aged/excess rows when an operator has enabled it; a no-op by default.
+  pruneLedgerByRetention(db, GOVERNOR_LEDGER_RETENTION_SPEC, resolveLedgerRetentionPolicy(), Date.now());
 
   const appendStatement = db.prepare(`
     INSERT INTO governor_events (ts, event_type, repo_full_name, action_class, decision, reason, payload_json)

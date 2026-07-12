@@ -11,6 +11,14 @@ import {
   findExecutableOnPath,
 } from "./laptop-init.js";
 import { resolveMinerVersion } from "./version.js";
+import { checkStoreIntegrity } from "./store-maintenance.js";
+import { resolveEventLedgerDbPath } from "./event-ledger.js";
+import { resolveGovernorLedgerDbPath } from "./governor-ledger.js";
+import { resolvePredictionLedgerDbPath } from "./prediction-ledger.js";
+import { resolvePortfolioQueueDbPath } from "./portfolio-queue.js";
+import { resolveClaimLedgerDbPath } from "./claim-ledger.js";
+import { resolveRunStateDbPath } from "./run-state.js";
+import { resolvePlanStoreDbPath } from "./plan-store.js";
 
 // Slim laptop-mode CLI commands (#2288): `status` (what's installed + where local state lives) and `doctor` (is
 // this laptop set up correctly). Both are read-only and 100% local — no repo-scanning, no coding-agent invocation,
@@ -271,6 +279,21 @@ function checkStateDirWritable(stateDir) {
   }
 }
 
+/** Per-store `PRAGMA integrity_check` sweep for `doctor` (#4834) — flags a corrupted store instead of probing
+ *  only one with `SELECT 1`. A store file that does not exist yet is healthy by absence. */
+function storeIntegrityChecks(env) {
+  const stores = [
+    ["event-ledger", resolveEventLedgerDbPath(env)],
+    ["governor-ledger", resolveGovernorLedgerDbPath(env)],
+    ["prediction-ledger", resolvePredictionLedgerDbPath(env)],
+    ["portfolio-queue", resolvePortfolioQueueDbPath(env)],
+    ["claim-ledger", resolveClaimLedgerDbPath(env)],
+    ["run-state", resolveRunStateDbPath(env)],
+    ["plan-store", resolvePlanStoreDbPath(env)],
+  ];
+  return stores.map(([name, dbPath]) => checkStoreIntegrity(`store-integrity:${name}`, dbPath));
+}
+
 /** Run the doctor checks. Returns an array of { name, ok, detail }; only writes a transient probe in the state dir,
  *  never touches the network. */
 export function runDoctorChecks(env = process.env) {
@@ -294,6 +317,7 @@ export function runDoctorChecks(env = process.env) {
     checkDockerPresent(),
     checkClaudeCliPresent({ env }),
     checkCodexCliPresent({ env }),
+    ...storeIntegrityChecks(env),
   ];
 }
 
