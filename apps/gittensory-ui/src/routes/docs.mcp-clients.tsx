@@ -6,17 +6,17 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/mcp-clients")({
   head: () => ({
     meta: [
-      { title: "MCP client setup — Gittensory docs" },
+      { title: "MCP client setup — LoopOver docs" },
       {
         name: "description",
         content:
-          "Wire the Gittensory MCP into Codex, Claude Desktop, Cursor, or any MCP-aware client over stdio or remote.",
+          "Wire the LoopOver MCP into Codex, Claude Desktop, Cursor, or any MCP-aware client over stdio or remote.",
       },
-      { property: "og:title", content: "MCP client setup — Gittensory docs" },
+      { property: "og:title", content: "MCP client setup — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Wire the Gittensory MCP into Codex, Claude Desktop, Cursor, or any MCP-aware client over stdio or remote.",
+          "Wire the LoopOver MCP into Codex, Claude Desktop, Cursor, or any MCP-aware client over stdio or remote.",
       },
       { property: "og:url", content: "/docs/mcp-clients" },
     ],
@@ -30,7 +30,7 @@ function McpClients() {
     <DocsPage
       eyebrow="Get started"
       title="MCP client setup"
-      description="Configure your coding agent to talk to the Gittensory MCP. Pick stdio for local agents, remote for cloud agents."
+      description="Configure your coding agent to talk to the LoopOver MCP. Pick stdio for local agents, remote for cloud agents."
     >
       <h2>Generate config</h2>
       <p>These commands print config only. They do not mutate your local client files.</p>

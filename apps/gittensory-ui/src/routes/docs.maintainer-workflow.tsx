@@ -8,17 +8,17 @@ import { MAINTAINER_COMMAND_LIST, PUBLIC_COMMAND_LIST } from "@/lib/command-refe
 export const Route = createFileRoute("/docs/maintainer-workflow")({
   head: () => ({
     meta: [
-      { title: "Maintainer workflow — Gittensory docs" },
+      { title: "Maintainer workflow — LoopOver docs" },
       {
         name: "description",
         content:
-          "How to use Gittensory in a repo: confirmed-miner labels, sticky sanitized comments, on-demand @gittensory commands.",
+          "How to use LoopOver in a repo: confirmed-miner labels, sticky sanitized comments, on-demand @gittensory commands.",
       },
-      { property: "og:title", content: "Maintainer workflow — Gittensory docs" },
+      { property: "og:title", content: "Maintainer workflow — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "How to use Gittensory in a repo: confirmed-miner labels, sticky sanitized comments, on-demand @gittensory commands.",
+          "How to use LoopOver in a repo: confirmed-miner labels, sticky sanitized comments, on-demand @gittensory commands.",
       },
       { property: "og:url", content: "/docs/maintainer-workflow" },
     ],

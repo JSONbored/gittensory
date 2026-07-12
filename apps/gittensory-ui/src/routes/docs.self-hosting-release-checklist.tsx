@@ -6,13 +6,13 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-release-checklist")({
   head: () => ({
     meta: [
-      { title: "First release checklist — Gittensory docs" },
+      { title: "First release checklist — LoopOver docs" },
       {
         name: "description",
         content:
           "Versioning and trigger for the first stable self-host image, the smoke-test matrix (direct App, brokered, air-gapped, each AI provider, SQLite/Postgres, Redis/Qdrant), an image-contents audit, the full-vs-minimal variant decision, and the GitHub Release notes template.",
       },
-      { property: "og:title", content: "First release checklist — Gittensory docs" },
+      { property: "og:title", content: "First release checklist — LoopOver docs" },
       {
         property: "og:description",
         content:

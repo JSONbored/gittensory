@@ -6,17 +6,17 @@ import { CodeBlock, Callout } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/tuning")({
   head: () => ({
     meta: [
-      { title: "Tuning your reviews — Gittensory docs" },
+      { title: "Tuning your reviews — LoopOver docs" },
       {
         name: "description",
         content:
-          "Configure Gittensory CI and Gittensory review: gate modes, score thresholds, guardrails, and feature flags via .gittensory.yml and repo settings.",
+          "Configure LoopOver CI and LoopOver review: gate modes, score thresholds, guardrails, and feature flags via .gittensory.yml and repo settings.",
       },
-      { property: "og:title", content: "Tuning your reviews — Gittensory docs" },
+      { property: "og:title", content: "Tuning your reviews — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Configure Gittensory CI and Gittensory review: gate modes, score thresholds, guardrails, and feature flags via .gittensory.yml and repo settings.",
+          "Configure LoopOver CI and LoopOver review: gate modes, score thresholds, guardrails, and feature flags via .gittensory.yml and repo settings.",
       },
       { property: "og:url", content: "/docs/tuning" },
     ],
@@ -30,12 +30,12 @@ function Tuning() {
     <DocsPage
       eyebrow="Operating"
       title="Tuning your reviews"
-      description="How to configure Gittensory CI and Gittensory review — gate modes, score thresholds, guardrails, and feature flags — through .gittensory.yml and your repo settings."
+      description="How to configure LoopOver CI and LoopOver review — gate modes, score thresholds, guardrails, and feature flags — through .gittensory.yml and your repo settings."
     >
       <h2>How configuration fits together</h2>
       <p>
-        <strong>Gittensory review</strong> is the engine that scores, gates, and comments on your
-        pull requests. You shape its behavior in two places, and you never have to touch the review
+        <strong>LoopOver review</strong> is the engine that scores, gates, and comments on your pull
+        requests. You shape its behavior in two places, and you never have to touch the review
         algorithm itself:
       </p>
       <ul>
@@ -93,7 +93,7 @@ function Tuning() {
       <p>
         The friendly <code>gate:</code> block in <code>.gittensory.yml</code> is a typed alias for
         the gate-related fields and wins over the generic <code>settings:</code> block for those
-        same fields. Gittensory looks for the manifest at the first match of{" "}
+        same fields. LoopOver looks for the manifest at the first match of{" "}
         <code>.gittensory.yml</code> → <code>.github/gittensory.yml</code> →{" "}
         <code>.gittensory.json</code> → <code>.github/gittensory.json</code>.
       </p>
@@ -292,8 +292,15 @@ function Tuning() {
         </li>
       </ul>
       <p>
-        The master switch is <code>gate.enabled</code> (<code>off</code> / <code>enabled</code>).
-        The per-dimension modes refine an already-enabled gate. The main dimensions:
+        There is no single gate master switch — each dimension below is independently controlled by
+        its own mode field (most default to <code>off</code> or <code>advisory</code>; see each
+        dimension's default below). <code>gate.enabled</code> is a legacy, unrelated field: it is
+        only a boolean shorthand for <code>gate.checkMode</code> (<code>required</code> /{" "}
+        <code>visible</code> / <code>disabled</code>), which controls solely whether the{" "}
+        <code>Gittensory Orb Review Agent</code> check-run publishes on GitHub. Neither field turns
+        gate evaluation, comments, labels, audit, or autonomous merge/close on or off — set the
+        dimension modes below directly, and set <code>gate.checkMode</code> explicitly instead of
+        the ambiguous <code>gate.enabled</code>. The main dimensions:
       </p>
       <ul>
         <li>
@@ -531,9 +538,9 @@ testExpectations:
   - "tests/**"
 linkedIssuePolicy: preferred
 
-# Gate policy (refines an enabled gate)
+# Gate policy — checkMode is set explicitly (not the legacy, ambiguous "enabled" alias)
 gate:
-  enabled: true
+  checkMode: visible
   pack: gittensor
   duplicates: block
   linkedIssue: advisory

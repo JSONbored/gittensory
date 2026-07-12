@@ -243,7 +243,7 @@ describe("runAttempt (#5132)", () => {
       outcome: "submitted",
       spec: { command: "gh pr create", cwd: worktreeResult.worktreePath, timeoutMs: 1000 },
       execResult: { code: 0 },
-      loopResult: { outcome: "handoff", totalTurnsUsed: 3, iterationsUsed: 2 },
+      loopResult: { outcome: "handoff", totalTurnsUsed: 3, totalCostUsd: 0.42, iterationsUsed: 2 },
     });
 
     const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
@@ -270,6 +270,7 @@ describe("runAttempt (#5132)", () => {
       attemptId: "fixed-attempt-id",
       submissionMode: "observe",
       totalTurnsUsed: 3,
+      totalCostUsd: 0.42,
       iterationsUsed: 2,
       spec: { command: "gh pr create", cwd: worktreeResult.worktreePath, timeoutMs: 1000 },
       execResult: { code: 0 },

@@ -7,17 +7,17 @@ import { DocsPage } from "@/components/site/docs-page";
 export const Route = createFileRoute("/docs/")({
   head: () => ({
     meta: [
-      { title: "Documentation — Gittensory" },
+      { title: "Documentation — LoopOver" },
       {
         name: "description",
         content:
-          "Start with the quickstart, set up your MCP client, and learn how Gittensory keeps maintainer surfaces quiet.",
+          "Start with the quickstart, set up your MCP client, and learn how LoopOver keeps maintainer surfaces quiet.",
       },
-      { property: "og:title", content: "Documentation — Gittensory" },
+      { property: "og:title", content: "Documentation — LoopOver" },
       {
         property: "og:description",
         content:
-          "Start with the quickstart, set up your MCP client, and learn how Gittensory keeps maintainer surfaces quiet.",
+          "Start with the quickstart, set up your MCP client, and learn how LoopOver keeps maintainer surfaces quiet.",
       },
       { property: "og:url", content: "/docs" },
     ],

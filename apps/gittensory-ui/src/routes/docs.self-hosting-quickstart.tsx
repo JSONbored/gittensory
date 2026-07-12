@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-quickstart")({
   head: () => ({
     meta: [
-      { title: "Self-hosting quickstart — Gittensory docs" },
+      { title: "Self-hosting quickstart — LoopOver docs" },
       {
         name: "description",
         content:
-          "Bring up the Gittensory self-host review service, run readiness checks, and choose the first safe rollout mode.",
+          "Bring up the LoopOver self-host review service, run readiness checks, and choose the first safe rollout mode.",
       },
-      { property: "og:title", content: "Self-hosting quickstart — Gittensory docs" },
+      { property: "og:title", content: "Self-hosting quickstart — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Bring up the Gittensory self-host review service, run readiness checks, and choose the first safe rollout mode.",
+          "Bring up the LoopOver self-host review service, run readiness checks, and choose the first safe rollout mode.",
       },
       { property: "og:url", content: "/docs/self-hosting-quickstart" },
     ],
@@ -197,7 +197,7 @@ review_context_fetch_failed   # REES/RAG/grounding context failure`}
           {
             title: "Gate activation (DB or private config)",
             description:
-              "Turns on the Gittensory check-run and deterministic gate rules for a repo. One-click via the control panel or POST /v1/repos/:owner/:repo/activation; or set gate.checkMode / gate.enabled in a mounted private .gittensory.yml.",
+              "Turns on the LoopOver check-run and deterministic gate rules for a repo. One-click via the control panel or POST /v1/repos/:owner/:repo/activation; or set gate.checkMode / gate.enabled in a mounted private .gittensory.yml.",
           },
           {
             title: "is_registered (Gittensor registry)",
@@ -230,7 +230,7 @@ cp config/examples/global.gittensory.yml gittensory-config/owner__my-repo/.gitte
       />
       <p>
         Sign in to the control panel (<code>ADMIN_GITHUB_LOGINS</code> must include your GitHub
-        login), open the repo workspace, preview what Gittensory would have flagged on recent PRs,
+        login), open the repo workspace, preview what LoopOver would have flagged on recent PRs,
         then enable advisory mode in one click — the same patch as:
       </p>
       <CodeBlock

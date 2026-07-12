@@ -11,13 +11,13 @@ import {
 export const Route = createFileRoute("/docs/gittensory-commands")({
   head: () => ({
     meta: [
-      { title: "@gittensory command reference — Gittensory docs" },
+      { title: "@gittensory command reference — LoopOver docs" },
       {
         name: "description",
         content:
           "Every @gittensory PR and issue comment command: syntax, default authorization roles, and the hard boundary between auto-review and the one-shot gate.",
       },
-      { property: "og:title", content: "@gittensory command reference — Gittensory docs" },
+      { property: "og:title", content: "@gittensory command reference — LoopOver docs" },
       {
         property: "og:description",
         content:

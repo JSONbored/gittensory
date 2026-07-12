@@ -1,4 +1,6 @@
-# Gittensory
+# LoopOver
+
+_Formerly Gittensory._
 
 <p align="center">
   <a href="https://github.com/JSONbored/gittensory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JSONbored/gittensory/actions/workflows/ci.yml/badge.svg" /></a>
@@ -8,7 +10,7 @@
   <a href="https://gittensor.io/miners/repository?name=JSONbored/gittensory"><img alt="Gittensor impact" src="https://api.gittensor.io/repos/JSONbored%2Fgittensory/badge.svg" /></a>
 </p>
 
-Gittensory is a deterministic control plane for Gittensor OSS contribution work.
+LoopOver is a deterministic control plane for Gittensor OSS contribution work.
 
 It helps contributors plan cleaner work, helps maintainers review with less public noise, and keeps private scoring, wallet, hotkey, and reviewability context out of public GitHub output.
 
@@ -18,7 +20,7 @@ It is not a Gittensor explorer, public leaderboard, reward-farming bot, wallet d
 
 ## Privacy Boundary
 
-Gittensory keeps sensitive context private by default.
+LoopOver keeps sensitive context private by default.
 
 - MCP local branch analysis sends metadata, not source contents.
 - Public GitHub comments never include wallet, hotkey, reward estimate, private ranking, raw trust score, or reviewability context.
@@ -29,7 +31,7 @@ See [Privacy and security](https://gittensory.aethereal.dev/docs/privacy-securit
 
 ## Review Capabilities
 
-Gittensory CI and gittensory review score, gate, and comment on pull requests. The review algorithm is open-source; operators tune behavior through per-repo settings and the `GITTENSORY_REVIEW_*` feature flags, every one of which ships **OFF** and is opt-in per repo.
+LoopOver CI and LoopOver review score, gate, and comment on pull requests. The review algorithm is open-source; operators tune behavior through per-repo settings and the `GITTENSORY_REVIEW_*` feature flags, every one of which ships **OFF** and is opt-in per repo.
 
 - **Safety scan** — defangs untrusted PR title/body/diff (prompt-injection neutralization) before the AI reviewer reads them, and scans the diff for leaked secrets, surfacing a `secret_leak` blocker.
 - **CI + full-file grounding** — grounds the AI reviewer with the PR's finished CI status and the full post-change content of the changed files, so claims are verified against reality instead of predicted.
@@ -65,7 +67,7 @@ See [Tuning your reviews](https://gittensory.aethereal.dev/docs/tuning) for the 
 | Engine package    | [`@jsonbored/gittensory-engine`](packages/gittensory-engine/README.md) — shared deterministic logic for the review stack and miner |
 | Miner package     | [`@jsonbored/gittensory-miner`](packages/gittensory-miner/README.md) — local foundation CLI for the autonomous miner runtime        |
 | API               | [API browser](https://gittensory.aethereal.dev/api) and [OpenAPI JSON](https://gittensory-api.aethereal.dev/openapi.json)          |
-| GitHub App        | [Install](https://github.com/apps/gittensory/installations/new) and [setup docs](https://gittensory.aethereal.dev/docs/github-app) |
+| GitHub App        | [Setup docs](https://gittensory.aethereal.dev/docs/github-app) — self-hosting is the only currently available path |
 | Browser extension | [Extension page](https://gittensory.aethereal.dev/extension)                                                                       |
 
 ## MCP Install

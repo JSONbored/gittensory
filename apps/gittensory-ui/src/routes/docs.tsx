@@ -6,17 +6,17 @@ import { DocsToc } from "@/components/site/docs-toc";
 export const Route = createFileRoute("/docs")({
   head: () => ({
     meta: [
-      { title: "Docs — Gittensory" },
+      { title: "Docs — LoopOver" },
       {
         name: "description",
         content:
-          "Documentation for Gittensory: install, MCP client setup, miner/maintainer workflows, GitHub App, branch analysis, scoreability, drift, privacy.",
+          "Documentation for LoopOver: install, MCP client setup, miner/maintainer workflows, GitHub App, branch analysis, scoreability, drift, privacy.",
       },
-      { property: "og:title", content: "Docs — Gittensory" },
+      { property: "og:title", content: "Docs — LoopOver" },
       {
         property: "og:description",
         content:
-          "Documentation for Gittensory: install, MCP client setup, miner/maintainer workflows, GitHub App, branch analysis, scoreability, drift, privacy.",
+          "Documentation for LoopOver: install, MCP client setup, miner/maintainer workflows, GitHub App, branch analysis, scoreability, drift, privacy.",
       },
     ],
   }),

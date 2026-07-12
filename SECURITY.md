@@ -11,8 +11,8 @@ include only the minimum reproduction details needed to verify the issue.
 
 ## Privacy Posture
 
-- Gittensory does not store user GitHub PATs.
-- Browser auth uses GitHub OAuth and an HttpOnly Gittensory session cookie. CLI/MCP auth uses the
+- LoopOver does not store user GitHub PATs.
+- Browser auth uses GitHub OAuth and an HttpOnly LoopOver session cookie. CLI/MCP auth uses the
   existing GitHub Device Flow and bearer session token.
 - Public PR comments are sanitized and only posted for officially confirmed Gittensor miners when
   the installed repository settings allow them.

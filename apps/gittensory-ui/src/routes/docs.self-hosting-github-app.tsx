@@ -6,17 +6,17 @@ import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
 export const Route = createFileRoute("/docs/self-hosting-github-app")({
   head: () => ({
     meta: [
-      { title: "Self-host GitHub App and Orb — Gittensory docs" },
+      { title: "Self-host GitHub App and Orb — LoopOver docs" },
       {
         name: "description",
         content:
-          "Connect a self-hosted Gittensory review service to GitHub with your own direct GitHub App (the default, recommended path) or private managed-beta brokered Orb enrollment.",
+          "Connect a self-hosted LoopOver review service to GitHub with your own direct GitHub App (the default, recommended path) or private managed-beta brokered Orb enrollment.",
       },
-      { property: "og:title", content: "Self-host GitHub App and Orb — Gittensory docs" },
+      { property: "og:title", content: "Self-host GitHub App and Orb — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Connect a self-hosted Gittensory review service to GitHub with your own direct GitHub App (the default, recommended path) or private managed-beta brokered Orb enrollment.",
+          "Connect a self-hosted LoopOver review service to GitHub with your own direct GitHub App (the default, recommended path) or private managed-beta brokered Orb enrollment.",
       },
       { property: "og:url", content: "/docs/self-hosting-github-app" },
     ],
@@ -38,7 +38,7 @@ function SelfHostingGithubApp() {
           {
             title: "Direct GitHub App (recommended default)",
             description:
-              "Your self-host stores its own App id, slug, private key, and webhook secret, and mints installation tokens directly. No shared quota, no dependency on gittensory's own infrastructure to process a review.",
+              "Your self-host stores its own App id, slug, private key, and webhook secret, and mints installation tokens directly. No shared quota, no dependency on LoopOver's own infrastructure to process a review.",
           },
           {
             title: "Brokered Orb (private/managed-beta only)",
@@ -48,10 +48,10 @@ function SelfHostingGithubApp() {
         ]}
       />
       <Callout variant="safety">
-        Direct App mode is the public default: it costs gittensory nothing to support and can't
-        overrun a shared rate-limit budget. Brokered mode routes every token mint through
-        gittensory's own infrastructure and GitHub API quota — every external brokered install is
-        gittensory's rate-limit and reliability problem, not just the operator's, so it stays
+        Direct App mode is the public default: it costs LoopOver nothing to support and can't
+        overrun a shared rate-limit budget. Brokered mode routes every token mint through LoopOver's
+        own infrastructure and GitHub API quota — every external brokered install is LoopOver's
+        rate-limit and reliability problem, not just the operator's, so it stays
         private/managed-beta until the safeguards below are in place.
       </Callout>
 
@@ -172,7 +172,7 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
         These are two independent things people conflate because they're both "Orb": anonymized
         fleet-calibration <strong>telemetry export</strong> (enabled by default, works in either
         connection mode) and <strong>token brokerage</strong> (optional, private/managed-beta only,
-        lets your self-host get installation tokens from gittensory instead of holding its own App
+        lets your self-host get installation tokens from LoopOver instead of holding its own App
         key). Choosing Direct App mode does not opt you out of telemetry, and it's what makes{" "}
         <Link to="/">the homepage counters</Link> and cross-fleet gate calibration reflect direct
         installs, not just brokered ones.
@@ -187,7 +187,7 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
           {
             title: "What's never exported",
             description:
-              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized by default with a per-instance secret gittensory's own collector never holds.",
+              "Repo/owner/PR names, commit SHAs, source code, diffs, comments, or logins. Repo/PR identifiers are HMAC-anonymized by default with a per-instance secret LoopOver's own collector never holds.",
           },
           {
             title: "Disabling it",
@@ -200,16 +200,16 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>`}
         Repo/PR identifiers are HMAC-anonymized by <strong>default</strong> (
         <code>ORB_ANONYMIZE=true</code>), not unconditionally — an operator can set{" "}
         <code>ORB_ANONYMIZE=false</code> to export raw repo/PR names instead. There's no scenario
-        where gittensory's own hosted collector needs raw names; the toggle exists for an operator
+        where LoopOver's own hosted collector needs raw names; the toggle exists for an operator
         running their <strong>own</strong> collector (see <code>ORB_COLLECTOR_URL</code> below) who
         wants readable identifiers in their own infrastructure. Leave this at the default unless you
         control the collector end.
       </Callout>
       <p>
-        <code>ORB_COLLECTOR_URL</code> overrides the export endpoint — default gittensory's hosted
+        <code>ORB_COLLECTOR_URL</code> overrides the export endpoint — default LoopOver's hosted
         collector, or point it at your own private collector if you're aggregating telemetry
-        yourself instead of sending it to gittensory. <code>ORB_COLLECTOR_TOKEN</code> is the bearer
-        credential for that private collector; leave it unset when using gittensory's own hosted
+        yourself instead of sending it to LoopOver. <code>ORB_COLLECTOR_TOKEN</code> is the bearer
+        credential for that private collector; leave it unset when using LoopOver's own hosted
         collector, which accepts unauthenticated, rate-limited, aggregate-only exports.
       </p>
 
@@ -264,14 +264,14 @@ ORB_RELAY_MODE=pull  # or omit for push (the default) -- see "Choosing a relay m
       <Callout variant="warn" title="Brokered mode operational risks">
         Before enabling this for anyone outside a controlled managed-beta cohort, weigh: (1){" "}
         <strong>rate-limit blast radius</strong> — every brokered install's GitHub API traffic draws
-        from token pools gittensory manages, so one misbehaving or high-volume install can degrade
+        from token pools LoopOver manages, so one misbehaving or high-volume install can degrade
         every other brokered install; (2) <strong>quota management</strong> — there is no automatic
         per-install cap on how much of that shared budget one enrollment can consume; (3){" "}
-        <strong>support burden</strong> — a broken brokered install looks like a gittensory outage
-        to its operator, not a self-host misconfiguration, and lands as a support request on
-        gittensory directly; (4) <strong>abuse/misconfiguration risk</strong> — an enrollment secret
-        that leaks or a misconfigured relay can mint tokens or receive webhook traffic for repos the
-        intended operator doesn't control.
+        <strong>support burden</strong> — a broken brokered install looks like a LoopOver outage to
+        its operator, not a self-host misconfiguration, and lands as a support request on LoopOver
+        directly; (4) <strong>abuse/misconfiguration risk</strong> — an enrollment secret that leaks
+        or a misconfigured relay can mint tokens or receive webhook traffic for repos the intended
+        operator doesn't control.
       </Callout>
 
       <h2>Minimum broker safeguards before a public rollout</h2>

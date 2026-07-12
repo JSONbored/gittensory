@@ -1,6 +1,6 @@
 # Code Of Conduct
 
-Gittensory is maintained as a direct, technical, evidence-first project. We expect contributors,
+LoopOver is maintained as a direct, technical, evidence-first project. We expect contributors,
 maintainers, and users to keep discussions focused on the work, the proof, and the production
 impact.
 
@@ -23,7 +23,7 @@ impact.
   credit or farm Gittensor rewards.
 - Posting secrets, private contributor evidence, private maintainer evidence, wallet details,
   hotkeys, coldkeys, raw trust scores, or private rankings publicly.
-- Misrepresenting Gittensory output as guaranteed compensation, guaranteed ranking, or financial
+- Misrepresenting LoopOver output as guaranteed compensation, guaranteed ranking, or financial
   advice.
 - Evading review boundaries by reopening closed work without addressing the stated reason.
 - Attempting to bypass authentication, rate limits, GitHub App permissions, or Cloudflare Worker

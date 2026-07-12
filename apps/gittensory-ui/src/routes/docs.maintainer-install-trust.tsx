@@ -7,20 +7,20 @@ import { MAINTAINER_COMMAND_LIST, PUBLIC_COMMAND_LIST } from "@/lib/command-refe
 export const Route = createFileRoute("/docs/maintainer-install-trust")({
   head: () => ({
     meta: [
-      { title: "Maintainer install and trust guide — Gittensory docs" },
+      { title: "Maintainer install and trust guide — LoopOver docs" },
       {
         name: "description",
         content:
-          "Self-host and install a Gittensory GitHub App as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable. Self-hosting is the recommended default path; the shared App is private managed-beta only.",
+          "Self-host and install a LoopOver GitHub App as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable. Self-hosting is the only currently available path.",
       },
       {
         property: "og:title",
-        content: "Maintainer install and trust guide — Gittensory docs",
+        content: "Maintainer install and trust guide — LoopOver docs",
       },
       {
         property: "og:description",
         content:
-          "Self-host and install a Gittensory GitHub App as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable. Self-hosting is the recommended default path; the shared App is private managed-beta only.",
+          "Self-host and install a LoopOver GitHub App as a maintainer, verify trust boundaries, preview public output, and decide when GitHub App checks are safe to enable. Self-hosting is the only currently available path.",
       },
       { property: "og:url", content: "/docs/maintainer-install-trust" },
     ],
@@ -34,29 +34,31 @@ function MaintainerInstallTrust() {
     <DocsPage
       eyebrow="Launch guide"
       title="Maintainer install and trust guide"
-      description="A maintainer-first checklist for self-hosting and installing a GitHub App, keeping public output safe, authorizing commands, using the browser extension, and rejecting weak Gittensory-driven PRs."
+      description="A maintainer-first checklist for self-hosting and installing a GitHub App, keeping public output safe, authorizing commands, using the browser extension, and rejecting weak LoopOver-driven PRs."
     >
       <Callout variant="safety" title="Trust posture">
-        Gittensory is advisory-first. It may help you review contribution readiness, but it does not
+        LoopOver is advisory-first. It may help you review contribution readiness, but it does not
         replace human maintainer judgment, expose private scoreability signals, or make reward,
         payout, wallet, hotkey, or trust-score claims in public surfaces.
       </Callout>
 
       <h2>Install the App</h2>
       <p>
-        <strong>Self-hosting is the recommended, default path.</strong> Start from{" "}
+        <strong>Self-hosting is the only currently available path.</strong> Start from{" "}
         <Link to="/docs/maintainer-self-hosting">self-hosting setup</Link> — the direct App's
         required permissions and events are covered in{" "}
-        <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link>, not the checklist below.
-        Either way, keep the first rollout narrow until the repo owner has verified permissions,
-        webhook delivery, and public copy.
+        <Link to="/docs/self-hosting-github-app">GitHub App and Orb</Link>. Keep the first rollout
+        narrow until the repo owner has verified permissions, webhook delivery, and public copy.
       </p>
-      <p>
-        The checklist below is for the shared <strong>private / managed-beta only</strong> App — see{" "}
-        <Link to="/docs/github-app">GitHub App configuration</Link> for the install flow.
-      </p>
+      <Callout variant="note" title="Shared, centrally hosted App: not currently available">
+        LoopOver previously ran a private managed-beta shared App with its own install checklist
+        below. That shared install path is currently paused while self-hosted Orb is the primary way
+        to run LoopOver — a new centrally hosted offering is planned for the future. The checklist
+        below reflects the shared App's permission set and is kept for when that offering returns;
+        use the self-hosting checklist above for a self-hosted install today.
+      </Callout>
       <ol>
-        <li>Install Gittensory on one test repository or a selected repository set.</li>
+        <li>Install LoopOver on one test repository or a selected repository set.</li>
         <li>
           Approve <code>Metadata: read</code>, <code>Pull requests: read</code>, and{" "}
           <code>Issues: write</code>. Add <code>Checks: write</code> only when Context or
@@ -73,7 +75,7 @@ function MaintainerInstallTrust() {
       </ol>
       <Callout variant="note">
         A self-hosted direct App needs <code>Pull requests: write</code> (not read) and{" "}
-        <code>Checks: write</code> is mandatory, not optional — this checklist's permissions are
+        <code>Checks: write</code> is mandatory, not optional — the numbered checklist above is
         scoped to the shared managed-beta App only.
       </Callout>
       <CodeBlock
@@ -219,12 +221,12 @@ API unavailable or stale data
       </p>
       <p>
         If the repo enables <strong>Gittensory Orb Review Agent</strong>, document which blockers
-        are enforced and why. Otherwise, treat Gittensory output as reviewer context only.
+        are enforced and why. Otherwise, treat LoopOver output as reviewer context only.
       </p>
 
-      <h2>Reject weak Gittensory-driven PRs</h2>
+      <h2>Reject weak LoopOver-driven PRs</h2>
       <p>
-        Maintainers should request changes or close PRs that misuse Gittensory output. The tool is a
+        Maintainers should request changes or close PRs that misuse LoopOver output. The tool is a
         contribution operating layer, not a guarantee that work deserves merge.
       </p>
       <ul>

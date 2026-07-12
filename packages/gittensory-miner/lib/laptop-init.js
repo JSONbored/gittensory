@@ -2,6 +2,7 @@ import { accessSync, chmodSync, constants, existsSync, mkdirSync } from "node:fs
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { applySchemaMigrations } from "./schema-version.js";
 
 const defaultDbFileName = "laptop-state.sqlite3";
 
@@ -36,6 +37,8 @@ export function initLaptopState(env = process.env) {
       value TEXT NOT NULL
     )
   `);
+  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
+  applySchemaMigrations(db, []);
   if (created) {
     db.prepare("INSERT INTO laptop_meta (key, value) VALUES ('initialized_at', ?)")
       .run(new Date().toISOString());

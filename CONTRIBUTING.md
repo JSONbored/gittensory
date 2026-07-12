@@ -1,6 +1,6 @@
 # Contributing
 
-Gittensory is a Cloudflare Workers, TanStack Start, GitHub App, and MCP project for
+LoopOver is a Cloudflare Workers, TanStack Start, GitHub App, and MCP project for
 Gittensor OSS contribution intelligence. Contributions need to protect that scope: private
 signals stay private, public GitHub output stays sanitized, and production surfaces must stay
 wired to real backend behavior.
@@ -11,7 +11,7 @@ closed without an extended review cycle.
 
 ## What Happens to Your PR (reviewed and acted on automatically)
 
-gittensory reviews every PR with an automated gate (a GitHub App) and **acts on the outcome within a
+LoopOver reviews every PR with an automated gate (a GitHub App) and **acts on the outcome within a
 few minutes** — there is no extended human back-and-forth. For a contributor PR (you are not the repo
 owner or an automation bot):
 
@@ -31,7 +31,7 @@ the whole procedure step by step.
 
 ## How Reviews Work (timing, one-shot, and asking for review)
 
-**Timing is typical, not an SLA.** When the gittensory maintainer agent is operating, most PRs are
+**Timing is typical, not an SLA.** When the LoopOver maintainer agent is operating, most PRs are
 reviewed and auto-merged or auto-closed within **~1 hour of CI finishing**. When the agent is paused or
 under maintenance, manual review **typically takes 24–48 hours, depending on volume**. These are
 observations, not commitments or a service-level guarantee — reviews happen when they happen.
@@ -305,7 +305,7 @@ Config as code (`.gittensory.yml`) — every repository setting is controllable 
 - Precedence: `.gittensory.yml` `gate:` > `.gittensory.yml` `settings:` > dashboard repository settings >
   safe defaults; unset fields fall back to the next layer. The committed root `.gittensory.yml` is the
   worked example. Resolved once in `resolveRepositorySettings`, so the whole app honours the file.
-- The config chooses **what** gittensory does (gate on/off, blockers, comments, labels, surface, panel
+- The config chooses **what** LoopOver does (gate on/off, blockers, comments, labels, surface, panel
   content); it never changes **who** can be blocked — only confirmed Gittensor contributors are ever
   hard-blocked, and the footer's Gittensor attribution/register link always remains.
 

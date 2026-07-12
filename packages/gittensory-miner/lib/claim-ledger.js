@@ -1,4 +1,5 @@
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
+import { applySchemaMigrations } from "./schema-version.js";
 
 // The miner's local soft-claim ledger (#2314): a 100% client-side record of "I'm working on issue #N in repo X",
 // so Phase 2's soft-claim adjudication (sibling issues) has somewhere to persist claims. Schema + CRUD only — no
@@ -71,6 +72,8 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
       UNIQUE (repo_full_name, issue_number)
     )
   `);
+  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
+  applySchemaMigrations(db, []);
 
   // Idempotent claim in ONE atomic statement: insert a new active claim, or — only if the existing row is NOT
   // already active — re-activate it (a released/expired claim can be re-claimed). The `WHERE status <> 'active'`

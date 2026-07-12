@@ -7,12 +7,12 @@ import { WorkflowMirror, type MirroredStep } from "@/components/site/workflow-mi
 export const Route = createFileRoute("/docs/miner-workflow")({
   head: () => ({
     meta: [
-      { title: "Miner workflow — Gittensory docs" },
+      { title: "Miner workflow — LoopOver docs" },
       {
         name: "description",
         content: "Plan → analyze → preflight → packet. The four-step miner loop with the MCP CLI.",
       },
-      { property: "og:title", content: "Miner workflow — Gittensory docs" },
+      { property: "og:title", content: "Miner workflow — LoopOver docs" },
       {
         property: "og:description",
         content: "Plan → analyze → preflight → packet. The four-step miner loop with the MCP CLI.",

@@ -349,7 +349,11 @@ export async function runLoop(args, options = {}) {
       const cycleElapsedMs = nowMsFn() - cycleStartMs;
 
       usage = {
-        budgetSpent: usage.budgetSpent,
+        // Real for the agent-sdk provider (its own SDK result message reports total_cost_usd, wired through
+        // runMinerAttempt's real loopResult.totalCostUsd); the CLI-subprocess providers (claude-cli/codex-cli)
+        // report no cost signal today, so this contributes 0 for those runs -- an honest absence, not a
+        // fabricated number. A capLimits.budget dimension only ever meaningfully trips against agent-sdk spend.
+        budgetSpent: usage.budgetSpent + (lastResult?.totalCostUsd ?? 0),
         turnsTaken: usage.turnsTaken + (lastResult?.totalTurnsUsed ?? 0),
         elapsedMs: usage.elapsedMs + cycleElapsedMs,
       };
