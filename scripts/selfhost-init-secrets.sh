@@ -42,6 +42,7 @@ SECRET_FILES=(
   "draft_token_encryption_secret.txt"
   "orb_enrollment_secret.txt"
   "pagerduty_routing_key.txt"
+  "claude_code_oauth_token.txt"
 )
 
 mkdir -p "$SECRETS_DIR"

@@ -66,6 +66,7 @@ see the tradeoff explained above for why `600` breaks the app's own ability to r
 | `draft_token_encryption_secret.txt` | `DRAFT_TOKEN_ENCRYPTION_SECRET_FILE` | AES-256-GCM secret for the contributor OAuth token (draft flow). |
 | `orb_enrollment_secret.txt` | `ORB_ENROLLMENT_SECRET_FILE` | One-time enrollment secret for brokered Orb mode. |
 | `pagerduty_routing_key.txt` | `PAGERDUTY_ROUTING_KEY_FILE` | PagerDuty Events API v2 routing key (experimental paging integration). |
+| `claude_code_oauth_token.txt` | `CLAUDE_CODE_OAUTH_TOKEN_FILE` | Claude Code subscription OAuth token (from `claude setup-token`), used when `AI_PROVIDER=claude-code`. |
 
 This is not the full list of every secret-shaped env var the stack supports (AI provider API keys,
 Discord/Slack webhooks, Postgres/Grafana credentials for their optional profiles, etc.) — it covers

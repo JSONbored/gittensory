@@ -130,6 +130,7 @@ services:
       DRAFT_TOKEN_ENCRYPTION_SECRET_FILE: "${DRAFT_TOKEN_ENCRYPTION_SECRET_FILE:-/run/secrets/draft_token_encryption_secret}"
       ORB_ENROLLMENT_SECRET_FILE: "${ORB_ENROLLMENT_SECRET_FILE:-/run/secrets/orb_enrollment_secret}"
       PAGERDUTY_ROUTING_KEY_FILE: "${PAGERDUTY_ROUTING_KEY_FILE:-/run/secrets/pagerduty_routing_key}"
+      CLAUDE_CODE_OAUTH_TOKEN_FILE: "${CLAUDE_CODE_OAUTH_TOKEN_FILE:-/run/secrets/claude_code_oauth_token}"
       # Uncomment for Qdrant RAG vector store (--profile qdrant):
       # QDRANT_URL: http://qdrant:6333
       # Uncomment for Ollama AI (--profile ollama):
@@ -169,6 +170,7 @@ services:
       - draft_token_encryption_secret
       - orb_enrollment_secret
       - pagerduty_routing_key
+      - claude_code_oauth_token
     depends_on:
       redis:
         condition: service_healthy
@@ -1004,6 +1006,8 @@ secrets:
     file: ./secrets/orb_enrollment_secret.txt
   pagerduty_routing_key:
     file: ./secrets/pagerduty_routing_key.txt
+  claude_code_oauth_token:
+    file: ./secrets/claude_code_oauth_token.txt
 
 volumes:
   gittensory-data:
