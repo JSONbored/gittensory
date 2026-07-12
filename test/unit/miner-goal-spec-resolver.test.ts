@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +52,28 @@ describe("resolveMinerGoalSpec (#5132)", () => {
     const parsed = resolveMinerGoalSpec(repoPath);
     expect(parsed.present).toBe(true);
     expect(parsed.spec.killSwitch.paused).toBe(true);
+  });
+
+  it("REGRESSION: rejects symlinked miner goal specs without reading the target", () => {
+    const repoPath = tempRepo();
+    const outsidePath = join(tempRepo(), "outside.yml");
+    writeFileSync(outsidePath, "killSwitch:\n  paused: true\n");
+    symlinkSync(outsidePath, join(repoPath, ".gittensory-miner.yml"));
+
+    const parsed = resolveMinerGoalSpec(repoPath);
+
+    expect(parsed.present).toBe(false);
+    expect(parsed.spec.killSwitch).toEqual({ paused: false });
+  });
+
+  it("REGRESSION: ignores oversized miner goal specs before reading them into memory", () => {
+    const repoPath = tempRepo();
+    writeFileSync(join(repoPath, ".gittensory-miner.yml"), `${"#".repeat(32_769)}\nkillSwitch:\n  paused: true\n`);
+
+    const parsed = resolveMinerGoalSpec(repoPath);
+
+    expect(parsed.present).toBe(false);
+    expect(parsed.spec.killSwitch).toEqual({ paused: false });
   });
 
   it("degrades to safe defaults on malformed content instead of throwing", () => {
