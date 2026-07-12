@@ -282,7 +282,7 @@ describe("queue processors", () => {
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     // aiReviewLowConfidenceDisposition left UNSET — the shipped default (hold_for_review) is what's under test.
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { close: "auto" }, aiReviewMode: "block", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { close: "auto" }, aiReviewMode: "block", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 8, title: "Sub-floor defect PR", state: "open", user: { login: "contributor" }, head: { sha: "b8" }, labels: [], body: "Closes #1" });
     await upsertPullRequestFile(env, { repoFullName: "owner/agent-repo", pullNumber: 8, path: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const ok = value.length;" } });
     const inputFingerprint = await cachedSubFloorDefectFingerprint("Sub-floor defect PR");
@@ -333,7 +333,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { close: "auto" }, aiReviewMode: "block", aiReviewLowConfidenceDisposition: "one_shot", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { close: "auto" }, aiReviewMode: "block", aiReviewLowConfidenceDisposition: "one_shot", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 9, title: "Sub-floor defect PR (one_shot)", state: "open", user: { login: "contributor" }, head: { sha: "c9" }, labels: [], body: "Closes #1" });
     await upsertPullRequestFile(env, { repoFullName: "owner/agent-repo", pullNumber: 9, path: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, payload: { patch: "@@\n+export const ok = value.length;" } });
     const inputFingerprint = await cachedSubFloorDefectFingerprint("Sub-floor defect PR (one_shot)");
@@ -398,7 +398,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -468,7 +468,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       aiReviewMode: "off",
     });
     // A sibling PR (different author, unrelated title) already open and already detail-synced — its files are
@@ -538,7 +537,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       aiReviewMode: "off",
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -633,7 +631,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -708,7 +706,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -783,7 +781,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -869,7 +867,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -952,7 +950,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -1011,7 +1009,7 @@ describe("queue processors", () => {
     });
     await persistRegistrySnapshot(env, normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"));
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", aiReviewMode: "advisory" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", aiReviewMode: "advisory" });
     const stickyComment: { current: { id: number; body: string } | null } = { current: null };
     let postCount = 0;
     let patchCount = 0;
@@ -1084,7 +1082,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       aiReviewMode: "advisory",
     });
     const postedBodies: string[] = [];
@@ -1171,7 +1168,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -1262,7 +1259,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -1356,7 +1353,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -1434,7 +1431,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -1555,7 +1552,7 @@ describe("queue processors", () => {
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
     await upsertInstallation(env, { action: "created", installation: { id: 9400, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9400);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     for (const number of [1, 2, 3, 4]) {
       const headSha = `a${number}`;
       await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number, title: `PR${number}`, state: "open", user: { login: "c" }, head: { sha: headSha }, labels: [], body: "" });
@@ -1611,7 +1608,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9403, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9403);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, regateSweepOrderMode: "oldest-first", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, regateSweepOrderMode: "oldest-first", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     // Deliberately seeded out of PR-number order: #1 is the NEWEST, #3 is the OLDEST — proves the fan-out
     // follows createdAt, not insertion/number order.
     const created: Record<number, string> = { 1: "2026-05-20T00:00:00.000Z", 2: "2026-05-10T00:00:00.000Z", 3: "2026-05-01T00:00:00.000Z" };
@@ -1660,7 +1657,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9402, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9402);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     for (const number of [1, 2, 3, 4, 5]) {
       const headSha = `repair-${number}`;
       await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number, title: `Repair ${number}`, state: "open", user: { login: "c" }, head: { sha: headSha }, labels: [], body: "" });
@@ -1700,7 +1697,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9403, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9403);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     // PR 1: missing its current Gate check -- the one priority repair. Make it newer-by-regate than the
     // ordinary stale PRs below, reproducing the backlog bug where a max=1 staleness slice could drop the repair.
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Repair 1", state: "open", user: { login: "c" }, head: { sha: "repair-1" }, labels: [], body: "" });
@@ -1741,7 +1738,7 @@ describe("queue processors", () => {
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
     await upsertInstallation(env, { action: "created", installation: { id: 9404, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9404);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     // PR 1: missing its current Gate check for its current head -- surfaceRepairPriorityPullNumbers flags this as
     // outage-repair priority (no completed Gittensory Gate check run at the live head SHA).
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 1, title: "Repair 1", state: "open", user: { login: "c" }, head: { sha: "repair-1" }, labels: [], body: "" });
@@ -1788,7 +1785,7 @@ describe("queue processors", () => {
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
     await upsertInstallation(env, { action: "created", installation: { id: 9407, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9407);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     // PR 1: missing its current Gate check for its current head -- would ordinarily be flagged outage-repair
     // priority on every tick. Pre-seed REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA=5 (#3998) prior repair-attempt audit
     // events for this EXACT head SHA to simulate a review that keeps failing (e.g. a timeout) and never
@@ -1840,7 +1837,7 @@ describe("queue processors", () => {
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
     await upsertInstallation(env, { action: "created", installation: { id: 9408, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9408);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 2, title: "Fresh repair", state: "open", user: { login: "c" }, head: { sha: "fresh-sha" }, labels: [], body: "" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 2, "fresh-sha");
     const targetKey = "owner/agent-repo#2#fresh-sha";
@@ -1885,7 +1882,7 @@ describe("queue processors", () => {
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
     await upsertInstallation(env, { action: "created", installation: { id: 9401, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9401);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Repair me", state: "open", user: { login: "c" }, head: { sha: "a7" }, labels: [], body: "" });
     await repositoriesModule.markPullRequestSurfacePublished(env, "owner/agent-repo", 7, "a7");
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
@@ -1937,7 +1934,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9406, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9406);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertRepoSyncSegment(env, completeSegment("owner/agent-repo", "open_pull_requests"));
     const backfillSpy = vi.spyOn(backfillModule, "backfillRepositorySegment").mockResolvedValueOnce({
       ok: true,
@@ -1968,7 +1965,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9402, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9402);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertRepoSyncSegment(env, completeSegment("owner/agent-repo", "open_pull_requests"));
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -2025,7 +2022,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9403, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9403);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertRepoSyncSegment(env, {
       ...completeSegment("owner/agent-repo", "open_pull_requests"),
       status: "running",
@@ -2056,7 +2053,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9404, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9404);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     const segmentSpy = vi.spyOn(repositoriesModule, "getRepoSyncSegment").mockRejectedValueOnce(new Error("segment read failed"));
     const backfillSpy = vi.spyOn(backfillModule, "backfillRepositorySegment").mockRejectedValueOnce(new Error("open PR refresh failed"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -2110,7 +2107,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9405, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9405);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     const backfillSpy = vi.spyOn(backfillModule, "backfillRepositorySegment").mockResolvedValueOnce(undefined as never);
     vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
 
@@ -2132,7 +2129,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9405, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9405);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertRepoSyncSegment(env, {
       ...completeSegment("owner/agent-repo", "open_pull_requests"),
       status: "partial",
@@ -2166,7 +2163,7 @@ describe("queue processors", () => {
     });
     await upsertInstallation(env, { action: "created", installation: { id: 9407, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9407);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     const segmentSpy = vi.spyOn(repositoriesModule, "getRepoSyncSegment").mockResolvedValueOnce({
       ...completeSegment("owner/agent-repo", "open_pull_requests"),
       completedAt: undefined,
@@ -2630,7 +2627,7 @@ describe("queue processors", () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
-    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Clean PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
     let mergeCalls = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -3178,7 +3175,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
     });
@@ -3258,7 +3255,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
     });
@@ -3312,7 +3309,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
     });
@@ -3377,7 +3374,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       manifestPolicyGateMode: "block",
       requireLinkedIssue: false,
@@ -3465,7 +3462,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       manifestPolicyGateMode: "block",
       requireLinkedIssue: false,
@@ -3556,7 +3553,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       manifestPolicyGateMode: "block",
       requireLinkedIssue: false,
@@ -3652,7 +3649,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       manifestPolicyGateMode: "block",
       requireLinkedIssue: false,
@@ -3741,7 +3738,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       manifestPolicyGateMode: "block",
       requireLinkedIssue: false,
@@ -3835,7 +3832,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       manifestPolicyGateMode: "block",
       requireLinkedIssue: false,
@@ -3913,7 +3910,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -3969,7 +3966,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -4033,7 +4030,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -4096,7 +4093,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       aiReviewMode: "off",
     });
     let commentPosts = 0;
@@ -4227,7 +4223,6 @@ describe("queue processors", () => {
         publicSurface: "comment_only",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        gateCheckMode: "off",
         aiReviewMode: "off",
       });
       let commentPosts = 0;
@@ -4293,7 +4288,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       aiReviewMode: "off",
     });
     let commentPosts = 0;
@@ -4369,7 +4363,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       aiReviewMode: "off",
     });
     let commentPosts = 0;
@@ -4436,7 +4429,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -4531,7 +4524,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -4606,7 +4599,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
       autonomy: { review_state_label: "auto", request_changes: "auto" },
@@ -4669,7 +4662,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       manifestPolicyGateMode: "block",
       autonomy: { merge: "auto", request_changes: "auto" },
       agentDryRun: true,
@@ -4745,7 +4738,6 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       autonomy: { merge: "observe", request_changes: "observe" },
       slopGateMode: "off",
       mergeReadinessGateMode: "off",
@@ -4827,7 +4819,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" }, // evaluate + post the gate, take no merge/close action
       agentDryRun: false, // so the gate check-run is actually POSTed (dry-run suppresses the write) and capturable
     });
@@ -4906,7 +4898,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" },
       agentDryRun: false,
     });
@@ -4984,7 +4976,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" },
       agentDryRun: false,
     });
@@ -5056,7 +5048,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" },
       agentDryRun: false,
       // No gate.claMode manifest override — claGateMode stays undefined (the safe default).
@@ -5133,7 +5125,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" },
       agentDryRun: false,
     });
@@ -5209,7 +5201,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" },
       agentDryRun: false,
     });
@@ -5289,7 +5281,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "observe", request_changes: "observe" },
       agentDryRun: false,
     });

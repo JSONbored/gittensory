@@ -1099,7 +1099,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "auto", approve: "auto", close: "auto" },
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -1158,7 +1158,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       // The banned login is per-repo DB config; the label is the configurable `.gittensory.yml` value below —
@@ -1231,7 +1231,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
     });
@@ -1294,7 +1294,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", merge: "auto" },
     });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { screenshotTableGate: { enabled: true, whenLabels: ["visual"] } } }, "repo_file");
@@ -1378,7 +1378,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", label: "auto" },
     });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { screenshotTableGate: { enabled: true, whenLabels: ["visual"] } } }, "repo_file");
@@ -1484,7 +1484,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", label: "auto" },
     });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { screenshotTableGate: { enabled: true, whenLabels: ["visual"] } } }, "repo_file");
@@ -1602,7 +1602,7 @@ describe("queue processors", () => {
         installation: { id: 123, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { contents: "write", pull_requests: "write", issues: "write" }, events: [] },
       });
       await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       if (opts.premergeContentRecheck !== undefined) {
         await upsertRepoFocusManifest(env, "owner/repo", { gate: { premergeContentRecheck: opts.premergeContentRecheck } });
       }
@@ -1681,7 +1681,7 @@ describe("queue processors", () => {
       });
       // No default_branch on the repo record AND no base.ref on the PR record — baseRef resolves to undefined.
       await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       await upsertRepoFocusManifest(env, "owner/repo", { gate: { premergeContentRecheck: true } });
       await upsertPullRequestFromGitHub(env, "owner/repo", { number: 65, title: "No base ref", state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, labels: [], body: "" });
       const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[], treeCalls: 0 };
@@ -2053,7 +2053,7 @@ describe("queue processors", () => {
         installation: { id: 123, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { contents: "write", pull_requests: "write", issues: "write" }, events: [] },
       });
       await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: opts.autonomy ?? { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: opts.autonomy ?? { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       if (opts.guardrailMode !== undefined) {
         await upsertRepoFocusManifest(env, "owner/repo", { settings: { unlinkedIssueGuardrail: { mode: opts.guardrailMode } } });
       }
@@ -2179,7 +2179,7 @@ describe("queue processors", () => {
         autoMaintain: { requireApprovals: 0, mergeMethod: "squash" },
         aiReviewMode: "off",
         gatePack: "oss-anti-slop",
-        gateCheckMode: "enabled", reviewCheckMode: "required",
+        reviewCheckMode: "required",
         checkRunMode: "off",
         commentMode: "off",
         publicSurface: "off",
@@ -2338,7 +2338,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2406,7 +2406,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2492,7 +2492,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2533,7 +2533,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2577,7 +2577,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2624,7 +2624,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2663,7 +2663,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2711,7 +2711,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2755,7 +2755,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2793,7 +2793,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -2834,7 +2834,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 1,
@@ -2892,7 +2892,7 @@ describe("queue processors", () => {
       commentMode: "off",
       publicSurface: "off",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 100, // above SIBLING_COUNT + 1 — this test only cares about concurrency, not closing.
     });
@@ -2954,7 +2954,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
     });
@@ -3009,7 +3009,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -3077,7 +3077,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       // Deliberately NO contributorOpenPrCap here — only the install-wide env cap should catch this.
@@ -3142,7 +3142,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
     });
@@ -3201,7 +3201,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
     });
@@ -3259,7 +3259,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       autoCloseExemptLogins: ["farmer99"],
@@ -3320,7 +3320,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
     });
@@ -3382,7 +3382,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
     });
@@ -3440,7 +3440,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -3496,7 +3496,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -3577,7 +3577,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       // #label-scoping: the cap label/close rides on `close`; the new-account label rides on `review_state_label`.
       autonomy: { close: "auto", review_state_label: "auto" },
       contributorOpenPrCap: 4,
@@ -3614,7 +3614,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", review_state_label: "auto" },
       contributorOpenPrCap: 2,
       accountAgeThresholdDays: 30,
@@ -3668,7 +3668,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 4,
       accountAgeThresholdDays: 30,
@@ -3703,7 +3703,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       accountAgeThresholdDays: 30,
     });
     const seen = { labels: [] as string[], closed: false };
@@ -3749,7 +3749,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", label: "auto" },
       // accountAgeThresholdDays intentionally omitted — off by default.
     });
@@ -3804,7 +3804,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto", review_state_label: "auto" },
       accountAgeThresholdDays: 30,
       newAccountLabel: "custom-new-account-label",
@@ -3837,7 +3837,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       // autonomy intentionally omitted — deny-by-default ("observe" for every action class, including "review_state_label").
       accountAgeThresholdDays: 30,
     });
@@ -4233,7 +4233,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -4318,7 +4318,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,
@@ -4375,7 +4375,7 @@ describe("queue processors", () => {
       commentMode: "all_prs",
       publicSurface: "comment_only",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "advisory",
       autonomy: { close: "auto", label: "auto" },
       contributorOpenPrCap: 2,

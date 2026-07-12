@@ -260,7 +260,7 @@ describe("agentMaintenanceHeadMatchesGate", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { merge: "auto", approve: "auto", close: "auto" },
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -1047,7 +1047,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     });
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto" },
       agentPaused: false,
       ...overrides,
@@ -1175,7 +1175,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
       },
       repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
     });
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "enabled", reviewCheckMode: "required", autonomy: { close: "auto" }, agentPaused: false });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewCheckMode: "required", autonomy: { close: "auto" }, agentPaused: false });
     await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
 
     await processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-no-write", eventName: "pull_request", payload: draftPayload("contributor") });
@@ -1205,7 +1205,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     // No installations row pre-seeded. processGitHubWebhook auto-upserts one from the payload's bare
     // `installation: { id: 123 }` (no permissions field, as a real pull_request payload carries), so the
     // resulting row has no explicit pull_requests:write grant — the permission check must fail CLOSED (deny).
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "enabled", reviewCheckMode: "required", autonomy: { close: "auto" }, agentPaused: false });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewCheckMode: "required", autonomy: { close: "auto" }, agentPaused: false });
     await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
 
     await processJob(env, { type: "github-webhook", deliveryId: "draft-dodge-no-install-row", eventName: "pull_request", payload: draftPayload("contributor") });
@@ -1239,7 +1239,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
       },
       repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
     });
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "enabled", reviewCheckMode: "required", autonomy: { close: "auto" }, agentPaused: false });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", reviewCheckMode: "required", autonomy: { close: "auto" }, agentPaused: false });
     await recordGateBlockOutcome(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", blockerCodes: ["missing_linked_issue"] });
     // First getInstallation call in processGitHubWebhook (installationActor derivation, unrelated to this fix)
     // resolves normally; the SECOND call is the draft-dodge readiness check itself -- that one is a genuine D1
@@ -1625,7 +1625,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     });
     await upsertRepositorySettings(env, {
       repoFullName: "noslash",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { close: "auto" },
       agentPaused: false,
     });
@@ -3616,7 +3616,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
         const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
         await upsertInstallation(env, { action: "created", installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: {}, events: [] } });
         await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-        await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+        await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
         await seedWarmPrStateCache(env, "JSONbored/gittensory", 200);
         vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
           const url = input.toString();
@@ -3648,7 +3648,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await upsertInstallation(env, { action: "created", installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: {}, events: [] } });
       await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       await seedWarmPrStateCache(env, "JSONbored/gittensory", 201);
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         const url = input.toString();
@@ -3704,7 +3704,7 @@ describe("installation app_id capture + dual-app webhook filter (#selfhost-app-i
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
       await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write" }, events: [] } });
       await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
-      await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", gateCheckMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
       await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 6, title: "Sweep target", state: "open", user: { login: "contributor" }, head: { sha: "a6" }, base: { ref: "main" }, labels: [], body: "" });
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
         const url = input.toString();
@@ -4139,7 +4139,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
       commentMode: "off",
       publicSurface: "off",
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block", // the default blocker mechanism for these tests: missing linked issue -> gate failure
       ...settingsOverrides,
     });

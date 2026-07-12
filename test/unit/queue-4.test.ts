@@ -264,7 +264,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: over.autonomy ?? { merge: "auto", update_branch: "auto" },
       agentPaused: over.agentPaused ?? false,
     });
@@ -402,7 +402,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
       autonomy: { label: "observe" }, // not acting → agent never runs
@@ -446,7 +446,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { review_state_label: "auto", request_changes: "auto" },
     });
     // No confirmed-miner seed → author is unconfirmed; the manifest's linkedIssue:block + no issue fires a
@@ -496,7 +496,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { label: "auto" },
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -538,7 +538,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       autonomy: { review_state_label: "auto" },
       agentDryRun: true,
     });
@@ -587,7 +587,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
     });
     const calls = { gateChecks: 0, comments: 0, minerList: 0 };
@@ -658,7 +658,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
     });
     const calls = { gateChecks: 0, comments: 0, minerList: 0 };
@@ -736,7 +736,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       reviewCheckMode: "disabled",
       linkedIssueGateMode: "off",
     });
@@ -788,7 +787,6 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       reviewCheckMode: "disabled",
       linkedIssueGateMode: "off",
     });
@@ -837,7 +835,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
     });
     const calls = { minerList: 0, gateChecks: 0, comments: 0 };
@@ -909,7 +907,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
     });
 
@@ -976,7 +974,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
     });
     const calls = { minerList: 0, gateChecks: 0 };
@@ -1060,7 +1058,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "block",
       // Also exercise the opt-in slop advisory in the same surface pass: it persists a per-PR assessment
@@ -1143,7 +1141,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     const patchBodies: Array<{ status?: string; conclusion?: string; output?: { title?: string } }> = [];
@@ -1215,7 +1213,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -1286,7 +1284,7 @@ describe("queue processors", () => {
       autoLabelEnabled: true,
       createMissingLabel: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -1360,7 +1358,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -1419,7 +1417,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
       aiReviewMode: "off",
     });
@@ -1473,7 +1471,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "off",
     });
     const patchBodies: Array<{ status?: string; conclusion?: string; output?: { title?: string } }> = [];
@@ -1525,7 +1523,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
     });
@@ -1575,7 +1573,7 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       requireLinkedIssue: true,
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -1628,7 +1626,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
     });
     const calls = { gateWrites: 0, commentGets: 0, commentPosts: 0 };
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1688,7 +1686,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
     });
     let commentGets = 0;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -1739,7 +1737,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       includeMaintainerAuthors: true,
       commandAuthorization: { default: ["maintainer", "collaborator", "confirmed_miner"], commands: { "review-now": ["maintainer"] } },
     });
@@ -1845,7 +1842,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       includeMaintainerAuthors: true,
       autonomy: { merge: "auto" },
       commandAuthorization: { default: ["maintainer"], commands: { "review-now": ["maintainer"] } },
@@ -1935,7 +1932,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       includeMaintainerAuthors: true,
       // Slop gate on → the rerun must refresh the PR files before evaluating (the guard fires).
       slopGateMode: "advisory",
@@ -2009,7 +2005,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       includeMaintainerAuthors: true,
       // Even if repo config tries to allow confirmed miners, the checkbox is a maintainer/write-collaborator
       // control because it mutates the bot's persisted review comment.
@@ -2156,7 +2151,6 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "off",
       includeMaintainerAuthors: true,
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -2407,7 +2401,7 @@ describe("queue processors", () => {
       publicSurface: "comment_and_label",
       autoLabelEnabled: true,
       checkRunMode: "enabled",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
     });
     let publicCalls = 0;
     vi.stubGlobal("fetch", async () => {
@@ -2698,7 +2692,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -2885,7 +2879,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -3061,7 +3055,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
       // The only delta from the #4744 test above: turns on slop evidence collection so `slopBand` is populated
@@ -3228,7 +3222,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -3351,7 +3345,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -3498,7 +3492,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -3639,7 +3633,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -3811,7 +3805,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -3992,7 +3986,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
     });
@@ -4176,7 +4170,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -4254,7 +4248,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       // advisory (NOT block): block mode always reviews the full diff, ignoring exclude_paths/path_filters, so
       // only advisory mode exercises the filterReviewFilesForAi branch (src/queue/processors.ts).
       aiReviewMode: "advisory",
@@ -4329,7 +4323,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
       linkedIssueGateMode: "block",
@@ -4493,7 +4487,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
       autonomy: { update_branch: "auto" },
       qualityGateMode: "advisory",
@@ -4729,7 +4723,7 @@ describe("queue processors", () => {
   it("swallows an estimateReviewEffort failure when persisting the public-stats minutes — the publish still completes", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", aiReviewMode: "off", gatePack: "oss-anti-slop" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", aiReviewMode: "off", gatePack: "oss-anti-slop" });
     const estimateSpy = vi.spyOn(reviewEffortModule, "estimateReviewEffort").mockImplementationOnce(() => {
       throw new Error("estimator blew up");
     });
@@ -4817,7 +4811,7 @@ describe("queue processors", () => {
       publicSurface: "comment_only",
       autoLabelEnabled: false,
       checkRunMode: "off",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
@@ -4886,7 +4880,7 @@ describe("queue processors", () => {
     });
     await persistRegistrySnapshot(env, normalizeRegistryPayload({ "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } }, { kind: "raw-github", url: "https://example.test" }, "2026-05-23T00:00:00.000Z"));
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", aiReviewMode: "block", gatePack: "oss-anti-slop" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", aiReviewMode: "block", gatePack: "oss-anti-slop" });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 77, title: "Held PR", state: "open", user: { login: "contributor" }, head: { sha: "a77" }, labels: [{ name: "manual-review" }], body: "Closes #1" });
     await upsertPullRequestDetailSyncState(env, { repoFullName: "JSONbored/gittensory", pullNumber: 77, status: "complete", reviewsSyncedAt: new Date().toISOString() });
     // A prior PUBLISHED review for this exact head — the freeze path reuses it (aiReview = frozenReview) instead of
@@ -4946,7 +4940,7 @@ describe("queue processors", () => {
       AI_DAILY_NEURON_BUDGET: "100000",
     });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", gateCheckMode: "enabled", reviewCheckMode: "required", aiReviewMode: "block", gatePack: "oss-anti-slop" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", commentMode: "all_prs", publicSurface: "comment_only", autoLabelEnabled: false, checkRunMode: "off", reviewCheckMode: "required", aiReviewMode: "block", gatePack: "oss-anti-slop" });
     let unifiedCommentBody = "";
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -5013,7 +5007,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
     });
     // Seed a FAILED check summary with a per-check WHY (codecov-style) so listCheckSummaries returns it and the
@@ -5170,7 +5164,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -5318,7 +5312,7 @@ describe("queue processors", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "enabled", reviewCheckMode: "required",
+      reviewCheckMode: "required",
       backfillEnabled: true,
     });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
@@ -5503,7 +5497,6 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "off",
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
@@ -5557,7 +5550,6 @@ describe("queue processors", () => {
       publicSurface: "off",
       autoLabelEnabled: false,
       checkRunMode: "enabled",
-      gateCheckMode: "off",
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
