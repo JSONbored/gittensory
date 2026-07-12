@@ -1,16 +1,13 @@
-# AMS (gittensory-miner) local SQLite ledger datasources (#5184).
+# AMS (gittensory-miner) redacted SQLite reporting datasources (#5184).
 #
-# The miner keeps append-only SQLite ledgers under GITTENSORY_MINER_CONFIG_DIR (default ~/.config/gittensory-miner
-# on a laptop, or /data/miner in the fleet Docker image). This wires two scrape-free `frser-sqlite-datasource`
-# entries so a follow-on AMS usage dashboard can query them read-only — mirroring the maintainer `GittensoryDB`
-# entry in sqlite.yml. This file is purely additive (it touches no existing datasource) and provisions NO
-# dashboards or queries — that is the follow-on dashboard issue's scope.
+# Grafana must not mount the miner's live GITTENSORY_MINER_CONFIG_DIR ledgers. The attempt log and prediction
+# ledger contain free-form reasons, payload JSON, repo/target identifiers, readiness scores, and blocker/warning
+# codes that are private AMS intelligence. Instead, expose only redacted reporting-export snapshots, mirroring the
+# maintainer GittensoryDB pattern in sqlite.yml.
 #
-# PATH — the absolute path varies per install, so `path:` below is a documented placeholder. Mount your miner's
-# ledger directory (GITTENSORY_MINER_CONFIG_DIR) into the Grafana container at /ams-ledgers, e.g.:
-#   volumes: [ "${GITTENSORY_MINER_CONFIG_DIR:-~/.config/gittensory-miner}:/ams-ledgers:ro" ]
-# then Grafana reads the files below. The `:ro` mount + this read-only query plugin mean Grafana can never write
-# to the live ledgers. Adjust the two `path:` values if you mount elsewhere.
+# PATH — the absolute path varies per install, so `path:` below is a documented placeholder. Publish sanitized AMS
+# reporting exports into Grafana's existing reporting mount (for example /reporting/ams-attempt-log.sqlite and
+# /reporting/ams-prediction-ledger.sqlite) and keep the live ledger directory private to the miner.
 apiVersion: 1
 datasources:
   - name: AMS Attempt Log
@@ -19,11 +16,11 @@ datasources:
     access: proxy
     editable: false
     jsonData:
-      path: /ams-ledgers/attempt-log.sqlite3
+      path: /reporting/ams-attempt-log.sqlite
   - name: AMS Prediction Ledger
     type: frser-sqlite-datasource
     uid: ams-prediction-ledger
     access: proxy
     editable: false
     jsonData:
-      path: /ams-ledgers/prediction-ledger.sqlite3
+      path: /reporting/ams-prediction-ledger.sqlite
