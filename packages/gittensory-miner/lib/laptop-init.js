@@ -521,9 +521,7 @@ async function runInteractiveInit(args, env, options = {}) {
  *  claude checks at call time — `CLAUDE_CODE_OAUTH_TOKEN` present (see createClaudeCodeAi, src/selfhost/ai.ts). */
 export function checkClaudeCliPresent(options = {}) {
   const env = options.env ?? process.env;
-  const claudePath = (
-    options.resolveClaudePath ?? (() => findExecutableOnPath("claude", env))
-  )();
+  const claudePath = (options.resolveClaudePath ?? (() => findExecutableOnPath("claude", env)))();
   if (!claudePath) {
     const configured = codingAgentProviderConfiguredFor(env, "claude-cli");
     return {
@@ -534,15 +532,11 @@ export function checkClaudeCliPresent(options = {}) {
         : "not installed (optional until a coding-agent driver is configured)",
     };
   }
-  const authed =
-    typeof env.CLAUDE_CODE_OAUTH_TOKEN === "string" &&
-    env.CLAUDE_CODE_OAUTH_TOKEN.length > 0;
+  const authed = typeof env.CLAUDE_CODE_OAUTH_TOKEN === "string" && env.CLAUDE_CODE_OAUTH_TOKEN.length > 0;
   return {
     name: "claude-cli-present",
     ok: true,
-    detail: authed
-      ? `found at ${claudePath} (authenticated)`
-      : `found at ${claudePath} (not authenticated: set CLAUDE_CODE_OAUTH_TOKEN)`,
+    detail: authed ? `found at ${claudePath} (authenticated)` : `found at ${claudePath} (not authenticated: set CLAUDE_CODE_OAUTH_TOKEN)`,
   };
 }
 
@@ -551,9 +545,7 @@ export function checkClaudeCliPresent(options = {}) {
  *  assertCodexAuthConfigured uses at call time: codex's `auth.json` is readable. */
 export function checkCodexCliPresent(options = {}) {
   const env = options.env ?? process.env;
-  const codexPath = (
-    options.resolveCodexPath ?? (() => findExecutableOnPath("codex", env))
-  )();
+  const codexPath = (options.resolveCodexPath ?? (() => findExecutableOnPath("codex", env)))();
   if (!codexPath) {
     const configured = codingAgentProviderConfiguredFor(env, "codex-cli");
     return {
@@ -564,9 +556,7 @@ export function checkCodexCliPresent(options = {}) {
         : "not installed (optional until a coding-agent driver is configured)",
     };
   }
-  const authPath = (
-    options.resolveCodexAuthPath ?? (() => resolveCodexAuthPath(env))
-  )();
+  const authPath = (options.resolveCodexAuthPath ?? (() => resolveCodexAuthPath(env)))();
   let authed = false;
   try {
     accessSync(authPath, constants.R_OK);
@@ -575,11 +565,7 @@ export function checkCodexCliPresent(options = {}) {
     // auth.json missing or unreadable — codex would fail for lack of credentials at call time.
   }
   if (authed) {
-    return {
-      name: "codex-cli-present",
-      ok: true,
-      detail: `found at ${codexPath} (authenticated)`,
-    };
+    return { name: "codex-cli-present", ok: true, detail: `found at ${codexPath} (authenticated)` };
   }
   // codex-cli IS the configured driver but auth.json is missing/expired: a more specific, actionable remediation
   // than the generic advisory below, mirroring ORB's codexAuthReadinessProbe/assertCodexAuthConfigured wording

@@ -122,7 +122,11 @@ describe("buildAttemptLoopInput (#5132)", () => {
       rejectionSignaled: false,
       amsPolicySpec: { ...DEFAULT_AMS_POLICY_SPEC, capLimits: { budget: 9, turns: 8, elapsedMs: 7 } },
     });
-    expect(loopInput.budget).toEqual({ maxTurns: 8, maxWallClockMs: 7, maxCostUsd: 9 });
+    expect((loopInput as unknown as { budget: { maxTurns: number; maxWallClockMs: number; maxCostUsd: number } }).budget).toEqual({
+      maxTurns: 8,
+      maxWallClockMs: 7,
+      maxCostUsd: 9,
+    });
   });
 
   it("threads a real rejectionSignaled:true through unchanged", () => {

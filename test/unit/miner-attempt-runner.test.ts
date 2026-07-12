@@ -192,7 +192,7 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
 
     expect(result.outcome).toBe("abandon");
     expect(result.loopResult.finalDecision.abandonReason).toBe("cost_ceiling_reached");
-    expect(result.loopResult.budgetBreaches).toEqual(["turns"]);
+    expect((result.loopResult as unknown as { budgetBreaches: string[] }).budgetBreaches).toEqual(["turns"]);
     expect(result.loopResult.iterationsUsed).toBe(1);
     // No downstream gate consulted -- the same real short-circuit as the maxIterations:0 case above.
     expect(claimLedgerListClaims).not.toHaveBeenCalled();
@@ -205,7 +205,7 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
     expect(result.outcome).toBe("submitted");
     if (result.outcome !== "submitted") throw new Error("expected submitted");
     expect(result.loopResult.outcome).toBe("handoff");
-    expect(result.loopResult.budgetBreaches).toEqual([]);
+    expect((result.loopResult as unknown as { budgetBreaches: string[] }).budgetBreaches).toEqual([]);
   });
 
   it("abandon mid-loop: a real iteration ran (and was billed) before the ceiling forced abandon", async () => {
