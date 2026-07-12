@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { registerCleanupResource } from "./process-lifecycle.js";
 
 // Shared path-resolution + DB-open boilerplate for the package's local SQLite stores (#4272). This is a DRY pass
 // only, not a merge: run-state.js, claim-ledger.js, portfolio-queue.js, and event-ledger.js each keep their own
@@ -48,5 +49,14 @@ export function openLocalStoreDb(resolvedPath, options = {}) {
   const db = new DatabaseSync(resolvedPath);
   if (!isMemory) chmodSync(resolvedPath, 0o600);
   db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
+  // Crash-safety (#4826): register every opened store so a SIGINT/SIGTERM/uncaught-exception handler can close it
+  // mid-run instead of leaving it half-written. The normal `close()` unregisters first, so the happy path never
+  // double-closes and a long-running `loop` doesn't accumulate stale references.
+  const unregister = registerCleanupResource(db);
+  const originalClose = db.close.bind(db);
+  db.close = () => {
+    unregister();
+    return originalClose();
+  };
   return db;
 }

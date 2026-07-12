@@ -16,6 +16,11 @@ import {
   resolvePortfolioQueueDbPath,
 } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
 import { closeDefaultRunStateStore, initRunStateStore, resolveRunStateDbPath } from "../../packages/gittensory-miner/lib/run-state.js";
+import {
+  cleanupResourceCount,
+  closeAllCleanupResources,
+  resetProcessLifecycleForTesting,
+} from "../../packages/gittensory-miner/lib/process-lifecycle.js";
 
 const roots: string[] = [];
 const dbs: Array<{ close(): void }> = [];
@@ -93,6 +98,29 @@ describe("gittensory-miner shared local-store helper (#4272)", () => {
     dbs.push(db);
     db.exec("CREATE TABLE t (id INTEGER)");
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 't'").get()).toEqual({ name: "t" });
+  });
+
+  it("openLocalStoreDb registers the store for crash-safe cleanup and unregisters it on normal close (#4826)", () => {
+    resetProcessLifecycleForTesting();
+    expect(cleanupResourceCount()).toBe(0);
+    const db = openLocalStoreDb(":memory:");
+    expect(cleanupResourceCount()).toBe(1);
+    db.close();
+    // The normal close() path unregisters, so the happy path never leaks a stale handle or double-closes at exit.
+    expect(cleanupResourceCount()).toBe(0);
+  });
+
+  it("closeAllCleanupResources closes a store left open at crash time (#4826)", () => {
+    resetProcessLifecycleForTesting();
+    const db = openLocalStoreDb(":memory:");
+    db.exec("CREATE TABLE t (id INTEGER)");
+    expect(cleanupResourceCount()).toBe(1);
+
+    closeAllCleanupResources();
+
+    expect(cleanupResourceCount()).toBe(0);
+    // The DB really is closed now: a subsequent operation throws instead of silently touching a half-written file.
+    expect(() => db.exec("SELECT 1")).toThrow();
   });
 
   it("regression: the four migrated stores still resolve to independent files, and each on-disk file only has its own table (#4272)", () => {

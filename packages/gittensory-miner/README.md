@@ -99,6 +99,13 @@ else `XDG_CONFIG_HOME` (falling back to `~/.config`), joined with `gittensory-mi
 its file with `0700`/`0600` permissions and a shared `PRAGMA busy_timeout` so two instances on the same file
 serialize writes instead of racing.
 
+Opening a store through `local-store.js` also registers it with the CLI's crash-safety chokepoint
+(`process-lifecycle.js`): the entrypoint calls `installCliSignalHandlers()` once at startup, so a `SIGINT`/`SIGTERM`
+mid-run — or an uncaught exception / unhandled rejection — closes every still-open ledger cleanly and exits with a
+conventional code (130/143 for signals, non-zero for a crash) instead of dying mid-write. A store's normal `close()`
+unregisters itself first, so the happy path never double-closes and a long-running `loop` never accumulates stale
+handles. Cleanup only — no command business logic is affected. (#4826)
+
 The "PR portfolio" `manage status` renders is currently a **read-time join**, not a dedicated table:
 `collectManageStatus` reads `portfolio-queue.js` rows (via the `pr:{number}` identifier convention) and joins them
 against `event-ledger.js`'s free-form `manage_pr_update` JSON events at query time, on every read. Decision: keep

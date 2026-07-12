@@ -15,6 +15,7 @@ import { runPlanCli } from "../lib/plan-store-cli.js";
 import { runClaimCli } from "../lib/claim-ledger-cli.js";
 import { runQueueCli } from "../lib/portfolio-queue-cli.js";
 import { runOrbExportCli } from "../lib/orb-export.js";
+import { installCliSignalHandlers } from "../lib/process-lifecycle.js";
 import { runStateCli } from "../lib/run-state-cli.js";
 import { runInit } from "../lib/laptop-init.js";
 import { runDoctor, runStatus } from "../lib/status.js";
@@ -24,6 +25,10 @@ import {
   startUpdateCheck,
 } from "../lib/update-check.js";
 import { resolveMinerVersion } from "../lib/version.js";
+
+// Register signal + crash handlers once, before any command runs, so an interrupted run closes its open ledgers
+// cleanly instead of dying mid-write (#4826). Covers every subcommand below, including the local ones.
+installCliSignalHandlers();
 
 const cliArgs = process.argv.slice(2);
 
