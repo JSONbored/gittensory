@@ -36,6 +36,15 @@ fi
 # polling often enough that a normal ~15-20s boot returns almost immediately once actually ready.
 READY_RETRIES="${SELFHOST_READY_RETRIES:-45}"
 READY_RETRY_DELAY_SECONDS="${SELFHOST_READY_RETRY_DELAY_SECONDS:-2}"
+if [[ ! "$READY_RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "selfhost post-update check: warning — invalid SELFHOST_READY_RETRIES=$READY_RETRIES (using 45)" >&2
+  READY_RETRIES=45
+fi
+if [[ ! "$READY_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "selfhost post-update check: warning — invalid SELFHOST_READY_RETRY_DELAY_SECONDS=$READY_RETRY_DELAY_SECONDS (using 2)" >&2
+  READY_RETRY_DELAY_SECONDS=2
+fi
+READY_TIMEOUT_SECONDS=$((10#$READY_RETRIES * 10#$READY_RETRY_DELAY_SECONDS))
 
 echo "selfhost post-update check: probing $READY_URL"
 ready=0
@@ -47,7 +56,7 @@ for _ in $(seq 1 "$READY_RETRIES"); do
   sleep "$READY_RETRY_DELAY_SECONDS"
 done
 if [ "$ready" -ne 1 ]; then
-  echo "error: $READY_URL did not return HTTP 2xx after $READY_RETRIES attempts ($((READY_RETRIES * READY_RETRY_DELAY_SECONDS))s)" >&2
+  echo "error: $READY_URL did not return HTTP 2xx after $READY_RETRIES attempts (${READY_TIMEOUT_SECONDS}s)" >&2
   exit 1
 fi
 
