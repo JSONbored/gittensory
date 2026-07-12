@@ -4,6 +4,46 @@ How to point Grafana at redacted miner reporting exports to see attempt and pred
 miner's live local ledgers. This covers the **miner-specific** observability wiring only; for general self-host
 operations, see your ops runbook.
 
+Everything here is **opt-in and off by default** ([#4839](https://github.com/JSONbored/gittensory/issues/4839)):
+AMS's zero-infra "laptop mode" keeps working with no observability stack present at all. There are two independent
+paths — **pull metrics** (Prometheus scrapes text you export) and **SQLite → Grafana** (Grafana reads redacted
+ledger snapshots). Pick either, both, or neither.
+
+## Scrape miner metrics with Prometheus (opt-in)
+
+The miner renders its counters as Prometheus text-exposition on demand — nothing is emitted unless you run a
+command, so this adds no runtime cost to a laptop miner:
+
+- `gittensory-miner metrics` — prediction-calibration counters ([#4838](https://github.com/JSONbored/gittensory/issues/4838)).
+- `gittensory-miner ledger metrics` — event-ledger counters by type ([#4841](https://github.com/JSONbored/gittensory/issues/4841)).
+- `gittensory-miner metrics export` — the **unified** surface: both of the above composed into one exposition
+  document, plus a `gittensory_miner_build_info{version="…"}` gauge and a `gittensory_miner_scrape_timestamp_seconds`
+  gauge so staleness is visible in Grafana.
+
+`metrics export` prints to stdout by default (always safe to run). To feed a Prometheus
+[node_exporter textfile collector](https://github.com/prometheus/node_exporter#textfile-collector), point it at a
+`.prom` file in the collector's directory — via `--file <path>` or the `GITTENSORY_MINER_METRICS_FILE` environment
+variable (`--file` wins). The file is written atomically (temp file + rename), so the collector never scrapes a
+half-written document:
+
+```sh
+# One-shot, or on a cron / systemd timer next to a long-running `gittensory-miner loop`:
+GITTENSORY_MINER_METRICS_FILE=/var/lib/node_exporter/textfile/gittensory-miner.prom \
+  gittensory-miner metrics export
+```
+
+Prometheus then scrapes node_exporter as usual, and the `gittensory_miner_*` series appear in your own Grafana.
+Leaving `GITTENSORY_MINER_METRICS_FILE` unset and never running the command keeps the miner completely inert — the
+laptop-mode contract.
+
+## Tracing hook (opt-in integration point)
+
+For a self-hoster wiring the miner into their own tracer, `withMinerSpan(name, attributes, fn, options)` (exported
+from `lib/observability.js`) is a no-op-by-default span wrapper mirroring the main product's `withOtelSpan`: with
+`options.enabled` unset it just runs `fn` with zero overhead; when enabled it times `fn` and reports
+`{ name, attributes, durationMs, ok }` to `options.onSpan`, which an embedder points at their OpenTelemetry/other
+tracer. It never changes control flow (the function's result and thrown errors pass straight through).
+
 ## What's observable
 
 The miner writes append-only SQLite ledgers under `GITTENSORY_MINER_CONFIG_DIR` (default

@@ -112,6 +112,14 @@ against `event-ledger.js`'s free-form `manage_pr_update` JSON events at query ti
 this as a read-time join for now; revisit a dedicated indexed table only if/when PR-portfolio reads become frequent
 enough (e.g. a live-polling dashboard) that the per-read linear event-ledger scan becomes a measured bottleneck.
 
+The package also includes an opt-in, off-by-default metrics/tracing surface (`observability.js` /
+`observability-cli.js`): `gittensory-miner metrics export` composes the per-ledger prediction (#4838) and
+event-ledger (#4841) Prometheus counters into one exposition document (plus build-info/scrape-time gauges) and
+either prints it or writes it atomically to `GITTENSORY_MINER_METRICS_FILE` (a node_exporter textfile-collector
+path), so a self-hoster can scrape miner activity into their own Prometheus/Grafana. Tracing is exposed via the
+no-op-by-default `withMinerSpan` hook. Nothing runs unless explicitly opted in — laptop mode stays zero-infra. See
+[`docs/observability.md`](docs/observability.md). (#4839)
+
 ## Install
 
 See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md) for the `.gittensory-miner.yml` field reference and [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) at the repo root.

@@ -11,6 +11,7 @@ import { runLoop } from "../lib/loop-cli.js";
 import { runManagePoll } from "../lib/manage-poll.js";
 import { runManageStatus } from "../lib/manage-status.js";
 import { runMetrics } from "../lib/metrics-cli.js";
+import { runMetricsExport } from "../lib/observability-cli.js";
 import { runPlanCli } from "../lib/plan-store-cli.js";
 import { runClaimCli } from "../lib/claim-ledger-cli.js";
 import { runQueueCli } from "../lib/portfolio-queue-cli.js";
@@ -52,6 +53,11 @@ if (cliArgs[0] === "doctor") {
 // `metrics` is strictly local + offline like `status`/`doctor` (it reads only the local prediction ledger), so it
 // is dispatched here, before the opportunistic npm-registry update check is ever started.
 if (cliArgs[0] === "metrics") {
+  // `metrics export` (#4839) is the opt-in unified scrape surface; bare `metrics` stays the prediction renderer.
+  // Both are strictly local + offline, so they dispatch here before the npm-registry update check.
+  if (cliArgs[1] === "export") {
+    process.exit(runMetricsExport(cliArgs.slice(2)));
+  }
   process.exit(runMetrics(cliArgs.slice(1)));
 }
 
