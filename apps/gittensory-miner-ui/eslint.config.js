@@ -34,7 +34,7 @@ export default tseslint.config(
           selector:
             "Literal[value=/(^|\\s)(text-(2xs|xs|sm|base|md|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-\\[\\d|leading-(none|tight|snug|normal|relaxed|loose|3|4|5|6|7|8|9|10)|leading-\\[|rounded-(sm|md|lg|xl|2xl|3xl)|divide-y(\\s|$)|border-(t|b|l|r)(\\s|$))(\\s|$)/]",
           message:
-            "Use design tokens instead: text-token-*, leading-token-*, rounded-token, border-hairline / divide-hairline. See @jsonbored/gittensory-ui-kit/theme.css.",
+            "Use design tokens instead: text-token-*, leading-token-*, rounded-token, border-hairline / divide-hairline. See @jsonbored/loopover-ui-kit/theme.css.",
         },
         {
           selector:

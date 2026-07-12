@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { resolveAiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import { resolveAiPolicyVerdict } from "@jsonbored/loopover-engine";
 
 const defaultApiBaseUrl = "https://api.github.com";
 const defaultConcurrency = 5;

@@ -2,7 +2,7 @@
 // (portfolio-queue.js, #2292) with the pure engine selector (nextEligibleItems, queue.ts, #2326) so batch
 // claiming respects global/per-repo WIP caps and cross-repo diversification instead of a naive priority-only
 // single-row dequeue. Caps are plain constructor arguments — not wired to .gittensory-miner.yml here.
-import { nextEligibleItems } from "@jsonbored/gittensory-engine";
+import { nextEligibleItems } from "@jsonbored/loopover-engine";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { DEFAULT_MAX_LEASE_MS, sweepStuckItems } from "./portfolio-queue-expiry.js";
 

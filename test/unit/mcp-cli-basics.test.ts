@@ -119,7 +119,7 @@ describe("gittensory-mcp CLI — basics", () => {
   });
 
   it("reports the package version via version, --version, and -v", () => {
-    const expected = `@jsonbored/gittensory-mcp/${mcpPackageJson.version}`;
+    const expected = `@jsonbored/loopover-mcp/${mcpPackageJson.version}`;
     for (const flag of ["version", "--version", "-v"]) {
       const plain = run([flag]).trim();
       expect(plain).toContain(expected);
@@ -131,7 +131,7 @@ describe("gittensory-mcp CLI — basics", () => {
 
   it("emits machine-readable version output with --json", () => {
     const payload = JSON.parse(run(["version", "--json"])) as { name: string; version: string; apiVersion: string; node: string };
-    expect(payload.name).toBe("@jsonbored/gittensory-mcp");
+    expect(payload.name).toBe("@jsonbored/loopover-mcp");
     expect(payload.version).toBe(mcpPackageJson.version);
     expect(payload.apiVersion).toBe("0.1.0");
     expect(payload.node).toBe(process.version);

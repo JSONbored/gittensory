@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/aspect-ratio";
+export * from "@jsonbored/loopover-ui-kit/components/aspect-ratio";

@@ -15,7 +15,7 @@ import { initPortfolioQueueStore } from "../lib/portfolio-queue.js";
 import { initRunStateStore } from "../lib/run-state.js";
 import { PLAN_STATUSES, openPlanStore } from "../lib/plan-store.js";
 
-// MCP stdio server for @jsonbored/gittensory-miner (scaffold #5153). Mirrors the packages/gittensory-mcp
+// MCP stdio server for @jsonbored/loopover-miner (scaffold #5153). Mirrors the packages/gittensory-mcp
 // harness (MCP SDK server + stdio transport). Tools:
 //   - gittensory_miner_ping (#5153): trivial static health check, reads no AMS state.
 //   - gittensory_miner_get_portfolio_dashboard (#5155): read-only per-repo backlog dashboard, wrapping the

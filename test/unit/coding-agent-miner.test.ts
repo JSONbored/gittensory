@@ -646,7 +646,7 @@ describe("lint-guarded edit wrapper (#4276)", () => {
   it("guardChangedFiles checks a changeset spanning multiple packages against each file's OWN rule, once per package", async () => {
     const { spawn, calls } = recordingSpawn({
       "npm run typecheck": { code: 0, output: "" },
-      "npm run build --workspace @jsonbored/gittensory-engine": { code: 1, output: "engine build failed" },
+      "npm run build --workspace @jsonbored/loopover-engine": { code: 1, output: "engine build failed" },
       "node --check packages/gittensory-miner/lib/cli.js": { code: 0, output: "" },
       "npm run ui:typecheck": { code: 0, output: "" },
     });

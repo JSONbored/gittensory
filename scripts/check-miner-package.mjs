@@ -51,7 +51,7 @@ function loadMinerPackFromNpm() {
     const paths = JSON.parse(process.env.CHECK_MINER_PACK_TEST_FILES);
     return { files: paths.map((path) => ({ path })) };
   }
-  const result = spawnSync("npm", ["pack", "--workspace", "@jsonbored/gittensory-miner", "--dry-run", "--json"], {
+  const result = spawnSync("npm", ["pack", "--workspace", "@jsonbored/loopover-miner", "--dry-run", "--json"], {
     encoding: "utf8",
   });
   if (result.status !== 0) {

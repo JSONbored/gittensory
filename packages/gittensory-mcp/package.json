@@ -1,9 +1,9 @@
 {
-  "name": "@jsonbored/gittensory-mcp",
+  "name": "@jsonbored/loopover-mcp",
   "version": "0.7.1",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "Local stdio MCP wrapper for the Gittensory Gittensor base-agent.",
+  "description": "Local stdio MCP wrapper for the LoopOver Gittensor base-agent.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JSONbored/gittensory.git",
@@ -38,7 +38,7 @@
     "build": "node --check bin/gittensory-mcp.js && node --check lib/local-branch.js && node --check lib/format-table.js && node --check scripts/gittensor-score-preview.mjs"
   },
   "dependencies": {
-    "@jsonbored/gittensory-engine": "^1.0.0",
+    "@jsonbored/loopover-engine": "^1.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "^4.4.3"
   },

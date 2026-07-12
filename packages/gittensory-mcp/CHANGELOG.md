@@ -295,7 +295,7 @@
 - Gittensory_lint_pr_text commit/PR-body rubric linter (#634)
 - Per-repo time-decay hyperparameters + go live (#703) (#733)
 - Active issue-watch monitor — gittensory_watch_issues (#699 path B) (#735)
-- Slop self-check tools + release @jsonbored/gittensory-mcp v0.6.0 (#745)
+- Slop self-check tools + release @jsonbored/loopover-mcp v0.6.0 (#745)
 
 ### Fixes
 - Bound local branch scenario inputs (#614)

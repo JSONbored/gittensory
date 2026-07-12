@@ -15,7 +15,7 @@ describe("CI engine/miner path filters", () => {
     expect(ci).toContain("name: Build engine package");
     expect(ci).toContain("name: Build miner CLI");
     expect(ci).toContain("name: Miner package check");
-    expect(ci).toContain("npm run build --workspace @jsonbored/gittensory-engine");
+    expect(ci).toContain("npm run build --workspace @jsonbored/loopover-engine");
     expect(ci).toContain("npm run build:miner");
     expect(ci).toContain("npm run test:miner-pack");
   });

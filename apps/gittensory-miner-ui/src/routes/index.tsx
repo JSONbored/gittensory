@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
+import { Card, CardContent, CardHeader } from "@jsonbored/loopover-ui-kit/components/card";
 
 export const Route = createFileRoute("/")({
   component: IndexPage,

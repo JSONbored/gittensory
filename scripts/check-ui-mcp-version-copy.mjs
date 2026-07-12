@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import { get } from "node:https";
 
 const root = process.cwd();
-const packageName = "@jsonbored/gittensory-mcp";
+const packageName = "@jsonbored/loopover-mcp";
 const registryUrl = "https://registry.npmjs.org/@jsonbored%2fgittensory-mcp";
 const sourceLatestPath = join(root, "apps/gittensory-ui/src/lib/mcp-package.ts");
 const targets = [

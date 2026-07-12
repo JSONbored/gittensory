@@ -1,7 +1,7 @@
 import { listCheckSummaries, listPullRequestReviews } from "../db/repositories";
 import type { CheckSummaryRecord, PullRequestRecord, PullRequestReviewRecord } from "../types";
 
-// Deterministic open-PR classification/detection, extracted to `@jsonbored/gittensory-engine` (#2282) so
+// Deterministic open-PR classification/detection, extracted to `@jsonbored/loopover-engine` (#2282) so
 // the miner can run the same pending-PR-scenario logic locally. Re-exported here (via relative source path
 // — see src/scoring/preview.ts's shim comment for why) so every existing import of this module keeps
 // working unchanged. The two D1-fetching loaders below cannot move into the engine package, so they stay

@@ -3,7 +3,7 @@
 The **fleet run-manifest** is the top-level config a *fleet operator* authors to run the miner across many repos
 at once: it declares which repos are in scope for a fleet run and how a finite worktree/concurrency budget is
 split between them. It is parsed by `parseFleetRunManifestContent` / `parseFleetRunManifest` in
-`@jsonbored/gittensory-engine` (`packages/gittensory-engine/src/fleet-run-manifest.ts`).
+`@jsonbored/loopover-engine` (`packages/gittensory-engine/src/fleet-run-manifest.ts`).
 
 It is **not** the same file as `.gittensory-miner.yml` (see [`miner-goal-spec.md`](./miner-goal-spec.md)) — the
 naming is easy to conflate. Same tolerant-parser convention (every field optional, unknown keys ignored, a

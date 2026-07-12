@@ -13,7 +13,7 @@ import {
 } from "./mcp-release-candidate-core.mjs";
 
 const PACKAGE_DIR = "packages/gittensory-mcp";
-const WORKSPACE = "@jsonbored/gittensory-mcp";
+const WORKSPACE = "@jsonbored/loopover-mcp";
 const PUBLISH_WORKFLOW = ".github/workflows/npm-publish.yml";
 const onWindows = process.platform === "win32";
 

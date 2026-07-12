@@ -1,7 +1,7 @@
 # Discovery-index API contract
 
 The **discovery-index contract** is the typed request/response shape a miner uses to query the *optional* hosted
-discovery-index service. It is defined in `@jsonbored/gittensory-engine`
+discovery-index service. It is defined in `@jsonbored/loopover-engine`
 (`packages/gittensory-engine/src/discovery-index-contract.ts`) so both sides — this repo's future server
 implementation ([#4250](https://github.com/JSONbored/gittensory/issues/4250), maintainer-only, explicitly blocked
 on this contract) and any client — build against one shape.

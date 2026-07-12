@@ -9,7 +9,7 @@ export type MinerCommandAction = {
   boundary: "local-mcp";
 };
 
-const MCP_PACKAGE = "@jsonbored/gittensory-mcp";
+const MCP_PACKAGE = "@jsonbored/loopover-mcp";
 const FALLBACK_LOGIN = "your-login";
 const FALLBACK_REPO = "owner/repo";
 

@@ -1,6 +1,6 @@
 // Hosted `gittensory_find_opportunities` (#2308): metadata-only cross-repo discovery that composes the
 // opportunity fan-out (#2307), deterministic ranker (#2302), and goal-model signals from
-// `@jsonbored/gittensory-engine` — never clones source, never uploads metadata, never writes to GitHub.
+// `@jsonbored/loopover-engine` — never clones source, never uploads metadata, never writes to GitHub.
 // Banned repos are hard-skipped upstream in fan-out AI-policy resolution; only `aiPolicyAllowed: true`
 // rows are ever returned.
 

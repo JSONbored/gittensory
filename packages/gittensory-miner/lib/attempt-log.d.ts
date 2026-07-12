@@ -1,4 +1,4 @@
-import type { AttemptLogEvent } from "@jsonbored/gittensory-engine";
+import type { AttemptLogEvent } from "@jsonbored/loopover-engine";
 
 export type AttemptLogEntry = {
   id: number;

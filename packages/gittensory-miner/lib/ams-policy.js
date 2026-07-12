@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { AMS_POLICY_SPEC_FILENAMES, DEFAULT_AMS_POLICY_SPEC, parseAmsPolicySpecContent } from "@jsonbored/gittensory-engine";
+import { AMS_POLICY_SPEC_FILENAMES, DEFAULT_AMS_POLICY_SPEC, parseAmsPolicySpecContent } from "@jsonbored/loopover-engine";
 import { resolveLocalStoreDbPath } from "./local-store.js";
 
 // Real two-scope resolver for `.gittensory-ams.yml` (#5132, Wave 3.5 follow-up). AmsPolicySpec
@@ -83,7 +83,7 @@ async function fetchRepoAmsPolicyContent(target, resolved) {
  *   readFileSync?: (path: string, encoding: "utf8") => string, existsSync?: (path: string) => boolean,
  *   env?: Record<string, string | undefined>,
  * }} [options]
- * @returns {Promise<{ spec: import("@jsonbored/gittensory-engine").AmsPolicySpec, source: "local"|"repo"|"default", warnings: string[] }>}
+ * @returns {Promise<{ spec: import("@jsonbored/loopover-engine").AmsPolicySpec, source: "local"|"repo"|"default", warnings: string[] }>}
  */
 export async function resolveAmsPolicy(repoFullName, options = {}) {
   const resolved = normalizeOptions(options);

@@ -7,7 +7,7 @@ import {
   evaluateWriteRateLimit,
   recordWriteRateLimitAllowed,
   recordWriteRateLimitDenied,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import { appendGovernorEvent } from "./governor-ledger.js";
 
 /**
@@ -16,10 +16,10 @@ import { appendGovernorEvent } from "./governor-ledger.js";
  * @param {object} input
  * @param {string} input.actionClass governor write class (e.g. open_pr, comment)
  * @param {string} input.repoFullName target repo
- * @param {import("@jsonbored/gittensory-engine").WriteRateLimitBucketStore} input.buckets
- * @param {import("@jsonbored/gittensory-engine").WriteRateLimitBackoffStore} input.backoffAttempts
+ * @param {import("@jsonbored/loopover-engine").WriteRateLimitBucketStore} input.buckets
+ * @param {import("@jsonbored/loopover-engine").WriteRateLimitBackoffStore} input.backoffAttempts
  * @param {number} input.nowMs clock reading in epoch ms
- * @param {import("@jsonbored/gittensory-engine").WriteRateLimitPolicies} [input.policies]
+ * @param {import("@jsonbored/loopover-engine").WriteRateLimitPolicies} [input.policies]
  * @param {() => number} [input.randomFn] injected jitter source (defaults to mid-band draw)
  * @param {{ append?: typeof appendGovernorEvent }} [options]
  */

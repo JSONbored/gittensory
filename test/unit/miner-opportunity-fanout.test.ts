@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@jsonbored/loopover-engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 

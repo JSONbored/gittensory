@@ -1,8 +1,8 @@
 {
-  "name": "@jsonbored/gittensory-ui",
+  "name": "@jsonbored/loopover-ui",
   "version": "0.0.0",
   "private": true,
-  "description": "Gittensory's public website, docs, and dashboard (TanStack Start SPA/SSR app).",
+  "description": "LoopOver's public website, docs, and dashboard (TanStack Start SPA/SSR app).",
   "packageManager": "npm@10.9.8",
   "sideEffects": false,
   "type": "module",
@@ -20,7 +20,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
-    "@jsonbored/gittensory-ui-kit": "^0.1.0",
+    "@jsonbored/loopover-ui-kit": "^0.1.0",
     "@radix-ui/react-accordion": "^1.2.15",
     "@radix-ui/react-alert-dialog": "^1.1.18",
     "@radix-ui/react-aspect-ratio": "^1.1.11",

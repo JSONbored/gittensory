@@ -30,7 +30,7 @@ const TOKENLESS_WORKFLOW = [
   "      id-token: write",
   "    steps:",
   "      - name: Publish with npm trusted publishing",
-  "        run: npx -y npm@11.15.0 publish --workspace @jsonbored/gittensory-mcp --access public --provenance",
+  "        run: npx -y npm@11.15.0 publish --workspace @jsonbored/loopover-mcp --access public --provenance",
 ].join("\n");
 
 describe("parseReleaseTag / checkTag", () => {

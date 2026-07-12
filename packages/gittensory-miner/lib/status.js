@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CODING_AGENT_DRIVER_CONFIG_ENV, resolveFirstConfiguredCodingAgentDriverName } from "@jsonbored/gittensory-engine";
+import { CODING_AGENT_DRIVER_CONFIG_ENV, resolveFirstConfiguredCodingAgentDriverName } from "@jsonbored/loopover-engine";
 import {
   checkClaudeCliPresent,
   checkCodexCliPresent,
@@ -29,8 +29,8 @@ function moduleDir() {
   return (cachedModuleDir ??= import.meta.dirname);
 }
 
-const PACKAGE_NAME = "@jsonbored/gittensory-miner";
-const ENGINE_PACKAGE = "@jsonbored/gittensory-engine";
+const PACKAGE_NAME = "@jsonbored/loopover-miner";
+const ENGINE_PACKAGE = "@jsonbored/loopover-engine";
 // Config-file discovery order (mirrors the `.gittensory-miner.yml` precedence the goal-spec parser documents).
 const CONFIG_FILE_CANDIDATES = Object.freeze([
   ".gittensory-miner.yml",
@@ -52,7 +52,7 @@ export function resolveMinerStateDir(env = process.env) {
   return join(configHome, "gittensory-miner");
 }
 
-// The pinned @jsonbored/gittensory-engine version this miner is built against, read from the miner's own declared
+// The pinned @jsonbored/loopover-engine version this miner is built against, read from the miner's own declared
 // dependency. (The engine package's `exports` map blocks `require("<pkg>/package.json")`, and its built `dist` may
 // be absent depending on build order, so the declared-dependency version is the reliable, always-available source.)
 function readEngineVersion() {
@@ -88,7 +88,7 @@ export function readInstalledEnginePackageVersionFromPaths(
   return null;
 }
 
-/** Installed @jsonbored/gittensory-engine semver from node_modules (not the declared dependency range). */
+/** Installed @jsonbored/loopover-engine semver from node_modules (not the declared dependency range). */
 export function readInstalledEnginePackageVersion() {
   try {
     return readInstalledEnginePackageVersionFromPaths(

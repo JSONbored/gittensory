@@ -7,7 +7,7 @@ import {
   isGlobalMinerLiveModeOptIn,
   minerActionModeExecutes,
   resolveMinerActionMode,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import { appendGovernorEvent } from "./governor-ledger.js";
 
 /**
@@ -16,10 +16,10 @@ import { appendGovernorEvent } from "./governor-ledger.js";
  * opt-in. Both sides must opt in before real writes execute; repo config alone only preserves dry-run.
  *
  * @param {object} input
- * @param {import("@jsonbored/gittensory-engine").MinerKillSwitchScope} input.killSwitchScope
+ * @param {import("@jsonbored/loopover-engine").MinerKillSwitchScope} input.killSwitchScope
  * @param {unknown} [input.repoLiveModeOptIn] `MinerGoalSpec.execution.liveModeOptIn` from the target repo
  * @param {Record<string, string | undefined>} [input.env]
- * @returns {{ mode: import("@jsonbored/gittensory-engine").MinerActionMode, executes: boolean }}
+ * @returns {{ mode: import("@jsonbored/loopover-engine").MinerActionMode, executes: boolean }}
  */
 export function resolveMinerActionModeGate(input) {
   const env = input.env ?? process.env;

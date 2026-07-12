@@ -194,7 +194,7 @@ describe("gittensory-mcp CLI — profiles", () => {
       }),
     ) as { package: { name: string; version: string; latestStatus: string }; api: { status: string }; auth: { login: string } };
 
-    expect(status.package).toMatchObject({ name: "@jsonbored/gittensory-mcp", version: mcpPackageJson.version, latestStatus: "skipped" });
+    expect(status.package).toMatchObject({ name: "@jsonbored/loopover-mcp", version: mcpPackageJson.version, latestStatus: "skipped" });
     expect(status.api.status).toBe("ok");
     expect(status.auth.login).toBe("JSONbored");
 
@@ -216,7 +216,7 @@ describe("gittensory-mcp CLI — profiles", () => {
     });
 
     const sessionRequest = requests.find((request) => request.url === "/v1/auth/session");
-    expect(sessionRequest?.headers["x-gittensory-mcp-package"]).toBe("@jsonbored/gittensory-mcp");
+    expect(sessionRequest?.headers["x-gittensory-mcp-package"]).toBe("@jsonbored/loopover-mcp");
     expect(sessionRequest?.headers["x-gittensory-mcp-version"]).toBe(mcpPackageJson.version);
     expect(sessionRequest?.headers["x-gittensory-mcp-client"]).toBe("gittensory-mcp-cli");
     const telemetryHeaders = JSON.stringify({

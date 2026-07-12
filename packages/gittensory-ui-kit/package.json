@@ -1,9 +1,9 @@
 {
-  "name": "@jsonbored/gittensory-ui-kit",
+  "name": "@jsonbored/loopover-ui-kit",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "Shared design-system tokens and component primitives for gittensory-ui and gittensory-miner-ui.",
+  "description": "Shared design-system tokens and component primitives for loopover-ui and loopover-miner-ui.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JSONbored/gittensory.git",
@@ -14,7 +14,7 @@
     "url": "https://github.com/JSONbored/gittensory/issues"
   },
   "keywords": [
-    "gittensory",
+    "loopover",
     "design-system",
     "ui"
   ],

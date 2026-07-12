@@ -1,4 +1,4 @@
-import type { GovernorChokepointInput, GovernorDecision, WriteRateLimitBackoffStore, WriteRateLimitBucketStore } from "@jsonbored/gittensory-engine";
+import type { GovernorChokepointInput, GovernorDecision, WriteRateLimitBackoffStore, WriteRateLimitBucketStore } from "@jsonbored/loopover-engine";
 import type { AppendGovernorEventInput, GovernorLedgerEntry } from "./governor-ledger.js";
 
 export type EvaluateGovernorChokepointGateResult = {

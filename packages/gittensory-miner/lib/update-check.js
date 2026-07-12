@@ -1,4 +1,4 @@
-const defaultPackageName = "@jsonbored/gittensory-miner";
+const defaultPackageName = "@jsonbored/loopover-miner";
 const defaultNpmRegistryUrl = "https://registry.npmjs.org";
 
 function isLocalRegistryHost(hostname) {

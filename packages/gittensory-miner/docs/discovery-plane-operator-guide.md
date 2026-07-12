@@ -61,7 +61,7 @@ With opt-in off (default), behavior is byte-identical to today: local SQLite led
 
 `packages/gittensory-miner/lib/claim-ledger.js` records soft claims **locally only** ("never uploads, syncs, or phones home"). Fleet-wide coordination before work starts is what [#4302](https://github.com/JSONbored/gittensory/issues/4302) + the hosted index ([#4250](https://github.com/JSONbored/gittensory/issues/4250)) add **on top of** that ledger — only after explicit opt-in.
 
-After-the-fact duplicate adjudication (`isDuplicateClusterWinnerByClaim` in `@jsonbored/gittensory-engine`) remains separate; it resolves collisions by observing what publicly landed first, not by preventing overlap up front.
+After-the-fact duplicate adjudication (`isDuplicateClusterWinnerByClaim` in `@jsonbored/loopover-engine`) remains separate; it resolves collisions by observing what publicly landed first, not by preventing overlap up front.
 
 ## Invariants
 

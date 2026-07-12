@@ -1,7 +1,7 @@
-import { evaluateHarnessSubmissionTrigger } from "@jsonbored/gittensory-engine";
+import { evaluateHarnessSubmissionTrigger } from "@jsonbored/loopover-engine";
 
 // Harness submission-gate wiring orchestrator (#2337): the real-IO half of connecting the gated-submission
-// decision (`shouldSubmit`, wrapped by `evaluateHarnessSubmissionTrigger`, @jsonbored/gittensory-engine) to a
+// decision (`shouldSubmit`, wrapped by `evaluateHarnessSubmissionTrigger`, @jsonbored/loopover-engine) to a
 // real driving loop's own handoff signal. Reads the session's recent decision history to compute the
 // consecutive-block circuit-breaker tally, consults the pure decision, and always records exactly one audit
 // event -- regardless of outcome, so a paused-pending-human-review session leaves a full trail of why.

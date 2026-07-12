@@ -1,4 +1,4 @@
-import type { MinerGoalSpec } from "@jsonbored/gittensory-engine";
+import type { MinerGoalSpec } from "@jsonbored/loopover-engine";
 import type { RawCandidateIssue } from "./opportunity-fanout.js";
 
 export type RankedCandidateIssue = RawCandidateIssue & {

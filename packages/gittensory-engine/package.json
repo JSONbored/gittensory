@@ -1,9 +1,9 @@
 {
-  "name": "@jsonbored/gittensory-engine",
+  "name": "@jsonbored/loopover-engine",
   "version": "1.0.0",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "Shared deterministic engine logic for the Gittensory review stack and gittensory-miner.",
+  "description": "Shared deterministic engine logic for the LoopOver review stack and loopover-miner.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JSONbored/gittensory.git",
@@ -15,7 +15,7 @@
   },
   "keywords": [
     "gittensor",
-    "gittensory",
+    "loopover",
     "engine",
     "deterministic",
     "scoring",

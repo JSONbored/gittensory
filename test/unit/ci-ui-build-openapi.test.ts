@@ -15,7 +15,7 @@ describe("UI build steps skip the redundant OpenAPI regen", () => {
     const stepEnd = workflow.indexOf("\n\n", stepStart);
     const step = workflow.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
 
-    expect(step).toContain("run: npm run extension:build && npm --workspace @jsonbored/gittensory-ui run build");
+    expect(step).toContain("run: npm run extension:build && npm --workspace @jsonbored/loopover-ui run build");
     expect(step).not.toContain("npm run ui:build");
   });
 
@@ -23,7 +23,7 @@ describe("UI build steps skip the redundant OpenAPI regen", () => {
     const workflow = read(".github/workflows/ui-deploy.yml");
 
     expect(workflow).toContain(
-      "run: npm run ui:openapi:check && npm run ui:lint && npm run ui:typecheck && npm run extension:build && npm --workspace @jsonbored/gittensory-ui run build",
+      "run: npm run ui:openapi:check && npm run ui:lint && npm run ui:typecheck && npm run extension:build && npm --workspace @jsonbored/loopover-ui run build",
     );
     expect(workflow).not.toContain("&& npm run ui:build");
   });

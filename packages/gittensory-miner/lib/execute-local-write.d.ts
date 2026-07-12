@@ -1,4 +1,4 @@
-import type { LocalWriteActionSpec } from "@jsonbored/gittensory-engine";
+import type { LocalWriteActionSpec } from "@jsonbored/loopover-engine";
 
 export type ExecuteLocalWriteResult = {
   action: string;

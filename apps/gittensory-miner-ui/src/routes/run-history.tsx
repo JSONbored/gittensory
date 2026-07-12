@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { Badge } from "@jsonbored/gittensory-ui-kit/components/badge";
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
+import { Badge } from "@jsonbored/loopover-ui-kit/components/badge";
+import { Card, CardContent, CardHeader } from "@jsonbored/loopover-ui-kit/components/card";
 import {
   Table,
   TableBody,
@@ -10,7 +10,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@jsonbored/gittensory-ui-kit/components/table";
+} from "@jsonbored/loopover-ui-kit/components/table";
 
 import { fetchRunStates, type RunHistoryResult, type RunStateRow } from "../lib/run-history";
 

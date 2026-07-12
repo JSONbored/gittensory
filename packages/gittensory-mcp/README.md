@@ -1,19 +1,19 @@
-# @jsonbored/gittensory-mcp
+# @jsonbored/loopover-mcp
 
-Local stdio MCP wrapper for the Gittensory base-agent layer.
+Local stdio MCP wrapper for the LoopOver base-agent layer.
 
-It inspects local git metadata and calls the Gittensory API for branch preflight, score blockers, reward/risk reasoning, contributor decision packs, deterministic next-action planning, and public-safe PR packets. It does not upload source contents in v1.
+It inspects local git metadata and calls the LoopOver API for branch preflight, score blockers, reward/risk reasoning, contributor decision packs, deterministic next-action planning, and public-safe PR packets. It does not upload source contents in v1.
 
 ## Status
 
-The package is public. Gittensory keeps sensitive score, trust, wallet, and maintainer context out of public PR comments.
+The package is public. LoopOver keeps sensitive score, trust, wallet, and maintainer context out of public PR comments.
 
 ## Install
 
 Public npm:
 
 ```sh
-npm install -g @jsonbored/gittensory-mcp@latest
+npm install -g @jsonbored/loopover-mcp@latest
 gittensory-mcp login
 ```
 
@@ -21,7 +21,7 @@ From a local checkout:
 
 ```sh
 npm install
-npm link --workspace @jsonbored/gittensory-mcp
+npm link --workspace @jsonbored/loopover-mcp
 ```
 
 ## Commands
@@ -74,14 +74,14 @@ gittensory-mcp --stdio
 `gittensory-mcp version` (aliases `--version` and `-v`) prints the installed package version, the targeted API version, and the Node.js runtime version:
 
 ```text
-@jsonbored/gittensory-mcp/0.5.0 (api 0.1.0, node v22.12.0)
+@jsonbored/loopover-mcp/0.5.0 (api 0.1.0, node v22.12.0)
 ```
 
 Add `--json` for machine-readable output:
 
 ```json
 {
-  "name": "@jsonbored/gittensory-mcp",
+  "name": "@jsonbored/loopover-mcp",
   "version": "0.5.0",
   "apiVersion": "0.1.0",
   "node": "v22.12.0"
@@ -124,7 +124,7 @@ gittensory-mcp analyze-branch --login jsonbored \
 ## Review your PR locally before you push
 
 `gittensory-mcp review-pr` composes the existing preflight, slop-risk, and PR-text-lint checks into
-ONE report, so your own local agent (Claude Code, Codex, etc.) can see everything the gittensory gate
+ONE report, so your own local agent (Claude Code, Codex, etc.) can see everything the LoopOver gate
 would flag before you ever open a PR. It is a thin composition layer — it calls the same checks
 `preflight`, `slop-risk`, and `lint-pr-text` already run and merges their output; it does not
 reimplement any of them.
@@ -152,7 +152,7 @@ The same composed check is exposed to MCP clients as `gittensory_review_pr_befor
 gittensory-mcp login --github-token "$(gh auth token)"
 ```
 
-The wrapper stores a Gittensory session token, not a GitHub token.
+The wrapper stores a LoopOver session token, not a GitHub token.
 
 The default profile keeps normal single-account usage simple. For multiple identities, use named profiles:
 
@@ -208,7 +208,7 @@ Profiles are prompt instructions for the coding-agent environment, not autonomou
 - `maintainer-triage` uses queue triage, review prep, and public-guidance prompts for maintainer review preparation.
 - `repo-owner-intake` uses intake-readiness, focus-manifest, and onboarding-pack prompts for repository owner setup planning.
 
-Use them when an agent should plan, explain, draft, or prepare packets from Gittensory MCP outputs. Do not use them to open PRs, post comments, label, close, merge, publish public GitHub output, ask for wallets/hotkeys/coldkeys/private keys/tokens, or upload local source contents. Public snippets must stay separated from authenticated private context.
+Use them when an agent should plan, explain, draft, or prepare packets from LoopOver MCP outputs. Do not use them to open PRs, post comments, label, close, merge, publish public GitHub output, ask for wallets/hotkeys/coldkeys/private keys/tokens, or upload local source contents. Public snippets must stay separated from authenticated private context.
 
 ## Environment
 
@@ -227,21 +227,21 @@ Use them when an agent should plan, explain, draft, or prepare packets from Gitt
 
 ### Local score preview adapter
 
-Branch analysis can call a local scorer command that reads branch metadata JSON from stdin and prints one JSON object to stdout. Gittensory never uploads source contents; the scorer runs on your machine.
+Branch analysis can call a local scorer command that reads branch metadata JSON from stdin and prints one JSON object to stdout. LoopOver never uploads source contents; the scorer runs on your machine.
 
 Metadata-only fallback is used when the command is missing or fails. Run `gittensory-mcp doctor` for setup diagnostics.
 
 Reference wrappers ship with the package:
 
 ```sh
-export GITTENSOR_SCORE_PREVIEW_CMD="node $(npm root -g)/@jsonbored/gittensory-mcp/scripts/gittensor-score-preview.mjs"
+export GITTENSOR_SCORE_PREVIEW_CMD="node $(npm root -g)/@jsonbored/loopover-mcp/scripts/gittensor-score-preview.mjs"
 ```
 
 For tree-sitter scoring with a local [entrius/gittensor](https://github.com/entrius/gittensor) checkout:
 
 ```sh
 export GITTENSOR_ROOT=/path/to/gittensor
-export GITTENSOR_SCORE_PREVIEW_CMD="python3 $(npm root -g)/@jsonbored/gittensory-mcp/scripts/gittensor-score-preview.py"
+export GITTENSOR_SCORE_PREVIEW_CMD="python3 $(npm root -g)/@jsonbored/loopover-mcp/scripts/gittensor-score-preview.py"
 ```
 
 Expected stdout shape:

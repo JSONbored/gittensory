@@ -1,4 +1,4 @@
-import type { AmsPolicySpec } from "@jsonbored/gittensory-engine";
+import type { AmsPolicySpec } from "@jsonbored/loopover-engine";
 import type { SelfReviewContextFetch } from "./self-review-context.js";
 
 export function resolveAmsPolicyConfigPath(env?: Record<string, string | undefined>): string;

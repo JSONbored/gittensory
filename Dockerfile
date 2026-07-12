@@ -13,13 +13,13 @@ WORKDIR /app
 # (workspaces: apps/*, packages/*), and `npm ci` only symlinks node_modules/<pkg> to a workspace whose
 # directory already exists on disk. Copying just the root package*.json first (the usual dependency-layer
 # caching trick) left every workspace package.json missing at `npm ci` time, so npm silently skipped every
-# internal symlink -- @jsonbored/gittensory-engine (a workspace dependency of gittensory-miner's checked-in
+# internal symlink -- @jsonbored/loopover-engine (a workspace dependency of loopover-miner's checked-in
 # lib/*.js artifacts, #2281) then couldn't be resolved by esbuild no matter how/when its own dist/ was built.
 COPY . .
 # --ignore-scripts: no native builds are needed (SQLite is the built-in node:sqlite; @hono/node-server is
 # pure JS; esbuild ships its binary as an optional dependency, not a script).
 RUN npm ci --ignore-scripts
-RUN npm --workspace @jsonbored/gittensory-engine run build
+RUN npm --workspace @jsonbored/loopover-engine run build
 # --all: bundle every dependency into one self-contained dist/server.mjs, so the runtime image needs no
 # node_modules (≈10× smaller). The bundle has zero `cloudflare:*` imports (stubbed at build), so no loader.
 RUN node scripts/build-selfhost.mjs --all

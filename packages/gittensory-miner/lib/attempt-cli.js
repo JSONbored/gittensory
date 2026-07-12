@@ -12,7 +12,7 @@
 // governor.convergenceInput is an honest first-attempt-shaped literal, not a real per-issue attempt-history
 // query (attempt-log.js's schema has no repo+issue index, and reenqueue counts aren't tracked anywhere yet).
 
-import { resolveCodingAgentModeFromConfig } from "@jsonbored/gittensory-engine";
+import { resolveCodingAgentModeFromConfig } from "@jsonbored/loopover-engine";
 import { constructProductionCodingAgentDriver } from "./coding-agent-construction.js";
 import { runSlopAssessment } from "./slop-assessment.js";
 import { fetchLiveIssueSnapshot } from "./live-issue-snapshot.js";

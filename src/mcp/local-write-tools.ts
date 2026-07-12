@@ -17,4 +17,4 @@ export {
   buildTestGenSpec,
   type LocalWriteActionSpec,
   type LocalWriteJsonValue,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";

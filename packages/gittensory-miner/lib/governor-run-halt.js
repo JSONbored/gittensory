@@ -4,7 +4,7 @@
 import {
   buildRunLoopHaltGovernorLedgerEvent,
   evaluateRunLoopHalt,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import { appendGovernorEvent } from "./governor-ledger.js";
 
 /**
@@ -12,10 +12,10 @@ import { appendGovernorEvent } from "./governor-ledger.js";
  *
  * @param {object} input
  * @param {boolean} [input.runHalted] whether the run is already halted
- * @param {import("@jsonbored/gittensory-engine").GovernorCapUsage} input.usage cumulative run usage
- * @param {import("@jsonbored/gittensory-engine").GovernorCapLimits} input.limits run ceilings
- * @param {import("@jsonbored/gittensory-engine").PortfolioConvergenceInput} input.convergence in-flight item history
- * @param {import("@jsonbored/gittensory-engine").PortfolioConvergenceThresholds} [input.convergenceThresholds]
+ * @param {import("@jsonbored/loopover-engine").GovernorCapUsage} input.usage cumulative run usage
+ * @param {import("@jsonbored/loopover-engine").GovernorCapLimits} input.limits run ceilings
+ * @param {import("@jsonbored/loopover-engine").PortfolioConvergenceInput} input.convergence in-flight item history
+ * @param {import("@jsonbored/loopover-engine").PortfolioConvergenceThresholds} [input.convergenceThresholds]
  * @param {{ repoFullName: string, identifier: string } | null | undefined} [input.inFlightItem]
  * @param {(repoFullName: string, identifier: string) => import("./portfolio-queue.js").QueueEntry | null} [input.markFailed]
  * @param {{ append?: typeof appendGovernorEvent }} [options]

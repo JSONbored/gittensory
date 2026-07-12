@@ -5,15 +5,15 @@ import {
   buildSelfPlagiarismGovernorLedgerEvent,
   resolveSelfPlagiarismConfig,
   selfPlagiarismCheck,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import { appendGovernorEvent } from "./governor-ledger.js";
 
 /**
  * Run the self-plagiarism throttle for a prospective open_pr and persist the governor decision.
  *
  * @param {object} input
- * @param {import("@jsonbored/gittensory-engine").SelfPlagiarismCandidate} input.candidate
- * @param {readonly import("@jsonbored/gittensory-engine").OwnSubmissionRecord[]} input.recentOwnSubmissions
+ * @param {import("@jsonbored/loopover-engine").SelfPlagiarismCandidate} input.candidate
+ * @param {readonly import("@jsonbored/loopover-engine").OwnSubmissionRecord[]} input.recentOwnSubmissions
  * @param {unknown} [input.selfPlagiarismConfig] parsed `.gittensory-miner.yml` selfPlagiarism block
  * @param {{ append?: typeof appendGovernorEvent }} [options]
  */

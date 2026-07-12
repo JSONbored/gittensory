@@ -1,5 +1,5 @@
 // Pure, deterministic path matchers for slop classification (#561), extracted to
-// `@jsonbored/gittensory-engine` (#4252) so the published gittensory-mcp/gittensory-miner CLIs can depend on
+// `@jsonbored/loopover-engine` (#4252) so the published gittensory-mcp/gittensory-miner CLIs can depend on
 // the same source instead of hand-porting it. This file is a thin re-export shim; the implementation lives at
 // packages/gittensory-engine/src/signals/path-matchers.ts (imported via relative source path, not the
 // published package, to match this repo's existing engine-consumption convention — see e.g.

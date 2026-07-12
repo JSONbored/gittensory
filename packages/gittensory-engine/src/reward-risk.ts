@@ -1,4 +1,4 @@
-// Deterministic reward/risk reasoning signals, extracted to `@jsonbored/gittensory-engine` (#2281) so the
+// Deterministic reward/risk reasoning signals, extracted to `@jsonbored/loopover-engine` (#2281) so the
 // gittensory-miner can rank candidate work locally with the same logic the maintainer-side gate computes.
 //
 // Unlike the earlier self-contained extractions, reward-risk sits on top of the maintainer signal stack in

@@ -456,7 +456,7 @@ const CLIENT_TABS: Array<{
     audience: "Miners",
     filename: "terminal",
     lang: "bash",
-    snippet: `npm i -g @jsonbored/gittensory-mcp@latest
+    snippet: `npm i -g @jsonbored/loopover-mcp@latest
 gittensory-mcp login
 gittensory-mcp analyze-branch --login your-login --json`,
   },
@@ -468,7 +468,7 @@ gittensory-mcp analyze-branch --login your-login --json`,
     lang: "toml",
     snippet: `[mcp_servers.gittensory]
 command = "npx"
-args = ["-y", "@jsonbored/gittensory-mcp@latest", "--stdio"]`,
+args = ["-y", "@jsonbored/loopover-mcp@latest", "--stdio"]`,
   },
   {
     id: "claude",
@@ -480,7 +480,7 @@ args = ["-y", "@jsonbored/gittensory-mcp@latest", "--stdio"]`,
   "mcpServers": {
     "gittensory": {
       "command": "npx",
-      "args": ["-y", "@jsonbored/gittensory-mcp@latest", "--stdio"]
+      "args": ["-y", "@jsonbored/loopover-mcp@latest", "--stdio"]
     }
   }
 }`,
@@ -495,7 +495,7 @@ args = ["-y", "@jsonbored/gittensory-mcp@latest", "--stdio"]`,
   "mcpServers": {
     "gittensory": {
       "command": "npx",
-      "args": ["-y", "@jsonbored/gittensory-mcp@latest", "--stdio"]
+      "args": ["-y", "@jsonbored/loopover-mcp@latest", "--stdio"]
     }
   }
 }`,

@@ -96,7 +96,7 @@ approved, then confirm it's green.
 **Install the gittensory MCP** — your pre-submit oracle that predicts the gate before you push:
 
 ```sh
-npm install -g @jsonbored/gittensory-mcp@latest
+npm install -g @jsonbored/loopover-mcp@latest
 gittensory-mcp login                       # GitHub device flow (for the auth'd preflight tools)
 gittensory-mcp init-client --print codex   # prints TOML for ~/.codex/config.toml ([mcp_servers.gittensory])
 gittensory-mcp init-client --print claude  # or --print cursor — prints the correct config per tool
@@ -204,7 +204,7 @@ Run the matching command(s) and **commit the regenerated file(s)** — CI fails 
 | Added a raw-SQL migration | (none — just author it) | next **contiguous** `migrations/NNNN_snake.sql` |
 | `src/selfhost/**` (or a few other scanned files — see `scripts/gen-selfhost-env-reference.mjs`'s `DEFAULT_SOURCE_ROOTS`) adding/removing an `env.SOMETHING` read | `npm run selfhost:env-reference` | `apps/gittensory-ui/src/lib/selfhost-env-reference.ts` — the doc cites the file only (not `file:line`, deliberately, so an unrelated line shift elsewhere in the file never makes this go stale) |
 | CLI command surface | `npm run command-reference` | the generated command-reference doc |
-| UI files (`apps/gittensory-ui/**`) | `npm --workspace @jsonbored/gittensory-ui run format` | formatted files |
+| UI files (`apps/gittensory-ui/**`) | `npm --workspace @jsonbored/loopover-ui run format` | formatted files |
 
 Migrations must use the **next free number** (contiguous, no gaps, no reuse) and match
 `NNNN_snake_case.sql`; `db:migrations:check` enforces it.
@@ -222,14 +222,14 @@ npm audit --audit-level=moderate          # the dependency-review job's local eq
 `npm run test:ci` runs, and must pass, **all of**: `actionlint`, `db:migrations:check`,
 `db:schema-drift:check`, `selfhost:env-reference:check`, `selfhost:validate-observability`,
 `cf-typegen:check`, `typecheck`, `test:coverage`, `test:engine-parity`, `test:driver-parity`, the
-`@jsonbored/gittensory-engine` workspace's own test run, `test:workers`, `build:mcp`, `test:mcp-pack`,
+`@jsonbored/loopover-engine` workspace's own test run, `test:workers`, `build:mcp`, `test:mcp-pack`,
 `build:miner`, `test:miner-pack`, `rees:test`, `ui:openapi:check`, `ui:openapi:settings-parity`,
 `ui:version-audit`, `docs:drift-check`, `manifest:drift-check`, `engine-parity:drift-check`,
 `command-reference:check`, `ui:lint`, `ui:typecheck`, `ui:test`, `ui:build`. If any step fails, fix it
 and re-run — do not push a red tree. (Full per-check table in `reference.md`; check `package.json`'s
 own `test:ci` script if this list and that script ever disagree — the script is the source of truth.)
 
-If `ui:lint` fails on formatting, run `npm --workspace @jsonbored/gittensory-ui run format`. If
+If `ui:lint` fails on formatting, run `npm --workspace @jsonbored/loopover-ui run format`. If
 `ui:openapi:check` fails, you forgot Phase 4's `ui:openapi`.
 
 **Sync with `main` before you push if it moved** — a base conflict auto-closes a contributor PR:

@@ -12,6 +12,6 @@ describe("gittensory-miner claim ledger README (#2291)", () => {
     expect(readme).toContain("releaseClaim");
     expect(readme).toContain("listActiveClaims");
     expect(readme).toContain("bookkeeping only");
-    expect(readme).toContain("@jsonbored/gittensory-engine");
+    expect(readme).toContain("@jsonbored/loopover-engine");
   });
 });

@@ -9,7 +9,7 @@ test("githubHeaders defaults to the structured-JSON Accept media type", () => {
     Authorization: "Bearer tok_abc123",
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "gittensory-review-enrichment",
+    "User-Agent": "loopover-review-enrichment",
   });
 });
 
@@ -23,7 +23,7 @@ test("githubHeaders switches Accept to the raw media type when opts.raw is true"
     Authorization: "Bearer tok_abc123",
     Accept: "application/vnd.github.raw",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "gittensory-review-enrichment",
+    "User-Agent": "loopover-review-enrichment",
   });
 });
 

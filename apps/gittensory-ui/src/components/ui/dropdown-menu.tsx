@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/dropdown-menu";
+export * from "@jsonbored/loopover-ui-kit/components/dropdown-menu";

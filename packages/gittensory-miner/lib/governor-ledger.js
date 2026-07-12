@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { normalizeGovernorLedgerEvent } from "@jsonbored/gittensory-engine";
+import { normalizeGovernorLedgerEvent } from "@jsonbored/loopover-engine";
 import { applySchemaMigrations } from "./schema-version.js";
 
 // Append-only governor decision ledger (#2328): every allowed/denied/throttled/kill-switch outcome lands in a

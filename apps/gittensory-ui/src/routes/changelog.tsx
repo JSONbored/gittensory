@@ -16,12 +16,12 @@ export const Route = createFileRoute("/changelog")({
       { title: "Changelog — Gittensory" },
       {
         name: "description",
-        content: "Release history for @jsonbored/gittensory-mcp pulled live from the npm registry.",
+        content: "Release history for @jsonbored/loopover-mcp pulled live from the npm registry.",
       },
       { property: "og:title", content: "Changelog — Gittensory" },
       {
         property: "og:description",
-        content: "Release history for @jsonbored/gittensory-mcp pulled live from the npm registry.",
+        content: "Release history for @jsonbored/loopover-mcp pulled live from the npm registry.",
       },
       { property: "og:url", content: "/changelog" },
     ],

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const result = spawnSync("npm", ["pack", "--workspace", "@jsonbored/gittensory-mcp", "--dry-run", "--json"], {
+const result = spawnSync("npm", ["pack", "--workspace", "@jsonbored/loopover-mcp", "--dry-run", "--json"], {
   encoding: "utf8",
 });
 

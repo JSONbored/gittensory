@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { removeWorktree } from "@jsonbored/gittensory-engine";
+import { removeWorktree } from "@jsonbored/loopover-engine";
 import { openLocalStoreDb, resolveLocalStoreDbPath, normalizeLocalStoreDbPath } from "./local-store.js";
 
 // Freeze/snapshot mechanism for historical replay targets (#3010). Given a repo and a commit SHA T, exports:
@@ -17,7 +17,7 @@ import { openLocalStoreDb, resolveLocalStoreDbPath, normalizeLocalStoreDbPath } 
 // and found no such utility anywhere -- opportunity-fanout.js reads GitHub API issue `updated_at`, not git
 // commit/tag history at all. The one genuinely reusable piece is worktree-allocator.ts's injected-exec
 // convention (WorktreeExecFn) and its removeWorktree -- both reused directly below (import from
-// @jsonbored/gittensory-engine), rather than inventing a THIRD "inject the git subprocess" abstraction
+// @jsonbored/loopover-engine), rather than inventing a THIRD "inject the git subprocess" abstraction
 // alongside cli-subprocess-driver.ts's and worktree-allocator.ts's own.
 //
 // FAIL-FAST VALIDATION: ancestry-walking (git log T) already excludes anything NOT reachable from T by

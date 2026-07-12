@@ -1,4 +1,4 @@
-import type { AmsPolicySpec, CodingAgentExecutionMode, IterateLoopInput, SelfReviewContext } from "@jsonbored/gittensory-engine";
+import type { AmsPolicySpec, CodingAgentExecutionMode, IterateLoopInput, SelfReviewContext } from "@jsonbored/loopover-engine";
 import type { AttemptGovernorContext } from "./attempt-runner.js";
 import type { CodingTaskSpecResult } from "./coding-task-spec.js";
 

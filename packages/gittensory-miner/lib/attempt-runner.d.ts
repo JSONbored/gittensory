@@ -4,7 +4,7 @@ import type {
   IterateLoopInput,
   IterateLoopResult,
   LocalWriteActionSpec,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import type { HarnessSubmissionDecision, HarnessSubmissionEventLedger } from "./harness-submission-trigger.js";
 import type { SubmissionFreshnessClaimLedger, LiveIssueSnapshot, FreshnessAbortReason } from "./submission-freshness-check.js";
 import type { GovernorChokepointInputPersisted } from "./governor-chokepoint-persisted.js";

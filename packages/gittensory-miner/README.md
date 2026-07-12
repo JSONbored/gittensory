@@ -1,6 +1,6 @@
-# @jsonbored/gittensory-miner
+# @jsonbored/loopover-miner
 
-Foundation CLI for the local Gittensory miner runtime.
+Foundation CLI for the local LoopOver miner runtime.
 
 This package is the future home of the autonomous discover → analyze → plan → prepare → create → manage miner workflow. In this foundation phase it provides the package scaffold, a minimal CLI surface for `--help` and `--version`, and a non-blocking npm registry version nudge on startup.
 
@@ -33,7 +33,7 @@ no enforcement wiring yet. (#2328)
 
 The package also includes a local soft-claim ledger: `openClaimLedger` / `claimIssue` / `releaseClaim` /
 `listActiveClaims` persist which issues this miner instance has claimed on this machine. The table is local
-bookkeeping only — duplicate winners are adjudicated elsewhere via `@jsonbored/gittensory-engine`. (#2291)
+bookkeeping only — duplicate winners are adjudicated elsewhere via `@jsonbored/loopover-engine`. (#2291)
 
 The package also includes an append-only event ledger: `initEventLedger` / `appendEvent` / `readEvents` persist
 immutable miner-loop events in local SQLite for contributor audit. Insert-only — rows are never updated or
@@ -41,7 +41,7 @@ deleted. (#2322)
 
 The package also records local PR outcomes: `recordPrOutcomeSnapshot` / `readPrOutcomes` write and reduce the
 miner's OWN record of the outcomes of its OWN PRs (merged / closed, with an optional rejection-reason bucket) over
-the append-only event ledger above. This is DISTINCT from the gittensory server's `recordPrOutcome`
+the append-only event ledger above. This is DISTINCT from the LoopOver server's `recordPrOutcome`
 (`src/review/outcomes-wire.ts`), which writes hosted-backend audit rows from the GitHub App's webhook stream — same
 concept name, different codebase layer, no shared code (a laptop-mode miner may have no webhook relay at all). (#4274)
 
@@ -96,7 +96,7 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for laptop vs fleet deployment.
 Zero-infra local install — no Docker, Redis, or Postgres required:
 
 ```sh
-npm install -g @jsonbored/gittensory-miner
+npm install -g @jsonbored/loopover-miner
 gittensory-miner init
 gittensory-miner doctor
 gittensory-miner status
@@ -108,8 +108,8 @@ From a local checkout:
 
 ```sh
 npm install
-npm --workspace @jsonbored/gittensory-miner run build
-npm link --workspace @jsonbored/gittensory-miner
+npm --workspace @jsonbored/loopover-miner run build
+npm link --workspace @jsonbored/loopover-miner
 ```
 
 ## Commands
@@ -149,4 +149,4 @@ Further AMS-state-reading tools (status/doctor diagnostics, governor ledger) lan
 
 ## Version check
 
-On every invocation the CLI starts an async npm registry lookup (5s timeout). When the installed package is behind `@jsonbored/gittensory-miner@latest`, it prints a one-line upgrade command to stderr without blocking or failing the requested command. Set `GITTENSORY_NPM_REGISTRY_URL` to point at a mirror, same as `@jsonbored/gittensory-mcp`.
+On every invocation the CLI starts an async npm registry lookup (5s timeout). When the installed package is behind `@jsonbored/loopover-miner@latest`, it prints a one-line upgrade command to stderr without blocking or failing the requested command. Set `GITTENSORY_NPM_REGISTRY_URL` to point at a mirror, same as `@jsonbored/loopover-mcp`.

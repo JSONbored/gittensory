@@ -40,7 +40,7 @@ function parseArgs(argv) {
 }
 
 function readPublishedPackageVersion() {
-  const result = spawnSync("npm", ["view", "@jsonbored/gittensory-mcp", "version", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync("npm", ["view", "@jsonbored/loopover-mcp", "version", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (result.status !== 0) return null;
   try {
     const parsed = JSON.parse(result.stdout);

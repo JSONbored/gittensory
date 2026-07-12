@@ -1,4 +1,4 @@
-import type { AcceptanceCriteria, FeasibilityGateResult, FeasibilityVerdict, IssueRecord, PullRequestRecord } from "@jsonbored/gittensory-engine";
+import type { AcceptanceCriteria, FeasibilityGateResult, FeasibilityVerdict, IssueRecord, PullRequestRecord } from "@jsonbored/loopover-engine";
 
 export type CodingTaskIssue = { number: number; title: string; body?: string | null | undefined; labels?: string[] | undefined };
 

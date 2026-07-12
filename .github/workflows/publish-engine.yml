@@ -6,7 +6,7 @@ name: Publish Engine Package
 # released_by_release_please left false) is the human override path and self-tags HEAD from
 # packages/gittensory-engine/package.json's version.
 #
-# NOTE: this workflow cannot run successfully until @jsonbored/gittensory-engine has been bootstrap
+# NOTE: this workflow cannot run successfully until @jsonbored/loopover-engine has been bootstrap
 # -published to npm once from a maintainer's own authenticated `npm login` session (npm's trusted
 # publishing/OIDC cannot create a brand-new package -- the package must already exist before a
 # Trusted Publisher can be configured in npmjs.com's package settings). Until that one-time manual
@@ -90,14 +90,14 @@ jobs:
         run: npm ci
 
       - name: Engine test suite
-        run: npm run test --workspace @jsonbored/gittensory-engine
+        run: npm run test --workspace @jsonbored/loopover-engine
 
       # Build + pack happen in THIS unprivileged job (no id-token). The privileged publish job below
       # never runs npm install/build, so a compromised build dependency can't reach the OIDC token.
       - name: Pack and smoke-test the tarball
         run: |
           set -euo pipefail
-          PACK_JSON="$(npm pack --workspace @jsonbored/gittensory-engine --pack-destination "$RUNNER_TEMP" --json)"
+          PACK_JSON="$(npm pack --workspace @jsonbored/loopover-engine --pack-destination "$RUNNER_TEMP" --json)"
           TARBALL="$(node -e 'const fs=require("fs"); const input=fs.readFileSync(0,"utf8"); process.stdout.write(JSON.parse(input)[0].filename)' <<< "$PACK_JSON")"
           TARBALL_PATH="$RUNNER_TEMP/$TARBALL"
           UNEXPECTED_FILES="$(tar -tzf "$TARBALL_PATH" | grep -Ev '^(package/dist/.+|package/(package.json|README.md|CHANGELOG.md|LICENSE))$' || true)"
@@ -114,8 +114,8 @@ jobs:
           npm --prefix "$TMP" init -y >/dev/null
           npm --prefix "$TMP" install "$TARBALL_PATH" >/dev/null
           node --input-type=module -e "
-            import { ENGINE_VERSION } from '$TMP/node_modules/@jsonbored/gittensory-engine/dist/index.js';
-            import { isTestPath, isCodeFile } from '$TMP/node_modules/@jsonbored/gittensory-engine/dist/signals/test-evidence.js';
+            import { ENGINE_VERSION } from '$TMP/node_modules/@jsonbored/loopover-engine/dist/index.js';
+            import { isTestPath, isCodeFile } from '$TMP/node_modules/@jsonbored/loopover-engine/dist/signals/test-evidence.js';
             if (typeof ENGINE_VERSION !== 'string' || !ENGINE_VERSION) throw new Error('ENGINE_VERSION smoke test failed');
             if (isTestPath('test/foo.test.ts') !== true) throw new Error('isTestPath smoke test failed');
             if (isCodeFile('src/foo.ts') !== true) throw new Error('isCodeFile smoke test failed');
@@ -178,7 +178,7 @@ jobs:
             echo "Creating tag $TAG at HEAD ($HEAD_SHA)."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "@jsonbored/gittensory-engine v${VERSION}"
+            git tag -a "$TAG" -m "@jsonbored/loopover-engine v${VERSION}"
             git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
             gh auth setup-git
             git push origin "$TAG"
@@ -224,16 +224,16 @@ jobs:
           set -euo pipefail
           NOTES_FILE="$(mktemp)"
           cat > "$NOTES_FILE" <<EOF
-          Published [@jsonbored/gittensory-engine v${RELEASE_VERSION}](https://www.npmjs.com/package/@jsonbored/gittensory-engine/v/${RELEASE_VERSION}) to npm with provenance.
+          Published [@jsonbored/loopover-engine v${RELEASE_VERSION}](https://www.npmjs.com/package/@jsonbored/loopover-engine/v/${RELEASE_VERSION}) to npm with provenance.
 
           Install:
 
           \`\`\`sh
-          npm install @jsonbored/gittensory-engine@${RELEASE_VERSION}
+          npm install @jsonbored/loopover-engine@${RELEASE_VERSION}
           \`\`\`
           EOF
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/gittensory-engine v${RELEASE_VERSION}" --notes-file "$NOTES_FILE"
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/loopover-engine v${RELEASE_VERSION}" --notes-file "$NOTES_FILE"
           else
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/gittensory-engine v${RELEASE_VERSION}" --notes-file "$NOTES_FILE" --verify-tag
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/loopover-engine v${RELEASE_VERSION}" --notes-file "$NOTES_FILE" --verify-tag
           fi

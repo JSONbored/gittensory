@@ -1,4 +1,4 @@
-import type { AgentSdkHooks, CodingAgentDriverResult, CodingAgentExecutionMode, LintGuardResult, RunCodingAgentAttemptOptions } from "@jsonbored/gittensory-engine";
+import type { AgentSdkHooks, CodingAgentDriverResult, CodingAgentExecutionMode, LintGuardResult, RunCodingAgentAttemptOptions } from "@jsonbored/loopover-engine";
 import type { DenyRule } from "./deny-hooks.js";
 import type { appendGovernorEvent } from "./governor-ledger.js";
 

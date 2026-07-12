@@ -1,4 +1,4 @@
-/** Must match `GOVERNOR_LEDGER_EVENT_TYPES` in `@jsonbored/gittensory-engine`. */
+/** Must match `GOVERNOR_LEDGER_EVENT_TYPES` in `@jsonbored/loopover-engine`. */
 const GOVERNOR_LEDGER_EVENT_TYPES = Object.freeze([
   "allowed",
   "denied",

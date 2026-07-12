@@ -1,4 +1,4 @@
-import type { CodingAgentExecutionMode, FeasibilityVerdict, LocalWriteActionSpec } from "@jsonbored/gittensory-engine";
+import type { CodingAgentExecutionMode, FeasibilityVerdict, LocalWriteActionSpec } from "@jsonbored/loopover-engine";
 import type { AttemptDeps, AttemptResult as RunMinerAttemptResult, runMinerAttempt } from "./attempt-runner.js";
 import type { ClaimLedger } from "./claim-ledger.js";
 import type { EventLedger } from "./event-ledger.js";

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
+import { Card, CardContent, CardHeader } from "@jsonbored/loopover-ui-kit/components/card";
 
 import { fetchPortfolioQueue, type PortfolioQueueResult, type QueueStatus } from "../lib/portfolio-queue";
 

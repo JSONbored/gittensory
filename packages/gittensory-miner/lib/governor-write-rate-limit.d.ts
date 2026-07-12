@@ -3,7 +3,7 @@ import type {
   WriteRateLimitBucketStore,
   WriteRateLimitPolicies,
   WriteRateLimitVerdict,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import type { AppendGovernorEventInput, GovernorLedgerEntry } from "./governor-ledger.js";
 
 export type EvaluateWriteRateLimitGateInput = {

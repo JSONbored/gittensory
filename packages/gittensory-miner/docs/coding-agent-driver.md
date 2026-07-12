@@ -5,7 +5,7 @@
 provider-agnostic contract, so the rest of the miner — planning, attempt logging, metering, gate polling — never
 has to know which backend actually did the work.
 
-The interface itself lives in `@jsonbored/gittensory-engine`
+The interface itself lives in `@jsonbored/loopover-engine`
 ([`packages/gittensory-engine/src/miner/coding-agent-driver.ts`](../../gittensory-engine/src/miner/coding-agent-driver.ts));
 the orchestration around it (mode gating, invocation, the factory) lives in the sibling modules described below.
 

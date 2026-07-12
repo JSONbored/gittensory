@@ -9,7 +9,7 @@ import {
   evaluateGovernorChokepoint,
   recordWriteRateLimitAllowed,
   recordWriteRateLimitDenied,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 import { appendGovernorEvent } from "./governor-ledger.js";
 
 /**
@@ -17,13 +17,13 @@ import { appendGovernorEvent } from "./governor-ledger.js";
  * advance rate-limit bucket/backoff state when the rate-limit stage actually ran (kill-switch and dry-run
  * short-circuit before rate-limit is evaluated, so bucket state is untouched in those cases).
  *
- * @param {import("@jsonbored/gittensory-engine").GovernorChokepointInput} input
+ * @param {import("@jsonbored/loopover-engine").GovernorChokepointInput} input
  * @param {{ append?: typeof appendGovernorEvent }} [options]
  * @returns {{
- *   decision: import("@jsonbored/gittensory-engine").GovernorDecision,
+ *   decision: import("@jsonbored/loopover-engine").GovernorDecision,
  *   recorded: import("./governor-ledger.js").GovernorLedgerEntry,
- *   rateLimitBuckets: import("@jsonbored/gittensory-engine").WriteRateLimitBucketStore,
- *   rateLimitBackoffAttempts: import("@jsonbored/gittensory-engine").WriteRateLimitBackoffStore,
+ *   rateLimitBuckets: import("@jsonbored/loopover-engine").WriteRateLimitBucketStore,
+ *   rateLimitBackoffAttempts: import("@jsonbored/loopover-engine").WriteRateLimitBackoffStore,
  * }}
  */
 export function evaluateGovernorChokepointGate(input, options = {}) {

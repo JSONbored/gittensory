@@ -78,12 +78,12 @@ jobs:
         run: npm ci
 
       # packages/gittensory-mcp's own test suite pulls in src/mcp/find-opportunities.ts transitively
-      # (via packages/gittensory-miner/lib/opportunity-fanout.js), which imports @jsonbored/gittensory-engine.
-      # That package's dist/ is gitignored (see ci.yml's own build --workspace @jsonbored/gittensory-engine
+      # (via packages/gittensory-miner/lib/opportunity-fanout.js), which imports @jsonbored/loopover-engine.
+      # That package's dist/ is gitignored (see ci.yml's own build --workspace @jsonbored/loopover-engine
       # step for the same reason) -- without building it first, the MCP release validation gate below
-      # fails with "Failed to resolve entry for package @jsonbored/gittensory-engine" on every run.
+      # fails with "Failed to resolve entry for package @jsonbored/loopover-engine" on every run.
       - name: Build gittensory-engine
-        run: npm run build --workspace @jsonbored/gittensory-engine
+        run: npm run build --workspace @jsonbored/loopover-engine
 
       - name: MCP release validation gate
         run: npm run test:release:mcp
@@ -93,7 +93,7 @@ jobs:
       - name: Pack and smoke-test the tarball
         run: |
           set -euo pipefail
-          PACK_JSON="$(npm pack --workspace @jsonbored/gittensory-mcp --pack-destination "$RUNNER_TEMP" --json)"
+          PACK_JSON="$(npm pack --workspace @jsonbored/loopover-mcp --pack-destination "$RUNNER_TEMP" --json)"
           TARBALL="$(node -e 'const fs=require("fs"); const input=fs.readFileSync(0,"utf8"); process.stdout.write(JSON.parse(input)[0].filename)' <<< "$PACK_JSON")"
           TARBALL_PATH="$RUNNER_TEMP/$TARBALL"
           UNEXPECTED_FILES="$(tar -tzf "$TARBALL_PATH" | grep -Ev '^(package/(bin|lib|scripts)/.+|package/(package.json|README.md|CHANGELOG.md|LICENSE))$' || true)"
@@ -158,7 +158,7 @@ jobs:
             echo "Creating tag $TAG at HEAD ($HEAD_SHA)."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "@jsonbored/gittensory-mcp v${VERSION}"
+            git tag -a "$TAG" -m "@jsonbored/loopover-mcp v${VERSION}"
             git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
             gh auth setup-git
             git push origin "$TAG"
@@ -204,16 +204,16 @@ jobs:
           set -euo pipefail
           NOTES_FILE="$(mktemp)"
           cat > "$NOTES_FILE" <<EOF
-          Published [@jsonbored/gittensory-mcp v${RELEASE_VERSION}](https://www.npmjs.com/package/@jsonbored/gittensory-mcp/v/${RELEASE_VERSION}) to npm with provenance.
+          Published [@jsonbored/loopover-mcp v${RELEASE_VERSION}](https://www.npmjs.com/package/@jsonbored/loopover-mcp/v/${RELEASE_VERSION}) to npm with provenance.
 
           Install:
 
           \`\`\`sh
-          npm install -g @jsonbored/gittensory-mcp@${RELEASE_VERSION}
+          npm install -g @jsonbored/loopover-mcp@${RELEASE_VERSION}
           \`\`\`
           EOF
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/gittensory-mcp v${RELEASE_VERSION}" --notes-file "$NOTES_FILE"
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/loopover-mcp v${RELEASE_VERSION}" --notes-file "$NOTES_FILE"
           else
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/gittensory-mcp v${RELEASE_VERSION}" --notes-file "$NOTES_FILE" --verify-tag
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "@jsonbored/loopover-mcp v${RELEASE_VERSION}" --notes-file "$NOTES_FILE" --verify-tag
           fi

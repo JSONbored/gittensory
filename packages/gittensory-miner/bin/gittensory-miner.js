@@ -72,7 +72,7 @@ if (cliArgs[0] === "feasibility") {
   process.exit(runFeasibilityCli(cliArgs.slice(1)));
 }
 
-const packageName = "@jsonbored/gittensory-miner";
+const packageName = "@jsonbored/loopover-miner";
 const packageVersion = resolveMinerVersion(process.env);
 const upgradeCommand = resolveUpgradeCommand(packageName);
 

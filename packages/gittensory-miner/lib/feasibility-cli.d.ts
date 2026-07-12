@@ -4,7 +4,7 @@ import type {
   FeasibilityGateInput,
   FeasibilityGateResult,
   FeasibilityIssueStatus,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 
 export type ParsedFeasibilityArgs =
   | {

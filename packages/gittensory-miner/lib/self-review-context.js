@@ -1,4 +1,4 @@
-import { buildCollisionReport, parseFocusManifestContent } from "@jsonbored/gittensory-engine";
+import { buildCollisionReport, parseFocusManifestContent } from "@jsonbored/loopover-engine";
 
 // Real SelfReviewContext fetcher (#5145, Wave 3.5). Builds the context object the miner's self-review pass
 // (packages/gittensory-engine/src/miner/self-review-adapter.ts) needs, at the SAME fidelity the live gate's
@@ -10,7 +10,7 @@ import { buildCollisionReport, parseFocusManifestContent } from "@jsonbored/gitt
 //     system that PUSHES data into the live gate's own internal ingest route (src/api/routes.ts). There is
 //     no public endpoint the miner could legitimately pull from instead.
 //   - `issueQuality`: built by buildIssueQualityReport, which lives only in root src/signals/engine.ts and
-//     has never been extracted into @jsonbored/gittensory-engine (the same "not yet extracted" situation
+//     has never been extracted into @jsonbored/loopover-engine (the same "not yet extracted" situation
 //     src/signals/slop.ts documented before #5133 extracted slop scoring specifically).
 //
 // Both are already optional on SelfReviewContext, and buildPredictedGateVerdict already degrades gracefully

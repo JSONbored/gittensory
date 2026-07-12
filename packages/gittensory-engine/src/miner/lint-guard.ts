@@ -62,7 +62,7 @@ export type LintGuardOptions = {
 
 const PACKAGE_COMMAND: Readonly<Record<Exclude<LintGuardPackage, "miner-js" | "mcp-js">, readonly string[]>> = Object.freeze({
   root: Object.freeze(["npm", "run", "typecheck"]),
-  engine: Object.freeze(["npm", "run", "build", "--workspace", "@jsonbored/gittensory-engine"]),
+  engine: Object.freeze(["npm", "run", "build", "--workspace", "@jsonbored/loopover-engine"]),
   ui: Object.freeze(["npm", "run", "ui:typecheck"]),
 });
 

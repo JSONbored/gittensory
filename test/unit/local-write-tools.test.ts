@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // no network round-trip). Without this redirect, the package-specifier re-export resolves through the engine's
 // published dist/ output, not its .ts source, so v8 coverage cannot attribute hits back to the source file --
 // same fix as miner-coding-agent-house-rules.test.ts / miner-harness-submission-trigger.test.ts already apply.
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@jsonbored/loopover-engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 

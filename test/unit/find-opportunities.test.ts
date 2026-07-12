@@ -16,7 +16,7 @@ import {
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@jsonbored/loopover-engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 

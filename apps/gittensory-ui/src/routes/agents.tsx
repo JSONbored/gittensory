@@ -69,7 +69,7 @@ function AgentsPage() {
             <div className="mt-4">
               <CodeBlock code={`gittensory-mcp --stdio`} />
               <div className="mt-2">
-                <CodeBlock code={`npx -y @jsonbored/gittensory-mcp@latest --stdio`} />
+                <CodeBlock code={`npx -y @jsonbored/loopover-mcp@latest --stdio`} />
               </div>
               <div className="mt-2">
                 <CodeBlock lang="http" code={`https://gittensory-api.aethereal.dev/mcp`} />

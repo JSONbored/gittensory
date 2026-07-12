@@ -1,4 +1,4 @@
-import type { ParsedMinerGoalSpec } from "@jsonbored/gittensory-engine";
+import type { ParsedMinerGoalSpec } from "@jsonbored/loopover-engine";
 
 export function resolveMinerGoalSpec(
   repoPath: string,

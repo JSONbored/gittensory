@@ -30,7 +30,7 @@ describe("gittensory-miner package skeleton (#2287)", () => {
     const miner = readPackageJson(minerRoot);
     const mcp = readPackageJson(mcpRoot);
 
-    expect(miner.name).toBe("@jsonbored/gittensory-miner");
+    expect(miner.name).toBe("@jsonbored/loopover-miner");
     expect(miner.license).toBe("AGPL-3.0-only");
     expect(miner.type).toBe("module");
     expect(miner.bin).toEqual({
@@ -38,7 +38,7 @@ describe("gittensory-miner package skeleton (#2287)", () => {
       "gittensory-miner-mcp": "bin/gittensory-miner-mcp.js",
     });
     expect(miner.publishConfig).toEqual(mcp.publishConfig);
-    expect(miner.dependencies["@jsonbored/gittensory-engine"]).toBeDefined();
+    expect(miner.dependencies["@jsonbored/loopover-engine"]).toBeDefined();
     expect(miner.engines.node).toMatch(/^>=22(?:\.\d+){0,2}$/);
     expect(miner.files).toEqual(expect.arrayContaining(["bin", "lib"]));
     expect(miner.scripts.build.startsWith("node --check bin/gittensory-miner.js")).toBe(true);
@@ -56,15 +56,15 @@ describe("gittensory-miner package skeleton (#2287)", () => {
     // behavior. spawnSync never throws; assert on stdout content directly, decoupled from the exit code.
     const result = spawnSync(
       "npm",
-      ["ls", "--workspace", "@jsonbored/gittensory-miner", "--depth=0"],
+      ["ls", "--workspace", "@jsonbored/loopover-miner", "--depth=0"],
       { cwd: process.cwd(), encoding: "utf8" },
     );
-    expect(result.stdout).toContain("@jsonbored/gittensory-miner@");
+    expect(result.stdout).toContain("@jsonbored/loopover-miner@");
   });
 
   it("serves --help and --version from the bin entry", () => {
     expect(runCapture(["--help", "--no-update-check"])).toContain("gittensory-miner --help");
-    expect(runCapture(["--version", "--no-update-check"])).toContain("@jsonbored/gittensory-miner/");
+    expect(runCapture(["--version", "--no-update-check"])).toContain("@jsonbored/loopover-miner/");
     expect(
       runCapture(["--version", "--no-update-check"], {
         GITTENSORY_MINER_VERSION: "gittensory-miner-fleet@abc1234",
@@ -75,7 +75,7 @@ describe("gittensory-miner package skeleton (#2287)", () => {
   it("documents foundation scope and local checkout install paths in the README", () => {
     const readme = readFileSync(readmePath, "utf8");
     expect(readme).toContain("foundation phase");
-    expect(readme).toContain("npm link --workspace @jsonbored/gittensory-miner");
+    expect(readme).toContain("npm link --workspace @jsonbored/loopover-miner");
     expect(readme).toContain("gittensory-miner --help");
     expect(readme).toContain("gittensory-miner --version");
   });

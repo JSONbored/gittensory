@@ -1,11 +1,11 @@
-# @jsonbored/gittensory-engine
+# @jsonbored/loopover-engine
 
-Shared, deterministic engine logic for the Gittensory review stack and the `gittensory-miner`.
+Shared, deterministic engine logic for the LoopOver review stack and the `loopover-miner`.
 
 This package houses pure, side-effect-free logic (scoring preview/model, predicted-gate types, reward-risk,
 slop signals, focus-manifest parse/compile core, duplicate-winner adjudication, and their engine-parity
 fixtures) so the exact same code runs identically in the hosted review backend and in a local miner. It is
-versioned independently of the app and published to npm as `@jsonbored/gittensory-engine`.
+versioned independently of the app and published to npm as `@jsonbored/loopover-engine`.
 
 The logic is extracted from the app's `src/` in follow-up issues; this skeleton keeps the package buildable in
 the meantime. The root `package.json` already globs `packages/*` in its `workspaces` field, so `npm ci`
@@ -19,7 +19,7 @@ log or assert which engine build produced a deterministic result.
 ## Build
 
 ```
-npm run build --workspace @jsonbored/gittensory-engine
+npm run build --workspace @jsonbored/loopover-engine
 ```
 
 This runs `tsc -p tsconfig.json`, emitting `dist/` (the only published output alongside `CHANGELOG.md`).
@@ -27,7 +27,7 @@ This runs `tsc -p tsconfig.json`, emitting `dist/` (the only published output al
 ## Test
 
 ```
-npm test --workspace @jsonbored/gittensory-engine
+npm test --workspace @jsonbored/loopover-engine
 ```
 
 Compiles the package and the `test/` suite (`node:test`) to plain JS and runs it — no experimental runtime
@@ -53,7 +53,7 @@ than inverting or overflowing it — but the two directions are handled asymmetr
 Any single factor at `0` (or a `dupRisk` of `1`) collapses the whole score to `0`.
 
 ```ts
-import { rankOpportunities, rankOpportunityScore } from "@jsonbored/gittensory-engine";
+import { rankOpportunities, rankOpportunityScore } from "@jsonbored/loopover-engine";
 
 rankOpportunityScore({ potential: 0.9, feasibility: 0.8, laneFit: 1, freshness: 0.7, dupRisk: 0.1 }); // → 0.4536
 
@@ -73,7 +73,7 @@ The score is intended for replay harnesses that need an auditable floor before a
 the replayed plan or PR target data and the revealed history target data:
 
 ```ts
-import { scoreObjectiveAnchor } from "@jsonbored/gittensory-engine";
+import { scoreObjectiveAnchor } from "@jsonbored/loopover-engine";
 
 const result = scoreObjectiveAnchor({
   replayed: {
@@ -125,7 +125,7 @@ Replay harnesses that already represent the two sides as arrays of plans, PRs, o
 helpers instead:
 
 ```ts
-import { scoreObjectiveAnchorHistory } from "@jsonbored/gittensory-engine";
+import { scoreObjectiveAnchorHistory } from "@jsonbored/loopover-engine";
 
 const result = scoreObjectiveAnchorHistory({
   replayed: [
@@ -170,7 +170,7 @@ runtime owns the model calls; the engine package owns the stable post-processing
 - combine the surviving pairwise average with the objective-anchor score.
 
 ```ts
-import { computePairwiseCalibrationScore } from "@jsonbored/gittensory-engine";
+import { computePairwiseCalibrationScore } from "@jsonbored/loopover-engine";
 
 const result = computePairwiseCalibrationScore({
   objectiveAnchor: 0.55,
@@ -217,7 +217,7 @@ secrets, trust scores, reward values, private rankings, or maintainer evidence.
 import {
   computeGateVerdictCompositeCalibrationScore,
   ingestGateVerdictCalibrationSignals,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 
 const gateVerdicts = ingestGateVerdictCalibrationSignals([
   {
@@ -276,7 +276,7 @@ to pr_outcome-only gating.
 import {
   computePhase7CalibrationLoop,
   shouldScheduleHistoricalReplayRun,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 
 const prOutcome = {
   mergeConfirmed: 74,
@@ -352,7 +352,7 @@ import {
   computeTrackRecordSummary,
   renderTrackRecordSummaryMarkdown,
   resolveTrackRecordSummaryConfig,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 
 const config = resolveTrackRecordSummaryConfig({
   miner: { trackRecordSummary: { enabled: true } },
@@ -410,7 +410,7 @@ for raw review text, secrets, trust scores, reward values, private rankings, or 
 import {
   computeFindingSeverityCompositeCalibrationScore,
   ingestFindingSeverityCalibrationSignals,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 
 const findingSeverity = ingestFindingSeverityCalibrationSignals([
   {
@@ -478,7 +478,7 @@ It has no fields for raw review text, secrets, trust scores, reward values, priv
 import {
   computeReviewerConsensusCompositeCalibrationScore,
   ingestReviewerConsensusCalibrationSignals,
-} from "@jsonbored/gittensory-engine";
+} from "@jsonbored/loopover-engine";
 
 const reviewerConsensus = ingestReviewerConsensusCalibrationSignals([
   {
@@ -573,7 +573,7 @@ fatigue before a formal ban lands. It keeps the hard-ban verdict authoritative a
 object instead of changing `allowed`:
 
 ```ts
-import { resolveAiPolicyFatigueVerdict } from "@jsonbored/gittensory-engine";
+import { resolveAiPolicyFatigueVerdict } from "@jsonbored/loopover-engine";
 
 const verdict = resolveAiPolicyFatigueVerdict({
   now: "2026-07-05T00:00:00Z",

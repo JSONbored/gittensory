@@ -1,14 +1,14 @@
-// Reward/risk reasoning signals, extracted to `@jsonbored/gittensory-engine` (#2281) so the gittensory-miner
+// Reward/risk reasoning signals, extracted to `@jsonbored/loopover-engine` (#2281) so the gittensory-miner
 // can rank candidate work locally with the same logic the maintainer-side gate computes. The implementation
 // lives at `packages/gittensory-engine/src/reward-risk.ts`, imported via its RELATIVE SOURCE PATH (matching
-// the merged #2276/#2278/#2282 shims) — not the published `@jsonbored/gittensory-engine` specifier, so no
+// the merged #2276/#2278/#2282 shims) — not the published `@jsonbored/loopover-engine` specifier, so no
 // tsconfig path / vitest alias / root dependency is introduced.
 //
 // This is a WRAPPING shim rather than the usual pure `export *` re-export. reward-risk depends on the
 // maintainer signal stack in `src/signals/engine.ts` (`buildRoleContext`, `buildLaneAdvice`,
 // `buildCollisionReport`, `buildQueueHealth`, `buildRepoFitRecommendation`, `buildContributorIntakeHealth`,
 // `buildPullRequestReviewIntelligence`) — none of which are extracted yet (and are far too large to port
-// under the size cap). `isFailingCheckSummary` now lives in `@jsonbored/gittensory-engine` (#4256). The
+// under the size cap). `isFailingCheckSummary` now lives in `@jsonbored/loopover-engine` (#4256). The
 // engine module takes the remaining builders as an
 // injected `RewardRiskEngineDeps`; this shim binds the real `src` builders and threads them in, so every
 // existing importer keeps calling the four builders with their original signatures. Once those builders gain

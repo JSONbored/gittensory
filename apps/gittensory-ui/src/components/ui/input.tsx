@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/input";
+export * from "@jsonbored/loopover-ui-kit/components/input";

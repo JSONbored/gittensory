@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api/request";
 
-export const MCP_PACKAGE_NAME = "@jsonbored/gittensory-mcp";
+export const MCP_PACKAGE_NAME = "@jsonbored/loopover-mcp";
 export const MCP_PACKAGE_ENCODED_NAME = "@jsonbored%2fgittensory-mcp";
 export const MCP_PACKAGE_REGISTRY_URL = `https://registry.npmjs.org/${MCP_PACKAGE_ENCODED_NAME}`;
 export const MCP_PACKAGE_NPM_URL = `https://www.npmjs.com/package/${MCP_PACKAGE_NAME}`;

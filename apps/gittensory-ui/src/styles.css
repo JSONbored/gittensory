@@ -2,13 +2,13 @@
 @source "../src";
 @source "../../../packages/gittensory-ui-kit/src";
 @import "tw-animate-css";
-@import "@jsonbored/gittensory-ui-kit/theme.css";
+@import "@jsonbored/loopover-ui-kit/theme.css";
 
 /*
  * Site-only additions on top of the shared design system (imported above
- * from @jsonbored/gittensory-ui-kit/theme.css — tokens, base layer, and the
+ * from @jsonbored/loopover-ui-kit/theme.css — tokens, base layer, and the
  * border-hairline family the shared components depend on now live there).
- * Everything below is specific to gittensory-ui's own marketing/docs pages
+ * Everything below is specific to loopover-ui's own marketing/docs pages
  * and dashboard chrome — hero flourishes, gradients, nav accents — not
  * needed by a shared component, so it stays local.
  */
@@ -93,7 +93,7 @@
 }
 
 /* Animated gradient border utility (focus-ring now lives in the shared
-   theme — see @jsonbored/gittensory-ui-kit/theme.css). */
+   theme — see @jsonbored/loopover-ui-kit/theme.css). */
 @layer utilities {
   .gradient-border {
     position: relative;

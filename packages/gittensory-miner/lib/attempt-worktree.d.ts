@@ -1,4 +1,4 @@
-import type { WorktreeExecFn } from "@jsonbored/gittensory-engine";
+import type { WorktreeExecFn } from "@jsonbored/loopover-engine";
 import type { RunGitFn } from "./repo-clone.js";
 
 export function createRealWorktreeExec(timeoutMs?: number): WorktreeExecFn;

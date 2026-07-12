@@ -1,4 +1,4 @@
-import { resolveAiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import { resolveAiPolicyVerdict } from "@jsonbored/loopover-engine";
 
 // Real rejectionSignaled resolver (#5132, Wave 3.5 follow-up). iterate-policy.ts's own doc comment: "True
 // when the target repo (or this contributor's history with it) has signaled it does not want automated/

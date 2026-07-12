@@ -1,4 +1,4 @@
-import type { WorktreeExecFn, WorktreeRemoveResult } from "@jsonbored/gittensory-engine";
+import type { WorktreeExecFn, WorktreeRemoveResult } from "@jsonbored/loopover-engine";
 
 export const REPLAY_SNAPSHOT_SUBDIR: ".gittensory-replay-snapshots";
 

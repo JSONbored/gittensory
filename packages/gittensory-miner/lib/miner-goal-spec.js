@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { discoverMinerGoalSpecPath, parseMinerGoalSpecContent } from "@jsonbored/gittensory-engine";
+import { discoverMinerGoalSpecPath, parseMinerGoalSpecContent } from "@jsonbored/loopover-engine";
 
 // Real local .gittensory-miner.yml resolver (#5132, Wave 3.5 follow-up). MinerGoalSpec's own discovery
 // helper (discoverMinerGoalSpecPath, packages/gittensory-engine) is deliberately IO-free -- the caller
@@ -20,7 +20,7 @@ import { discoverMinerGoalSpecPath, parseMinerGoalSpecContent } from "@jsonbored
  *
  * @param {string} repoPath
  * @param {{ existsSync?: (path: string) => boolean, readFileSync?: (path: string, encoding: "utf8") => string }} [options]
- * @returns {import("@jsonbored/gittensory-engine").ParsedMinerGoalSpec}
+ * @returns {import("@jsonbored/loopover-engine").ParsedMinerGoalSpec}
  */
 export function resolveMinerGoalSpec(repoPath, options = {}) {
   const existsImpl = options.existsSync ?? existsSync;

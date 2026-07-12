@@ -1,5 +1,5 @@
-import { buildOpenPrSpec } from "@jsonbored/gittensory-engine";
-import { runIterateLoop } from "@jsonbored/gittensory-engine";
+import { buildOpenPrSpec } from "@jsonbored/loopover-engine";
+import { runIterateLoop } from "@jsonbored/loopover-engine";
 import { checkSubmissionFreshness } from "./submission-freshness-check.js";
 import { evaluateGovernorChokepointGatePersisted } from "./governor-chokepoint-persisted.js";
 import { prepareOpenPrSubmission } from "./harness-submission-trigger.js";
@@ -10,7 +10,7 @@ import { prepareOpenPrSubmission } from "./harness-submission-trigger.js";
 // Governor chokepoint (#2340, which itself composes kill-switch, dry-run, rate-limit, budget caps, non-
 // convergence, self-reputation-throttle, and self-plagiarism -- see chokepoint.ts's own module doc comment for
 // the exact precedence ladder) -> on allowed:true, builds the REAL open_pr command via the now-shared
-// buildOpenPrSpec (@jsonbored/gittensory-engine, moved from root src/mcp/local-write-tools.ts) and executes it.
+// buildOpenPrSpec (@jsonbored/loopover-engine, moved from root src/mcp/local-write-tools.ts) and executes it.
 //
 // WORKTREE LIFECYCLE IS NOT THIS MODULE'S JOB: runIterateLoop already takes a plain `workingDirectory` string
 // (packages/gittensory-engine/src/miner/iterate-loop.ts's own IterateLoopInput), deliberately agnostic about
@@ -73,7 +73,7 @@ function assertInput(input) {
  * input/deps, mirroring every sibling module in this pipeline.
  *
  * @param {{
- *   loopInput: import("@jsonbored/gittensory-engine").IterateLoopInput,
+ *   loopInput: import("@jsonbored/loopover-engine").IterateLoopInput,
  *   issueNumber: number,
  *   minerLogin: string,
  *   base: string,
@@ -82,10 +82,10 @@ function assertInput(input) {
  *   submissionMode: "observe"|"enforce",
  *   maxConsecutiveGateBlocks?: number,
  *   draft?: boolean,
- *   governor: Omit<import("@jsonbored/gittensory-engine").GovernorChokepointInput, "actionClass"|"repoFullName"|"nowMs"|"wouldBeAction">,
+ *   governor: Omit<import("@jsonbored/loopover-engine").GovernorChokepointInput, "actionClass"|"repoFullName"|"nowMs"|"wouldBeAction">,
  * }} input
  * @param {{
- *   driver: import("@jsonbored/gittensory-engine").CodingAgentDriver,
+ *   driver: import("@jsonbored/loopover-engine").CodingAgentDriver,
  *   runSlopAssessment: Function,
  *   appendAttemptLogEvent: Function,
  *   claimLedger: object,
@@ -95,7 +95,7 @@ function assertInput(input) {
  *   governorState?: import("./governor-state.js").GovernorState,
  *   sessionStartMs?: number,
  *   nowMs: number,
- *   executeLocalWrite: (spec: import("@jsonbored/gittensory-engine").LocalWriteActionSpec) => Promise<unknown>,
+ *   executeLocalWrite: (spec: import("@jsonbored/loopover-engine").LocalWriteActionSpec) => Promise<unknown>,
  * }} deps
  */
 export async function runMinerAttempt(input, deps) {
