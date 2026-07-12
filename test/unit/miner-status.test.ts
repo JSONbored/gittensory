@@ -77,9 +77,9 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).stateDir).toBe("/s");
   });
 
-  it("doctor passes on a healthy setup (writable state dir, initialized sqlite, optional Docker)", () => {
+  it("doctor passes on a healthy setup (writable state dir, initialized sqlite, optional Docker, GITHUB_TOKEN set)", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state") };
+    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state"), GITHUB_TOKEN: "ghp_faketoken" };
     initLaptopState(env);
     const checks = runDoctorChecks(env);
     expect(checks.every((check) => check.ok)).toBe(true);
@@ -92,6 +92,8 @@ describe("gittensory-miner status/doctor (#2288)", () => {
       "docker-present",
       "claude-cli-present",
       "codex-cli-present",
+      "github-token-present",
+      "coding-agent-credential-present",
     ]);
     expect(runDoctor([], env)).toBe(0);
     expect(log).toHaveBeenCalled();
@@ -154,7 +156,7 @@ describe("gittensory-miner status/doctor (#2288)", () => {
 
   it("runDoctor supports --json output", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state") };
+    const env = { GITTENSORY_MINER_CONFIG_DIR: join(tempRoot(), "state"), GITHUB_TOKEN: "ghp_faketoken" };
     initLaptopState(env);
     expect(runDoctor(["--json"], env)).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).checks).toBeDefined();
@@ -311,6 +313,108 @@ describe("gittensory-miner status/doctor (#2288)", () => {
         const parsed = JSON.parse(output);
         expect(typeof parsed.driver.cliPresent === "boolean" || parsed.driver.cliPresent === null).toBe(true);
       }
+    });
+  });
+
+  describe("doctor credential-presence checks (#5170)", () => {
+    it("github-token-present: ok true when GITHUB_TOKEN is a non-empty string", () => {
+      const check = runDoctorChecks({ GITHUB_TOKEN: "ghp_faketoken" }).find(
+        (c) => c.name === "github-token-present",
+      );
+      expect(check?.ok).toBe(true);
+      expect(check?.detail).toBe("GITHUB_TOKEN is set");
+    });
+
+    it("github-token-present: ok false (regression guard) when GITHUB_TOKEN is unset or blank", () => {
+      const unset = runDoctorChecks({}).find((c) => c.name === "github-token-present");
+      expect(unset?.ok).toBe(false);
+      const blank = runDoctorChecks({ GITHUB_TOKEN: "   " }).find((c) => c.name === "github-token-present");
+      expect(blank?.ok).toBe(false);
+    });
+
+    it("coding-agent-credential-present: no provider configured is advisory (ok true)", () => {
+      const check = runDoctorChecks({}).find((c) => c.name === "coding-agent-credential-present");
+      expect(check?.ok).toBe(true);
+      expect(check?.detail).toBe("no coding-agent provider configured");
+    });
+
+    it("coding-agent-credential-present: noop/agent-sdk require no separate credential (ok true, no secret in message)", () => {
+      const noop = runDoctorChecks({ MINER_CODING_AGENT_PROVIDER: "noop" }).find(
+        (c) => c.name === "coding-agent-credential-present",
+      );
+      expect(noop?.ok).toBe(true);
+      expect(noop?.detail).toBe("noop requires no separate credential file/env var");
+
+      const agentSdk = runDoctorChecks({ MINER_CODING_AGENT_PROVIDER: "agent-sdk" }).find(
+        (c) => c.name === "coding-agent-credential-present",
+      );
+      expect(agentSdk?.ok).toBe(true);
+      expect(agentSdk?.detail).toBe("agent-sdk requires no separate credential file/env var");
+    });
+
+    it("coding-agent-credential-present: claude-cli configured + token set is ok true", () => {
+      const check = runDoctorChecks({
+        MINER_CODING_AGENT_PROVIDER: "claude-cli",
+        CLAUDE_CODE_OAUTH_TOKEN: "fake-oauth-token",
+      }).find((c) => c.name === "coding-agent-credential-present");
+      expect(check?.ok).toBe(true);
+      expect(check?.detail).toBe("CLAUDE_CODE_OAUTH_TOKEN is set");
+    });
+
+    it("coding-agent-credential-present: claude-cli configured + token missing fails with an actionable message", () => {
+      const check = runDoctorChecks({ MINER_CODING_AGENT_PROVIDER: "claude-cli" }).find(
+        (c) => c.name === "coding-agent-credential-present",
+      );
+      expect(check?.ok).toBe(false);
+      expect(check?.detail).toBe(
+        "CLAUDE_CODE_OAUTH_TOKEN is not set -- every claude-cli attempt will fail without it",
+      );
+    });
+
+    it("coding-agent-credential-present: codex-cli configured + auth.json readable is ok true", () => {
+      const root = tempRoot();
+      const authFile = join(root, "auth.json");
+      writeFileSync(authFile, "{}");
+      const check = runDoctorChecks({ MINER_CODING_AGENT_PROVIDER: "codex-cli", CODEX_HOME: root }).find(
+        (c) => c.name === "coding-agent-credential-present",
+      );
+      expect(check?.ok).toBe(true);
+      expect(check?.detail).toBe(`${authFile} is readable`);
+    });
+
+    it("coding-agent-credential-present: codex-cli configured + auth.json missing fails with an actionable message", () => {
+      const root = tempRoot();
+      const check = runDoctorChecks({ MINER_CODING_AGENT_PROVIDER: "codex-cli", CODEX_HOME: root }).find(
+        (c) => c.name === "coding-agent-credential-present",
+      );
+      expect(check?.ok).toBe(false);
+      expect(check?.detail).toBe(
+        `${join(root, "auth.json")} is missing or unreadable -- run \`codex auth\`; every codex-cli attempt will fail without it`,
+      );
+    });
+
+    it("makes zero network calls (preserves doctor's documented invariant)", () => {
+      const fetchStub = vi.fn(() => {
+        throw new Error("network calls are forbidden");
+      });
+      vi.stubGlobal("fetch", fetchStub);
+      runDoctorChecks({ GITHUB_TOKEN: "ghp_faketoken", MINER_CODING_AGENT_PROVIDER: "codex-cli" });
+      expect(fetchStub).not.toHaveBeenCalled();
+    });
+
+    it("invariant: doctor's output never contains an actual credential value, only presence booleans/names/paths", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const secretToken = "ghp_should-never-appear-in-doctor-output";
+      const secretOauth = "oauth-should-never-appear-in-doctor-output";
+      runDoctor(["--json"], {
+        GITTENSORY_MINER_CONFIG_DIR: tempRoot(),
+        GITHUB_TOKEN: secretToken,
+        MINER_CODING_AGENT_PROVIDER: "claude-cli",
+        CLAUDE_CODE_OAUTH_TOKEN: secretOauth,
+      });
+      const output = String(log.mock.calls[0]?.[0]);
+      expect(output).not.toContain(secretToken);
+      expect(output).not.toContain(secretOauth);
     });
   });
 });
