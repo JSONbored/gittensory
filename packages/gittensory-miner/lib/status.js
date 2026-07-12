@@ -60,15 +60,30 @@ export function resolveMinerStateDir(env = process.env) {
   return join(configHome, "gittensory-miner");
 }
 
-// The pinned @jsonbored/gittensory-engine version this miner is built against, read from the miner's own declared
-// dependency. (The engine package's `exports` map blocks `require("<pkg>/package.json")`, and its built `dist` may
-// be absent depending on build order, so the declared-dependency version is the reliable, always-available source.)
-function readEngineVersion() {
+/**
+ * The REAL installed @jsonbored/gittensory-engine version, for `status`'s own display. Prefers `readInstalled`
+ * (the actually-resolved semver from node_modules/the monorepo workspace, the same real resolution `doctor`'s
+ * engine-version-skew check already relies on) -- a self-hoster asking "what's installed" wants the real
+ * answer, not the declared dependency RANGE ("*" in this monorepo, which tells them nothing). Falls back to
+ * the declared range only if real resolution genuinely comes up empty (the engine package's `exports` map
+ * blocks `require("<pkg>/package.json")` in some resolution orders, and its built `dist` may be absent
+ * depending on build order) -- still better than reporting nothing at all.
+ *
+ * Exported + injectable (mirrors `buildEngineVersionSkewCheck`'s own `readInstalled` param): real resolution
+ * succeeding is the only realistic case in a working install, so the fallback path needs a way to force it.
+ */
+export function buildEngineVersionDisplay(readInstalled = readInstalledEnginePackageVersion) {
+  const installed = readInstalled();
+  if (installed) return installed;
   try {
     return requireFromHere()("../package.json").dependencies?.[ENGINE_PACKAGE] ?? null;
   } catch {
     return null;
   }
+}
+
+function readEngineVersion() {
+  return buildEngineVersionDisplay();
 }
 
 export function readInstalledEnginePackageVersionFromPaths(

@@ -53,3 +53,5 @@ export function buildEngineVersionSkewCheck(
   readInstalled?: () => string | null,
   readExpected?: () => string | null,
 ): DoctorCheck;
+
+export function buildEngineVersionDisplay(readInstalled?: () => string | null): string | null;

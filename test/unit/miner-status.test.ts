@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildEngineVersionDisplay,
   buildEngineVersionSkewCheck,
   checkConfigContent,
   collectStatus,
@@ -57,6 +58,24 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     expect(status.engine.name).toBe("@jsonbored/gittensory-engine");
     expect(status.stateDir).toBe(join(root, "state"));
     expect(status.configFile).toBe(join(root, ".gittensory-miner.yml")); // discovered
+  });
+
+  it("REGRESSION: collectStatus reports the REAL installed engine version, not the declared dependency range", () => {
+    const root = tempRoot();
+    const status = collectStatus({ GITTENSORY_MINER_CONFIG_DIR: join(root, "state") }, root);
+    // The monorepo declares "*" for this workspace dependency -- a self-hoster asking "what's installed"
+    // needs the real resolved semver (matching what doctor's own engine-version-skew check already shows),
+    // not the meaningless declared range.
+    expect(status.engine.version).toBe(readInstalledEnginePackageVersion());
+    expect(status.engine.version).not.toBe("*");
+  });
+
+  it("buildEngineVersionDisplay prefers a real resolved version when available", () => {
+    expect(buildEngineVersionDisplay(() => "9.9.9")).toBe("9.9.9");
+  });
+
+  it("REGRESSION: buildEngineVersionDisplay falls back to the declared dependency range when real resolution comes up empty", () => {
+    expect(buildEngineVersionDisplay(() => null)).toBe("*");
   });
 
   it("collectStatus prefers GITTENSORY_MINER_VERSION over package.json (#4310)", () => {
