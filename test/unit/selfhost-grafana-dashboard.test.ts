@@ -61,14 +61,17 @@ function targetForPanel(panelId: number): DashboardTarget {
   return target;
 }
 
-function expandGrafanaRange(query: string): string {
+function grafanaSqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function expandGrafanaRange(query: string, repo = "$__all"): string {
   const from = Math.floor(Date.parse("2026-06-29T20:00:00Z") / 1000);
   const to = Math.floor(Date.parse("2026-06-29T22:00:00Z") / 1000);
-  // Every panel's $repo variable also needs expanding for a real sqlite3 CLI run, same as the time
+  // Every panel's repo variable also needs expanding for a real sqlite3 CLI run, same as the time
   // placeholders above -- Grafana's own templating engine does this substitution normally, so a raw
-  // file-read + direct sqlite3 execution (what these tests do) has to simulate it. Default to "All
-  // repos" ('$__all' both sides of the OR) unless a caller substitutes a specific repo value first.
-  return query.replaceAll(timeFrom, String(from)).replaceAll(timeTo, String(to)).replaceAll("'$repo'", "'$__all'");
+  // file-read + direct sqlite3 execution (what these tests do) has to simulate its SQL string format.
+  return query.replaceAll(timeFrom, String(from)).replaceAll(timeTo, String(to)).replaceAll("${repo:sqlstring}", grafanaSqlString(repo));
 }
 
 function tmpRoot(): string {
@@ -337,7 +340,7 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
       expect(target?.queryType).toBe("table");
       expect(target?.rawQueryText).toBe(target?.queryText);
       expect(target?.queryText).toContain("FROM issues");
-      expect(target?.queryText).toContain("('$repo' = '$__all' OR repo = '$repo')");
+      expect(target?.queryText).toContain("(${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})");
       expect(panel?.description?.length ?? 0).toBeGreaterThan(0);
     }
 
@@ -355,7 +358,7 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
 
   it("scopes the issue-activity panels to the selected $repo, same as the PR panels", () => {
     for (const id of [12, 13, 14] as const) {
-      expect(targetForPanel(id).queryText).toContain("('$repo' = '$__all' OR repo = '$repo')");
+      expect(targetForPanel(id).queryText).toContain("(${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})");
     }
   });
 
@@ -373,12 +376,13 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
     expect(vars[0]!.query?.rawQueryText).toBe("SELECT DISTINCT repo FROM review_targets ORDER BY repo");
   });
 
-  it("scopes every review_targets panel query to the selected $repo", () => {
+  it("scopes every review_targets panel query to the selected repo with Grafana SQL-string escaping", () => {
     const targets = reviewTargets();
 
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) {
-      expect(target.queryText).toContain("('$repo' = '$__all' OR repo = '$repo')");
+      expect(target.queryText).toContain("(${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})");
+      expect(target.queryText).not.toContain("'$repo'");
     }
   });
 
@@ -466,15 +470,41 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
 
     const trackedQuery = targetForPanel(2).queryText!;
     const allRepos = sqlite(db, expandGrafanaRange(trackedQuery));
-    // A specific repo selection substitutes BOTH $repo occurrences with the same real repo value (never
-    // the literal "$__all" sentinel, which only appears when "All" is selected) -- simulate that directly
-    // on the raw query rather than going through expandGrafanaRange's own "All" default.
-    const repoAOnly = sqlite(db, expandGrafanaRange(trackedQuery.replaceAll("'$repo'", "'owner/repo-a'")));
-    const repoBOnly = sqlite(db, expandGrafanaRange(trackedQuery.replaceAll("'$repo'", "'owner/repo-b'")));
+    // A specific repo selection substitutes BOTH repo occurrences with the same SQL-escaped repo value (never
+    // the literal "$__all" sentinel, which only appears when "All" is selected).
+    const repoAOnly = sqlite(db, expandGrafanaRange(trackedQuery, "owner/repo-a"));
+    const repoBOnly = sqlite(db, expandGrafanaRange(trackedQuery, "owner/repo-b"));
 
     expect(allRepos).toBe("3");
     expect(repoAOnly).toBe("1");
     expect(repoBOnly).toBe("2");
+  });
+
+
+  (sqliteCliAvailable ? it : it.skip)("SQL-escapes repo variable values instead of interpolating raw dashboard input", () => {
+    const root = tmpRoot();
+    const db = join(root, "reporting.sqlite");
+    sqlite(db, `
+      CREATE TABLE review_targets (
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        submitter TEXT,
+        status TEXT NOT NULL,
+        verdict TEXT,
+        title TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO review_targets (repo, number, submitter, status, verdict, title, created_at, updated_at)
+      VALUES
+        ('owner/repo-a', 1, 'alice', 'merged', 'merge', 'in repo a', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z'),
+        ('owner/repo-b', 2, 'bob', 'merged', 'merge', 'in repo b', '2026-06-29T20:30:00Z', '2026-06-29T20:30:00Z');
+    `);
+
+    const trackedQuery = targetForPanel(2).queryText!;
+    const injectedRepo = "x') OR 1=1 --";
+
+    expect(sqlite(db, expandGrafanaRange(trackedQuery, injectedRepo))).toBe("0");
   });
 
   it("excludes bot-authored PRs from every review_targets panel query, not just the table", () => {
