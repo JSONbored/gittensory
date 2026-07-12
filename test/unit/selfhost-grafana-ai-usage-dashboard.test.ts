@@ -22,7 +22,7 @@ type TemplateVar = {
   name: string;
   type: string;
   datasource?: { type?: string };
-  query?: { rawQueryText?: string; query?: string };
+  query?: { queryText?: string; rawQueryText?: string; query?: string };
   includeAll?: boolean;
   multi?: boolean;
   allValue?: string;
@@ -131,6 +131,8 @@ describe("Gittensory - AI usage dashboard (Phase B2 consolidation)", () => {
     expect(byName.model?.type).toBe("query");
     expect(byName.model?.query?.rawQueryText).toContain("SELECT DISTINCT model FROM ai_usage_events WHERE");
     expect(byName.model?.query?.rawQueryText).toContain("${provider:sqlstring}");
+    expect(byName.model?.query?.queryText).toContain("SELECT DISTINCT model FROM ai_usage_events WHERE");
+    expect(byName.model?.query?.queryText).toContain("${provider:sqlstring}");
     expect(byName.model?.includeAll).toBe(true);
 
     expect(byName.claudeModel?.type).toBe("query");
@@ -165,9 +167,12 @@ describe("Gittensory - AI usage dashboard (Phase B2 consolidation)", () => {
     ];
 
     for (const target of sqlTargets) {
-      const sql = target?.rawQueryText ?? target?.queryText;
-      if (!sql?.includes("ai_usage_events")) continue;
-      expect(sql).not.toMatch(/'\$(provider|feature|model)'/);
+      if (target?.queryText?.includes("ai_usage_events")) {
+        expect(target.queryText).not.toMatch(/'\$(provider|feature|model)'/);
+      }
+      if (target?.rawQueryText?.includes("ai_usage_events")) {
+        expect(target.rawQueryText).not.toMatch(/'\$(provider|feature|model)'/);
+      }
     }
   });
 
