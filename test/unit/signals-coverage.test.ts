@@ -1478,6 +1478,29 @@ describe("signal coverage edge cases", () => {
     expect(actionRequiredComment).toContain("Gittensory cannot evaluate this PR until installation state is repaired.");
     expect(actionRequiredComment).toContain("> | Gate result | ⚠️ App action required | Install/config needs attention. | Fix app config. |");
 
+    // REGRESSION: gateHeld's panelSummary falls back to a literal default when NO gate was passed at all --
+    // gateConclusion then resolves via fallbackGateConclusion's `!args.repo` arm to "neutral" (gateHeld-only,
+    // unlike "action_required" above which is ALSO gateBlocking and never reaches this fallback), and
+    // args.gate?.summary is undefined (no gate object exists to read a summary from), so the literal default
+    // text renders instead of a provided/derived summary.
+    const heldNoSummaryComment = buildPublicPrIntelligenceComment({env: {},
+      repo: null,
+      pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
+      profile,
+      detection,
+      queueHealth: buildQueueHealth(directRepo, [], [currentPr], buildCollisionReport(directRepo.fullName, [], [currentPr])),
+      collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
+      preflight: buildPreflightResult(
+        { repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] },
+        directRepo,
+        [],
+        [currentPr],
+      ),
+      settings: gateSettings,
+    });
+    expect(heldNoSummaryComment).toContain("> [!WARNING]");
+    expect(heldNoSummaryComment).toContain("LoopOver is holding this PR for maintainer review.");
+
     const duplicateAdvisoryComment = buildPublicPrIntelligenceComment({env: {},
       repo: directRepo,
       pr: currentPr,
