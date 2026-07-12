@@ -452,6 +452,17 @@ export {
   type ParsedMinerGoalSpec,
 } from "./miner-goal-spec.js";
 export {
+  DEFAULT_AMS_POLICY_SPEC,
+  parseAmsPolicySpec,
+  parseAmsPolicySpecContent,
+  AMS_POLICY_SPEC_FILENAMES,
+  type AmsCapLimits,
+  type AmsPolicySpec,
+  type AmsSlopThreshold,
+  type AmsSubmissionMode,
+  type ParsedAmsPolicySpec,
+} from "./ams-policy-spec.js";
+export {
   DEFAULT_FLEET_RUN_MANIFEST,
   parseFleetRunManifest,
   parseFleetRunManifestContent,

@@ -1,0 +1,60 @@
+# ============================================================================
+# .gittensory-ams.yml - operator execution policy (EXAMPLE)
+# ============================================================================
+# This is the OPERATOR's own execution-risk policy for their autonomous miner
+# (AMS) -- a deliberate structural sibling to `.gittensory-miner.yml`
+# (MinerGoalSpec), but answering a different question. MinerGoalSpec is what a
+# TARGET REPO wants from being mined (paths, labels, whether it's minable at
+# all). This file is how aggressive the OPERATOR wants their own agent to be
+# (submission mode, slop threshold, per-attempt budget/turn/time ceilings). No
+# field here ever lets a target repo loosen what an operator's agent is
+# willing to do -- see below for why.
+#
+# TWO SCOPES, mirroring `.gittensory.yml`'s own established self-host
+# precedent: a target repo MAY drop this file in as a proposed DEFAULT policy
+# for operators who haven't set their own (e.g. "please use a strict slop
+# threshold mining me"). But the OPERATOR's own local copy of this file (in
+# their gittensory-miner config dir, not this repo) -- when present -- FULLY
+# REPLACES whatever this repo's file says. Never a field-by-field merge. An
+# operator's explicit choice always wins; a repo's file can only ever propose
+# a fallback default for an unconfigured operator, never override an
+# operator's own decision.
+#
+# Every field is OPTIONAL and has a safe, deny-by-default default (shown as
+# "Default: X" below). The file is parsed tolerantly: an unknown key is
+# ignored, and a single malformed field falls back to its default with a
+# warning.
+#
+# Discovery order (first match wins):
+#   .gittensory-ams.yml -> .github/gittensory-ams.yml
+#   -> .gittensory-ams.json -> .github/gittensory-ams.json
+#
+# Copy to `.gittensory-ams.yml` and edit. YAML or JSON are both accepted.
+
+# Whether a real attempt is allowed to actually submit (open a PR), or only
+# compute + log its decision. "observe" still runs every real signal/decision
+# for real, it just never lets the result become a real write -- the safe
+# default for calibrating against live traffic before trusting it.
+# Values: observe | enforce. Default: observe.
+submissionMode: observe
+
+# The strictest self-review slop band still allowed to reach submission.
+# Lower is stricter: "clean" only lets the cleanest band through.
+# Values: clean | low | elevated | high. Default: low.
+slopThreshold: low
+
+# Governor cap ceilings for one attempt (budget-cap.ts). `budget` may be
+# fractional (e.g. a dollar cost); `turns` is a whole-count ceiling;
+# `elapsedMs` is a termination ceiling in milliseconds.
+# Default: { budget: 5, turns: 20, elapsedMs: 1800000 } (30 minutes).
+capLimits:
+  budget: 5
+  turns: 20
+  elapsedMs: 1800000
+
+# Non-convergence detector thresholds (non-convergence.ts): streak lengths at
+# which a still-unfinished portfolio-queue item reads non-convergent.
+# Default: { maxConsecutiveFailures: 3, maxReenqueues: 3 }.
+convergenceThresholds:
+  maxConsecutiveFailures: 3
+  maxReenqueues: 3

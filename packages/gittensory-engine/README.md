@@ -643,6 +643,25 @@ safe defaults and `warnings` explains any dropped or invalid fields.
 the existence check — so a caller reads the returned path and feeds its content to `parseMinerGoalSpecContent`. See
 `.gittensory-miner.yml.example` for the documented fields.
 
+## AmsPolicySpec
+
+`AmsPolicySpec` is the type surface for `.gittensory-ams.yml` — the OPERATOR's own execution-risk policy for
+their miner (`submissionMode`, `slopThreshold`, `capLimits`, `convergenceThresholds`), a deliberate structural
+sibling to `MinerGoalSpec` but answering a different question: `MinerGoalSpec` is what the target repo wants
+from being mined; `AmsPolicySpec` is how aggressive the operator wants their own agent to be. No field on this
+type lets a target repo's own file loosen what an operator's agent is willing to do — see the type's own header
+comment for why that boundary is load-bearing. `DEFAULT_AMS_POLICY_SPEC` is deny-by-default: `"observe"`
+submission mode (computes real decisions but never actually submits) and a `"low"` (strict) slop threshold.
+
+`parseAmsPolicySpec(raw)` / `parseAmsPolicySpecContent(content)` are the same tolerant-parser pair shape as
+`MinerGoalSpec`'s — never throw, return `{ present, spec, warnings }`.
+
+Unlike `MinerGoalSpec`, this package does not resolve `.gittensory-ams.yml`'s two-scope precedence itself (this
+package is IO-free) — `packages/gittensory-miner/lib/ams-policy.js`'s `resolveAmsPolicy` is the real caller,
+mirroring `.gittensory.yml`'s own established self-host precedent: the operator's own local file, when present,
+FULLY REPLACES the repo's proposed file (never a field-by-field merge) — the repo's file is only ever a fallback
+default for an operator who hasn't set their own local policy. See `.gittensory-ams.yml.example`.
+
 ## Repo map builder
 
 `buildRepoMap(files)` gives a coding-agent driver (or the acceptance-criteria/prompt-packet builders upstream of
