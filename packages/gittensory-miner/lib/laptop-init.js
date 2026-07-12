@@ -4,6 +4,7 @@ import {
   constants,
   existsSync,
   mkdirSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -306,7 +307,7 @@ function buildInteractiveProviderChoices() {
   return interactiveProviderOrder.filter((name) => knownProviders.has(name));
 }
 
-function createInteractiveInitPrompt(io = {}) {
+export function createInteractiveInitPrompt(io = {}) {
   const stdin = io.stdin ?? process.stdin;
   const stdout = io.stdout ?? process.stdout;
   if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== "function") {
@@ -501,7 +502,9 @@ async function runInteractiveInit(args, env, options = {}) {
   const envFilePath = resolveLaptopInitEnvFilePath(env);
   mkdirSync(result.stateDir, { recursive: true, mode: 0o700 });
   const envFileContent = renderInteractiveEnvFile(envEntries);
-  writeFileSync(envFilePath, envFileContent);
+  const tempEnvFilePath = `${envFilePath}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tempEnvFilePath, envFileContent, { mode: 0o600 });
+  renameSync(tempEnvFilePath, envFilePath);
   chmodSync(envFilePath, 0o600);
 
   console.log(`initialized ${result.stateDir}`);

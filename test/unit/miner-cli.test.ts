@@ -80,6 +80,16 @@ describe("gittensory-miner CLI helpers", () => {
     );
   });
 
+  it("returns the same unknown-command error for an empty argv", () => {
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    expect(runCli([], { packageName: "@jsonbored/gittensory-miner" })).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      "Unknown command: . Run @jsonbored/gittensory-miner --help.",
+    );
+  });
+
   it("keeps the CLI version source aligned with package metadata", async () => {
     const packageJson = await import(
       "../../packages/gittensory-miner/package.json",
