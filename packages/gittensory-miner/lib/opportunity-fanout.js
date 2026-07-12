@@ -1,9 +1,16 @@
 import { Buffer } from "node:buffer";
 import { resolveAiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import {
+  DEFAULT_RATE_LIMIT_HIGH_WATER_MARK,
+  DEFAULT_RATE_LIMIT_LOW_WATER_MARK,
+  resolveThrottledConcurrency,
+} from "./discovery-throttle.js";
 import { fetchWithRetry } from "./http-retry.js";
 
 const defaultApiBaseUrl = "https://api.github.com";
 const defaultConcurrency = 5;
+// How long a parked worker waits before re-checking the live rate-limit-derived concurrency limit (#4844).
+const throttleParkMs = 25;
 const defaultPerPage = 100;
 // Follow the GitHub Link header past the first page so a repo/search with >100 open issues isn't silently
 // truncated (#4831); cap the follow loop so a pathological Link chain can't run away.
@@ -330,18 +337,52 @@ async function fetchSearchIssues(searchQuery, githubToken, options, summary, war
   }
 }
 
-async function mapWithConcurrency(items, concurrency, worker) {
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Run `worker` over `items` with a dynamic in-flight cap (#4844). The pool spawns `maxConcurrency` loops, but a
+// loop parks (re-checking every `throttleParkMs`) whenever the live `resolveLimit()` — derived from the recorded
+// rate-limit budget — is already met by the number of in-flight workers, so effective concurrency tapers off as
+// the budget drops instead of sprinting into a 403. `sleepFn` lets tests inject an instant wait for the park.
+export async function mapWithConcurrency(items, maxConcurrency, worker, resolveLimit, sleepFn) {
   const results = new Array(items.length);
+  const sleep = sleepFn ?? delay;
   let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+  let active = 0;
+  const runOne = async () => {
     while (next < items.length) {
+      // Park while the live limit is already saturated. The check and the `active`/`next` bumps below run without
+      // an intervening await, so two loops can never claim the same slot.
+      while (active >= resolveLimit()) {
+        await sleep(throttleParkMs);
+      }
+      // The shared cursor can be drained by other loops while this one is parked, so re-check before claiming.
+      if (next >= items.length) return;
       const index = next;
       next += 1;
-      results[index] = await worker(items[index], index);
+      active += 1;
+      try {
+        results[index] = await worker(items[index], index);
+      } finally {
+        active -= 1;
+      }
     }
-  });
+  };
+  const workers = Array.from({ length: Math.min(maxConcurrency, items.length) }, runOne);
   await Promise.all(workers);
   return results;
+}
+
+/** A live limit resolver for `mapWithConcurrency`, reading the summary's rate-limit budget as it is updated (#4844). */
+function liveConcurrencyResolver(normalizedOptions, summary) {
+  return () =>
+    resolveThrottledConcurrency(
+      normalizedOptions.concurrency,
+      summary.rateLimitRemaining,
+      normalizedOptions.rateLimitLowWaterMark,
+      normalizedOptions.rateLimitHighWaterMark,
+    );
 }
 
 function normalizeOptions(options = {}) {
@@ -351,6 +392,20 @@ function normalizeOptions(options = {}) {
         ? options.apiBaseUrl.trim()
         : defaultApiBaseUrl,
     concurrency: normalizeLimit(options.concurrency, defaultConcurrency, 1, 10),
+    // Below/above these recorded-rate-limit-remaining marks the fanout serializes / runs at full concurrency; in
+    // between it scales down linearly (#4844).
+    rateLimitLowWaterMark: normalizeLimit(
+      options.rateLimitLowWaterMark,
+      DEFAULT_RATE_LIMIT_LOW_WATER_MARK,
+      0,
+      1_000_000,
+    ),
+    rateLimitHighWaterMark: normalizeLimit(
+      options.rateLimitHighWaterMark,
+      DEFAULT_RATE_LIMIT_HIGH_WATER_MARK,
+      1,
+      1_000_000,
+    ),
     perPage: normalizeLimit(options.perPage, defaultPerPage, 1, 100),
     maxPages: normalizeLimit(options.maxPages, defaultMaxPages, 1, 100),
     // Passed through to the per-fetch retry so tests can inject an instant sleep; undefined uses the real backoff.
@@ -369,8 +424,12 @@ export async function fetchCandidateIssuesWithSummary(targets, githubToken, opti
     rateLimitResetAt: null,
   };
   const warnings = [];
-  const batches = await mapWithConcurrency(normalizedTargets, normalizedOptions.concurrency, (target) =>
-    fetchTargetIssues(target, githubToken, normalizedOptions, summary, warnings),
+  const batches = await mapWithConcurrency(
+    normalizedTargets,
+    normalizedOptions.concurrency,
+    (target) => fetchTargetIssues(target, githubToken, normalizedOptions, summary, warnings),
+    liveConcurrencyResolver(normalizedOptions, summary),
+    normalizedOptions.sleepFn,
   );
   return {
     issues: batches.flat(),
@@ -412,6 +471,8 @@ export async function searchCandidateIssuesWithSummary(searchQuery, githubToken,
       const verdict = await resolveRepoAiPolicy(target, githubToken, normalizedOptions, summary, warnings);
       return [targetKey(target), verdict];
     },
+    liveConcurrencyResolver(normalizedOptions, summary),
+    normalizedOptions.sleepFn,
   );
   const policiesByKey = new Map(policyEntries);
   const issues = [];

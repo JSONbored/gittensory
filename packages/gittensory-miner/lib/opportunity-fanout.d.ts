@@ -43,6 +43,14 @@ export type CandidateIssueSummary = {
   warnings: CandidateIssueWarning[];
 };
 
+export function mapWithConcurrency<T, R>(
+  items: T[],
+  maxConcurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+  resolveLimit: () => number,
+  sleepFn?: (ms: number) => Promise<unknown>,
+): Promise<R[]>;
+
 export function fetchCandidateIssuesWithSummary(
   targets: FanoutTarget[],
   githubToken: string,

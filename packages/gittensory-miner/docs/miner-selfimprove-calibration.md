@@ -26,6 +26,27 @@ project, how many predictions were `wouldMerge` vs `wouldClose`, and how each re
 error)**, and symmetrically for close. `mergePrecision` / `closePrecision` are the headline accuracy numbers a
 dashboard renders.
 
+## The runner: wiring the replay scorer into the combine (#4248)
+
+`computePhase7CalibrationLoop` is a **pure combine contract** — by design it cannot schedule replay runs or read
+ledgers (the miner depends on the engine, not the reverse), so it waits for an external caller to feed it a real
+`historical_replay` composite. #3014 (PR #3225) shipped only that engine side; a 2026-07-08 audit found the closed
+issue claimed the two halves were "wired" when in fact **no miner-side runner ever called the replay scorer
+(`computeObjectiveAnchor`, #3012) and passed its result into the combine** — two finished pieces, never connected.
+
+[`lib/calibration-run.js`](../lib/calibration-run.js) (#4248) is that missing runner.
+`runHistoricalReplayCalibrationCycle` scores a completed replay run with the deterministic objective-anchor scorer,
+reduces the per-task scores to one composite `[0, 1]`, folds it into the `HistoricalReplayCalibrationInput` shape the
+engine expects, calls `computePhase7CalibrationLoop` with that **plus the existing `pr_outcome` signal**, and
+persists the combined snapshot as a `calibration_snapshot` event on the local append-only event ledger (the same
+typed-event-over-`event-ledger.js` pattern as `pr-outcome.js`). The persisted metric is queryable with
+`gittensory-miner ledger list --type calibration_snapshot` and via `readCalibrationSnapshots` /
+`latestCalibrationSnapshot`.
+
+Consistent with the boundary below, the runner is **read/measure-only**: it produces and persists the tracked
+metric but never acts on it (no autonomy bump, no threshold tune). Acting on the combined accuracy — the
+calibration-gated circuit-breaker — remains maintainer-only (#2352).
+
 ## Value-weighting: durable correctness, not volume
 
 Raw merge/close precision is not the real objective, and a contributor reading a dashboard number should understand

@@ -6,9 +6,11 @@ import { runDiscover } from "../lib/discover-cli.js";
 import { runFeasibilityCli } from "../lib/feasibility-cli.js";
 import { runGovernorCli } from "../lib/governor-ledger-cli.js";
 import { runLedgerCli } from "../lib/event-ledger-cli.js";
+import { runCalibrationCli } from "../lib/calibration-cli.js";
 import { runLoop } from "../lib/loop-cli.js";
 import { runManagePoll } from "../lib/manage-poll.js";
 import { runManageStatus } from "../lib/manage-status.js";
+import { runMetrics } from "../lib/metrics-cli.js";
 import { runPlanCli } from "../lib/plan-store-cli.js";
 import { runClaimCli } from "../lib/claim-ledger-cli.js";
 import { runQueueCli } from "../lib/portfolio-queue-cli.js";
@@ -42,6 +44,12 @@ if (cliArgs[0] === "doctor") {
   process.exit(runDoctor(cliArgs.slice(1)));
 }
 
+// `metrics` is strictly local + offline like `status`/`doctor` (it reads only the local prediction ledger), so it
+// is dispatched here, before the opportunistic npm-registry update check is ever started.
+if (cliArgs[0] === "metrics") {
+  process.exit(runMetrics(cliArgs.slice(1)));
+}
+
 if (cliArgs[0] === "manage" && cliArgs[1] === "status") {
   process.exit(runManageStatus(cliArgs.slice(2)));
 }
@@ -60,6 +68,10 @@ if (cliArgs[0] === "claim") {
 
 if (cliArgs[0] === "ledger") {
   process.exit(runLedgerCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+if (cliArgs[0] === "calibration") {
+  process.exit(runCalibrationCli(cliArgs.slice(1)));
 }
 
 if (cliArgs[0] === "plan") {

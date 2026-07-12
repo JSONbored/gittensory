@@ -50,6 +50,14 @@ The package also includes an append-only prediction ledger: `initPredictionLedge
 codes, plus the producing `ENGINE_VERSION`) in local SQLite, so a later self-improve pass can score predictions
 against realized outcomes. Insert-only. (#4263)
 
+The package also includes the Phase 7 calibration runner: `runHistoricalReplayCalibrationCycle`
+(`lib/calibration-run.js`) scores a completed historical-replay run with the deterministic objective-anchor scorer,
+folds the composite into the engine's `computePhase7CalibrationLoop` combine alongside the existing `pr_outcome`
+signal, and persists the combined snapshot as a `calibration_snapshot` event — queryable with
+`gittensory-miner ledger list --type calibration_snapshot` or `readCalibrationSnapshots` /
+`latestCalibrationSnapshot`. It measures and records only; acting on the metric (autonomy bumps, threshold tuning)
+stays maintainer-only. See [`docs/miner-selfimprove-calibration.md`](docs/miner-selfimprove-calibration.md). (#4248)
+
 `gittensory-miner manage status` now also folds each tracked repo's current discover/plan/prepare run state
 (`run-state.js`) alongside its managed PR rows into a "run portfolio" view — `collectRunPortfolio` /
 `renderRunPortfolioTable` — so a repo actively being discovered or planned shows up even with zero PRs yet.
