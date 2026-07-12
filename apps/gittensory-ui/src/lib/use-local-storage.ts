@@ -3,20 +3,33 @@ import { useCallback, useEffect, useState } from "react";
 /**
  * Tiny SSR-safe localStorage hook. Reads once on mount; writes are persisted
  * synchronously and broadcast via a `storage` event for other tabs.
+ *
+ * `legacyKey`, when given, is read as a one-time fallback if `key` is absent
+ * (a rebrand key-rename migration) -- the value found there is written
+ * forward to `key` immediately so every later read hits the new key
+ * directly. The legacy key is left in place, unremoved.
  */
-export function useLocalStorage<T>(key: string, initial: T) {
+export function useLocalStorage<T>(key: string, initial: T, legacyKey?: string) {
   const [value, setValue] = useState<T>(initial);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(key);
-      if (raw !== null) setValue(JSON.parse(raw) as T);
+      if (raw !== null) {
+        setValue(JSON.parse(raw) as T);
+      } else if (legacyKey) {
+        const legacyRaw = window.localStorage.getItem(legacyKey);
+        if (legacyRaw !== null) {
+          setValue(JSON.parse(legacyRaw) as T);
+          window.localStorage.setItem(key, legacyRaw);
+        }
+      }
     } catch {
       /* ignore */
     }
     setHydrated(true);
-  }, [key]);
+  }, [key, legacyKey]);
 
   const update = useCallback(
     (next: T | ((prev: T) => T)) => {

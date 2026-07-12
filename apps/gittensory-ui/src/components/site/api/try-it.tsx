@@ -16,7 +16,21 @@ import {
   useApiStatus,
 } from "@/lib/api/status";
 
-const STORAGE_KEY = "gittensory.session_token";
+const STORAGE_KEY = "loopover.session_token";
+// One-time rebrand migration fallback -- read once, then written forward to STORAGE_KEY below.
+const LEGACY_STORAGE_KEY = "gittensory.session_token";
+
+/** Reads the session token, falling back to (and migrating forward from) the pre-rebrand legacy key. */
+export function readStoredSessionToken(storage: Pick<Storage, "getItem" | "setItem">): string {
+  const stored = storage.getItem(STORAGE_KEY);
+  if (stored !== null) return stored;
+  const legacy = storage.getItem(LEGACY_STORAGE_KEY);
+  if (legacy !== null) {
+    storage.setItem(STORAGE_KEY, legacy);
+    return legacy;
+  }
+  return "";
+}
 
 interface Result {
   status: number;
@@ -52,7 +66,7 @@ export function TryIt({ op, server }: { op: OpenApiOperation; server: string }) 
   const runRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
-    setToken(localStorage.getItem(STORAGE_KEY) ?? "");
+    setToken(readStoredSessionToken(localStorage));
     setResult(null);
     setError(null);
     setPathParams({});

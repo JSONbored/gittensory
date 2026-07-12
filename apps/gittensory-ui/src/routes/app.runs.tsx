@@ -502,7 +502,11 @@ function SavedViews({
   current: { status: StatusFilter; kind: KindFilter; q: string };
   onApply: (v: { status: StatusFilter; kind: KindFilter; q: string }) => void;
 }) {
-  const [views, setViews, hydrated] = useLocalStorage<SavedView[]>("gittensory.runs.views", []);
+  const [views, setViews, hydrated] = useLocalStorage<SavedView[]>(
+    "loopover.runs.views",
+    [],
+    "gittensory.runs.views",
+  );
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   if (!hydrated) return null;

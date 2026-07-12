@@ -30,7 +30,11 @@ const LABELS: Record<Tab, string> = {
 function Workbench() {
   const { tab } = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const [lastTab, setLastTab, hydrated] = useLocalStorage<Tab>("gittensory.workbench.tab", "miner");
+  const [lastTab, setLastTab, hydrated] = useLocalStorage<Tab>(
+    "loopover.workbench.tab",
+    "miner",
+    "gittensory.workbench.tab",
+  );
   const value: Tab = tab ?? lastTab;
 
   // Restore last tab into URL when no explicit ?tab= is present.

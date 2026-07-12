@@ -134,7 +134,7 @@ describe("OnboardingPreviewCard", () => {
     await waitFor(() => expect(screen.getByText("Would comment and label this PR.")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss onboarding preview" }));
-    expect(screen.queryByText(/Here's what Gittensory would have flagged/)).toBeNull();
+    expect(screen.queryByText(/Here's what LoopOver would have flagged/)).toBeNull();
 
     apiFetch.mockClear();
     unmount();
@@ -142,7 +142,7 @@ describe("OnboardingPreviewCard", () => {
     // assumption ActivationPreview's tests already rely on for its own initial-load effect), so both of
     // these are safe to assert immediately rather than under waitFor.
     render(<OnboardingPreviewCard reviewability={REVIEWABILITY} />);
-    expect(screen.queryByText(/Here's what Gittensory would have flagged/)).toBeNull();
+    expect(screen.queryByText(/Here's what LoopOver would have flagged/)).toBeNull();
     expect(apiFetch).not.toHaveBeenCalled();
   });
 });

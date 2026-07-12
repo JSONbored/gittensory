@@ -17,7 +17,9 @@ import { useLocalStorage } from "@/lib/use-local-storage";
 
 type ReviewabilityRow = { pr: string; title: string; reason: string };
 
-const DISMISS_KEY = "gittensory_maintainer_onboarding_preview_dismissed";
+const DISMISS_KEY = "loopover_maintainer_onboarding_preview_dismissed";
+// One-time rebrand migration fallback -- see useLocalStorage's legacyKey param.
+const LEGACY_DISMISS_KEY = "gittensory_maintainer_onboarding_preview_dismissed";
 
 /** Builds a settings-preview form from a REAL cached PR (title, and a linked-issue number scraped from
  *  `reason` when present) — everything else (author identity, labels, body) isn't in the reviewability
@@ -40,16 +42,18 @@ function reviewabilityRowToForm(row: ReviewabilityRow): PreviewFormState | null 
 /**
  * First-session onboarding preview card (#2217, part of #701): auto-runs the same settings-preview
  * simulator SurfacePreview drives manually, against this repo's most recently cached pull request, so a
- * maintainer sees "here's what Gittensory would have flagged" without filling out a form. Dismissible via
+ * maintainer sees "here's what LoopOver would have flagged" without filling out a form. Dismissible via
  * localStorage, matching this codebase's established first-visit-card idiom (app.index.tsx's
  * OnboardingChecklist). Renders through PreviewResult — the same decision/checklist/comment-preview UI
  * SurfacePreview already uses — rather than a new findings UI: the settings-preview response has no
  * discrete findings array, so "flagged" here means decision.willComment / willLabel / willCheckRun.
  */
 export function OnboardingPreviewCard({ reviewability }: { reviewability: ReviewabilityRow[] }) {
-  const [state, setState, hydrated] = useLocalStorage<{ dismissed: boolean }>(DISMISS_KEY, {
-    dismissed: false,
-  });
+  const [state, setState, hydrated] = useLocalStorage<{ dismissed: boolean }>(
+    DISMISS_KEY,
+    { dismissed: false },
+    LEGACY_DISMISS_KEY,
+  );
   const target = reviewability[0] ?? null;
   const [preview, setPreview] = useState<SettingsPreviewResponse | null>(null);
   const [loading, setLoading] = useState(Boolean(target));
@@ -104,7 +108,7 @@ export function OnboardingPreviewCard({ reviewability }: { reviewability: Review
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="onboarding-preview-title" className="font-display text-token-lg font-semibold">
-            Here's what Gittensory would have flagged
+            Here's what LoopOver would have flagged
           </h2>
           <p className="mt-1 text-token-xs text-muted-foreground">
             {target ? (

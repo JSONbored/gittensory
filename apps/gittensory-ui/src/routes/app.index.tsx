@@ -434,7 +434,7 @@ function OnboardingChecklist() {
   const [state, setState, hydrated] = useLocalStorage<{
     dismissed: boolean;
     done: Record<string, boolean>;
-  }>("gittensory.onboarding", { dismissed: false, done: {} });
+  }>("loopover.onboarding", { dismissed: false, done: {} }, "gittensory.onboarding");
   if (!hydrated || state.dismissed) return null;
   const completed = ONBOARDING_STEPS.filter((s) => state.done[s.id]).length;
   return (

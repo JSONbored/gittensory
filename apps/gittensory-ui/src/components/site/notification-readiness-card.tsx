@@ -29,7 +29,11 @@ export function NotificationReadinessCard() {
     "/v1/app/notification-model",
     "Notification model",
   );
-  const [optIn, setOptIn] = useLocalStorage<boolean>("gittensory_notification_opt_in", false);
+  const [optIn, setOptIn] = useLocalStorage<boolean>(
+    "loopover_notification_opt_in",
+    false,
+    "gittensory_notification_opt_in",
+  );
   const [busy, setBusy] = useState(false);
 
   const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
