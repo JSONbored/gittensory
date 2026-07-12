@@ -72,6 +72,7 @@ jobs:
               - 'apps/gittensory-ui/**'
               - 'apps/gittensory-miner-ui/**'
               - 'apps/gittensory-extension/**'
+              - 'packages/gittensory-ui-kit/**'
               - 'scripts/build-extension.mjs'
               - 'package.json'
               - 'package-lock.json'
