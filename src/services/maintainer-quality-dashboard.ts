@@ -46,6 +46,18 @@ export type MaintainerQualityDashboard = {
   topContributors: MaintainerTopContributor[];
   /** Aggregate counts across the SHAPED repos' open PRs — observable facts, not private scores. */
   qualitySignals: { openPrs: number; duplicatePrRisk: number; missingLinkedIssue: number };
+  /** Aggregate PR-queue-health across the SHAPED repos (#2201): summed open/stale/draft/unlinked PR counts,
+   *  collision clusters, an age-bucket distribution, and how many repos fall in each burden band. Observable
+   *  counts + bands only, never raw scores — folds the per-repo QueueHealth signals the shaping already computes. */
+  queueHealth: {
+    openPullRequests: number;
+    stalePullRequests: number;
+    draftPullRequests: number;
+    unlinkedPullRequests: number;
+    collisionClusters: number;
+    ageBuckets: { under7Days: number; days7To30: number; over30Days: number };
+    bandCounts: Record<QueueHealth["level"], number>;
+  };
   summary: string;
 };
 
@@ -79,6 +91,15 @@ export function buildMaintainerQualityDashboard(args: { repos: MaintainerQuality
   let openPrs = 0;
   let duplicatePrRisk = 0;
   let missingLinkedIssue = 0;
+  const queueHealthAggregate = {
+    openPullRequests: 0,
+    stalePullRequests: 0,
+    draftPullRequests: 0,
+    unlinkedPullRequests: 0,
+    collisionClusters: 0,
+    ageBuckets: { under7Days: 0, days7To30: 0, over30Days: 0 },
+    bandCounts: { low: 0, medium: 0, high: 0, critical: 0 } as Record<QueueHealth["level"], number>,
+  };
 
   for (const { repo, issues, pullRequests } of args.repos) {
     const openPullRequests = pullRequests.filter((pr) => pr.state === "open");
@@ -103,6 +124,17 @@ export function buildMaintainerQualityDashboard(args: { repos: MaintainerQuality
       duplicateClusters: collisions.summary.clusterCount,
       highRiskDuplicates: collisions.summary.highRiskCount,
     });
+
+    // #2201: fold this repo's queue-health signals into the dashboard-level aggregate.
+    queueHealthAggregate.openPullRequests += queueHealth.signals.openPullRequests;
+    queueHealthAggregate.stalePullRequests += queueHealth.signals.stalePullRequests;
+    queueHealthAggregate.draftPullRequests += queueHealth.signals.draftPullRequests;
+    queueHealthAggregate.unlinkedPullRequests += queueHealth.signals.unlinkedPullRequests;
+    queueHealthAggregate.collisionClusters += queueHealth.signals.collisionClusters;
+    queueHealthAggregate.ageBuckets.under7Days += queueHealth.signals.ageBuckets.under7Days;
+    queueHealthAggregate.ageBuckets.days7To30 += queueHealth.signals.ageBuckets.days7To30;
+    queueHealthAggregate.ageBuckets.over30Days += queueHealth.signals.ageBuckets.over30Days;
+    queueHealthAggregate.bandCounts[queueHealth.level] += 1;
 
     for (const pr of openPullRequests) {
       openPrs += 1;
@@ -138,6 +170,7 @@ export function buildMaintainerQualityDashboard(args: { repos: MaintainerQuality
     repoQuality,
     topContributors,
     qualitySignals: { openPrs, duplicatePrRisk, missingLinkedIssue },
+    queueHealth: queueHealthAggregate,
     summary,
   };
 }

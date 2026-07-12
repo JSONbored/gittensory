@@ -23,6 +23,10 @@ import { ContributorQualityTable } from "@/components/site/app-panels/contributo
 import type { MaintainerTopContributor } from "@/components/site/app-panels/contributor-quality-table-model";
 import { GateOutcomeCard } from "@/components/site/app-panels/gate-outcome-card";
 import type { GateOutcomeCardData } from "@/components/site/app-panels/gate-outcome-card-model";
+import {
+  QueueHealthCard,
+  type MaintainerQueueHealth,
+} from "@/components/site/app-panels/queue-health-card";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
 import { OnboardingPreviewCard } from "@/components/site/app-panels/onboarding-preview-card";
 import { CheckRunReadinessTable } from "@/components/site/check-run-readiness-table";
@@ -87,6 +91,7 @@ type MaintainerDashboard = {
   qualityDashboard: {
     topContributors: MaintainerTopContributor[];
     gateOutcomeBreakdown: GateOutcomeCardData;
+    queueHealth?: MaintainerQueueHealth;
   };
 };
 
@@ -380,6 +385,8 @@ function MaintainerDashboardView({
           </section>
 
           <GateOutcomeCard breakdown={data.qualityDashboard.gateOutcomeBreakdown} />
+
+          <QueueHealthCard queueHealth={data.qualityDashboard.queueHealth} />
 
           <ContributorQualityTable topContributors={data.qualityDashboard.topContributors} />
 
