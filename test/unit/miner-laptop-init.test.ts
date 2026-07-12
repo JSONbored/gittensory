@@ -172,6 +172,38 @@ describe("gittensory-miner laptop init (#2329)", () => {
     ]);
   });
 
+  it("interactive init supports claude-cli follow-up prompts", async () => {
+    const root = tempRoot();
+    const env = { GITTENSORY_MINER_CONFIG_DIR: join(root, "state") };
+    const prompts = {
+      askSecret: vi.fn(async () => "gh-token-456"),
+      askChoice: vi.fn(async () => "claude-cli"),
+      askQuestion: vi.fn(async (question: string, defaultValue: string) => {
+        if (question.startsWith("Claude model override")) {
+          expect(defaultValue).toBe("");
+          return "claude-sonnet-4";
+        }
+        if (question === "CLI timeout in ms") {
+          expect(defaultValue).toBe("120000");
+          return "90000";
+        }
+        throw new Error(`unexpected question: ${question}`);
+      }),
+    };
+    const doctor = vi.fn(async () => 0);
+
+    expect(
+      await runInit(["--interactive"], env, {
+        interactivePrompt: prompts,
+        runDoctor: doctor,
+        cwd: root,
+      }),
+    ).toBe(0);
+    expect(readFileSync(resolveLaptopInitEnvFilePath(env), "utf8")).toContain(
+      'MINER_CODING_AGENT_CLAUDE_MODEL="claude-sonnet-4"',
+    );
+  });
+
   it("interactive init skips companion prompts for agent-sdk and noop providers", async () => {
     const root = tempRoot();
     const env = { GITTENSORY_MINER_CONFIG_DIR: join(root, "state") };
