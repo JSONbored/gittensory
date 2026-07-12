@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import {
   checkDockerPresent,
   checkLaptopStateSqlite,
   findExecutableOnPath,
+  resolveCodexAuthPath,
 } from "./laptop-init.js";
 import { resolveMinerVersion } from "./version.js";
 
@@ -271,6 +272,62 @@ function checkStateDirWritable(stateDir) {
   }
 }
 
+/** Offline (no network call) presence check for GITHUB_TOKEN -- string presence/length only, never its value.
+ *  Missing this is a common cause of a doctor-clean setup still failing on the first real attempt (#5170). */
+function checkGithubTokenPresent(env) {
+  const present = typeof env.GITHUB_TOKEN === "string" && env.GITHUB_TOKEN.trim().length > 0;
+  return {
+    name: "github-token-present",
+    ok: present,
+    detail: present ? "GITHUB_TOKEN is set" : "GITHUB_TOKEN is not set -- required for attempts to open/update PRs",
+  };
+}
+
+/** Offline presence check for whichever credential the CONFIGURED coding-agent provider actually needs (#5170).
+ *  `noop` and `agent-sdk` are locally-authenticated with no separate env-var/file credential this repo tracks
+ *  (driver-factory.ts's own comment: "All are locally-authenticated (no API-key env requirement)"), so they --
+ *  and an unconfigured provider -- report `ok: true` advisory. `claude-cli`/`codex-cli` reuse the exact
+ *  credential conditions `checkClaudeCliPresent`/`checkCodexCliPresent` already probe (CLAUDE_CODE_OAUTH_TOKEN /
+ *  the codex auth.json path) rather than re-deriving them, and fail doctor when missing since every attempt
+ *  would otherwise fail mid-run on it. Never prints the credential's actual value -- only presence/paths/names. */
+function checkCodingAgentCredentialPresent(env) {
+  const provider = resolveFirstConfiguredCodingAgentDriverName(env) ?? null;
+  if (provider === "claude-cli") {
+    const present = typeof env.CLAUDE_CODE_OAUTH_TOKEN === "string" && env.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0;
+    return {
+      name: "coding-agent-credential-present",
+      ok: present,
+      detail: present
+        ? "CLAUDE_CODE_OAUTH_TOKEN is set"
+        : "CLAUDE_CODE_OAUTH_TOKEN is not set -- every claude-cli attempt will fail without it",
+    };
+  }
+  if (provider === "codex-cli") {
+    const authPath = resolveCodexAuthPath(env);
+    let present = false;
+    try {
+      accessSync(authPath, constants.R_OK);
+      present = true;
+    } catch {
+      // missing or unreadable -- codex would fail for lack of credentials at call time.
+    }
+    return {
+      name: "coding-agent-credential-present",
+      ok: present,
+      detail: present
+        ? `${authPath} is readable`
+        : `${authPath} is missing or unreadable -- run \`codex auth\`; every codex-cli attempt will fail without it`,
+    };
+  }
+  return {
+    name: "coding-agent-credential-present",
+    ok: true,
+    detail: provider
+      ? `${provider} requires no separate credential file/env var`
+      : "no coding-agent provider configured",
+  };
+}
+
 /** Run the doctor checks. Returns an array of { name, ok, detail }; only writes a transient probe in the state dir,
  *  never touches the network. */
 export function runDoctorChecks(env = process.env) {
@@ -294,6 +351,8 @@ export function runDoctorChecks(env = process.env) {
     checkDockerPresent(),
     checkClaudeCliPresent({ env }),
     checkCodexCliPresent({ env }),
+    checkGithubTokenPresent(env),
+    checkCodingAgentCredentialPresent(env),
   ];
 }
 
