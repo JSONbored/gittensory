@@ -38,6 +38,7 @@ export function fetchCandidateIssuesWithSummary(
     apiBaseUrl?: string;
     concurrency?: number;
     perPage?: number;
+    sleepFn?: (ms: number) => Promise<unknown>;
   },
 ): Promise<CandidateIssueSummary>;
 
@@ -48,6 +49,7 @@ export function fetchCandidateIssues(
     apiBaseUrl?: string;
     concurrency?: number;
     perPage?: number;
+    sleepFn?: (ms: number) => Promise<unknown>;
   },
 ): Promise<RawCandidateIssue[]>;
 
@@ -58,6 +60,7 @@ export function searchCandidateIssuesWithSummary(
     apiBaseUrl?: string;
     concurrency?: number;
     perPage?: number;
+    sleepFn?: (ms: number) => Promise<unknown>;
   },
 ): Promise<CandidateIssueSummary>;
 
@@ -68,5 +71,6 @@ export function searchCandidateIssues(
     apiBaseUrl?: string;
     concurrency?: number;
     perPage?: number;
+    sleepFn?: (ms: number) => Promise<unknown>;
   },
 ): Promise<RawCandidateIssue[]>;

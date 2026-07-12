@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { resolveAiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import { fetchWithRetry } from "./http-retry.js";
 
 const defaultApiBaseUrl = "https://api.github.com";
 const defaultConcurrency = 5;
@@ -101,11 +102,15 @@ function recordRateLimit(summary, response) {
   }
 }
 
-async function githubGetJson(url, githubToken, summary) {
-  const response = await fetch(url, {
-    method: "GET",
-    headers: githubHeaders(githubToken),
-  });
+async function githubGetJson(url, githubToken, summary, options) {
+  // Retry a transient 5xx from GitHub before dropping this target's results for the whole run (#4830) — the same
+  // discipline as the CI/gate-verdict pollers. A thrown network error still propagates to each caller's try/catch.
+  const response = await fetchWithRetry(
+    fetch,
+    url,
+    { method: "GET", headers: githubHeaders(githubToken) },
+    { sleepFn: options?.sleepFn },
+  );
   recordRateLimit(summary, response);
   const payload = await response.json().catch(() => null);
   return { response, payload };
@@ -130,7 +135,7 @@ async function fetchRepoDoc(target, path, githubToken, options, summary, warning
     repoPath(target, `/contents/${encodeURIComponent(path)}`),
   );
   try {
-    const { response, payload } = await githubGetJson(url, githubToken, summary);
+    const { response, payload } = await githubGetJson(url, githubToken, summary, options);
     if (response.status === 404) return null;
     if (!response.ok) {
       warnings.push(warning(target, `policy:${path}`, `GitHub returned ${response.status}`));
@@ -212,7 +217,7 @@ async function fetchTargetIssues(target, githubToken, options, summary, warnings
     `?state=open&per_page=${options.perPage}`,
   );
   try {
-    const { response, payload } = await githubGetJson(url, githubToken, summary);
+    const { response, payload } = await githubGetJson(url, githubToken, summary, options);
     if (!response.ok) {
       warnings.push(warning(target, "issues", `GitHub returned ${response.status}`));
       return [];
@@ -242,7 +247,7 @@ async function fetchSearchIssues(searchQuery, githubToken, options, summary, war
     `?q=${encodeURIComponent(qualifiedQuery)}&per_page=${options.perPage}`,
   );
   try {
-    const { response, payload } = await githubGetJson(url, githubToken, summary);
+    const { response, payload } = await githubGetJson(url, githubToken, summary, options);
     if (!response.ok) {
       warnings.push({
         repoFullName: "*",
@@ -292,6 +297,8 @@ function normalizeOptions(options = {}) {
         : defaultApiBaseUrl,
     concurrency: normalizeLimit(options.concurrency, defaultConcurrency, 1, 10),
     perPage: normalizeLimit(options.perPage, defaultPerPage, 1, 100),
+    // Passed through to the per-fetch retry so tests can inject an instant sleep; undefined uses the real backoff.
+    sleepFn: typeof options.sleepFn === "function" ? options.sleepFn : undefined,
   };
 }
 

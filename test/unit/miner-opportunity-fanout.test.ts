@@ -181,7 +181,7 @@ describe("fetchCandidateIssues (#2307)", () => {
         { owner: "acme", repo: "up" },
       ],
       "token",
-      { apiBaseUrl: API },
+      { apiBaseUrl: API, sleepFn: () => Promise.resolve() }, // instant retry: a persistent 503 still warns
     );
 
     expect(result.issues.map((entry) => entry.issueNumber)).toEqual([11]);
@@ -301,11 +301,36 @@ describe("fetchCandidateIssues (#2307)", () => {
 
     const result = await searchCandidateIssuesWithSummary("label:feature", "token", {
       apiBaseUrl: API,
+      sleepFn: () => Promise.resolve(), // instant retry: a persistent 502 still warns
     });
 
     expect(result.issues).toEqual([]);
     expect(result.warnings).toEqual([
       { repoFullName: "*", stage: "search", message: "GitHub returned 502" },
     ]);
+  });
+
+  it("retries a transient 5xx and keeps the target's issues instead of dropping them (#4830)", async () => {
+    let issuesAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/contents/CONTRIBUTING.md")) return contentResponse("Contributions welcome.");
+      if (url.includes("/repos/acme/blip/issues?")) {
+        issuesAttempts += 1;
+        if (issuesAttempts === 1) return jsonResponse({ message: "server error" }, { status: 503 }); // a blip
+        return jsonResponse([issue(7)]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await fetchCandidateIssuesWithSummary([{ owner: "acme", repo: "blip" }], "token", {
+      apiBaseUrl: API,
+      sleepFn: () => Promise.resolve(),
+    });
+
+    expect(issuesAttempts).toBe(2); // the 503 was retried, then succeeded
+    expect(result.issues.map((entry) => entry.issueNumber)).toEqual([7]); // results kept, not dropped
+    expect(result.warnings).toEqual([]); // no warning — the transient blip recovered
   });
 });
