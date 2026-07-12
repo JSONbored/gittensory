@@ -714,10 +714,11 @@ describe("single AI pass: the bridge RECOVERS the consensus defect, never re-der
       changedFiles: 4,
       footerMarkdown: footer,
     });
-    // The defect title appears EXACTLY ONCE in the whole comment (the Code-review blocker bullet), never
-    // duplicated into the gate signal row (which only renders the conclusion-derived "Blocking" status text).
+    // The defect title appears in the Code-review blocker bullet AND once more inside the "Copy for AI
+    // agents" block (a deliberate copyable rendition) -- but never a THIRD time duplicated into the gate
+    // signal row (which only renders the conclusion-derived "Blocking" status text).
     const occurrences = body.split(defectTitle).length - 1;
-    expect(occurrences, "consensus defect title must appear exactly once").toBe(1);
+    expect(occurrences, "consensus defect title must appear exactly twice (blocker bullet + AI-context block)").toBe(2);
     // It is rendered under the blocked-reasons heading (the Code-review side), confirming where the one copy lives.
     expect(body).toMatch(/Why this is blocked|Concerns raised/);
   });
@@ -774,8 +775,10 @@ describe("gate blockers render in 'Why this is blocked' (FIX D1)", () => {
       changedFiles: 3,
       footerMarkdown: footer,
     });
-    // The defect surfaces exactly once (recovered via consensusDefect; excluded from the folded gate blockers).
-    expect(body.split(title).length - 1).toBe(1);
+    // The defect surfaces as ONE blocker (recovered via consensusDefect; excluded from the folded gate
+    // blockers so it isn't double-counted as two separate findings) -- which then legitimately renders in
+    // two places: the blocker bullet and the "Copy for AI agents" block.
+    expect(body.split(title).length - 1).toBe(2);
   });
 
   it("renders BOTH the recovered consensus defect AND a separate non-AI gate blocker", () => {
@@ -836,9 +839,13 @@ describe("gate blockers render in 'Why this is blocked' (FIX D1)", () => {
       changedFiles: 10,
       footerMarkdown: footer,
     });
-    // Exactly once: under "Why this is blocked" only, never ALSO restated under "Suggested Action".
-    expect(body.split(blockerTitle).length - 1).toBe(1);
-    expect(body).toContain("Why this is blocked");
+    // Never restated under "Suggested Action" (the original #5347 bug) -- the text before "Why this is
+    // blocked" must not contain it. It legitimately appears twice total: once under "Why this is blocked",
+    // once more inside the "Copy for AI agents" block (a deliberate, separate copyable rendition).
+    const [beforeWhyBlocked, afterWhyBlocked] = body.split("Why this is blocked");
+    expect(beforeWhyBlocked).not.toContain(blockerTitle);
+    expect(afterWhyBlocked).toContain(blockerTitle);
+    expect(body.split(blockerTitle).length - 1).toBe(2);
   });
 
   it("a manual-review HOLD (no gate blockers) still shows its own top-level reason, unaffected by the #5347 fix", () => {
