@@ -44,7 +44,7 @@ describe("maintainer AI-review config route", () => {
     expect(settings.aiReviewMode).toBe("block");
     expect(settings.aiReviewAllAuthors).toBe(true); // persisted + read back (DB column round-trip)
     expect(settings.closeOwnerAuthors).toBe(true); // persisted + read back (DB column round-trip)
-    expect(settings.gateCheckMode).toBe("enabled"); // preserved
+    expect(settings.reviewCheckMode).toBe("required"); // preserved
     expect(settings.gittensorLabel).toBe("custom-label"); // preserved
     expect(settings.blacklistLabel).toBe("abuse"); // #1425 round-trips through the DB
   });
@@ -106,7 +106,7 @@ describe("maintainer AI-review config route", () => {
     expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewLowConfidenceDisposition: "advisory_only" });
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.aiReviewLowConfidenceDisposition).toBe("advisory_only"); // persisted + read back (DB column round-trip)
-    expect(settings.gateCheckMode).toBe("enabled"); // preserved
+    expect(settings.reviewCheckMode).toBe("required"); // preserved
     expect(settings.gittensorLabel).toBe("custom-label"); // preserved
   });
 
@@ -155,7 +155,7 @@ describe("maintainer AI-review config route", () => {
     expect(await res.json()).toMatchObject({ closeOwnerAuthors: true, reviewCheckMode: "required", gittensorLabel: "custom-label" });
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.closeOwnerAuthors).toBe(true);
-    expect(settings.gateCheckMode).toBe("enabled");
+    expect(settings.reviewCheckMode).toBe("required");
   });
 
   it("round-trips requireFreshRebaseWindowMinutes through the maintainer settings PUT route (#2552 gate finding)", async () => {

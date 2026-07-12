@@ -432,11 +432,10 @@ describe("api routes", () => {
     await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/readiness-block", qualityGateMode: "advisory" });
   });
 
-  it("ignores a gateCheckMode-only body through the internal settings write endpoint -- it is not a write field (#4618)", async () => {
-    // gateCheckMode is deprecated (#4618): a computed read-back value only, derived from reviewCheckMode.
-    // The internal full-replace route's schema no longer accepts it as input, so a caller sending ONLY
-    // gateCheckMode gets the schema's plain reviewCheckMode default ("disabled"), not the old legacy-write
-    // derivation. gateCheckMode in the response reflects that default, not the caller's (ignored) input.
+  it("ignores an unknown gateCheckMode key in the request body through the internal settings write endpoint (#4618/#5373)", async () => {
+    // gateCheckMode was removed entirely from RepositorySettings (#5373); the internal full-replace route's
+    // schema never accepted it as input even before removal (#4618). A caller sending it gets the schema's
+    // plain reviewCheckMode default ("disabled") -- the unknown key is silently ignored, not rejected.
     const app = createApp();
     const env = createTestEnv();
     const enabled = await app.request(
@@ -445,7 +444,7 @@ describe("api routes", () => {
       env,
     );
     expect(enabled.status).toBe(200);
-    await expect(enabled.json()).resolves.toMatchObject({ gateCheckMode: "off", reviewCheckMode: "disabled" });
+    await expect(enabled.json()).resolves.toMatchObject({ reviewCheckMode: "disabled" });
 
     // reviewCheckMode set directly is the real, honored write path.
     const explicit = await app.request(
@@ -454,7 +453,7 @@ describe("api routes", () => {
       env,
     );
     expect(explicit.status).toBe(200);
-    await expect(explicit.json()).resolves.toMatchObject({ gateCheckMode: "enabled", reviewCheckMode: "visible" });
+    await expect(explicit.json()).resolves.toMatchObject({ reviewCheckMode: "visible" });
   });
 
   it("rejects invalid public GitHub repo stats paths before calling GitHub", async () => {
@@ -2555,15 +2554,14 @@ describe("api routes", () => {
         // #2267: qualityGateMode: "block" is downgraded to "advisory" on write — readiness/quality can never
         // hard-block a PR, so the dashboard/API save path can't persist a value implying enforcement it doesn't
         // have. slopGateMode: "block" is a DIFFERENT, legitimately-blockable dimension and is left untouched.
-        // #4618: gateCheckMode is a legacy key with no effect here (dropped from the write schema) -- included
-        // to confirm it is silently ignored, not to drive reviewCheckMode.
+        // #4618/#5373: gateCheckMode is an unknown key with no effect here (removed from RepositorySettings
+        // entirely) -- included to confirm it is silently ignored, not to drive reviewCheckMode.
         body: JSON.stringify({ gateCheckMode: "enabled", reviewCheckMode: "required", slopGateMode: "block", slopGateMinScore: 55, qualityGateMode: "block", mergeTrainMode: "enforce", autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
       },
       ownerEnv,
     );
     expect(settingsUpdate.status).toBe(200);
     await expect(settingsUpdate.json()).resolves.toMatchObject({
-      gateCheckMode: "enabled", // #4618: derived read-back from reviewCheckMode below, not the request's own gateCheckMode key
       reviewCheckMode: "required",
       slopGateMode: "block",
       slopGateMinScore: 55,
@@ -2574,15 +2572,15 @@ describe("api routes", () => {
       agentPaused: true, // #776 kill-switch
       agentDryRun: true,
     });
-    // #4618: gateCheckMode alone has NO effect -- it is dropped from the write schema, so reviewCheckMode
-    // stays whatever it already was (still "required" from the write immediately above), not derived "disabled".
+    // #4618/#5373: gateCheckMode alone has NO effect -- it is an unknown key, so reviewCheckMode stays
+    // whatever it already was (still "required" from the write immediately above), not derived "disabled".
     const settingsUpdateOff = await app.request(
       "/v1/repos/repo-owner/owned-repo/settings",
       { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "off" }) },
       ownerEnv,
     );
     expect(settingsUpdateOff.status).toBe(200);
-    await expect(settingsUpdateOff.json()).resolves.toMatchObject({ gateCheckMode: "enabled", reviewCheckMode: "required" });
+    await expect(settingsUpdateOff.json()).resolves.toMatchObject({ reviewCheckMode: "required" });
     // requireApprovals is bounded at the API boundary — an out-of-range value is rejected, not silently clamped.
     const settingsBadApprovals = await app.request(
       "/v1/repos/repo-owner/owned-repo/settings",

@@ -21,8 +21,8 @@ type MaintainerSettings = {
   publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
   checkRunMode: "off" | "enabled";
   checkRunDetailLevel: "minimal" | "standard";
-  // #4618: gateCheckMode is deprecated (a computed read-back value only) -- reviewCheckMode is the real,
-  // writable authority for whether the review-agent check-run publishes.
+  // #4618/#5373: a prior gateCheckMode field was a deprecated computed read-back, since removed entirely --
+  // reviewCheckMode is the real, writable authority for whether the review-agent check-run publishes.
   reviewCheckMode: "required" | "visible" | "disabled";
   gatePack: "gittensor" | "oss-anti-slop";
   linkedIssueGateMode: GateMode;

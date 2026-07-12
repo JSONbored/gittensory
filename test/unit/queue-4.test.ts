@@ -1527,7 +1527,7 @@ describe("queue processors", () => {
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
     });
-    // Config turns the gate OFF even though repo settings have gateCheckMode: enabled.
+    // Config turns the gate OFF even though repo settings have reviewCheckMode: required (the gate check-run publishing).
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { enabled: false } });
     const calls = { gateChecks: 0 };
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {

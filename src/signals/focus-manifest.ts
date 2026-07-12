@@ -464,10 +464,6 @@ function applyGateConfigOverrides(effective: RepositorySettings, gate: FocusMani
   // override, else the DB value) from the caller's spread.
   if (gate.checkMode !== null) effective.reviewCheckMode = gate.checkMode;
   else if (gate.enabled !== null) effective.reviewCheckMode = gate.enabled ? "required" : "disabled";
-  // #4618: gateCheckMode is a computed read-back value only -- always re-derive it from the reviewCheckMode
-  // just resolved above (not from gate.enabled alone), so it stays correct even when only gate.checkMode was
-  // the field actually set in the manifest.
-  effective.gateCheckMode = effective.reviewCheckMode === "disabled" ? "off" : "enabled";
   if (gate.pack !== null) effective.gatePack = gate.pack;
   if (gate.linkedIssue !== null) effective.linkedIssueGateMode = gate.linkedIssue;
   if (gate.duplicates !== null) effective.duplicatePrGateMode = gate.duplicates;

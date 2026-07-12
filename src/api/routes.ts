@@ -673,8 +673,9 @@ const repositorySettingsSchema = z.object({
   // this full-replace route that omits this field must land on the same safe default as a never-configured row.
   checkRunDetailLevel: z.enum(["minimal", "standard"]).default("minimal"),
   regateSweepOrderMode: z.enum(["staleness", "oldest-first"]).default("staleness"),
-  // #4618: gateCheckMode dropped from this write schema -- it is a computed read-back value only (see its
-  // doc comment on RepositorySettings). Set reviewCheckMode directly.
+  // #4618/#5373: this write schema never accepted a gateCheckMode field -- it was a deprecated computed
+  // read-back of reviewCheckMode, removed from RepositorySettings entirely in #5373. Set reviewCheckMode
+  // directly.
   reviewCheckMode: z.enum(["required", "visible", "disabled"]).default("disabled"),
   gatePack: z.enum(["gittensor", "oss-anti-slop"]).default("gittensor"),
   linkedIssueGateMode: z.enum(["off", "advisory", "block"]).default("advisory"),

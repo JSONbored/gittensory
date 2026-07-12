@@ -8731,13 +8731,6 @@
               "standard"
             ]
           },
-          "gateCheckMode": {
-            "type": "string",
-            "enum": [
-              "off",
-              "enabled"
-            ]
-          },
           "regateSweepOrderMode": {
             "type": "string",
             "enum": [

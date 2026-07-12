@@ -522,7 +522,6 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       publicSignalLevel: "standard",
       checkRunMode: "off",
       checkRunDetailLevel: "minimal",
-      gateCheckMode: "off",
       regateSweepOrderMode: "staleness",
       reviewCheckMode: "disabled",
       autoProjectMilestoneMatch: "off",
@@ -604,10 +603,6 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     publicSignalLevel: row.publicSignalLevel === "minimal" ? "minimal" : "standard",
     checkRunMode: parseCheckRunMode(row.checkRunMode),
     checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
-    // #4618/#5373: gateCheckMode is a computed field, not its own stored source of truth -- always derive it
-    // from the real authority (reviewCheckMode) rather than a stored value. The gate_check_mode column itself
-    // was dropped (#5373, migrations/0146) since it never carried any information a fresh derivation didn't.
-    gateCheckMode: parseReviewCheckMode(row.reviewCheckMode) === "disabled" ? "off" : "enabled",
     regateSweepOrderMode: parseRegateSweepOrderMode(row.regateSweepOrderMode),
     reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
     autoProjectMilestoneMatch: parseProjectMilestoneMatchMode(row.projectMilestoneMatchMode),
