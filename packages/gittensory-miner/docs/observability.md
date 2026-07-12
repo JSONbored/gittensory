@@ -31,22 +31,23 @@ The miner dashboard answers a different question: *what did my autonomous miner'
 
    (`GF_INSTALL_PLUGINS` in [`docker-compose.yml`](../../../docker-compose.yml) includes `frser-sqlite-datasource`.)
 
-2. **Miner state on disk.** `gittensory-miner init` bootstraps the state directory and `laptop-state.sqlite3` only — it does **not** create the Grafana ledger files. Those SQLite stores are created lazily on first write:
+2. **Miner state on disk.** The Grafana datasources point at **`attempt-log.sqlite3`** and **`prediction-ledger.sqlite3`**. Those files are **not** created by `gittensory-miner init` — `init` only bootstraps the state directory and `laptop-state.sqlite3` (same as [`../README.md`](../README.md#laptop-mode-quickstart)). Each ledger file is created **lazily on first write**:
 
    | Ledger file | Created when |
    |-------------|--------------|
-   | `attempt-log.sqlite3` | First coding-agent attempt (`gittensory-miner attempt`, or the autonomous loop) |
-   | `prediction-ledger.sqlite3` | First predicted-gate verdict recorded by the miner |
+   | `attempt-log.sqlite3` | First coding-agent attempt opens the store — e.g. `gittensory-miner attempt <owner/repo> <issue#> --miner-login <login>` (dry-run by default; `--live` optional) or the autonomous `gittensory-miner loop` |
+   | `prediction-ledger.sqlite3` | First predicted-gate verdict appended by the miner ([#4263](https://github.com/JSONbored/gittensory/issues/4263)) — there is **no standalone CLI** that creates this file today; it appears only after a code path calls `appendPrediction` |
 
-   Confirm your state directory and bootstrap file:
+   Bootstrap the state dir (if needed), then **verify the ledger files exist** before wiring Grafana:
 
    ```sh
-   gittensory-miner status --json   # prints stateDir
-   gittensory-miner init            # if laptop-state.sqlite3 is missing
-   gittensory-miner doctor --json   # confirms bootstrap SQLite only (not attempt/prediction ledgers)
+   gittensory-miner init            # state dir + laptop-state.sqlite3 only
+   STATE_DIR="$(gittensory-miner status --json | jq -r .stateDir)"
+   ls -l "$STATE_DIR/attempt-log.sqlite3" "$STATE_DIR/prediction-ledger.sqlite3"
+   gittensory-miner doctor --json   # checks bootstrap SQLite, not attempt/prediction ledgers
    ```
 
-   Until attempts and predictions have run, datasource **Save & test** may fail with *file not found* — see [Troubleshooting](#troubleshooting).
+   If `ls` reports *No such file*, the datasource path is valid but the store has not been written yet — run at least one attempt for the attempt log, and wait for a predicted-gate pass before configuring the prediction datasource. Until then, **Save & test** in Grafana will fail with *file not found* — see [Troubleshooting](#troubleshooting).
 
 3. **Resolve your ledger paths** (defaults shown; override with env vars):
 
@@ -127,7 +128,7 @@ Repeat for **each** ledger file (attempt log and prediction ledger):
 1. Open Grafana → **Connections** → **Data sources** → **Add data source**.
 2. Search for **SQLite** (`frser-sqlite-datasource`) and select it.
 3. Set **Path** to the container-visible absolute path, e.g. `/miner-state/attempt-log.sqlite3`.
-4. **Save & test** — you should see *Database ok* when the file exists and is readable.
+4. **Save & test** — *Database ok* only when that file already exists on disk (see prerequisite §2). Skip or defer the prediction datasource until `prediction-ledger.sqlite3` is present.
 
 Suggested names (match the upcoming provisioned UIDs in [#5184](https://github.com/JSONbored/gittensory/issues/5184)):
 

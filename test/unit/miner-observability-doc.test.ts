@@ -27,9 +27,10 @@ describe("miner observability docs (#5190)", () => {
   it("does not claim gittensory-miner init creates the Grafana ledger files", () => {
     const doc = readFileSync(observabilityDocPath, "utf8");
     expect(doc).toContain("laptop-state.sqlite3");
-    expect(doc).toMatch(/init.*does \*\*not\*\* create the Grafana ledger files/i);
-    expect(doc).toContain("attempt-log.sqlite3` | First coding-agent attempt");
-    expect(doc).toContain("prediction-ledger.sqlite3` | First predicted-gate verdict");
+    expect(doc).toMatch(/init.*only bootstraps the state directory and `laptop-state\.sqlite3`/i);
+    expect(doc).toContain("gittensory-miner attempt <owner/repo> <issue#>");
+    expect(doc).toContain("no standalone CLI");
+    expect(doc).toContain('ls -l "$STATE_DIR/attempt-log.sqlite3"');
     expect(doc).not.toMatch(/init.*so the SQLite files exist/i);
   });
 
