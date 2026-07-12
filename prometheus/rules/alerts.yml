@@ -411,12 +411,12 @@ groups:
           description: "Either the consecutive registration-failure streak has reached {{ $value | printf \"%.0f\" }}, or the pull-mode drain loop hasn't completed in over 30m. A lone registration timeout alone would not trigger this."
           runbook: "Check gittensory_orb_relay_register_total{result=\"failed\"} by mode for the failure pattern, and confirm ORB_BROKER_URL / ORB_ENROLLMENT_SECRET are still valid. If pull mode, verify the drain loop itself isn't crash-looping (selfhost_orb_relay_register_failed logs at level=error)."
 
-  # ── HTTP serving health (uses the PLANNED status label + duration histogram) ─
-  # NOTE: gittensory_http_requests_total is gaining a status="2xx|3xx|4xx|5xx" label,
-  # and gittensory_http_request_duration_seconds (a histogram) is being added. Both
-  # rules below tolerate the metric/label being absent on older data: the ratio uses a
-  # `> 0` denominator guard, and an absent series simply yields no result (rule stays
-  # inactive) rather than erroring. They start firing the moment the new metrics exist.
+  # ── HTTP serving health (status label + duration histogram, both live in src/server.ts) ─
+  # gittensory_http_requests_total carries a status="2xx|3xx|4xx|5xx" label (seeded at zero per
+  # class so every series exists from boot), and gittensory_http_request_duration_seconds is a
+  # histogram of request duration. Both rules below still tolerate an absent metric/label on an
+  # older running build: the ratio uses a `> 0` denominator guard, and an absent series simply
+  # yields no result (rule stays inactive) rather than erroring.
   - name: gittensory-http
     rules:
       - alert: GittensoryHighHttp5xxRatio

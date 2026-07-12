@@ -507,42 +507,6 @@
         }
       },
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 33 },
-      "id": 13,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "Orb Events Recorded",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "gittensory_orb_events_recorded_total or vector(0)",
-          "legendFormat": "recorded"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        }
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 33 },
       "id": 14,
       "options": {
         "colorMode": "value",
@@ -581,7 +545,7 @@
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 33 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 33 },
       "id": 15,
       "options": {
         "colorMode": "background",
@@ -609,48 +573,12 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        }
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 33 },
-      "id": 16,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "title": "Orb Installations",
-      "type": "stat",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "gittensory_orb_installs_total or vector(0)",
-          "legendFormat": "installs"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "lineWidth": 2, "fillOpacity": 10 },
           "unit": "ops"
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 37 },
       "id": 17,
       "options": {
         "legend": {
@@ -665,11 +593,6 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "rate(gittensory_orb_events_recorded_total[5m]) or vector(0)",
-          "legendFormat": "recorded/s"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "expr": "rate(gittensory_orb_events_exported_total[5m]) or vector(0)",
           "legendFormat": "exported/s"
         },
@@ -677,40 +600,6 @@
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "expr": "sum by (result) (rate(gittensory_orb_webhook_total[5m])) or vector(0)",
           "legendFormat": "{{result}} webhooks/s"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 10 },
-          "unit": "short"
-        }
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
-      "id": 18,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "last"],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": { "mode": "multi" }
-      },
-      "title": "Orb Pending vs Exported",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "(gittensory_orb_events_recorded_total or vector(0)) - (gittensory_orb_events_exported_total or vector(0))",
-          "legendFormat": "pending"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "gittensory_orb_events_exported_total or vector(0)",
-          "legendFormat": "exported (cumulative)"
         }
       ]
     },
@@ -2504,7 +2393,7 @@
         ]
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 170 },
-      "id": 158,
+      "id": 205,
       "options": {
         "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
         "tooltip": { "mode": "multi", "sort": "desc" }

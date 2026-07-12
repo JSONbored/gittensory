@@ -3,6 +3,14 @@
 # maintainer dashboards. Done over the API rather than file-provisioning on purpose: a backend datasource
 # whose plugin/token isn't ready at boot would crash Grafana's provisioning, so we add it after Grafana is up.
 #
+# KNOWN, ACCEPTED trade-off: unlike the other 4 file-provisioned datasources (each `editable: false` in their
+# YAML), this one is API-managed and therefore NOT locked read-only — Grafana's `readOnly` field is computed
+# from whether a datasource came from file provisioning and cannot be set via the datasource API itself
+# (verified empirically: a PUT with `"readOnly": true` in the payload is silently ignored, the response still
+# reports `false`). Moving this to YAML provisioning to close that gap would reintroduce the exact boot-crash
+# risk documented above, so this datasource's connection settings remain editable via the Grafana UI, unlike
+# every other one in this stack.
+#
 # Prereqs: --profile observability running, the grafana-github-datasource plugin installed (GF_INSTALL_PLUGINS),
 # and a read-only fine-grained PAT (Pull requests: read, Issues: read, Contents: read) on the repos.
 #

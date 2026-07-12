@@ -31,6 +31,7 @@ const tmpRoots: string[] = [];
 const dashboardPath = join(process.cwd(), "grafana/dashboards/maintainer-reviews.json");
 const selfhostDashboardPath = join(process.cwd(), "grafana/dashboards/gittensory.json");
 const selfhostAlertsPath = join(process.cwd(), "prometheus/rules/alerts.yml");
+const githubPrsPath = join(process.cwd(), "grafana/dashboards/github-prs.json");
 const timeFrom = "${__from:date:seconds}";
 const timeTo = "${__to:date:seconds}";
 
@@ -118,11 +119,31 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
     const dashboard = readDashboard(selfhostDashboardPath);
     const targets = dashboard.panels.flatMap((panel) => panel.targets ?? []);
 
-    expect(targets.some((target) => target.expr === "gittensory_orb_events_recorded_total or vector(0)")).toBe(true);
     expect(targets.some((target) => target.expr === "gittensory_orb_events_exported_total or vector(0)")).toBe(true);
-    expect(targets.some((target) => target.expr === "gittensory_orb_installs_total or vector(0)")).toBe(true);
+    expect(targets.some((target) => target.expr === "gittensory_orb_export_errors_total or vector(0)")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (result) (rate(gittensory_orb_webhook_total[5m])) or vector(0)")).toBe(true);
-    expect(targets.some((target) => target.expr === "(gittensory_orb_events_recorded_total or vector(0)) - (gittensory_orb_events_exported_total or vector(0))")).toBe(true);
+  });
+
+  it("no longer references gittensory_orb_events_recorded_total / gittensory_orb_installs_total, retired with the per-instance Orb App in #1256 but never cleaned out of the dashboard (2026-07 fix)", () => {
+    const dashboard = readDashboard(selfhostDashboardPath);
+    const targets = dashboard.panels.flatMap((panel) => panel.targets ?? []);
+    const titles = dashboard.panels.map((panel) => panel.title);
+
+    for (const target of targets) {
+      expect(target.expr ?? "").not.toContain("gittensory_orb_events_recorded_total");
+      expect(target.expr ?? "").not.toContain("gittensory_orb_installs_total");
+    }
+    expect(titles).not.toContain("Orb Events Recorded");
+    expect(titles).not.toContain("Orb Installations");
+    expect(titles).not.toContain("Orb Pending vs Exported");
+  });
+
+  it("assigns every panel a unique id (regression: 'Maintenance Admission Deferrals (total)' and 'Orb Relay Registration: Streak vs Drain Progress' both used id 158, 2026-07 fix)", () => {
+    const dashboard = readDashboard(selfhostDashboardPath);
+    const ids = dashboard.panels.map((panel) => panel.id).filter((id): id is number => id !== undefined);
+    const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+
+    expect(duplicates).toEqual([]);
   });
 
   it("surfaces the onMerge/combine/reviewer-count floor-clamp counter on a panel and an alert (#3901)", () => {
@@ -497,5 +518,41 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
     expect(tableRows).toContain("a real contribution");
     expect(tableRows).toContain("legacy row, no submitter recorded");
     expect(tableRows).not.toContain("cut v1.0.0");
+  });
+});
+
+describe("github-prs.json: $scope is dynamic, never a hardcoded repo list (2026-07 fix)", () => {
+  function readGithubPrsDashboard(): {
+    templating: { list: Array<{ name: string; type: string; datasource?: { type?: string }; query?: { rawQueryText?: string } }> };
+  } {
+    return JSON.parse(readFileSync(githubPrsPath, "utf8"));
+  }
+
+  it("declares $scope as a dynamic, query-backed variable against the local reporting DB, not a hardcoded custom list", () => {
+    const vars = readGithubPrsDashboard().templating.list;
+    const scope = vars.find((v) => v.name === "scope");
+
+    expect(scope?.type).toBe("query");
+    expect(scope?.datasource?.type).toBe("frser-sqlite-datasource");
+    expect(scope?.query?.rawQueryText).toContain("review_targets");
+    expect(scope?.query?.rawQueryText).not.toContain("JSONbored");
+  });
+
+  (sqliteCliAvailable ? it : it.skip)("builds 'All repos' as org:<owner> of the first tracked repo, plus one repo: option per distinct tracked repo", () => {
+    const root = tmpRoot();
+    const db = join(root, "reporting.sqlite");
+    sqlite(
+      db,
+      `
+      CREATE TABLE review_targets (repo TEXT NOT NULL);
+      INSERT INTO review_targets (repo) VALUES ('acme/widgets'), ('acme/gadgets'), ('acme/widgets');
+    `,
+    );
+
+    const rawQueryText = readGithubPrsDashboard().templating.list.find((v) => v.name === "scope")?.query?.rawQueryText;
+    if (!rawQueryText) throw new Error("missing $scope rawQueryText");
+    const rows = sqlite(db, rawQueryText).split("\n");
+
+    expect(rows).toEqual(["0|All repos|org:acme", "1|acme/gadgets|repo:acme/gadgets", "1|acme/widgets|repo:acme/widgets"]);
   });
 });
