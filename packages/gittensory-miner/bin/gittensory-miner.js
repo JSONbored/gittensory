@@ -2,6 +2,7 @@
 import { runAttempt } from "../lib/attempt-cli.js";
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import { runDenyCheck } from "../lib/deny-check.js";
+import { loadFileSecrets } from "../lib/load-file-secrets.js";
 import { runDiscover } from "../lib/discover-cli.js";
 import { runFeasibilityCli } from "../lib/feasibility-cli.js";
 import { runGovernorCli } from "../lib/governor-ledger-cli.js";
@@ -24,6 +25,10 @@ import {
 import { resolveMinerVersion } from "../lib/version.js";
 
 const cliArgs = process.argv.slice(2);
+
+// Resolve `<NAME>_FILE` secret mounts (Docker/K8s) into `<NAME>` before ANY command reads the env, so a
+// file-supplied GITHUB_TOKEN / coding-agent credential is never required to be a plaintext env var (#5178).
+loadFileSecrets();
 
 // `init`, `status`, and `doctor` are strictly local, offline commands — their contract is to make NO network calls.
 // Dispatch them BEFORE the opportunistic npm-registry update check is even started, so they can never reach that
