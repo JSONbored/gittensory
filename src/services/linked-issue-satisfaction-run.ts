@@ -26,6 +26,7 @@ import {
   coerceAiUsage,
   estimateNeurons,
   isEnabled,
+  isRateLimitError,
   utcDayStartIso,
 } from "./ai-review";
 
@@ -86,7 +87,8 @@ async function runWorkersSatisfactionOpinion(
         );
         const result = buildLinkedIssueSatisfactionResult(issueText, coerceAiText(raw));
         if (result) return { result, usage: coerceAiUsage(raw) };
-      } catch {
+      } catch (error) {
+        if (isRateLimitError(error)) break;
         /* retry / fall through to fallback */
       }
     }

@@ -191,6 +191,17 @@ describe("runGittensoryLinkedIssueSatisfaction gating + fail-safe", () => {
     expect(run).toHaveBeenCalled();
   });
 
+  it("REGRESSION (#5385-sentry, GITTENSORY-K/8): stops retrying a model after ONE 429 rate-limit error instead of burning its full attempt budget", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("claude_code_error_429");
+    });
+    const result = await runGittensoryLinkedIssueSatisfaction(enabledEnv(run), baseInput);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("unreachable");
+    expect(result.result).toBeNull();
+    expect(run).toHaveBeenCalledTimes(2); // 1 attempt per model (2 models), not the full 6-call budget
+  });
+
   it("falls back to the reliable model when the primary keeps returning garbage", async () => {
     const run = vi.fn(async (model: string) => ({ response: model.includes("gpt-oss") ? "not json" : satisfactionJson({ status: "partial" }) }));
     const result = await runGittensoryLinkedIssueSatisfaction(enabledEnv(run), baseInput);
