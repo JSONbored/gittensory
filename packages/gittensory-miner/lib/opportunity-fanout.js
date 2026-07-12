@@ -47,13 +47,21 @@ function targetFromFullName(fullName) {
   return { owner, repo, repoFullName: `${owner}/${repo}` };
 }
 
-function targetFromSearchIssue(issue) {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Derive owner/repo from a search hit when `repository.full_name` is absent, using the tenant forge's own
+// `repoPathPrefix` for the API `repository_url` and a forge-agnostic host for the web `html_url` (#4784). Hardcoding
+// `/repos/` and `github.com` here dropped every custom-forge search result whose payload omitted `full_name`.
+function targetFromSearchIssue(issue, forge) {
   const repositoryFullName = targetFromFullName(issue?.repository?.full_name);
   if (repositoryFullName) return repositoryFullName;
 
+  const repoPathPrefix = escapeRegExp(forge.repoPathPrefix.replace(/\/+$/, ""));
   const repositoryUrl =
     typeof issue?.repository_url === "string"
-      ? issue.repository_url.match(/\/repos\/([^/?#]+)\/([^/?#]+)(?:[?#].*)?$/)
+      ? issue.repository_url.match(new RegExp(`${repoPathPrefix}/([^/?#]+)/([^/?#]+)(?:[?#].*)?$`))
       : null;
   if (repositoryUrl) {
     const owner = decodeURIComponent(repositoryUrl[1]);
@@ -63,7 +71,7 @@ function targetFromSearchIssue(issue) {
 
   const htmlUrl =
     typeof issue?.html_url === "string"
-      ? issue.html_url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/\d+(?:[?#].*)?$/)
+      ? issue.html_url.match(/^https:\/\/[^/]+\/([^/]+)\/([^/]+)\/issues\/\d+(?:[?#].*)?$/)
       : null;
   if (htmlUrl) {
     const owner = decodeURIComponent(htmlUrl[1]);
@@ -427,7 +435,7 @@ export async function searchCandidateIssuesWithSummary(searchQuery, githubToken,
   const targetsByKey = new Map();
   for (const item of searchItems) {
     if (!item || typeof item !== "object" || item.pull_request) continue;
-    const target = targetFromSearchIssue(item);
+    const target = targetFromSearchIssue(item, normalizedOptions.forge);
     if (target && !targetsByKey.has(targetKey(target))) targetsByKey.set(targetKey(target), target);
   }
 
@@ -444,7 +452,7 @@ export async function searchCandidateIssuesWithSummary(searchQuery, githubToken,
   const policiesByKey = new Map(policyEntries);
   const issues = [];
   for (const item of searchItems) {
-    const target = targetFromSearchIssue(item);
+    const target = targetFromSearchIssue(item, normalizedOptions.forge);
     if (!target) continue;
     const policy = policiesByKey.get(targetKey(target));
     if (!policy?.allowed) continue;

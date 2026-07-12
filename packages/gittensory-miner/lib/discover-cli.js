@@ -1,5 +1,6 @@
 /** `discover` CLI command (#4247): wires the existing fanout -> rank -> enqueue pipeline together so a miner
  * can actually run it. Every piece already exists and is independently tested; this module only composes them. */
+import { resolveForgeConfig } from "./forge-config.js";
 import {
   fetchCandidateIssuesWithSummary,
   searchCandidateIssuesWithSummary,
@@ -140,8 +141,10 @@ export async function runDiscover(args, options = {}) {
   }
 
   // Credential env var is per-tenant (#4784): a `--token-env FORGE_PAT` flag (or `options.tokenEnv`) reads a
-  // non-`GITHUB_TOKEN` variable so a non-github.com forge's token is reachable, defaulting to GITHUB_TOKEN.
-  const tokenEnv = parsed.tokenEnv ?? options.tokenEnv ?? "GITHUB_TOKEN";
+  // non-`GITHUB_TOKEN` variable so a non-github.com forge's token is reachable. The default falls through to the
+  // forge adapter's own `tokenEnvVar` (github.com's `GITHUB_TOKEN`), so there's a single source of truth for the
+  // default credential env instead of a second hardcoded literal that could drift from `DEFAULT_FORGE_CONFIG`.
+  const tokenEnv = parsed.tokenEnv ?? options.tokenEnv ?? resolveForgeConfig(options.forge).tokenEnvVar;
   const githubToken = options.githubToken ?? process.env[tokenEnv] ?? "";
   // A `--api-base-url` flag (or `options.apiBaseUrl`) surfaces the fan-out's existing forge-host override at the CLI
   // (#4784); `options.forge` carries any remaining per-tenant forge knobs for a programmatic caller.

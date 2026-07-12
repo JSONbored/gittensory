@@ -53,6 +53,7 @@ const CUSTOM_FORGE = {
   repoPathPrefix: "/repositories",
   searchEndpoint: "/search/tickets",
   searchQualifiers: "is:open kind:issue",
+  tokenEnvVar: "FORGE_PAT",
 };
 
 afterEach(() => {
@@ -114,6 +115,54 @@ describe("opportunity fan-out per-tenant forge config (#4784)", () => {
       `q=${encodeURIComponent("label:bug is:open kind:issue")}`,
     );
     expect(calls.some((call) => call.url.includes("/search/issues?"))).toBe(false);
+  });
+
+  it("resolves search hits from repository_url via the tenant repoPathPrefix when full_name is absent (#4784)", async () => {
+    stubFetch((url) => {
+      if (url.includes("/search/tickets?")) {
+        return jsonResponse({
+          items: [
+            {
+              ...issue(33),
+              // No repository.full_name: the custom forge only returns the API repository_url, which uses the
+              // tenant's repoPathPrefix ("/repositories"), not GitHub's hardcoded "/repos".
+              repository_url: "https://ghe.example.com/api/v3/repositories/acme/gadgets",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/contents/CONTRIBUTING.md")) return contentResponse("Contributions welcome.");
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await searchCandidateIssuesWithSummary("label:bug", "tenant-token", { forge: CUSTOM_FORGE });
+
+    expect(result.issues.map((entry) => entry.repoFullName)).toEqual(["acme/gadgets"]);
+    expect(result.issues.map((entry) => entry.issueNumber)).toEqual([33]);
+  });
+
+  it("resolves search hits from a non-github html_url when full_name and repository_url are absent (#4784)", async () => {
+    stubFetch((url) => {
+      if (url.includes("/search/tickets?")) {
+        return jsonResponse({
+          items: [
+            {
+              ...issue(44),
+              html_url: "https://ghe.example.com/acme/tools/issues/44",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/contents/CONTRIBUTING.md")) return contentResponse("Contributions welcome.");
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await searchCandidateIssuesWithSummary("label:bug", "tenant-token", { forge: CUSTOM_FORGE });
+
+    expect(result.issues.map((entry) => entry.repoFullName)).toEqual(["acme/tools"]);
+    expect(result.issues.map((entry) => entry.issueNumber)).toEqual([44]);
   });
 
   it("lets a legacy top-level apiBaseUrl win over forge.apiBaseUrl (back-compat)", async () => {

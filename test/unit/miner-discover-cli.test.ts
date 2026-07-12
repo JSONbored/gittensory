@@ -448,6 +448,38 @@ describe("runDiscover (#4247)", () => {
     }
   });
 
+  it("defaults the credential env var to the forge adapter's tokenEnvVar when no --token-env is given (#4784)", async () => {
+    const portfolioQueue = tempQueueStore();
+    const previous = process.env.FORGE_PAT;
+    process.env.FORGE_PAT = "tenant-secret";
+    try {
+      const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+        issues: [fanOutIssue()],
+        warnings: [],
+        rateLimitRemaining: null,
+        rateLimitResetAt: null,
+      }));
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      const exitCode = await runDiscover(["acme/widgets"], {
+        nowMs: NOW,
+        initPortfolioQueue: () => portfolioQueue,
+        fetchCandidateIssuesWithSummary,
+        forge: { tokenEnvVar: "FORGE_PAT" },
+      });
+
+      expect(exitCode).toBe(0);
+      expect(fetchCandidateIssuesWithSummary).toHaveBeenCalledWith(
+        [{ owner: "acme", repo: "widgets" }],
+        "tenant-secret",
+        expect.any(Object),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.FORGE_PAT;
+      else process.env.FORGE_PAT = previous;
+    }
+  });
+
   it("prefers an explicit githubToken option and a programmatic apiBaseUrl / tokenEnv (#4784)", async () => {
     const portfolioQueue = tempQueueStore();
     const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
