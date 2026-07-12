@@ -21,9 +21,10 @@ describe("scanForSecrets", () => {
   });
 
   // #4284: AWS's own officially published documentation placeholder caused 4 false-positive closes in
-  // gittensory's own subprocess-env-redaction-helper epic before this exclusion existed.
+  // gittensory's own subprocess-env-redaction-helper epic before this exclusion existed. Assembled from
+  // fragments so this fixture doesn't itself read as a contiguous match in this file's own source.
   it("does NOT flag AWS's own officially published documentation example key", () => {
-    expect(scanForSecrets("AKIAIOSFODNN7EXAMPLE").kinds).not.toContain("aws_access_key");
+    expect(scanForSecrets("AKIA" + "IOSFODNN7EXAMPLE").kinds).not.toContain("aws_access_key");
   });
 
   it("returns empty for benign text", () => {
