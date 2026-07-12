@@ -1877,6 +1877,58 @@ describe("queue processors", () => {
     expect(exhausted?.n).toBe(1);
   }, 60_000);
 
+  it("REGRESSION (#5385-sentry, GITTENSORY-1E): a repair dispatch that prReadyForReview correctly defers (missing required CI context) records NO repair_attempt at all, so it can never falsely exhaust the budget", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, { action: "created", installation: { id: 9409, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { pull_requests: "write", checks: "write" }, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9409);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 3, title: "Healthy PR, still waiting on required CI", state: "open", user: { login: "contributor" }, head: { sha: "pending-sha" }, base: { ref: "main" }, labels: [], body: "" });
+    const targetKey = "owner/agent-repo#3#pending-sha";
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    // Same fixture shape as "keeps deferring a missing-required-context PR" (queue.test.ts): a required
+    // status check has simply not posted yet -- prReadyForReview's own #3947 design defers this
+    // UNCONDITIONALLY and INDEFINITELY (no finalize escape), by design, for exactly this case.
+    const requiredContextsSpy = vi.spyOn(backfillModule, "fetchRequiredStatusContexts").mockResolvedValue(null);
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "pending",
+      hasPending: true,
+      hasVisiblePending: false,
+      hasMissingRequiredContext: true,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      ciCompletenessWarning: null,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/3(?:\?|$)/.test(url) && method === "GET") return Response.json({ number: 3, title: "Healthy PR, still waiting on required CI", state: "open", user: { login: "contributor" }, head: { sha: "pending-sha" }, mergeable_state: "clean", labels: [], body: "" });
+      if (url.includes("/pulls/3/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      return Response.json({});
+    });
+
+    try {
+      // Simulate the sweep re-selecting this PR as an outage-repair priority candidate and re-dispatching a
+      // repair job for its (still current, still-pending) head SHA on every ~2-minute tick, well past what
+      // used to be the ~10-minute false-exhaustion window (5 ticks here).
+      for (let tick = 0; tick < 6; tick += 1) {
+        await processJob(env, { type: "agent-regate-pr", deliveryId: `regate-repair:owner/agent-repo#3:tick${tick}`, repoFullName: "owner/agent-repo", prNumber: 3, installationId: 9409, repairHeadSha: "pending-sha" });
+      }
+
+      const attempts = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+        .bind("agent.sweep.regate.repair_attempt", targetKey)
+        .first<{ n: number }>();
+      expect(attempts?.n).toBe(0); // never charged -- prReadyForReview declined before any attempt was recorded
+      const exhausted = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+        .bind("agent.sweep.regate.repair_exhausted", targetKey)
+        .first<{ n: number }>();
+      expect(exhausted?.n).toBe(0); // so the false "repair exhausted" alert never fires for a healthy, still-pending PR
+    } finally {
+      liveCiSpy.mockRestore();
+      requiredContextsSpy.mockRestore();
+    }
+  }, 60_000);
+
   it("agent re-gate sweep fail-opens when current Gate check reads fail during repair priority selection", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });

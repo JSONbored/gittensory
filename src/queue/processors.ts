@@ -1821,22 +1821,18 @@ export async function regatePullRequest(
     );
     return;
   }
-  // #orb-retry-storm: record the repair attempt NOW — after rate-limit admission — so the cap in
-  // surfaceRepairPriorityPullNumbers counts actual executions, not queued dispatches that may have
-  // been deferred or dropped before running (the old dispatch-time recording let rate-limit deferrals
-  // exhaust the 2-attempt budget without ever trying the repair).
-  if (repairHeadSha) {
-    await recordAuditEvent(env, {
-      eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
-      actor: "gittensory",
-      targetKey: regateRepairTargetKey(repoFullName, prNumber, repairHeadSha),
-      outcome: "completed",
-      detail: `outage-repair re-review executing for ${repoFullName}#${prNumber}`,
-      metadata: { repoFullName, prNumber, headSha: repairHeadSha },
-    });
-  }
   const settings = await resolveRepositorySettings(env, repoFullName);
-  await reReviewStoredPullRequest(
+  // #orb-retry-storm/#5385-sentry (GITTENSORY-1E): record the repair attempt only once
+  // reReviewStoredPullRequest confirms it actually got PAST the review pipeline's own readiness gate
+  // (prReadyForReview) -- not merely once the job cleared rate-limit admission above. A PR legitimately
+  // waiting on a still-missing branch-protection-required check defers UNCONDITIONALLY and INDEFINITELY
+  // (prReadyForReview's own deliberate #3947 design -- there is no finalize escape for that specific case),
+  // so recording the OLD way (before ever checking readiness) charged a full attempt to a healthy PR doing
+  // nothing wrong on every ~2-minute sweep tick, exhausting the 5-attempt budget in ~10 minutes -- an order
+  // of magnitude shorter than realistic required-CI latency -- and firing a false "repair exhausted" alert
+  // for a review that was never actually broken. Mirrors the same "count executions, not deferrals"
+  // reasoning #orb-retry-storm already applied one layer out (rate-limit admission, above).
+  const reachedReadiness = await reReviewStoredPullRequest(
     env,
     deliveryId,
     installationId,
@@ -1864,7 +1860,20 @@ export async function regatePullRequest(
         error: errorMessage(error),
       }),
     );
+    // A swallowed (non-retryable) failure past this point is still a genuine executed attempt, same as
+    // before this fix -- only the CLEAN "declined before ever reaching readiness" path is now excluded.
+    return true;
   });
+  if (repairHeadSha && reachedReadiness) {
+    await recordAuditEvent(env, {
+      eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
+      actor: "gittensory",
+      targetKey: regateRepairTargetKey(repoFullName, prNumber, repairHeadSha),
+      outcome: "completed",
+      detail: `outage-repair re-review executing for ${repoFullName}#${prNumber}`,
+      metadata: { repoFullName, prNumber, headSha: repairHeadSha },
+    });
+  }
 }
 
 export function changedPathsForGuardrail(
@@ -3050,6 +3059,13 @@ async function runAgentMaintenancePlanAndExecute(
  * re-run auto-maintain. Shared by the CI-completion (check_suite/check_run) handler below, mirroring reviewbot's
  * "the CI event WAKES the existing row and re-runs the full review". The PR's persisted head SHA is used as-is
  * (never overwritten from the CI payload — reviewbot scope parity). Best-effort throughout.
+ *
+ * Returns `true` once the review pipeline's own readiness gate (`prReadyForReview`, below) has actually
+ * passed and this call is genuinely proceeding with a real review/gate attempt; `false` for every early
+ * decline before that point (PR missing/closed, terminal-state reconcile, automation-bot skip, or
+ * `prReadyForReview` itself deferring — e.g. CI/required-context still pending). regatePullRequest (#5385-
+ * sentry, GITTENSORY-1E) uses this to only charge its bounded repair-attempt budget for a pass that actually
+ * got a chance to review, not one `prReadyForReview` correctly, harmlessly declined.
  */
 export async function reReviewStoredPullRequest(
   env: Env,
@@ -3059,13 +3075,13 @@ export async function reReviewStoredPullRequest(
   prNumber: number,
   previewPollAttempt?: number,
   options: { skipAiReview?: boolean; force?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   const [repo, settings] = await Promise.all([
     getRepository(env, repoFullName),
     resolveRepositorySettings(env, repoFullName),
   ]);
   let pr = await getPullRequest(env, repoFullName, prNumber);
-  if (!pr || pr.state !== "open") return;
+  if (!pr || pr.state !== "open") return false;
   const automationBotSkipEnabled = resolveSkipAutomationBotPullRequests(
     isSkipAutomationBotPullRequestsEnabledGlobally(env),
     settings.skipAutomationBotAuthors,
@@ -3105,7 +3121,7 @@ export async function reReviewStoredPullRequest(
     if (current?.state === "open" && current.updatedAt === pr.updatedAt) {
       await upsertPullRequestFromGitHub(env, repoFullName, live).catch(() => undefined);
     }
-    return;
+    return false;
   }
   if (live?.head?.sha && live.head.sha !== pr.headSha) {
     await upsertPullRequestFromGitHub(env, repoFullName, live).catch(
@@ -3125,7 +3141,7 @@ export async function reReviewStoredPullRequest(
     isTrustedAutomationBotAuthor(pr.authorLogin) &&
     live?.head?.sha === storedHeadShaBeforeResync
   )
-    return;
+    return false;
   // Operator review flow: rebase-if-behind → wait for ALL CI to finish → only THEN review. Defers (returns) when
   // a rebase fired a synchronize, or CI is still running — the synchronize / CI-completion webhook re-triggers
   // once the head is current and CI has settled (the sweep backstops a missed event). REST-budget dedup
@@ -3152,7 +3168,7 @@ export async function reReviewStoredPullRequest(
         ),
     ))
   )
-    return;
+    return false;
   const [cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
     await Promise.all([
       listOtherOpenPullRequests(env, repoFullName, prNumber),
@@ -3268,6 +3284,7 @@ export async function reReviewStoredPullRequest(
       }),
     );
   });
+  return true;
 }
 
 /**
