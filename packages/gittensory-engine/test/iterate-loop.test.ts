@@ -285,6 +285,14 @@ test("continue: budget omitted never trips the cost ceiling, regardless of turns
   assert.deepEqual(result.budgetBreaches, []);
 });
 
+test("handoff: a budget that IS configured but comfortably within limits never trips the ceiling", async () => {
+  const { deps } = collectingDeps({ driver: driverReturning(okResult(["src/upload.ts"], 5)) });
+  const result = await runIterateLoop(passingInput({ budget: { maxTurns: 20, maxCostUsd: 5, maxWallClockMs: 60_000 } }), deps);
+  assert.equal(result.outcome, "handoff");
+  assert.deepEqual(result.budgetBreaches, []);
+  assert.equal(result.finalMeterTotals.turns, 5);
+});
+
 test("finalMeterTotals.tokens is always an honest 0 -- no driver reports a real token count", async () => {
   const { deps } = collectingDeps({ driver: driverReturning(okResult()) });
   const result = await runIterateLoop(passingInput(), deps);

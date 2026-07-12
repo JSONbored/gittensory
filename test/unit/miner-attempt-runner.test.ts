@@ -198,6 +198,16 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
     expect(claimLedgerListClaims).not.toHaveBeenCalled();
   });
 
+  it("a budget that IS configured but comfortably within limits never trips the ceiling -- real pipeline reaches submitted", async () => {
+    const deps = baseDeps();
+    const result = await runMinerAttempt(baseAttemptInput({ loopInput: passingLoopInput({ budget: { maxTurns: 20, maxCostUsd: 5, maxWallClockMs: 60_000 } }) }), deps);
+
+    expect(result.outcome).toBe("submitted");
+    if (result.outcome !== "submitted") throw new Error("expected submitted");
+    expect(result.loopResult.outcome).toBe("handoff");
+    expect(result.loopResult.budgetBreaches).toEqual([]);
+  });
+
   it("abandon mid-loop: a real iteration ran (and was billed) before the ceiling forced abandon", async () => {
     // maxIterations: 1 with a driver that never produces a passing self-review runs ONE real iteration, then
     // decideNextActionWithReason's own iterationNumber>=maxIterations check abandons -- a genuinely different
