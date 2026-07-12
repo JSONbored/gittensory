@@ -7,7 +7,7 @@
 
 import type { AdvisoryFinding } from "../types";
 import { neutralizePromptInjection, safeReviewTitle } from "./prompt-injection";
-import { ADVISORY_ONLY_SECRET_KINDS, HARD_SECRET_KINDS } from "./secret-patterns";
+import { HARD_SECRET_KINDS } from "./secret-patterns";
 import { scanDiffForSecretsWithLocations, type SecretScanLocationMatch } from "./secrets-scan";
 
 // Concrete credential formats only — NOT the weak heuristics (`seed_or_mnemonic` / `bittensor_key`) that
@@ -94,21 +94,12 @@ function locationSummaryFor(hits: SecretScanLocationMatch[]): string {
  * Scan the PR diff for leaked secrets and, on a hit, return ONE `AdvisoryFinding` (else null). Mapped to
  * gittensory's {@link AdvisoryFinding} shape.
  *
- * Only CONCRETE credential formats ({@link HARD_SECRET_KINDS}) produce the critical `secret_leak` code that
+ * Hard-blocking secret kinds ({@link HARD_SECRET_KINDS}) produce the critical `secret_leak` code that
  * `rules/advisory.ts`'s `isConfiguredGateBlocker` treats as an unconditional hard blocker — the weak
  * `seed_or_mnemonic` / `bittensor_key` heuristics are ignored entirely here because they false-positive on
  * legitimate config/workflow content (e.g. `coldkey:` / `hotkey =` lines in *.toml, .github/workflows/**, or
- * wrangler/workers config). This is UNCONDITIONAL (#audit-3.4): a concrete, real-format committed credential
- * is a leak on any repo, so the caller runs it regardless of the safety flag / review allowlist (unlike the
- * prompt-injection defang, which stays flag-gated).
- *
- * `ADVISORY_ONLY_SECRET_KINDS` (currently just `generic_secret_assignment`) is a keyword-plus-quoted-value
- * SHAPE heuristic, not a concrete format — see `secret-patterns.ts`'s `HARD_SECRET_KINDS` doc comment for why
- * it was split out (PR #5346 auto-closed a legitimate contributor PR on two inert test-fixture strings). A
- * hit on ONLY this kind (no concrete kind present) instead returns a warning-severity `possible_secret_
- * assignment` finding, which `isConfiguredGateBlocker` does not recognize as a blocker code — it surfaces in
- * the PR panel for a human/AI reviewer to verify, exactly as REES's own "medium confidence" rating for this
- * same signal already treats it, without risking another auto-close false positive.
+ * wrangler/workers config). This is UNCONDITIONAL (#audit-3.4): a committed credential is a leak on any repo,
+ * including unknown-format assigned credentials that clear the placeholder filter.
  *
  * #3041: scans the RAW diff directly — `scanDiffForSecretsWithLocations` does its own +/- line-type
  * distinguishing (only added lines and added/renamed file paths are scanned, matching the previous
@@ -117,30 +108,19 @@ function locationSummaryFor(hits: SecretScanLocationMatch[]): string {
  */
 export function secretLeakFinding(diff: string): AdvisoryFinding | null {
   const allHits = scanDiffForSecretsWithLocations(diff);
-  // Only CONCRETE credential formats hard-block. The raw scanner also returns the weak `seed_or_mnemonic` /
-  // `bittensor_key` heuristics, which false-positive on `coldkey:` / `hotkey =` / "mnemonic" lines in
-  // legitimate config/workflow files (RC6); those are filtered out here so they never produce a finding at
-  // all. A real token (github_token, aws_access_key, …) still blocks regardless of which file it is in.
-  const concreteHits = allHits.filter((match) => HARD_SECRET_KINDS.has(match.kind));
-  if (concreteHits.length > 0) {
-    const kinds = [...new Set(concreteHits.map((hit) => hit.kind))].sort();
+  // The raw scanner also returns the weak `seed_or_mnemonic` / `bittensor_key` heuristics, which false-positive
+  // on `coldkey:` / `hotkey =` / "mnemonic" lines in legitimate config/workflow files (RC6); those are filtered
+  // out here so they never produce a finding at all.
+  const hardHits = allHits.filter((match) => HARD_SECRET_KINDS.has(match.kind));
+  if (hardHits.length > 0) {
+    const kinds = [...new Set(hardHits.map((hit) => hit.kind))].sort();
     return {
       code: "secret_leak",
       severity: "critical",
       title: `Possible leaked secret in the diff (${kinds.join(", ")})`,
-      detail: `The PR diff matches secret pattern(s): ${kinds.join(", ")}. ${locationSummaryFor(concreteHits)}. A committed credential must be rotated and removed from the change before merge.`,
+      detail: `The PR diff matches secret pattern(s): ${kinds.join(", ")}. ${locationSummaryFor(hardHits)}. A committed credential must be rotated and removed from the change before merge.`,
       action:
         "Remove the secret from the diff, rotate the exposed credential, then re-run the gate.",
-    };
-  }
-  const advisoryHits = allHits.filter((match) => ADVISORY_ONLY_SECRET_KINDS.has(match.kind));
-  if (advisoryHits.length > 0) {
-    return {
-      code: "possible_secret_assignment",
-      severity: "warning",
-      title: "Possible secret-shaped assignment in the diff (generic_secret_assignment)",
-      detail: `The PR diff contains a keyword-plus-quoted-value assignment that resembles a credential but doesn't match a concrete credential format. ${locationSummaryFor(advisoryHits)}. This is a medium-confidence heuristic (it also matches inert test/fixture values) and does not block the gate on its own.`,
-      action: "Verify the value is not a real credential.",
     };
   }
   return null;

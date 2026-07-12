@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  ADVISORY_ONLY_SECRET_KINDS,
   GENERIC_SECRET_ASSIGNMENT_PATTERN,
   HARD_SECRET_KINDS,
   hasGenericSecretAssignment,
@@ -31,29 +30,17 @@ describe("secret-patterns — shared secret-detection primitives (#4608)", () =>
       expect(new Set(names).size).toBe(names.length);
     });
 
-    it("HARD_SECRET_KINDS excludes the weak seed-phrase/bittensor-key heuristics and generic_secret_assignment", () => {
+    it("HARD_SECRET_KINDS excludes only the weak seed-phrase/bittensor-key heuristics", () => {
       expect(HARD_SECRET_KINDS.has("seed_or_mnemonic")).toBe(false);
       expect(HARD_SECRET_KINDS.has("bittensor_key")).toBe(false);
-      // generic_secret_assignment is a keyword-plus-quoted-value SHAPE heuristic, not a concrete credential
-      // format -- gittensory PR #5346 auto-closed a legitimate contributor PR over two inert test-fixture
-      // strings that matched this shape but weren't real secrets. Split out into ADVISORY_ONLY_SECRET_KINDS
-      // below (regression guard for that incident).
-      expect(HARD_SECRET_KINDS.has("generic_secret_assignment")).toBe(false);
+      expect(HARD_SECRET_KINDS.has("generic_secret_assignment")).toBe(true);
     });
 
-    it("every HARD_SECRET_KINDS entry is a real SECRET_PATTERNS name", () => {
+    it("every format-based HARD_SECRET_KINDS entry is a real SECRET_PATTERNS name", () => {
       const patternNames = new Set(SECRET_PATTERNS.map((pattern) => pattern.name));
       for (const kind of HARD_SECRET_KINDS) {
+        if (kind === "generic_secret_assignment") continue;
         expect(patternNames.has(kind)).toBe(true);
-      }
-    });
-  });
-
-  describe("ADVISORY_ONLY_SECRET_KINDS", () => {
-    it("contains exactly generic_secret_assignment, disjoint from HARD_SECRET_KINDS", () => {
-      expect([...ADVISORY_ONLY_SECRET_KINDS]).toEqual(["generic_secret_assignment"]);
-      for (const kind of ADVISORY_ONLY_SECRET_KINDS) {
-        expect(HARD_SECRET_KINDS.has(kind)).toBe(false);
       }
     });
   });

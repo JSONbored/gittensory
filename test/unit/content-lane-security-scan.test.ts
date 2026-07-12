@@ -233,16 +233,13 @@ describe("scanSubmissionContent", () => {
     }
   });
 
-  // #5346: generic_secret_assignment is a keyword-plus-quoted-value SHAPE heuristic, not a concrete format —
-  // it routes to MANUAL, never scanSubmissionContent's auto-close (this file's own header states the design
-  // principle: only a concrete credential is unambiguous enough to hard-close).
-  it("routes a generic_secret_assignment hit to MANUAL, never close (#5346)", () => {
+  it("hard-closes on a generic_secret_assignment hit after placeholder filtering", () => {
     const finding = scanSubmissionContent({
       content: `intro line\nclient_secret = "${GENERIC_VALUE}"`,
       category: "skills",
     });
-    expect(finding?.verdict).toBe("manual");
-    expect(finding?.reasonCode).toBe("possible_secret_assignment");
+    expect(finding?.verdict).toBe("close");
+    expect(finding?.reasonCode).toBe("embedded_secret");
     expect(finding?.summary).toContain("line 2");
   });
 
@@ -255,15 +252,14 @@ describe("scanSubmissionContent", () => {
     }
   });
 
-  it("routes a MULTILINE generic secret assignment whose value wraps to the next line to MANUAL (#5346)", () => {
+  it("hard-closes on a MULTILINE generic secret assignment whose value wraps to the next line", () => {
     // generic_secret_assignment's keyword-to-value span can wrap. scanForSecrets over the whole blob catches
-    // it; scanSubmissionContent must too, or a wrapped hit bypasses this signal entirely — but it still routes
-    // to MANUAL (never close), matching the single-line case above. Built from separate literals so this file
-    // embeds no contiguous secret.
+    // it; scanSubmissionContent must too, or a wrapped hit bypasses this signal entirely. Built from separate
+    // literals so this file embeds no contiguous secret.
     const content = `intro line\nclient_secret =\n"${GENERIC_VALUE}"`;
     const finding = scanSubmissionContent({ content, category: "guides" });
-    expect(finding?.verdict).toBe("manual");
-    expect(finding?.reasonCode).toBe("possible_secret_assignment");
+    expect(finding?.verdict).toBe("close");
+    expect(finding?.reasonCode).toBe("embedded_secret");
     expect(finding?.summary).toContain("line 3"); // cited where the wrapped match completes (the value line)
   });
 
@@ -282,10 +278,10 @@ describe("scanLinkedBodiesForSecrets", () => {
     expect(finding?.reasonCode).toBe("embedded_secret");
   });
 
-  it("flags a generic_secret_assignment-only hit in a LINKED body as MANUAL too (#5346)", () => {
+  it("flags a generic_secret_assignment-only hit in a LINKED body as an embedded secret for review", () => {
     const finding = scanLinkedBodiesForSecrets(["clean body", `client_secret = "${GENERIC_VALUE}"`]);
     expect(finding?.verdict).toBe("manual");
-    expect(finding?.reasonCode).toBe("possible_secret_assignment");
+    expect(finding?.reasonCode).toBe("embedded_secret");
   });
 
   it("returns null when no linked body leaks", () => {

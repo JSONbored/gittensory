@@ -352,28 +352,28 @@ describe("secret-leak finding in the advisory build", () => {
     expect(out).toContain("### ok.ts (added) +2/-1\n@@\n+const a = 1;");
   });
 
-  it("surfaces a lowercase-hyphenated password assignment as an advisory (never a hard block, #5346)", () => {
+  it("hard-blocks a lowercase-hyphenated password assignment", () => {
     const diff = [
       "### config/prod.env (modified) +1/-0",
       "@@ -0,0 +1 @@",
       '+password = "alpha-bravo-charlie-delta"',
     ].join("\n");
     const finding = secretLeakFinding(diff);
-    expect(finding?.code).toBe("possible_secret_assignment");
-    expect(finding?.severity).toBe("warning");
+    expect(finding?.code).toBe("secret_leak");
+    expect(finding?.severity).toBe("critical");
     expect(finding?.title).toContain("generic_secret_assignment");
     expect(finding?.detail).toContain("config/prod.env:1");
   });
 
-  it("surfaces a mixed-case mock-tokenized generic credential as an advisory (never a hard block, #5346)", () => {
+  it("hard-blocks a mixed-case mock-tokenized generic credential", () => {
     const diff = [
       "### config/prod.env (modified) +1/-0",
       "@@ -0,0 +1 @@",
       '+password = "prod-mock-aK9xQ2mZw7Ln4Rv8Pt3Bh6"',
     ].join("\n");
     const finding = secretLeakFinding(diff);
-    expect(finding?.code).toBe("possible_secret_assignment");
-    expect(finding?.severity).toBe("warning");
+    expect(finding?.code).toBe("secret_leak");
+    expect(finding?.severity).toBe("critical");
     expect(finding?.title).toContain("generic_secret_assignment");
     expect(finding?.detail).toContain("config/prod.env:1");
   });
@@ -468,9 +468,7 @@ describe("gate treats secret_leak as a hard blocker", () => {
   });
 
   // #2553: the concrete-format widened kinds (google_api_key, jwt) hard-block exactly like the original
-  // five — same secretLeakFinding -> evaluateGateCheck path, no separate opt-in. generic_secret_assignment is
-  // deliberately EXCLUDED from this table (see the dedicated describe block below, #5346): it is a
-  // keyword-plus-quoted-value SHAPE heuristic, not a concrete format, so it no longer hard-blocks.
+  // five — same secretLeakFinding -> evaluateGateCheck path, no separate opt-in.
   it.each([
     ["google_api_key", `### src/config.ts (modified) +1/-0\n@@\n+const key = "${"AIza" + "SyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"}";`],
     [
@@ -494,27 +492,21 @@ describe("gate treats secret_leak as a hard blocker", () => {
   });
 });
 
-// #5346: gittensory PR #5346 was auto-closed on a "possible leaked secret" that was really two inert
-// test-fixture strings matching the generic_secret_assignment SHAPE heuristic. This heuristic (unlike every
-// concrete-format kind above) is no longer an unconditional hard blocker — it surfaces as an advisory finding
-// that a human/AI reviewer can verify, matching how REES's own copy of this rule already rates it
-// "medium confidence".
-describe("generic_secret_assignment is advisory-only, never a hard blocker (#5346)", () => {
+describe("generic_secret_assignment hard-blocks after placeholder filtering", () => {
   const diff = `### src/config.ts (modified) +1/-0\n@@\n+secret = "${"sk_live_" + "aK9xQ2mZw7Ln4Rv8Pt3Bh6"}"`;
 
-  it("secretLeakFinding returns a warning-severity possible_secret_assignment finding, not secret_leak", () => {
+  it("secretLeakFinding returns a critical secret_leak finding", () => {
     const finding = secretLeakFinding(diff);
-    expect(finding?.code).toBe("possible_secret_assignment");
-    expect(finding?.severity).toBe("warning");
+    expect(finding?.code).toBe("secret_leak");
+    expect(finding?.severity).toBe("critical");
     expect(finding?.title).toContain("generic_secret_assignment");
   });
 
-  it("does not fail the gate — it surfaces only as a non-blocking warning", () => {
+  it("fails the gate as an unconditional hard blocker", () => {
     const finding = secretLeakFinding(diff)!;
     const gate = evaluateGateCheck(advisory([finding]), { confirmedContributor: true });
-    expect(gate.conclusion).toBe("success");
-    expect(gate.blockers).toEqual([]);
-    expect(gate.warnings.map((w) => w.code)).toContain("possible_secret_assignment");
+    expect(gate.conclusion).toBe("failure");
+    expect(gate.blockers.map((b) => b.code)).toContain("secret_leak");
   });
 
   it("a concrete kind alongside a generic-only kind still hard-blocks on the concrete kind (secret_leak wins)", () => {
