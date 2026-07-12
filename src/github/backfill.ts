@@ -3230,6 +3230,33 @@ export async function fetchLivePullRequestMergedAt(
   return result === undefined ? undefined : (result.data.merged_at ?? null);
 }
 
+export type LinkedIssueClosureByPullRequestResult = "closed_by_pull_request" | "not_closed_by_pull_request" | "fetch_error";
+
+function timelineEventClosesIssueFromPullRequest(
+  event: { event?: string | null; source?: { issue?: { number?: number | null; pull_request?: unknown } | null } | null },
+  prNumber: number,
+): boolean {
+  return event.event === "closed" && event.source?.issue?.number === prNumber && event.source.issue.pull_request !== undefined;
+}
+
+/** Verifies whether GitHub's issue timeline attributes this issue close to the specific PR. Timestamp ordering
+ *  alone only proves the issue closed after the PR merged; the timeline's closing-reference source binds the
+ *  closure to THIS PR and prevents borrowing labels from an unrelated issue that happened to close later. */
+export async function fetchLinkedIssueClosedByPullRequest(
+  env: Env,
+  repoFullName: string,
+  issueNumber: number,
+  prNumber: number,
+  token: string | undefined,
+  admissionKey?: GitHubRateLimitAdmissionKey,
+): Promise<LinkedIssueClosureByPullRequestResult> {
+  const result = await githubJsonWithHeaders<
+    Array<{ event?: string | null; source?: { issue?: { number?: number | null; pull_request?: unknown } | null } | null }>
+  >(env, repoFullName, `/issues/${issueNumber}/timeline?per_page=100`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
+  if (result === undefined) return "fetch_error";
+  return result.data.some((event) => timelineEventClosesIssueFromPullRequest(event, prNumber)) ? "closed_by_pull_request" : "not_closed_by_pull_request";
+}
+
 /** The issue's LIVE state ("open" / "closed") via REST `GET /issues/{n}`. Mirrors {@link fetchLivePullRequestState}
  *  for issues: the stored open-issue cache lags GitHub, so a sibling closed on GitHub (or elsewhere) can still
  *  read `open` locally. The per-contributor open-issue cap (#2479 gate finding) confirms each counted sibling's

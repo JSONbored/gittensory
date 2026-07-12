@@ -300,6 +300,7 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
             user: { login: "contrib" },
             labels: ["gittensor:feature", "gittensor:priority"],
           });
+        if (url.includes("/issues/4279/timeline")) return Response.json([{ event: "closed", source: { issue: { number: 4494, pull_request: {} } } }]);
         return new Response("not found", { status: 404 });
       });
       const env = createTestEnv({});
@@ -310,8 +311,79 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
         installationId: 123,
         prAuthorLogin: "contrib",
         prMergedAt: "2026-07-09T22:15:13Z",
+        prNumber: 4494,
       });
       expectPropagation(result, ["gittensor:feature", "gittensor:priority"]);
+    });
+
+    it("REGRESSION (#closed-issue-timestamp-spoof): does NOT propagate when an unrelated issue closed after this PR merged", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/9001"))
+          return Response.json({
+            number: 9001,
+            state: "closed",
+            closed_at: "2026-07-09T22:15:14Z",
+            user: { login: "contrib" },
+            labels: ["gittensor:feature", "gittensor:priority"],
+          });
+        if (url.includes("/issues/9001/timeline")) return Response.json([{ event: "closed", source: { issue: { number: 123, pull_request: {} } } }]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [9001],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: "2026-07-09T22:15:13Z",
+        prNumber: 4494,
+      });
+      expectPropagation(result, []);
+    });
+
+    it("does not propagate a timestamp-eligible closed issue when the caller cannot identify this PR number", async () => {
+      const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/9003"))
+          return Response.json({ number: 9003, state: "closed", closed_at: "2026-07-09T22:15:14Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
+        return new Response("not found", { status: 404 });
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [9003],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: "2026-07-09T22:15:13Z",
+      });
+      expectPropagation(result, []);
+      expect(fetchSpy.mock.calls.some(([input]) => input.toString().includes("/timeline"))).toBe(false);
+    });
+
+    it("flags closed issue propagation inconclusive when the timeline closure check fails", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/9002"))
+          return Response.json({ number: 9002, state: "closed", closed_at: "2026-07-09T22:15:14Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
+        if (url.includes("/issues/9002/timeline")) return new Response("server error", { status: 500 });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({});
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [9002],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        prMergedAt: "2026-07-09T22:15:13Z",
+        prNumber: 4494,
+      });
+      expectPropagation(result, [], true);
     });
 
     it("does NOT propagate when the linked issue was already closed BEFORE this PR merged (anti-gaming: an unrelated, already-resolved issue can't be borrowed)", async () => {
@@ -372,6 +444,7 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
             labels: ["gittensor:feature"],
           });
         if (url.endsWith("/pulls/4818")) return Response.json({ merged_at: "2026-07-11T02:26:24Z" });
+        if (url.includes("/issues/2192/timeline")) return Response.json([{ event: "closed", source: { issue: { number: 4818, pull_request: {} } } }]);
         return new Response("not found", { status: 404 });
       });
       const env = createTestEnv({});

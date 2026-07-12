@@ -6222,6 +6222,12 @@ describe("queue processors", () => {
           seen.issueFetches += 1;
           return linkedIssueResponse();
         }
+        // #4528 timeline attribution (#closed-issue-timestamp-spoof): every existing caller here exercises the
+        // legitimate "this PR's own merge closed the linked issue" trust path, never the spoofing case (which
+        // gets its own dedicated stub) -- so the shared helper can safely attribute every closure to this PR.
+        if (url.includes(`/issues/${linkedIssueNumber}/timeline`)) {
+          return Response.json([{ event: "closed", source: { issue: { number: prNumber, pull_request: {} } } }]);
+        }
         if (url.includes(`/issues/${prNumber}/labels`) && method === "GET") return Response.json([]);
         if (url.includes(`/issues/${prNumber}/labels`) && method === "POST") {
           seen.posted.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[]));

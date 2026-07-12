@@ -1,4 +1,10 @@
-import { fetchLinkedIssueFacts, fetchLivePullRequestMergedAt, type LinkedIssueFactsFetch, type LinkedIssueFactsResult } from "../github/backfill";
+import {
+  fetchLinkedIssueClosedByPullRequest,
+  fetchLinkedIssueFacts,
+  fetchLivePullRequestMergedAt,
+  type LinkedIssueFactsFetch,
+  type LinkedIssueFactsResult,
+} from "../github/backfill";
 import { createInstallationToken, getRepositoryCollaboratorPermission } from "../github/app";
 import { githubRateLimitAdmissionKeyForToken, type GitHubRateLimitAdmissionKey } from "../github/client";
 import { parseGitHubLoginList } from "../auth/security";
@@ -68,17 +74,13 @@ async function isRepoMaintainerLogin(env: Env, installationId: number, repoFullN
   return permission != null && new Set(["admin", "maintain", "write"]).has(permission) ? "maintainer" : "not_maintainer";
 }
 
-/** True when the linked issue's authority for propagation can be trusted (#4528): it's still OPEN, or it
- *  was closed no earlier than THIS PR's own merge. Merging a PR whose body says "Closes #N" auto-closes
- *  issue #N as an immediate side effect of that same merge -- so `closedAt >= prMergedAt` is exactly the
- *  signature of "this merge is what closed it," the single most authoritative moment for propagation to
- *  fire, not a weaker one. An issue closed BEFORE this PR ever merged (`closedAt < prMergedAt`) is the
- *  gaming case the OPEN-only check originally existed to block -- a PR opportunistically referencing some
- *  unrelated, already-resolved issue to borrow its label -- and stays blocked, unchanged. `prMergedAt`
- *  absent (PR not yet merged) never trusts a closed issue, also unchanged. */
-function isLinkedIssueTrustworthy(facts: LinkedIssueFactsResult, prMergedAt: string | null): boolean {
+function linkedIssueNeedsClosureVerification(facts: LinkedIssueFactsResult, prMergedAt: string | null): boolean {
+  return facts.state !== "open" && prMergedAt !== null && facts.closedAt !== null && facts.closedAt >= prMergedAt;
+}
+
+function isLinkedIssueTrustworthy(facts: LinkedIssueFactsResult, prMergedAt: string | null, closedByThisPr: boolean): boolean {
   if (facts.state === "open") return true;
-  return prMergedAt !== null && facts.closedAt !== null && facts.closedAt >= prMergedAt;
+  return linkedIssueNeedsClosureVerification(facts, prMergedAt) && closedByThisPr;
 }
 
 /** {@link resolveIssueLabelsForPropagation}'s and {@link fetchLinkedIssueLabelsForPropagation}'s return shape
@@ -172,7 +174,31 @@ async function resolveIssueLabelsForPropagation(
     }
     trustedMergedAt = liveMergedAt;
   }
-  if (!isLinkedIssueTrustworthy(result.facts, trustedMergedAt)) return { labels: [], inconclusive: false };
+  let closedByThisPr = false;
+  if (linkedIssueNeedsClosureVerification(result.facts, trustedMergedAt)) {
+    if (args.prNumber === undefined) return { labels: [], inconclusive: false };
+    const closure = await fetchLinkedIssueClosedByPullRequest(
+      args.env,
+      args.repoFullName,
+      result.facts.number,
+      args.prNumber,
+      args.token,
+      args.admissionKey,
+    );
+    if (closure === "fetch_error") {
+      console.log(
+        JSON.stringify({
+          event: "linked_issue_label_propagation_inconclusive",
+          repoFullName: args.repoFullName,
+          issueNumber: result.facts.number,
+          reason: "issue_closure_timeline_check_failed",
+        }),
+      );
+      return { labels: [], inconclusive: true };
+    }
+    closedByThisPr = closure === "closed_by_pull_request";
+  }
+  if (!isLinkedIssueTrustworthy(result.facts, trustedMergedAt, closedByThisPr)) return { labels: [], inconclusive: false };
   const allLabels = result.facts.labels;
   const issueAuthorLogin = result.facts.authorLogin?.toLowerCase();
   const assignees = result.facts.assignees.map((login) => login.toLowerCase());
@@ -212,7 +238,7 @@ async function resolveIssueLabelsForPropagation(
 
 /** FETCH every linked issue's labels (fail-open) and flatten into one label list for
  *  `resolvePrTypeLabel` (`src/settings/pr-type-label.ts`) to match against. Only an OPEN issue, or one
- *  closed no earlier than THIS PR's own merge (#4528, {@link isLinkedIssueTrustworthy}), can contribute
+ *  closed by THIS PR as verified from GitHub's timeline (#4528, {@link isLinkedIssueTrustworthy}), can contribute
  *  labels; closing-keyword text in a PR body is author-controlled and is not authority by itself. Mirrors
  *  `resolveLinkedIssueHardRule`'s own fetch idiom (`src/review/linked-issue-hard-rules.ts`): a per-issue
  *  fetch failure contributes no labels rather than throwing, so if EVERY linked issue fails, `labels` is
