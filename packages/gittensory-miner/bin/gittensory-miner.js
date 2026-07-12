@@ -25,11 +25,13 @@ import { resolveMinerVersion } from "../lib/version.js";
 
 const cliArgs = process.argv.slice(2);
 
-// `init`, `status`, and `doctor` are strictly local, offline commands — their contract is to make NO network calls.
-// Dispatch them BEFORE the opportunistic npm-registry update check is even started, so they can never reach that
-// network path (the update check runs for the remaining commands below).
+// `status` and `doctor` are strictly local, offline commands — their contract is to make NO network calls.
+// `init` stays local by default and only makes a network call when the operator explicitly passes
+// `--verify-token`.
+// Dispatch the local commands BEFORE the opportunistic npm-registry update check is even started, so they can
+// never reach that network path (the update check runs for the remaining commands below).
 if (cliArgs[0] === "init") {
-  process.exit(runInit(cliArgs.slice(1)));
+  process.exit(await runInit(cliArgs.slice(1)));
 }
 
 if (cliArgs[0] === "status") {

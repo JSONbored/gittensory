@@ -3,6 +3,9 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+const githubApiBaseUrl = "https://api.github.com";
+const githubApiVersion = "2022-11-28";
+const classicRepoScopes = new Set(["repo", "public_repo"]);
 const defaultDbFileName = "laptop-state.sqlite3";
 
 /** Local state directory (mirrors `resolveMinerStateDir` in status.js — kept local to avoid import cycles). */
@@ -105,6 +108,113 @@ function resolveCodexAuthPath(env = process.env) {
   return join(base, "auth.json");
 }
 
+function githubHeaders(githubToken) {
+  const headers = {
+    accept: "application/vnd.github+json",
+    "user-agent": "gittensory-miner",
+    "x-github-api-version": githubApiVersion,
+  };
+  const token = typeof githubToken === "string" ? githubToken.trim() : "";
+  if (token) headers.authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function parseScopesHeader(scopesHeader) {
+  return typeof scopesHeader === "string" && scopesHeader.trim()
+    ? scopesHeader.split(",").map((scope) => scope.trim()).filter(Boolean)
+    : [];
+}
+
+function formatScopes(scopes) {
+  return scopes.length > 0 ? scopes.join(", ") : "none reported";
+}
+
+function hasRepoAccessScope(scopes) {
+  return scopes.some((scope) => classicRepoScopes.has(scope));
+}
+
+function readGithubErrorMessage(payload, status) {
+  if (payload && typeof payload === "object" && typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message.trim();
+  }
+  return `GitHub returned HTTP ${status}`;
+}
+
+/**
+ * Validate a GitHub token with one authenticated API call.
+ *
+ * The classic OAuth scope header is advisory when GitHub reports it: if GitHub returns `repo` or
+ * `public_repo`, we treat the token as sufficiently scoped for miner setup. If GitHub omits the classic
+ * scope header altogether, the token is still considered valid and the response is reported as "scopes not
+ * reported" — that keeps fine-grained tokens usable while still surfacing the scopes GitHub did return.
+ */
+export async function verifyGithubToken(options = {}) {
+  const githubToken = typeof options.githubToken === "string" ? options.githubToken.trim() : "";
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const apiBaseUrl =
+    typeof options.apiBaseUrl === "string" && options.apiBaseUrl.trim()
+      ? options.apiBaseUrl.trim().replace(/\/+$/, "") || githubApiBaseUrl
+      : githubApiBaseUrl;
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 5000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetchImpl(`${apiBaseUrl}/user`, {
+      method: "GET",
+      headers: githubHeaders(githubToken),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const detail = controller.signal.aborted
+      ? `timed out after ${timeoutMs}ms`
+      : error instanceof Error
+        ? error.message
+        : "request failed";
+    return {
+      ok: false,
+      login: null,
+      scopes: [],
+      detail: `GITHUB_TOKEN verification failed: ${detail}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const payload = await response.json().catch(() => null);
+  const scopes = parseScopesHeader(response.headers.get("x-oauth-scopes"));
+  const login = payload && typeof payload === "object" && typeof payload.login === "string" ? payload.login.trim() : "";
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      login: null,
+      scopes,
+      detail: `GITHUB_TOKEN verification failed: ${readGithubErrorMessage(payload, response.status)}`,
+    };
+  }
+
+  if (scopes.length > 0 && !hasRepoAccessScope(scopes)) {
+    return {
+      ok: false,
+      login: login || null,
+      scopes,
+      detail: `GITHUB_TOKEN is valid, but GitHub reported only ${formatScopes(scopes)}; reissue it with repo access for miner setup.`,
+    };
+  }
+
+  return {
+    ok: true,
+    login: login || null,
+    scopes,
+    detail:
+      scopes.length > 0
+        ? `validated GitHub token for ${login || "unknown user"}; scopes: ${formatScopes(scopes)}`
+        : `validated GitHub token for ${login || "unknown user"}; GitHub did not report classic OAuth scopes`,
+  };
+}
+
 /** A coding-agent CLI is only needed once a driver provider is configured (#4289) — gated by
  *  `MINER_CODING_AGENT_PROVIDER` (#5165). When that provider is NOT the CLI being checked, absence is
  *  advisory (`ok: true`), mirroring checkDockerPresent's optional tone. When it IS configured and the CLI is
@@ -175,13 +285,33 @@ export function checkCodexCliPresent(options = {}) {
   return { name: "codex-cli-present", ok: true, detail };
 }
 
-export function runInit(args = [], env = process.env) {
+export async function runInit(args = [], env = process.env) {
+  const verifyToken = args.includes("--verify-token");
+  const jsonOutput = args.includes("--json");
+  let verification = null;
+  if (verifyToken) {
+    verification = await verifyGithubToken({ githubToken: env.GITHUB_TOKEN ?? "" });
+    if (!verification.ok) {
+      console.error(verification.detail);
+      return 1;
+    }
+  }
+
   const result = initLaptopState(env);
-  if (args.includes("--json")) {
-    console.log(JSON.stringify(result, null, 2));
+  if (jsonOutput) {
+    console.log(
+      JSON.stringify(
+        verification ? { ...result, tokenVerification: verification } : result,
+        null,
+        2,
+      ),
+    );
   } else {
     console.log(`initialized ${result.stateDir}`);
     console.log(`sqlite: ${result.dbPath}${result.created ? "" : " (already existed)"}`);
+    if (verification) {
+      console.log(`token: ${verification.detail}`);
+    }
   }
   return 0;
 }

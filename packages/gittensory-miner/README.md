@@ -102,7 +102,7 @@ gittensory-miner doctor
 gittensory-miner status
 ```
 
-`init` creates `~/.config/gittensory-miner/` (or `GITTENSORY_MINER_CONFIG_DIR` / `XDG_CONFIG_HOME` overrides) and a local `laptop-state.sqlite3` bootstrap file. Re-running `init` is idempotent. `doctor` reports Node, the state directory, SQLite readiness, and whether Docker is installed (informational only).
+`init` creates `~/.config/gittensory-miner/` (or `GITTENSORY_MINER_CONFIG_DIR` / `XDG_CONFIG_HOME` overrides) and a local `laptop-state.sqlite3` bootstrap file. Re-running `init` is idempotent. Pass `--verify-token` to make one authenticated GitHub API call up front and fail fast if `GITHUB_TOKEN` is invalid or missing repository access scopes. `doctor` reports Node, the state directory, SQLite readiness, and whether Docker is installed (informational only).
 
 From a local checkout:
 
@@ -119,7 +119,7 @@ gittensory-miner --help
 gittensory-miner help
 gittensory-miner --version
 gittensory-miner version
-gittensory-miner init [--json]
+gittensory-miner init [--json] [--verify-token]
 gittensory-miner status [--json]
 gittensory-miner doctor [--json]
 gittensory-miner manage status [--json]

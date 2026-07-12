@@ -10,6 +10,13 @@ export type DoctorCheck = {
   detail: string;
 };
 
+export type GithubTokenVerification = {
+  ok: boolean;
+  login: string | null;
+  scopes: string[];
+  detail: string;
+};
+
 export function resolveLaptopStateDbPath(env?: Record<string, string | undefined>): string;
 
 export function initLaptopState(env?: Record<string, string | undefined>): LaptopInitResult;
@@ -34,4 +41,11 @@ export function checkCodexCliPresent(options?: {
   resolveCodexAuthPath?: () => string;
 }): DoctorCheck;
 
-export function runInit(args?: string[], env?: Record<string, string | undefined>): number;
+export function verifyGithubToken(options?: {
+  githubToken?: string;
+  fetchImpl?: typeof fetch;
+  apiBaseUrl?: string;
+  timeoutMs?: number;
+}): Promise<GithubTokenVerification>;
+
+export function runInit(args?: string[], env?: Record<string, string | undefined>): Promise<number>;

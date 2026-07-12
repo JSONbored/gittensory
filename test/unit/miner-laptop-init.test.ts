@@ -60,14 +60,14 @@ describe("gittensory-miner laptop init (#2329)", () => {
     expect(readFileSync(join(first.stateDir, "marker.txt"), "utf8")).toBe("keep-me");
   });
 
-  it("runInit prints human text (0) and machine JSON with --json", () => {
+  it("runInit prints human text (0) and machine JSON with --json", async () => {
     const root = tempRoot();
     const env = { GITTENSORY_MINER_CONFIG_DIR: join(root, "state") };
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(runInit([], env)).toBe(0);
+    expect(await runInit([], env)).toBe(0);
     expect(String(log.mock.calls[0]?.[0])).toContain("initialized");
     log.mockClear();
-    expect(runInit(["--json"], env)).toBe(0);
+    expect(await runInit(["--json"], env)).toBe(0);
     const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
     expect(payload.created).toBe(false);
     expect(payload.dbPath).toBe(resolveLaptopStateDbPath(env));
@@ -127,16 +127,16 @@ describe("gittensory-miner laptop init (#2329)", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it("runInit notes when sqlite already existed", () => {
+  it("runInit notes when sqlite already existed", async () => {
     const root = tempRoot();
     const env = { GITTENSORY_MINER_CONFIG_DIR: join(root, "state") };
     initLaptopState(env);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(runInit([], env)).toBe(0);
+    expect(await runInit([], env)).toBe(0);
     expect(String(log.mock.calls[1]?.[0])).toContain("already existed");
   });
 
-  it("makes no network calls", () => {
+  it("makes no network calls", async () => {
     const fetchStub = vi.fn(() => {
       throw new Error("network calls are forbidden");
     });
@@ -144,7 +144,7 @@ describe("gittensory-miner laptop init (#2329)", () => {
     const root = tempRoot();
     const env = { GITTENSORY_MINER_CONFIG_DIR: join(root, "state") };
     vi.spyOn(console, "log").mockImplementation(() => {});
-    runInit([], env);
+    await runInit([], env);
     checkDockerPresent();
     expect(fetchStub).not.toHaveBeenCalled();
   });
