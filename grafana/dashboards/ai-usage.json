@@ -1,0 +1,474 @@
+{
+  "uid": "gittensory-ai-usage",
+  "title": "Gittensory - AI usage",
+  "tags": ["gittensory", "ai"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "description": "Consolidated AI-usage dashboard (replaces the old Claude/Codex/ORB AI-usage dashboards, and the AI-cost/token panels formerly in the infra dashboard). Two structurally different sources, kept in clearly separate sections: (1) the durable, cross-provider ai_usage_events log (migration 0109) — every configured provider (Ollama, Claude Code, Codex, OpenAI-compatible, Anthropic BYOK) and every AI feature (ai_review_pr, ai_slop_pr, embeddings, visual_vision, screenshot_table_vision, agent_private_summary, agent_public_summary, pr_intelligence_comment, linked_issue_satisfaction, issue_plan, unlinked_issue_verify, chat_qa, intent_routing, ai_key_change), filterable by $provider/$feature/$model and repo/PR-attributable; (2) Claude Code's own OTEL session telemetry, a separate non-durable data source with no repo/PR attribution that cannot be joined to (1) — kept in its own section rather than force-merged. A row of live Prometheus counters sits between them for real-time signal the durable log can lag behind (it's written after a call completes).",
+  "templating": {
+    "list": [
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+        "query": { "queryType": "table", "rawQueryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider" },
+        "includeAll": true,
+        "allValue": "$__all",
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "feature",
+        "label": "Feature",
+        "type": "query",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+        "query": { "queryType": "table", "rawQueryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature" },
+        "includeAll": true,
+        "allValue": "$__all",
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+        "query": {
+          "queryType": "table",
+          "rawQueryText": "SELECT DISTINCT model FROM ai_usage_events WHERE ('$provider' = '$__all' OR provider = '$provider') ORDER BY model"
+        },
+        "includeAll": true,
+        "allValue": "$__all",
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1,
+        "description": "Narrows to the selected Provider's own models (e.g. Ollama's separate bge-m3/qwen3-vl/qwen3 use cases)."
+      },
+      {
+        "name": "claudeModel",
+        "label": "Claude Model (OTEL)",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(claude_code_cost_usage_USD_total, model)",
+        "query": { "query": "label_values(claude_code_cost_usage_USD_total, model)", "refId": "A" },
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "description": "Only scopes the separate 'Claude Code native OTEL telemetry' section below — unrelated to Provider/Feature/Model above, which scope the durable ai_usage_events log."
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Summary (durable log, filtered)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total AI events",
+      "description": "Every ai_usage_events row with a non-null provider (i.e. a real, attributed AI call) in the selected time range, filtered by Provider/Feature/Model.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT count(*) AS events FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT count(*) AS events FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total tokens",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT coalesce(sum(total_tokens), 0) AS total_tokens FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT coalesce(sum(total_tokens), 0) AS total_tokens FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total cost",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Events missing real usage",
+      "description": "Completed AI calls (status='ok') with no real usage captured (no provider attribution, or every numeric field still at its zero default). Only scoped by Feature + time range — not by Provider/Model, since a NULL provider is exactly the kind of row this panel exists to surface, and filtering it out by provider would hide the very rows it's meant to catch. Excludes quota_exceeded/disabled/unavailable (no call was attempted) and ai_key_change (not an AI call).",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE status = 'ok' AND feature <> 'ai_key_change' AND ('$feature' = '$__all' OR feature = '$feature') AND (provider IS NULL OR (input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 AND cost_usd = 0)) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT count(*) AS unattributed FROM ai_usage_events WHERE status = 'ok' AND feature <> 'ai_key_change' AND ('$feature' = '$__all' OR feature = '$feature') AND (provider IS NULL OR (input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 AND cost_usd = 0)) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Usage by category (what's using the most, and is anything spiking)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Tokens by feature, over time",
+      "description": "Stacked daily token totals per feature within the selected Provider/Model filter — a spike in one feature's stack is the signal to investigate.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "time series",
+          "timeColumns": ["time"],
+          "metricColumn": "feature",
+          "queryText": "SELECT date(created_at) AS time, feature, coalesce(sum(total_tokens), 0) AS tokens FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY date(created_at), feature ORDER BY time",
+          "rawQueryText": "SELECT date(created_at) AS time, feature, coalesce(sum(total_tokens), 0) AS tokens FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY date(created_at), feature ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Cost share by feature",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "options": { "pieType": "donut", "legend": { "showLegend": true, "placement": "right", "values": ["percent", "value"] }, "reduceOptions": { "calcs": ["lastNotNull"] }, "displayLabels": ["percent"] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT feature, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY feature ORDER BY cost_usd DESC",
+          "rawQueryText": "SELECT feature, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY feature ORDER BY cost_usd DESC"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "piechart",
+      "title": "Events by provider",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "pieType": "donut", "legend": { "showLegend": true, "placement": "right", "values": ["percent", "value"] }, "reduceOptions": { "calcs": ["lastNotNull"] }, "displayLabels": ["percent"] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT provider, count(*) AS events FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY events DESC",
+          "rawQueryText": "SELECT provider, count(*) AS events FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY events DESC"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Usage by provider + model + effort",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 15 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "events", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT provider, model, effort, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50",
+          "rawQueryText": "SELECT provider, model, effort, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider, model, effort ORDER BY events DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "By repo / PR",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Top repos by AI usage",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "events", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY repo, provider ORDER BY events DESC LIMIT 50",
+          "rawQueryText": "SELECT json_extract(metadata_json, '$.repoFullName') AS repo, provider, count(*) AS events, coalesce(sum(total_tokens), 0) AS total_tokens, coalesce(sum(cost_usd), 0) AS cost_usd FROM ai_usage_events WHERE provider IS NOT NULL AND json_extract(metadata_json, '$.repoFullName') IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY repo, provider ORDER BY events DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Recent AI events",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gittensory-db" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "created_at", "desc": true }] },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } } },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT created_at, feature, provider, model, effort, status, input_tokens, output_tokens, total_tokens, cost_usd, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} ORDER BY created_at DESC LIMIT 100",
+          "rawQueryText": "SELECT created_at, feature, provider, model, effort, status, input_tokens, output_tokens, total_tokens, cost_usd, json_extract(metadata_json, '$.repoFullName') AS repo, json_extract(metadata_json, '$.pullNumber') AS pr FROM ai_usage_events WHERE provider IS NOT NULL AND ('$provider' = '$__all' OR provider = '$provider') AND ('$feature' = '$__all' OR feature = '$feature') AND ('$model' = '$__all' OR model = '$model') AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} ORDER BY created_at DESC LIMIT 100"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Live Prometheus counters (all providers, real-time — the durable log above is written after a call completes)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Cumulative AI cost (USD) by provider",
+      "description": "gittensory's own monotonic cost counter (gittensory_ai_cost_usd_total) — continuously scraped, so it draws a clean cumulative line. Resets to 0 on a stack restart.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "refId": "A", "expr": "sum by (provider) (gittensory_ai_cost_usd_total) or vector(0)", "legendFormat": "{{provider}}" }]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Tokens/min by provider",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider) ((rate(gittensory_ai_input_tokens_total[5m]) + rate(gittensory_ai_output_tokens_total[5m])) * 60)",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "AI requests + fallbacks (last 1h)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (model, effort) (increase(gittensory_ai_requests_total[1h]))", "legendFormat": "{{model}} · {{effort}}" },
+        { "refId": "B", "expr": "sum by (primary, fallback) (increase(gittensory_ai_review_model_fallback_total[1h]))", "legendFormat": "fallback {{primary}}→{{fallback}}" }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Total tokens by provider + kind",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (provider, kind) (gittensory_ai_input_tokens_total)", "legendFormat": "{{provider}} {{kind}} in" },
+        { "refId": "B", "expr": "sum by (provider, kind) (gittensory_ai_output_tokens_total)", "legendFormat": "{{provider}} {{kind}} out" }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Codex CLI attempts by model and effort",
+      "description": "Codex-specific: raw CLI attempt counters, including attempts that never produced a usable response (so never landed a durable ai_usage_events row).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "stacking": { "mode": "none" } } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, effort) (increase(gittensory_ai_requests_total{provider=\"codex\"}[$__rate_interval]))",
+          "legendFormat": "{{model}} / {{effort}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Codex reported tokens by direction",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind) (increase(gittensory_ai_input_tokens_total{provider=\"codex\"}[$__rate_interval]))", "legendFormat": "input {{kind}}" },
+        { "refId": "B", "expr": "sum by (kind) (increase(gittensory_ai_output_tokens_total{provider=\"codex\"}[$__rate_interval]))", "legendFormat": "output {{kind}}" }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Claude Code native OTEL telemetry (session-scoped CLI metrics — NOT joinable with the durable log above)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 59 }
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Total cost",
+      "description": "Each headless review is a session-scoped cumulative counter, so totals use last_over_time (sum of each session's final value) — increase()/rate() would read flat because a session exports its total in one shot.",
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(last_over_time(claude_code_cost_usage_USD_total{model=~\"$claudeModel\"}[$__range]))" }]
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Total tokens",
+      "gridPos": { "h": 5, "w": 5, "x": 5, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(last_over_time(claude_code_token_usage_tokens_total{model=~\"$claudeModel\"}[$__range]))" }]
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Sessions",
+      "gridPos": { "h": 5, "w": 5, "x": 10, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(last_over_time(claude_code_session_count_total[$__range]))" }]
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Active time",
+      "gridPos": { "h": 5, "w": 4, "x": 15, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(last_over_time(claude_code_active_time_seconds_total[$__range]))" }]
+    },
+    {
+      "id": 26,
+      "type": "stat",
+      "title": "Lines of code",
+      "gridPos": { "h": 5, "w": 5, "x": 19, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "yellow" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "justifyMode": "center" },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum(last_over_time(claude_code_lines_of_code_count_total[$__range]))" }]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Cost by model (per scrape interval)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 65 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "gradientMode": "opacity" } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom", "displayMode": "table", "calcs": ["max"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "expr": "sum by (model) (last_over_time(claude_code_cost_usage_USD_total{model=~\"$claudeModel\"}[$__rate_interval]))", "legendFormat": "{{model}}" }]
+    },
+    {
+      "id": 28,
+      "type": "piechart",
+      "title": "Tokens by type",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 65 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "pieType": "donut", "legend": { "showLegend": true, "placement": "right", "values": ["percent", "value"] }, "reduceOptions": { "calcs": ["lastNotNull"] }, "displayLabels": ["percent"] },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum by (type) (last_over_time(claude_code_token_usage_tokens_total{model=~\"$claudeModel\"}[$__range]))", "legendFormat": "{{type}}" }]
+    },
+    {
+      "id": 29,
+      "type": "bargauge",
+      "title": "Cost by model",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 65 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "color": { "mode": "continuous-GrYlRd" } } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "valueMode": "color", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "instant": true, "expr": "sum by (model) (last_over_time(claude_code_cost_usage_USD_total{model=~\"$claudeModel\"}[$__range]))", "legendFormat": "{{model}}" }]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Tokens by type (per scrape interval)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 73 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "refId": "A", "expr": "sum by (type) (last_over_time(claude_code_token_usage_tokens_total{model=~\"$claudeModel\"}[$__rate_interval]))", "legendFormat": "{{type}}" }]
+    },
+    {
+      "id": 31,
+      "type": "table",
+      "title": "Cost by model × effort",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 73 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [{ "displayName": "Cost", "desc": true }] },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Cost" },
+            "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }]
+          }
+        ]
+      },
+      "targets": [{ "refId": "A", "format": "table", "instant": true, "expr": "sum by (model, effort) (last_over_time(claude_code_cost_usage_USD_total{model=~\"$claudeModel\"}[$__range]))" }],
+      "transformations": [{ "id": "organize", "options": { "renameByName": { "Value": "Cost" }, "excludeByName": { "Time": true } } }]
+    }
+  ]
+}

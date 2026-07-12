@@ -97,8 +97,21 @@ describe("Gittensory Self-Host Grafana dashboard", () => {
     expect(targets.some((target) => target.expr === "sum by (kind, key_scope, job_type) (rate(gittensory_jobs_rate_limit_admission_deferred_total[5m])) or vector(0)")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (kind, key_scope, job_type) (rate(gittensory_jobs_rate_limit_budget_deferred_total[5m])) or vector(0)")).toBe(true);
     expect(targets.some((target) => target.expr === "sum by (kind, key_scope, job_type) (rate(gittensory_jobs_rate_limited_by_type_total[5m])) or vector(0)")).toBe(true);
-    expect(targets.some((target) => target.expr === "sum by (primary, fallback) (increase(gittensory_ai_review_model_fallback_total[1h]))")).toBe(true);
-    expect(targets.some((target) => target.legendFormat === "fallback {{primary}}→{{fallback}}")).toBe(true);
+    // The AI request/fallback + cost/token panels moved to the consolidated grafana/dashboards/ai-usage.json
+    // (Phase B2, 2026-07) — see test/unit/selfhost-grafana-ai-usage-dashboard.test.ts for their coverage there.
+  });
+
+  it("no longer duplicates the AI cost/token panels moved to the consolidated ai-usage.json dashboard (Phase B2, 2026-07 fix)", () => {
+    const dashboard = readDashboard(selfhostDashboardPath);
+    const titles = dashboard.panels.map((panel) => panel.title);
+    const ids = dashboard.panels.map((panel) => panel.id);
+
+    expect(titles).not.toContain("AI Usage & Cost (per provider)");
+    expect(titles).not.toContain("Tokens/min by provider");
+    expect(titles).not.toContain("AI requests + fallbacks (last 1h)");
+    expect(titles).not.toContain("Cumulative AI cost (USD) by provider");
+    expect(titles).not.toContain("Total tokens by provider + kind");
+    expect(ids).not.toEqual(expect.arrayContaining([108, 109, 110, 111, 112]));
   });
 
   it("keeps Orb dashboard panels zero-safe when telemetry counters are absent", () => {
