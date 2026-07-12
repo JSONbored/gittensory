@@ -108,7 +108,7 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
     expect(result.source).toBe("title");
   });
 
-  it("resolves the FIRST matching mapping when multiple linked-issue labels are present", () => {
+  it("resolves the LAST matching exclusive mapping (highest declared precedence) when multiple linked-issue labels are present (#5385)", () => {
     const result = resolvePrTypeLabel({
       title: "fix: y",
       linkedIssueLabels: ["customer:vip", "gittensor:priority"],
@@ -119,7 +119,7 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
         ],
       }),
     });
-    expect(result.applyLabels).toEqual(["triage:vip"]);
+    expect(result.applyLabels).toEqual(["gittensor:priority"]);
     expect(result.source).toBe("propagation_exclusive");
   });
 
@@ -172,14 +172,15 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
       expect(result.source).toBe("propagation_exclusive");
     });
 
-    it("two exclusive candidates + an additive one: only the FIRST-configured exclusive mapping wins, additive still composes", () => {
+    it("two exclusive candidates + an additive one: only the LAST-configured (highest-precedence) exclusive mapping wins, additive still composes (#5385)", () => {
       const result = resolvePrTypeLabel({
         title: "fix: y",
         linkedIssueLabels: ["gittensor:bug", "gittensor:feature", "gittensor:priority"],
         propagation: propagation({ mappings: bugFeaturePriorityMappings }),
       });
-      // bug is configured before feature, so bug wins the exclusive slot even though both matched.
-      expect(result).toEqual({ applyLabels: ["gittensor:bug", "gittensor:priority"], removeLabels: ["gittensor:feature"], source: "propagation_exclusive" });
+      // feature is configured after bug (ascending precedence), so feature wins the exclusive slot even
+      // though both matched -- matching feature's higher scoring weight than bug.
+      expect(result).toEqual({ applyLabels: ["gittensor:feature", "gittensor:priority"], removeLabels: ["gittensor:bug"], source: "propagation_exclusive" });
     });
   });
 

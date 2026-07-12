@@ -633,8 +633,10 @@ settings:
   # output, or existing PR labels, only ever copied from a linked/closing issue ("Fixes #123") that
   # ALREADY carries the configured issue label. Generic beyond the priority use case: any issue label
   # can map to any PR label. `removeOtherTypeLabels: true` marks the mapping EXCLUSIVE -- it REPLACES
-  # the type label entirely (bug/feature are removed), for genuinely mutually-exclusive categories; only
-  # the FIRST-configured exclusive match wins when more than one applies. `false` (e.g. `gittensor:priority`,
+  # the type label entirely (bug/feature are removed), for genuinely mutually-exclusive categories; when
+  # more than one applies, the LAST-configured exclusive match wins -- declare exclusive mappings in
+  # ASCENDING precedence order (lowest-value category first, e.g. bug before feature) so the highest-
+  # precedence one you actually want is declared last. `false` (e.g. `gittensor:priority`,
   # which is a reward tag that coexists WITH whichever type already applies, not a type of its own) applies
   # the mapped label ADDITIVELY alongside whichever exclusive match (or the normal title-based bug/feature
   # label) already won -- every additive match composes together rather than competing for a single slot.

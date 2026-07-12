@@ -4086,7 +4086,14 @@ async function maybeReReviewOnLinkedIssueChange(
   const installationId = getInstallationId(payload);
   const issueNumber = payload.issue?.number;
   if (!repoFullName || !installationId || !issueNumber) return false;
-  if (isConvergenceRepoAllowed(env, repoFullName)) {
+  // #5385: mirrors sweepRepoRegate's own gate exactly -- a repo with acting autonomy configured but NOT in the
+  // GITTENSORY_REVIEW_REPOS allowlist (e.g. removed during a rollback, or a self-hoster who configured autonomy
+  // without also updating the env allowlist) used to silently never wake affected PRs here, leaving a stale
+  // type label (or any other issue-driven verdict) until the sweep eventually reached it, cycles later.
+  // Short-circuited deliberately: resolveRepositorySettings does a live manifest fetch, so the allowlisted
+  // common case (this repo is already in GITTENSORY_REVIEW_REPOS) must never pay for it -- this handler's own
+  // doc comment promises "never doing the expensive live re-review inline", and that includes this gate check.
+  if (isConvergenceRepoAllowed(env, repoFullName) || isAgentConfigured((await resolveRepositorySettings(env, repoFullName)).autonomy)) {
     const openPullRequests = await listOpenPullRequests(env, repoFullName);
     // Issue-side label/assignment changes can flip linked-issue hard-rule verdicts from mergeable to close.
     // Wake affected PRs promptly: the issue-side signal can invalidate public gate state, so dropping every

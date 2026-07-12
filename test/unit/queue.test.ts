@@ -3275,17 +3275,73 @@ describe("queue processors", () => {
     expect(checkRunsFetched).toBe(false); // PR #7 links #99, not #1 — never re-reviewed
   });
 
-  it("issue label change is dormant on a repo outside the GITTENSORY_REVIEW_REPOS convergence allowlist", async () => {
-    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_REPOS: "" });
+  it("issue label change wakes the linked PR via the acting-autonomy fallback even OUTSIDE the GITTENSORY_REVIEW_REPOS convergence allowlist, mirroring sweepRepoRegate's own gate (#5385)", async () => {
+    // Before #5385, this exact shape (real acting autonomy, but not in the env allowlist) silently stayed
+    // dormant here even though the periodic sweep (sweepRepoRegate) would already treat this repo as eligible
+    // via `isConvergenceRepoAllowed || isAgentConfigured(settings.autonomy)` — a self-hoster who configures
+    // autonomy without also updating the allowlist (or a repo removed from the allowlist during a rollback)
+    // would see a stale type label / hard-rule verdict until the sweep eventually reached it, cycles later.
+    const sent: Array<{ message: import("../../src/types").JobMessage; options?: QueueSendOptions }> = [];
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_REVIEW_REPOS: "",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage, options?: QueueSendOptions) {
+          sent.push(options ? { message, options } : { message });
+        },
+      } as unknown as Queue,
+    });
     await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
     await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
     await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { merge: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
     await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1", created_at: "2026-07-03T10:00:00.000Z" });
-    let checkRunsFetched = false;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
-      checkRunsFetched ||= url.includes("/commits/a7/check-runs");
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      // The acting-autonomy fallback resolves settings via resolveRepositorySettings, which reads the repo's
+      // manifest file (unlike the allowlisted common case, which never fetches at all) — a 404 here is the
+      // realistic "no .gittensory.yml override" response, not a stub gap.
+      if (url.includes("/contents/")) return new Response("not found", { status: 404 });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "issue-label-fallback-wake",
+      eventName: "issues",
+      payload: {
+        action: "labeled",
+        repository: { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } },
+        installation: { id: 9001 },
+        issue: { number: 1, title: "Issue", state: "open", labels: [{ name: "maintainer-only" }] },
+        label: { name: "maintainer-only" },
+      } as never,
+    });
+
+    expect(sent).toEqual([
+      { message: expect.objectContaining({ type: "agent-regate-pr", repoFullName: "owner/agent-repo", prNumber: 7, installationId: 9001, prCreatedAt: "2026-07-03T10:00:00.000Z" }) },
+    ]);
+    const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("issue-label-fallback-wake").first<{ status: string }>();
+    expect(webhookRow?.status).toBe("processed");
+  });
+
+  it("issue label change stays dormant when the repo is neither in the convergence allowlist NOR has any acting autonomy configured (#5385 — genuinely inert repos are still untouched)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GITTENSORY_REVIEW_REPOS: "",
+      JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue,
+    });
+    await upsertInstallation(env, { action: "created", installation: { id: 9001, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo", full_name: "owner/agent-repo", private: false, owner: { login: "owner" } }, 9001);
+    // Every autonomy class left at the deny-by-default "observe" floor — isAgentConfigured is false, same as
+    // isConvergenceRepoAllowed, so this repo has genuinely opted into nothing.
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo", autonomy: { review: "observe" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo", { number: 7, title: "Linking PR", state: "open", user: { login: "contributor" }, head: { sha: "a7" }, labels: [], body: "Closes #1" });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/contents/")) return new Response("not found", { status: 404 });
       return Response.json({});
     });
 
@@ -3302,7 +3358,7 @@ describe("queue processors", () => {
       } as never,
     });
 
-    expect(checkRunsFetched).toBe(false); // dormant default: not in the convergence allowlist
+    expect(sent).toEqual([]); // dormant: neither allowlisted nor acting-autonomy-configured
     const webhookRow = await env.DB.prepare("select status from webhook_events where delivery_id = ?").bind("issue-label-not-converged").first<{ status: string }>();
     expect(webhookRow?.status).toBe("processed"); // still marked handled — only the re-review work is skipped
   });

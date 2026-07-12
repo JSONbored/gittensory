@@ -3239,16 +3239,20 @@ export async function fetchLivePullRequestMergedAt(
 
 export type LinkedIssueClosureByPullRequestResult = "closed_by_pull_request" | "not_closed_by_pull_request" | "fetch_error";
 
-function timelineEventClosesIssueFromPullRequest(
-  event: { event?: string | null; source?: { issue?: { number?: number | null; pull_request?: unknown } | null } | null },
-  prNumber: number,
-): boolean {
-  return event.event === "closed" && event.source?.issue?.number === prNumber && event.source.issue.pull_request !== undefined;
-}
-
-/** Verifies whether GitHub's issue timeline attributes this issue close to the specific PR. Timestamp ordering
- *  alone only proves the issue closed after the PR merged; the timeline's closing-reference source binds the
- *  closure to THIS PR and prevents borrowing labels from an unrelated issue that happened to close later. */
+/** Verifies whether GitHub attributes this issue's closure to the specific PR, via GraphQL's `ClosedEvent.closer`
+ *  field -- the one place GitHub's API actually records "what closed this issue" (a `PullRequest` or a `Commit`).
+ *  Timestamp ordering alone only proves the issue closed after the PR merged; `closer` binds the closure to THIS
+ *  PR and prevents borrowing labels from an unrelated issue that happened to close later (#4528).
+ *
+ *  #5385 (production incident): a prior version of this check read REST's `GET /issues/{n}/timeline` and looked
+ *  for a `closed`-type event carrying a `source.issue` field matching this PR. That field NEVER appears on a
+ *  `closed` event -- confirmed against three live production examples -- it only exists on `cross-referenced`
+ *  events, a structurally different type. The REST check therefore always returned `not_closed_by_pull_request`,
+ *  even for a completely legitimate same-PR close, silently converting every "Closes #N" merge into a title-
+ *  heuristic mislabel. `closer` is GraphQL-only; there is no equivalent REST field to fall back to.
+ *
+ *  `last: 1` deliberately reads only the MOST RECENT closing event, not history: an issue that was closed,
+ *  reopened, and closed again by something else must be judged on its current closer, not a superseded one. */
 export async function fetchLinkedIssueClosedByPullRequest(
   env: Env,
   repoFullName: string,
@@ -3257,11 +3261,24 @@ export async function fetchLinkedIssueClosedByPullRequest(
   token: string | undefined,
   admissionKey?: GitHubRateLimitAdmissionKey,
 ): Promise<LinkedIssueClosureByPullRequestResult> {
-  const result = await githubJsonWithHeaders<
-    Array<{ event?: string | null; source?: { issue?: { number?: number | null; pull_request?: unknown } | null } | null }>
-  >(env, repoFullName, `/issues/${issueNumber}/timeline?per_page=100`, token, githubRateLimitOptions(admissionKey)).catch(() => undefined);
+  if (!token) return "fetch_error";
+  const { owner, name } = repoParts(repoFullName);
+  if (!owner || !name) return "fetch_error";
+  const query = `query GittensoryIssueCloser { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { issue(number: ${issueNumber}) { timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) { nodes { __typename ... on ClosedEvent { closer { __typename ... on PullRequest { number } } } } } } } }`;
+  const result = await githubGraphQl<{
+    data?: {
+      repository?: {
+        issue?: { timelineItems?: { nodes?: Array<{ closer?: { __typename?: string | null; number?: number | null } | null } | null> | null } | null } | null;
+      } | null;
+    };
+    errors?: unknown[];
+  }>(env, query, token, admissionKey).catch(() => undefined);
   if (result === undefined) return "fetch_error";
-  return result.data.some((event) => timelineEventClosesIssueFromPullRequest(event, prNumber)) ? "closed_by_pull_request" : "not_closed_by_pull_request";
+  if (Array.isArray(result.errors) && result.errors.length > 0) return "fetch_error";
+  const nodes = result.data?.repository?.issue?.timelineItems?.nodes;
+  if (!Array.isArray(nodes)) return "fetch_error";
+  const closer = nodes[0]?.closer;
+  return closer?.__typename === "PullRequest" && closer.number === prNumber ? "closed_by_pull_request" : "not_closed_by_pull_request";
 }
 
 /** The issue's LIVE state ("open" / "closed") via REST `GET /issues/{n}`. Mirrors {@link fetchLivePullRequestState}

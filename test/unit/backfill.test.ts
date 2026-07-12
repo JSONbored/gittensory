@@ -37,6 +37,7 @@ import {
   enqueueRepositoryOpenDataBackfill,
   enrichInstallationHealth,
   fetchAndStorePullRequestFilesForReview,
+  fetchLinkedIssueClosedByPullRequest,
   fetchLinkedIssueFacts,
   fetchLiveBaseBranchAdvancedAt,
   fetchLiveCiAggregate,
@@ -4514,4 +4515,118 @@ describe("GitHub backfill", () => {
   // FIX B: the review path uses this to fetch + persist a PR's files inline when the stored rows are still
   // empty (the PR-opened webhook beat the async detail-sync), so the FIRST AI review/grounding/comment sees
   // the real diff instead of "0 files".
+});
+
+// #5385: fetchLinkedIssueClosedByPullRequest was rewritten from a REST /issues/{n}/timeline read (which could
+// never actually succeed -- GitHub's real "closed" timeline event carries no source.issue field, only
+// cross-referenced events do) to GraphQL's Issue.timelineItems -> ClosedEvent.closer. These tests pin every
+// branch of the new implementation, including the guard clauses and malformed-response shapes that didn't
+// exist in the old REST version at all.
+describe("fetchLinkedIssueClosedByPullRequest (#5385)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function closerBody(closer: { typename: string; number?: number } | null): unknown {
+    return {
+      data: {
+        repository: {
+          issue: {
+            timelineItems: {
+              nodes: closer === null ? [] : [{ __typename: "ClosedEvent", closer: { __typename: closer.typename, ...(closer.number !== undefined ? { number: closer.number } : {}) } }],
+            },
+          },
+        },
+      },
+    };
+  }
+
+  it("returns fetch_error without ever calling fetch when no token is available", async () => {
+    const env = createTestEnv({});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const result = await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, undefined);
+    expect(result).toBe("fetch_error");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns fetch_error without ever calling fetch for a malformed repoFullName (no owner/name split)", async () => {
+    const env = createTestEnv({});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "", 100, 200, "test-token")).toBe("fetch_error");
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "no-slash-repo", 100, 200, "test-token")).toBe("fetch_error");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns fetch_error when GraphQL responds 200 OK with a top-level errors array (GitHub's REAL response shape for an unresolvable issue number, confirmed via gh api graphql)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql"
+        ? Response.json({ data: { repository: { issue: null } }, errors: [{ type: "NOT_FOUND", message: "Could not resolve to an issue." }] })
+        : new Response("not found", { status: 404 }),
+    );
+    const result = await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 999999, 200, "test-token");
+    expect(result).toBe("fetch_error");
+  });
+
+  it("returns fetch_error when timelineItems.nodes is missing/non-array (malformed response, no top-level errors)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql"
+        ? Response.json({ data: { repository: { issue: { timelineItems: {} } } } })
+        : new Response("not found", { status: 404 }),
+    );
+    const result = await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token");
+    expect(result).toBe("fetch_error");
+  });
+
+  it("returns fetch_error when the GraphQL request itself throws (network failure)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("network down");
+    });
+    const result = await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token");
+    expect(result).toBe("fetch_error");
+  });
+
+  it("returns closed_by_pull_request when the closer is a matching PullRequest", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql" ? Response.json(closerBody({ typename: "PullRequest", number: 200 })) : new Response("not found", { status: 404 }),
+    );
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token")).toBe("closed_by_pull_request");
+  });
+
+  it("returns not_closed_by_pull_request when the closer is a DIFFERENT PullRequest (anti-spoofing)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql" ? Response.json(closerBody({ typename: "PullRequest", number: 999 })) : new Response("not found", { status: 404 }),
+    );
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token")).toBe("not_closed_by_pull_request");
+  });
+
+  it("returns not_closed_by_pull_request when the issue was closed manually with no closer at all (confirmed live shape via gh api graphql against JSONbored/gittensory#5130: closer: null)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql"
+        ? Response.json({ data: { repository: { issue: { timelineItems: { nodes: [{ __typename: "ClosedEvent", closer: null }] } } } } })
+        : new Response("not found", { status: 404 }),
+    );
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token")).toBe("not_closed_by_pull_request");
+  });
+
+  it("returns not_closed_by_pull_request when the closer is a Commit, not a PullRequest (issue closed via a commit message reference)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql" ? Response.json(closerBody({ typename: "Commit" })) : new Response("not found", { status: 404 }),
+    );
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token")).toBe("not_closed_by_pull_request");
+  });
+
+  it("returns not_closed_by_pull_request when there is no CLOSED_EVENT at all (nodes is an empty array)", async () => {
+    const env = createTestEnv({});
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      input.toString() === "https://api.github.com/graphql" ? Response.json(closerBody(null)) : new Response("not found", { status: 404 }),
+    );
+    expect(await fetchLinkedIssueClosedByPullRequest(env, "owner/repo", 100, 200, "test-token")).toBe("not_closed_by_pull_request");
+  });
 });

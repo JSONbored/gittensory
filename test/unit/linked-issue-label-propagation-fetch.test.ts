@@ -38,6 +38,29 @@ function expectPropagation(result: LinkedIssuePropagationLabels, labels: string[
   expect(result).toEqual({ labels, inconclusive });
 }
 
+const GRAPHQL_URL = "https://api.github.com/graphql";
+
+/** GraphQL `Issue.timelineItems -> ClosedEvent.closer` response shape, matching exactly what
+ *  `fetchLinkedIssueClosedByPullRequest` (src/github/backfill.ts) parses -- built from a REAL `gh api graphql`
+ *  response captured against a live PR-merge-closed issue (#5385), not an invented shape. A prior REST-
+ *  `/issues/{n}/timeline`-based version of this check assumed a `source.issue` field that GitHub's REST
+ *  Timeline API never actually populates on a `closed` event -- confirmed empirically -- which made every
+ *  legitimate same-PR close silently fail closure verification in production. `closerPrNumber: null` mirrors
+ *  an issue with no CLOSED_EVENT in its last-item window (still open, or closed by neither a PR nor a commit). */
+function closerGraphQlBody(closerPrNumber: number | null): unknown {
+  return {
+    data: {
+      repository: {
+        issue: {
+          timelineItems: {
+            nodes: closerPrNumber === null ? [] : [{ __typename: "ClosedEvent", closer: { __typename: "PullRequest", number: closerPrNumber } }],
+          },
+        },
+      },
+    },
+  };
+}
+
 describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -300,10 +323,13 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
             user: { login: "contrib" },
             labels: ["gittensor:feature", "gittensor:priority"],
           });
-        if (url.includes("/issues/4279/timeline")) return Response.json([{ event: "closed", source: { issue: { number: 4494, pull_request: {} } } }]);
+        if (url === GRAPHQL_URL) return Response.json(closerGraphQlBody(4494));
         return new Response("not found", { status: 404 });
       });
-      const env = createTestEnv({});
+      // GITHUB_PUBLIC_TOKEN: the closure-verification GraphQL call (#5385) requires a real token to
+      // authenticate at all (unlike REST, which can fall back to an unauthenticated read) -- createTestEnv({})
+      // has no signable GITHUB_APP_PRIVATE_KEY, so createInstallationToken fails and this is the fallback.
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       const result = await fetchLinkedIssueLabelsForPropagation({
         env,
         repoFullName: "owner/repo",
@@ -327,10 +353,12 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
             user: { login: "contrib" },
             labels: ["gittensor:feature", "gittensor:priority"],
           });
-        if (url.includes("/issues/9001/timeline")) return Response.json([{ event: "closed", source: { issue: { number: 123, pull_request: {} } } }]);
+        // Closer is PR #123, not the PR calling in (#4494) -- proves the spoof protection still rejects an
+        // unrelated issue that happened to close (by something else) after this PR merged.
+        if (url === GRAPHQL_URL) return Response.json(closerGraphQlBody(123));
         return new Response("not found", { status: 404 });
       });
-      const env = createTestEnv({});
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       const result = await fetchLinkedIssueLabelsForPropagation({
         env,
         repoFullName: "owner/repo",
@@ -370,10 +398,10 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
         if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
         if (url.endsWith("/issues/9002"))
           return Response.json({ number: 9002, state: "closed", closed_at: "2026-07-09T22:15:14Z", user: { login: "contrib" }, labels: ["gittensor:priority"] });
-        if (url.includes("/issues/9002/timeline")) return new Response("server error", { status: 500 });
+        if (url === GRAPHQL_URL) return new Response("server error", { status: 500 });
         return new Response("not found", { status: 404 });
       });
-      const env = createTestEnv({});
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       const result = await fetchLinkedIssueLabelsForPropagation({
         env,
         repoFullName: "owner/repo",
@@ -444,10 +472,10 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
             labels: ["gittensor:feature"],
           });
         if (url.endsWith("/pulls/4818")) return Response.json({ merged_at: "2026-07-11T02:26:24Z" });
-        if (url.includes("/issues/2192/timeline")) return Response.json([{ event: "closed", source: { issue: { number: 4818, pull_request: {} } } }]);
+        if (url === GRAPHQL_URL) return Response.json(closerGraphQlBody(4818));
         return new Response("not found", { status: 404 });
       });
-      const env = createTestEnv({});
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
       const result = await fetchLinkedIssueLabelsForPropagation({
         env,
         repoFullName: "owner/repo",

@@ -115,7 +115,7 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
     expect(result.source).toBe("title");
   });
 
-  it("resolves the FIRST matching mapping when multiple linked-issue labels are present", () => {
+  it("resolves the LAST matching exclusive mapping (highest declared precedence) when multiple linked-issue labels are present (#5385)", () => {
     const result = resolvePrTypeLabel({
       title: "fix: y",
       linkedIssueLabels: ["customer:vip", "gittensor:priority"],
@@ -126,7 +126,7 @@ describe("resolvePrTypeLabel (#priority-linked-issue-gate)", () => {
         ],
       }),
     });
-    expect(result.applyLabels).toEqual(["triage:vip"]);
+    expect(result.applyLabels).toEqual(["gittensor:priority"]);
     expect(result.source).toBe("propagation_exclusive");
   });
 

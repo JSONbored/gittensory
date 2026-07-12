@@ -114,8 +114,9 @@ export type PrTypeLabelDecision = {
 /**
  * Resolve the TYPE label decision for a PR.
  *  1. Linked-issue label PROPAGATION (config-driven, #priority-linked-issue-gate): when enabled, the
- *     FIRST configured mapping whose `issueLabel` appears (case-insensitively) among the
- *     ALREADY-FETCHED `linkedIssueLabels` wins. This is the ONLY way a label like `gittensor:priority`
+ *     LAST configured EXCLUSIVE mapping whose `issueLabel` appears (case-insensitively) among the
+ *     ALREADY-FETCHED `linkedIssueLabels` wins (#5385 -- declare exclusive mappings in ascending
+ *     precedence order). This is the ONLY way a label like `gittensor:priority`
  *     can ever be chosen — this function does no I/O and never infers it from title, changed files,
  *     AI output, or PR labels; the caller must fetch `linkedIssueLabels` itself (see
  *     `fetchLinkedIssueLabelsForPropagation` in `review/linked-issue-label-propagation-fetch.ts`).
@@ -152,19 +153,24 @@ export function resolvePrTypeLabel(input: {
   if (input.propagation?.enabled) {
     const wanted = new Set((input.linkedIssueLabels ?? []).map((label) => label.toLowerCase()));
     // Collect EVERY mapping the linked issue's labels satisfy, not just the first. An exclusive mapping
-    // (removeOtherTypeLabels: true -- e.g. bug/feature, genuinely mutually-exclusive categories) still only
-    // ever lets the FIRST-configured match win, same precedence as before. But an additive mapping (e.g.
-    // priority -- a maintainer-hand-picked reward tag that coexists WITH whichever type already applies, not a
-    // type of its own) must compose with that winner instead of being skipped just because an earlier mapping
-    // in the array already matched and returned. Before this, an additive match was unreachable whenever the
-    // SAME linked issue also carried a label an earlier (exclusive) mapping matched -- the overwhelmingly common
-    // case for gittensor:priority, which is applied ALONGSIDE gittensor:bug/gittensor:feature on the issue, never
-    // instead of it (#priority-linked-issue-gate).
+    // (removeOtherTypeLabels: true -- e.g. bug/feature, genuinely mutually-exclusive categories) lets the
+    // LAST-configured match win, not the first (#5385 fix -- was first-match-wins, which meant a linked issue
+    // carrying BOTH gittensor:bug and gittensor:feature always resolved to bug, the lower-value label, purely
+    // because bug is declared before feature in `.gittensory.yml`). Operators must declare exclusive mappings
+    // in ASCENDING precedence order (lowest-value category first, e.g. bug then feature) so the last match
+    // encountered while iterating is the highest-precedence one that actually applies -- this mirrors the
+    // repo's own default mapping order, which is already bug/feature/priority (ascending multiplier value).
+    // An additive mapping (e.g. priority -- a maintainer-hand-picked reward tag that coexists WITH whichever
+    // type already applies, not a type of its own) must compose with that winner instead of being skipped just
+    // because an earlier mapping in the array already matched. Before the original #priority-linked-issue-gate
+    // composition fix, an additive match was unreachable whenever the SAME linked issue also carried a label an
+    // earlier (exclusive) mapping matched -- the overwhelmingly common case for gittensor:priority, which is
+    // applied ALONGSIDE gittensor:bug/gittensor:feature on the issue, never instead of it.
     let exclusiveMatch: LinkedIssueLabelPropagationMapping | undefined;
     const additiveMatches: LinkedIssueLabelPropagationMapping[] = [];
     for (const mapping of input.propagation.mappings) {
       if (!wanted.has(mapping.issueLabel.toLowerCase())) continue;
-      if (mapping.removeOtherTypeLabels) exclusiveMatch ??= mapping;
+      if (mapping.removeOtherTypeLabels) exclusiveMatch = mapping;
       else additiveMatches.push(mapping);
     }
     if (exclusiveMatch || additiveMatches.length > 0) {
