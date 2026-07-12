@@ -358,6 +358,24 @@ export {
   type LocalWriteActionSpec,
   type LocalWriteJsonValue,
 } from "./miner/local-write-tools.js";
+export {
+  GENERIC_COMMIT_PATTERN,
+  SLOP_RUBRIC_MARKDOWN,
+  SLOP_WEIGHTS,
+  buildDuplicateClusterFinding,
+  buildEmptyDescriptionFinding,
+  buildLowQualityCommitMessageFinding,
+  buildMissingTestEvidenceFinding,
+  buildNoLinkedIssueRationaleFinding,
+  buildNonSubstantivePaddingFinding,
+  buildSlopAssessment,
+  buildTrivialWhitespaceChurnFinding,
+  hasClearNoIssueRationale,
+  type SlopAssessment,
+  type SlopAssessmentInput,
+  type SlopBand,
+  type SlopChangedFile,
+} from "./signals/slop.js";
 export * from "./plan-export.js";
 export { countPlanStepsByStatus } from "./plan-step-stats.js";
 export { countPlanSteps } from "./plan-step-count.js";

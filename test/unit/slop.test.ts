@@ -13,6 +13,7 @@ import {
   buildTitleRestatementIssueFinding,
   buildTrivialWhitespaceChurnFinding,
   buildUnfilledIssueTemplateFinding,
+  hasClearNoIssueRationale,
   type SlopAssessmentInput,
   type SlopBand,
   ISSUE_SLOP_WEIGHTS,
@@ -98,6 +99,13 @@ describe("buildSlopAssessment", () => {
     // a maintenance/cleanup rationale in the body clears the signal even with no linked issue
     expect(buildNoLinkedIssueRationaleFinding({ hasLinkedIssue: false, description: "Routine maintenance; no issue needed." })).toBeNull();
     expect(buildNoLinkedIssueRationaleFinding({ hasLinkedIssue: false, description: "" })).toMatchObject({ code: "no_linked_issue_without_rationale" });
+  });
+
+  it("hasClearNoIssueRationale (called directly, both sides of the omitted-body fallback)", () => {
+    expect(hasClearNoIssueRationale({ title: "", body: "docs only" })).toBe(true);
+    // body omitted entirely (undefined) — the `pr.body ?? ""` fallback, distinct from an explicit "" body.
+    expect(hasClearNoIssueRationale({ title: "" })).toBe(false);
+    expect(hasClearNoIssueRationale({ title: "fix something" })).toBe(false);
   });
 
   it("raises duplicate-cluster slop when the PR is flagged as in a duplicate cluster (#563)", () => {
@@ -485,6 +493,8 @@ describe("buildIssueSlopAssessment (#533 issue-side triage)", () => {
   it("finding builders are correct when called directly (the standalone guards)", () => {
     // The unfilled-template builder guards an empty body for direct callers (assessment handles it upstream).
     expect(buildUnfilledIssueTemplateFinding({ body: "" })).toBeNull();
+    // Omitted (undefined) body — the `input.body ?? ""` nullish fallback, distinct from an explicit "" above.
+    expect(buildUnfilledIssueTemplateFinding({})).toBeNull();
     expect(buildUnfilledIssueTemplateFinding({ body: "Real prose explaining the bug." })).toBeNull();
     expect(buildEmptyIssueBodyFinding({ body: "has content" })).toBeNull();
   });
