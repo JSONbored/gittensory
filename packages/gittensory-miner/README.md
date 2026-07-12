@@ -35,6 +35,14 @@ tenant goal spec to the ranker, printing `usedDefaultGoalSpec` so a fall-back to
 rather than silent. See [`docs/repo-agnostic-capability-audit.md`](docs/repo-agnostic-capability-audit.md) for the
 #4780 audit this executes.
 
+The package also includes repo stack auto-detection: `detectRepoStack` (`lib/stack-detection.js`) inspects an
+already-cloned target repo's manifest / lockfile / config files and returns a structured description — language,
+package manager, and the build / test / lint / format commands — for Node (npm/yarn/pnpm/bun), Python
+(pip/poetry/pipenv/uv), Rust, Go, Maven, and Gradle. It is pure (injectable `existsSync` / `readFileSync`), never
+throws, and per its acceptance criteria **fails closed** — a repo with no recognized manifest returns
+`{ detected: false, reason }` and a command that can't be inferred without guessing stays `null`, rather than being
+assumed. Detection only; wiring the description into the attempt prompt is the follow-up ([#4786](https://github.com/JSONbored/gittensory/issues/4786)). (#4785)
+
 The package also includes an append-only governor decision ledger: `initGovernorLedger` / `appendGovernorEvent`
 persist structured allow/deny/throttle/kill-switch outcomes in local SQLite for contributor audit. Insert-only —
 no enforcement wiring yet. (#2328)
