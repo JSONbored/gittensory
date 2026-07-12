@@ -1,0 +1,129 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "description": "browserless (headless-Chromium visual-review screenshot capture, --profile visual-review, #5368) queue depth, concurrency, and rejection/error/timeout rate, translated from its own JSON /metrics by the browserless-exporter sidecar. Absent/empty unless the visual-review profile is active.",
+  "panels": [
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 1, "title": "Exporter health", "type": "row" },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "FAILED", "color": "red" }, "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "noValue": "no data"
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "title": "Last scrape of browserless's own /metrics",
+      "description": "0 means the exporter's most recent poll of browserless itself failed (wrong token, browserless down, or network issue) — the panels below are then serving stale data.",
+      "type": "stat",
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_exporter_last_scrape_success", "legendFormat": "scrape ok", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "dtdurations" } },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "title": "Time since browserless's own sample",
+      "description": "browserless_sample_timestamp_seconds is the timestamp browserless itself assigned to its newest 5-minute window. A large, growing value here means browserless has stopped reporting new windows even if the exporter's own scrape is succeeding.",
+      "type": "stat",
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "time() - browserless_sample_timestamp_seconds", "legendFormat": "age", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }, "unit": "ms" } },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "title": "Mean session time",
+      "type": "stat",
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_session_mean_time_ms", "legendFormat": "mean", "refId": "A" }]
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }, "id": 10, "title": "Queue, concurrency & outcomes", "type": "row" },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "Queue depth & concurrency",
+      "description": "queued: sessions waiting over the configured concurrency limit. running: sessions active at the sample point. max_concurrent: peak concurrent sessions in the window.",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_queued", "legendFormat": "queued", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_running", "legendFormat": "running", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_max_concurrent", "legendFormat": "max_concurrent", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 12,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "Session outcomes by window",
+      "description": "Per-5-minute-window counts from browserless's own rolling buffer — a non-zero, sustained rejected/error/timeout/unhealthy count means capture is degrading, not just occasionally flaky.",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_successful", "legendFormat": "successful", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_rejected", "legendFormat": "rejected", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_errors", "legendFormat": "error", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_timedout", "legendFormat": "timedout", "refId": "D" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_unauthorized", "legendFormat": "unauthorized", "refId": "E" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_unhealthy", "legendFormat": "unhealthy", "refId": "F" }
+      ]
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }, "id": 20, "title": "Resource utilization", "type": "row" },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "percentunit", "max": 1, "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "CPU utilization",
+      "type": "timeseries",
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_cpu_ratio", "legendFormat": "cpu", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "percentunit", "max": 1, "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 22,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "Memory utilization",
+      "type": "timeseries",
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "browserless_memory_ratio", "legendFormat": "memory", "refId": "A" }]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["gittensory", "browserless", "observability"],
+  "templating": {
+    "list": [
+      { "current": {}, "hide": 0, "includeAll": false, "name": "DS_PROMETHEUS", "options": [], "query": "prometheus", "refresh": 1, "type": "datasource" }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Gittensory — Browserless (visual review)",
+  "uid": "gittensory-browserless",
+  "version": 1
+}

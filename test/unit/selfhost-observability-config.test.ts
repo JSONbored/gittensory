@@ -271,4 +271,52 @@ describe("self-host observability trace config", () => {
       ]),
     );
   });
+
+  it("translates browserless's JSON /metrics into Prometheus text via a sidecar, gated on --profile visual-review (#5368)", () => {
+    const compose = record(readYaml("docker-compose.yml"));
+    const services = record(compose.services);
+    const browserlessExporter = record(services["browserless-exporter"]);
+    const prometheus = record(readYaml("prometheus/prometheus.yml"));
+    const scrapeConfigs = prometheus.scrape_configs as Array<Record<string, any>>;
+
+    expect(browserlessExporter.image).toBe("alpine:3.20");
+    expect(browserlessExporter.profiles).toEqual(["visual-review"]);
+    expect(browserlessExporter.depends_on?.browserless).toEqual({ condition: "service_healthy" });
+    expect(browserlessExporter.environment).toMatchObject({
+      BROWSERLESS_METRICS_URL: "http://browserless:3000/metrics",
+      BROWSERLESS_TOKEN: "${BROWSERLESS_TOKEN:-}",
+    });
+    expect(browserlessExporter.expose).toEqual(["9102"]);
+    expect(browserlessExporter.command).toEqual([
+      "/bin/sh",
+      "-c",
+      "apk add --no-cache jq busybox-extras >/dev/null 2>&1 && sh /scripts/browserless-metrics.sh",
+    ]);
+    expect(browserlessExporter.healthcheck?.test).toEqual([
+      "CMD-SHELL",
+      "wget -qO- http://127.0.0.1:9102/metrics | grep -q '^browserless_exporter_last_scrape_success'",
+    ]);
+
+    expect(scrapeConfigs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          job_name: "browserless",
+          fallback_scrape_protocol: "PrometheusText0.0.4",
+          static_configs: [{ targets: ["browserless-exporter:9102"] }],
+        }),
+      ]),
+    );
+  });
+
+  it("ships the browserless-metrics.sh translator with the newest-window-wins + scrape-failure-safe shape it claims", () => {
+    const script = readFileSync(join(process.cwd(), "scripts/browserless-metrics.sh"), "utf8");
+
+    // Picks the LAST array element (browserless's rolling history is oldest-first), not the first or a merge.
+    expect(script).toContain("jq -c '.[-1] // empty'");
+    // A failed poll must not corrupt/blank the previously-served file: written atomically via tmp+mv, and the
+    // failure branch still emits a valid, parseable metrics document (just success=0) rather than an empty body.
+    expect(script).toContain('mv "$tmp" "$FILE"');
+    expect(script).toContain("browserless_exporter_last_scrape_success 0");
+    expect(script).toContain("browserless_exporter_last_scrape_success 1");
+  });
 });

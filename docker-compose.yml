@@ -553,6 +553,40 @@ services:
       start_period: 15s
       retries: 5
 
+  # browserless's own /metrics?token=<token> endpoint returns JSON (a rolling history of 5-minute-window
+  # snapshots), not Prometheus text -- this sidecar polls it and re-exposes the newest snapshot's fields as
+  # real Prometheus gauges (#5368), same "translate non-Prometheus output" pattern as backup-exporter above.
+  # Gated on the same --profile visual-review as browserless itself; meaningless without it running.
+  browserless-exporter:
+    image: alpine:3.20
+    restart: unless-stopped
+    <<: *default-logging
+    profiles: ["visual-review"]
+    depends_on:
+      browserless:
+        condition: service_healthy
+    environment:
+      BROWSERLESS_METRICS_URL: "http://browserless:3000/metrics"
+      BROWSERLESS_TOKEN: "${BROWSERLESS_TOKEN:-}"
+    volumes:
+      # Directory mount, not a single-file one -- same #reporting-exporter-stale-bind-mount rationale as
+      # the backup-exporter service above.
+      - ./scripts:/scripts:ro
+    expose:
+      - "9102"
+    command:
+      - /bin/sh
+      - -c
+      - "apk add --no-cache jq busybox-extras >/dev/null 2>&1 && sh /scripts/browserless-metrics.sh"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9102/metrics | grep -q '^browserless_exporter_last_scrape_success'"]
+      interval: 30s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: "${BROWSERLESS_EXPORTER_MEM_LIMIT:-64m}"
+
   # ── REES / review-enrichment (--profile rees) ──────────────────────────────
   # Self-hosted alternative to pointing REES_URL at a managed/external instance (see the self-hosting docs).
   # REES runs the heavier PR analysis (dependency CVEs, secret scan, license, EOL runtime, lockfile drift, IaC
