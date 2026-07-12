@@ -26,7 +26,7 @@ owner or an automation bot):
 
 So **get it green and correct before you push**: run the full local gate (`npm run test:ci`), keep your
 branch current with `main` (a conflict closes the PR), and link an eligible issue. If you use Claude
-Code or Codex, the `.claude/skills/contributing-to-gittensory` skill (and the root `AGENTS.md`) encode
+Code or Codex, the `.claude/skills/contributing-to-loopover` skill (and the root `AGENTS.md`) encode
 the whole procedure step by step.
 
 ## How Reviews Work (timing, one-shot, and asking for review)
@@ -235,7 +235,7 @@ Frontend:
   evidence. Recordings/GIFs are supplemental for anything a static screenshot can already show, but
   are the required primary evidence for an effect only visible in motion (hover, scroll-linked,
   transition/animation) — a still image can't show it, so don't force one. See the
-  `.claude/skills/contributing-to-gittensory` skill (Phase 7) for exactly how to capture and host
+  `.claude/skills/contributing-to-loopover` skill (Phase 7) for exactly how to capture and host
   either kind of evidence.
 - Arrange screenshots in a small table or grid with a short state/title such as "Loaded state",
   "Empty state", "Error state", "Mobile layout", or "PR sidebar". Each screenshot should be a small

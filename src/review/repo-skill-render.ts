@@ -1,6 +1,6 @@
 // Repo-skill content rendering (#3001, part of the repo-doc generation roadmap #2993). Extends AGENTS.md/CLAUDE.md
 // generation (#3000) to conditionally propose a Claude Code / Codex skill file -- this repo's own
-// `.claude/skills/contributing-to-gittensory/SKILL.md` (frontmatter `name`/`description` + a procedural body) is
+// `.claude/skills/contributing-to-loopover/SKILL.md` (frontmatter `name`/`description` + a procedural body) is
 // the concrete convention being replicated for OTHER repos.
 //
 // TRIGGER, NOT UNCONDITIONAL: a skill file is only warranted when a repo's contribution workflow is complex
@@ -56,7 +56,7 @@ function repoOnlyName(repoFullName: string): string {
 }
 
 /** The skill's `name:` frontmatter value -- also the containing directory name, per this repo's own convention
- *  (`.claude/skills/contributing-to-gittensory/`, directory name === frontmatter `name`). */
+ *  (`.claude/skills/contributing-to-loopover/`, directory name === frontmatter `name`). */
 export function repoSkillName(repoFullName: string): string {
   return `contributing-to-${sanitizeSkillNameSegment(repoOnlyName(repoFullName))}`;
 }

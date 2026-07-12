@@ -1,13 +1,13 @@
-# gittensory — AI contributor guide
+# LoopOver — AI contributor guide
 
 Loaded automatically by AI coding tools: **Codex** reads this `AGENTS.md`; **Claude Code** reads
 `CLAUDE.md` (a symlink to this file) and additionally auto-loads the on-demand skill at
-`.claude/skills/contributing-to-gittensory/`.
+`.claude/skills/contributing-to-loopover/`.
 
 **Before writing ANY code contribution or pull request to this repo, read and follow the skill:**
 
-- `.claude/skills/contributing-to-gittensory/SKILL.md` — the one-shot-PR playbook (phases + checklist)
-- `.claude/skills/contributing-to-gittensory/reference.md` — exhaustive tables (CI, Codecov, the gate, tests, style)
+- `.claude/skills/contributing-to-loopover/SKILL.md` — the one-shot-PR playbook (phases + checklist)
+- `.claude/skills/contributing-to-loopover/reference.md` — exhaustive tables (CI, Codecov, the gate, tests, style)
 
 That skill is the **single source of truth** for how to contribute here. Keep it updated as the
 process evolves — edits to those files improve both Claude Code and Codex.

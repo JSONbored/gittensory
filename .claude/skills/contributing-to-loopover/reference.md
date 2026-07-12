@@ -1,4 +1,4 @@
-# gittensory contribution — deep reference
+# LoopOver contribution — deep reference
 
 Exhaustive tables and patterns behind the `SKILL.md` playbook. Read the section you need; you don't
 need all of it for every change. All commands run from the repo root unless noted.
@@ -85,7 +85,7 @@ checks go green) is the only way to know you didn't break it.
 
 ---
 
-## 3. The gittensory gate — it auto-MERGES and auto-CLOSES (not advisory)
+## 3. The loopover gate — it auto-MERGES and auto-CLOSES (not advisory)
 
 The engine reviews every PR and **acts on it** with autonomy (`src/settings/agent-actions.ts`
 `planAgentMaintenanceActions`). A scheduled sweep re-evaluates open PRs roughly every ~2 minutes, so a
@@ -290,7 +290,7 @@ boxes (auth/CORS **negative-path tests**, no-secrets) and the **UI Evidence** th
 
 ---
 
-## 9. What gittensory does NOT accept (from `CONTRIBUTING.md`)
+## 9. What LoopOver does NOT accept (from `CONTRIBUTING.md`)
 
 - `site/`, `CNAME`, VitePress/old static-docs surfaces; `**/lovable/**`.
 - Broad rewrites / framework swaps / redesigns without a maintainer-approved issue.

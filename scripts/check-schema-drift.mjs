@@ -30,7 +30,7 @@ const MIGRATIONS_DIR = process.env.CHECK_SCHEMA_DRIFT_DIR || "migrations";
 
 // Feature/aggregate tables that intentionally live ONLY in migrations/ and are accessed via raw SQL
 // (env.DB.prepare(...)) rather than through a Drizzle sqliteTable declaration -- the house pattern documented
-// in .claude/skills/contributing-to-gittensory/reference.md ("core tables use Drizzle; feature/aggregate
+// in .claude/skills/contributing-to-loopover/reference.md ("core tables use Drizzle; feature/aggregate
 // tables use raw-SQL migrations"). Each of these is confirmed (by direct inspection at the time this check
 // was added) to be actively read/written via raw SQL elsewhere in src/ -- this is not a dead-table allowlist,
 // it is a declared exception to "every migrated table must have a matching schema.ts declaration". Adding a

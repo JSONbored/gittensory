@@ -1,18 +1,18 @@
 ---
-name: contributing-to-gittensory
+name: contributing-to-loopover
 description: >-
   Use when writing, testing, or preparing ANY code contribution or pull request to the
   JSONbored/gittensory repo — picking/validating an issue, implementing a change, writing tests
-  that pass Codecov, running the local CI gate, predicting the gittensory gate, and formatting the
-  commit + PR. gittensory reviews PRs ONE-SHOT via the gittensory gate (a GitHub App / CI) plus a
+  that pass Codecov, running the local CI gate, predicting the loopover gate, and formatting the
+  commit + PR. loopover reviews PRs ONE-SHOT via the loopover gate (a GitHub App / CI) plus a
   strict CI suite with Codecov (99% patch coverage, hard); there is no review back-and-forth, so a
   PR must be correct, fully tested, house-style-compliant, and green before it is pushed. Invoke
-  for any "contribute to / open a PR against / fix a bug in / add a feature to gittensory" task.
+  for any "contribute to / open a PR against / fix a bug in / add a feature to loopover" task.
 ---
 
-# Contributing to gittensory — the one-shot PR playbook
+# Contributing to LoopOver — the one-shot PR playbook
 
-gittensory merges through an **automated, one-shot review**: the gittensory gate (a GitHub App that
+LoopOver merges through an **automated, one-shot review**: the loopover gate (a GitHub App that
 posts a check run + a single review verdict) and a **strict CI suite gated by Codecov**. There is no
 human ping-pong and no "fix it in review" — **the PR must be perfect before you push.** This skill is
 the end-to-end procedure to make that happen with AI tools (Claude Code / Codex).
@@ -27,7 +27,7 @@ the gate config, the MCP tools, test helpers, the commit/PR rubric). Read it whe
 
 ## What the gate does to your PR — it merges and closes, automatically
 
-gittensory's review engine has **real autonomy** here — it is **not advisory**. Within ~2 minutes of
+LoopOver's review engine has **real autonomy** here — it is **not advisory**. Within ~2 minutes of
 your PR's checks settling, for a **contributor** PR (you are not the repo owner or an automation bot)
 it takes a one-shot disposition:
 
@@ -93,7 +93,7 @@ approve the run, so the checks sit *unverified* for a bit — that is **expected
 an unverified-CI PR (it does **not** close it). Don't open a duplicate; wait for the run to be
 approved, then confirm it's green.
 
-**Install the gittensory MCP** — your pre-submit oracle that predicts the gate before you push:
+**Install the loopover MCP** — your pre-submit oracle that predicts the gate before you push:
 
 ```sh
 npm install -g @jsonbored/gittensory-mcp@latest
@@ -239,7 +239,7 @@ named **`Gittensory Orb Review Agent`** — watch both go green/passing.
 
 ---
 
-## Phase 6 — Predict the gittensory gate before you push
+## Phase 6 — Predict the loopover gate before you push
 
 Run the MCP predictor with your actual PR shape:
 
