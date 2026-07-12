@@ -4969,6 +4969,91 @@ describe("queue processors", () => {
     expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
   });
 
+  it("install-wide contributor open-item cap (#4511): miner cap off still falls through to the per-repo issue cap", async () => {
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP_MINER: "off",
+    });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { close: "auto", label: "auto" }, contributorOpenIssueCap: 2 });
+    const seen = { closed: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([{ githubUsername: "farmer99", githubId: "123", totalPrs: 2, totalMergedPrs: 2, isEligible: true, credibility: 1 }]);
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://api.gittensor.io/miners/123") return Response.json({});
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if ((url.endsWith("/issues/60") || url.endsWith("/issues/61")) && method === "GET") return Response.json({ state: "open" });
+      if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ state: "closed" }); }
+      if (url.includes("/issues/62/labels") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/62/labels") && method === "POST") return Response.json([]);
+      if (url.includes("/issues/62/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "miner-off-falls-through-to-repo-issue-cap",
+      eventName: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 62, title: "Farmer's 3rd issue", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+      },
+    });
+
+    expect(seen.closed).toBe(true);
+    const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
+    expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
+  });
+
+  it("install-wide contributor open-item cap (#5205): an over-install-cap issue with autonomy that plans NO action does not execute a close", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GLOBAL_CONTRIBUTOR_OPEN_ITEM_CAP: "2" });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", issues: "write" }, events: ["issues"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 60, title: "Farmer issue one", state: "open", user: { login: "farmer99" }, labels: [], body: "x" });
+    await upsertIssueFromGitHub(env, "JSONbored/gittensory", { number: 61, title: "Farmer issue two", state: "open", user: { login: "farmer99" }, labels: [], body: "y" });
+    // autonomy: {} (no acting classes granted) -- planAgentMaintenanceActions builds an empty plan, so
+    // `planned.length > 0` is false and executeIssueMaintenanceActions is never called.
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: {} });
+    const seen = { closed: false };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if ((url.endsWith("/issues/60") || url.endsWith("/issues/61")) && method === "GET") return Response.json({ state: "open" });
+      if (url.endsWith("/issues/62") && method === "PATCH") { seen.closed = true; return Response.json({ state: "closed" }); }
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "global-contributor-issue-cap-empty-plan",
+      eventName: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 62, title: "Farmer's 3rd issue install-wide, no autonomy granted", state: "open", user: { login: "farmer99" }, labels: [], body: "x" },
+      },
+    });
+
+    expect(seen.closed).toBe(false);
+    const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
+    expect(closeAudit?.n ?? 0).toBe(0);
+  });
+
   it("contributor open-ISSUE cap (#2270): the repo OWNER's own issue is never closed even over the cap", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {

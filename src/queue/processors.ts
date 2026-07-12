@@ -4839,47 +4839,48 @@ async function maybeCloseIssueOverContributorCap(
       deliveryId,
     });
     const globalCap = officialMiner.status === "confirmed" ? globalCapForMiner : globalCapForHuman;
-    if (globalCap === null) return;
-    const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, authorLogin, {
-      repoFullName,
-      number: issue.number,
-      kind: "issue",
-    }, globalCap);
-    if (globalOpenCount > globalCap) {
-      const planned = planAgentMaintenanceActions({
-        conclusion: "skipped",
-        blockerTitles: [],
-        autonomy: settings.autonomy,
-        changedPaths: [],
-        hardGuardrailGlobs: [],
-        authorIsOwner,
-        authorIsAdmin,
-        authorIsAutomationBot,
-        ciState: "unverified",
-        // verifiedGlobalOpenItemCount sums BOTH open PRs and open issues; "pull requests and issues" is
-        // accurate regardless of the actual split, unlike a hardcoded single kind.
-        contributorCapMatch: { matched: true, authorLogin, openCount: globalOpenCount, cap: globalCap, itemKind: "pull requests and issues", scope: "install" },
-        contributorCapLabel: settings.contributorCapLabel,
-        pr: { labels: [] },
-      });
-      if (planned.length > 0) {
-        await executeIssueMaintenanceActions(
-          env,
-          {
-            installationId,
-            repoFullName,
-            issueNumber: issue.number,
-            autonomy: settings.autonomy,
-            agentPaused: settings.agentPaused,
-            agentDryRun: settings.agentDryRun,
-            agentGlobalFreezeOverride: settings.agentGlobalFreezeOverride,
-            authorLogin,
-            moderationSettings: { moderationGateMode: settings.moderationGateMode, moderationRules: settings.moderationRules, moderationWarningLabel: settings.moderationWarningLabel, moderationBannedLabel: settings.moderationBannedLabel },
-          },
-          planned,
-        );
+    if (globalCap !== null) {
+      const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, authorLogin, {
+        repoFullName,
+        number: issue.number,
+        kind: "issue",
+      }, globalCap);
+      if (globalOpenCount > globalCap) {
+        const planned = planAgentMaintenanceActions({
+          conclusion: "skipped",
+          blockerTitles: [],
+          autonomy: settings.autonomy,
+          changedPaths: [],
+          hardGuardrailGlobs: [],
+          authorIsOwner,
+          authorIsAdmin,
+          authorIsAutomationBot,
+          ciState: "unverified",
+          // verifiedGlobalOpenItemCount sums BOTH open PRs and open issues; "pull requests and issues" is
+          // accurate regardless of the actual split, unlike a hardcoded single kind.
+          contributorCapMatch: { matched: true, authorLogin, openCount: globalOpenCount, cap: globalCap, itemKind: "pull requests and issues", scope: "install" },
+          contributorCapLabel: settings.contributorCapLabel,
+          pr: { labels: [] },
+        });
+        if (planned.length > 0) {
+          await executeIssueMaintenanceActions(
+            env,
+            {
+              installationId,
+              repoFullName,
+              issueNumber: issue.number,
+              autonomy: settings.autonomy,
+              agentPaused: settings.agentPaused,
+              agentDryRun: settings.agentDryRun,
+              agentGlobalFreezeOverride: settings.agentGlobalFreezeOverride,
+              authorLogin,
+              moderationSettings: { moderationGateMode: settings.moderationGateMode, moderationRules: settings.moderationRules, moderationWarningLabel: settings.moderationWarningLabel, moderationBannedLabel: settings.moderationBannedLabel },
+            },
+            planned,
+          );
+        }
+        return;
       }
-      return;
     }
   }
 
