@@ -36,9 +36,6 @@ export type GithubAppBehavior = {
   commentMode: RepositorySettings["commentMode"];
   publicAudienceMode: RepositorySettings["publicAudienceMode"];
   checkRunMode: RepositorySettings["checkRunMode"];
-  /** @deprecated (#4618, tracked for removal in #5373) computed read-back of {@link reviewCheckMode} kept
-   *  only for API/dashboard back-compat display -- read `reviewCheckMode` instead. */
-  gateCheckMode: RepositorySettings["gateCheckMode"];
   reviewCheckMode: RepositorySettings["reviewCheckMode"];
   quietByDefault: boolean;
   behavior: string;
@@ -132,7 +129,6 @@ function buildGithubAppBehavior(repo: RepositoryRecord | null, settings: Reposit
     commentMode: settings.commentMode,
     publicAudienceMode: settings.publicAudienceMode,
     checkRunMode: settings.checkRunMode,
-    gateCheckMode: settings.gateCheckMode,
     reviewCheckMode: settings.reviewCheckMode,
     quietByDefault,
     behavior: !installed

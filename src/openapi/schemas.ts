@@ -887,9 +887,6 @@ export const RepoSettingsPreviewSchema = z
       publicSignalLevel: z.enum(["minimal", "standard"]),
       checkRunMode: z.enum(["off", "enabled"]),
       checkRunDetailLevel: z.enum(["minimal", "standard"]),
-      // @deprecated (#4618, tracked for removal in #5373): computed read-back of reviewCheckMode kept only
-      // for API/dashboard back-compat display -- read reviewCheckMode instead.
-      gateCheckMode: z.enum(["off", "enabled"]).optional(),
       regateSweepOrderMode: z.enum(["staleness", "oldest-first"]),
       reviewCheckMode: z.enum(["required", "visible", "disabled"]),
       autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
@@ -1292,9 +1289,6 @@ export const InstallationRepairSchema = z
           commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
           publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]),
           checkRunMode: z.enum(["off", "enabled"]),
-          // @deprecated (#4618, tracked for removal in #5373): computed read-back of reviewCheckMode kept only
-          // for API/dashboard back-compat display -- read reviewCheckMode instead.
-          gateCheckMode: z.enum(["off", "enabled"]).optional(),
           reviewCheckMode: z.enum(["required", "visible", "disabled"]),
           autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
           autoProjectMilestoneMatchBackend: z.enum(["github", "linear"]).optional(),
@@ -2213,9 +2207,6 @@ export const RegistrationReadinessSchema = z
       commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
       publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]),
       checkRunMode: z.enum(["off", "enabled"]),
-      // @deprecated (#4618, tracked for removal in #5373): computed read-back of reviewCheckMode kept only
-      // for API/dashboard back-compat display -- read reviewCheckMode instead.
-      gateCheckMode: z.enum(["off", "enabled"]).optional(),
       reviewCheckMode: z.enum(["required", "visible", "disabled"]),
       autoProjectMilestoneMatch: z.enum(["off", "suggest", "auto"]).optional(),
       autoProjectMilestoneMatchBackend: z.enum(["github", "linear"]).optional(),

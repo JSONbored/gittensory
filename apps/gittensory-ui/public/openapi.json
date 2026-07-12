@@ -3862,13 +3862,6 @@
                   "enabled"
                 ]
               },
-              "gateCheckMode": {
-                "type": "string",
-                "enum": [
-                  "off",
-                  "enabled"
-                ]
-              },
               "reviewCheckMode": {
                 "type": "string",
                 "enum": [
@@ -9742,13 +9735,6 @@
                         "enabled"
                       ]
                     },
-                    "gateCheckMode": {
-                      "type": "string",
-                      "enum": [
-                        "off",
-                        "enabled"
-                      ]
-                    },
                     "reviewCheckMode": {
                       "type": "string",
                       "enum": [
@@ -10168,13 +10154,6 @@
                 "enum": [
                   "minimal",
                   "standard"
-                ]
-              },
-              "gateCheckMode": {
-                "type": "string",
-                "enum": [
-                  "off",
-                  "enabled"
                 ]
               },
               "regateSweepOrderMode": {
