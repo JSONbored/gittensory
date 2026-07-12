@@ -8,6 +8,9 @@
 // matcher, #2343's stated attachment point) and this driver forwards them verbatim onto the `query()` options, so
 // house-rule enforcement can intercept every tool call before execution without this module knowing the rules.
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { redactSecrets } from "../subprocess-env.js";
 import type {
   CodingAgentDriver,
@@ -40,8 +43,7 @@ export type AgentSdkQueryFn = (input: {
   options: AgentSdkQueryOptions;
 }) => AsyncIterable<Record<string, unknown>>;
 
-/** Tool names whose successful use means a file in the working directory changed. */
-const FILE_EDIT_TOOL_NAMES = new Set(["Edit", "Write", "NotebookEdit"]);
+const execFileAsync = promisify(execFile);
 
 /** Ceiling for any redacted free text surfaced on the result (error detail, summary) — one named place. */
 const MAX_REDACTED_TEXT_LENGTH = 500;
@@ -66,10 +68,28 @@ export type CreateAgentSdkDriverOptions = {
   query?: AgentSdkQueryFn | undefined;
   /** Forwarded verbatim to the SDK session — the #2343 `PreToolUse` interception point. */
   hooks?: AgentSdkHooks | undefined;
+  /** Injected changed-file enumerator; defaults to git diff over the worktree. */
+  listChangedFiles?: ((cwd: string) => Promise<string[]>) | undefined;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+async function listWorktreeChangedFiles(cwd: string): Promise<string[]> {
+  const [tracked, untracked] = await Promise.all([
+    execFileAsync("git", ["-C", cwd, "diff", "--name-only", "HEAD", "--"]),
+    execFileAsync("git", ["-C", cwd, "ls-files", "--others", "--exclude-standard"]),
+  ]);
+  return Array.from(
+    new Set(
+      [tracked.stdout, untracked.stdout]
+        .join("\n")
+        .split(/\r?\n/)
+        .map((file) => file.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 /** Fold one assistant message's content blocks into the transcript/changed-file accumulators. */
@@ -87,9 +107,7 @@ function foldAssistantMessage(
       transcript.push(block.text);
     } else if (block.type === "tool_use" && typeof block.name === "string") {
       const filePath = asRecord(block.input)?.file_path;
-      if (FILE_EDIT_TOOL_NAMES.has(block.name) && typeof filePath === "string") {
-        changedFiles.add(filePath);
-      }
+      if (typeof filePath === "string") changedFiles.add(filePath);
     }
   }
 }
@@ -105,6 +123,7 @@ export function createAgentSdkCodingAgentDriver(
   options: CreateAgentSdkDriverOptions = {},
 ): CodingAgentDriver {
   const query = options.query ?? defaultQuery;
+  const listChangedFiles = options.listChangedFiles ?? listWorktreeChangedFiles;
 
   return {
     async run(task: CodingAgentDriverTask): Promise<CodingAgentDriverResult> {
@@ -179,10 +198,27 @@ export function createAgentSdkCodingAgentDriver(
         };
       }
 
+      let worktreeChangedFiles: string[];
+      try {
+        worktreeChangedFiles = await listChangedFiles(task.workingDirectory);
+      } catch (error) {
+        const detail = redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, MAX_REDACTED_TEXT_LENGTH);
+        return {
+          ok: false,
+          changedFiles: [],
+          summary: "agent sdk changed-file enumeration failed",
+          transcript,
+          turnsUsed,
+          costUsd,
+          error: `agent_sdk_changed_files_unavailable: ${detail}`,
+        };
+      }
+
+      const allChangedFiles = Array.from(new Set([...changedFiles, ...worktreeChangedFiles]));
       return {
         ok: true,
-        changedFiles: [...changedFiles],
-        summary: resultText.slice(0, MAX_REDACTED_TEXT_LENGTH) || `coding agent completed with ${changedFiles.size} changed file(s)`,
+        changedFiles: allChangedFiles,
+        summary: resultText.slice(0, MAX_REDACTED_TEXT_LENGTH) || `coding agent completed with ${allChangedFiles.length} changed file(s)`,
         transcript,
         turnsUsed,
         costUsd,

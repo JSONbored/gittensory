@@ -1,12 +1,21 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
 import { describe, expect, it } from "vitest";
 import {
   createAgentSdkCodingAgentDriver,
   type AgentSdkQueryFn,
+  type CreateAgentSdkDriverOptions,
   type CodingAgentDriverTask,
 } from "../../packages/gittensory-engine/src/index";
 
 // Secret-shaped strings are BUILT AT RUNTIME so the diff never contains a token-shaped literal (the
 // repo secret scanner pattern-matches raw diff text; redactSecrets only needs the shape to exist at runtime).
+const execFileAsync = promisify(execFile);
+
 const fakeApiKey = ["sk", "abcdefghijklmnop1234"].join("-");
 const fakeGithubToken = ["ghp", "abcdefghijklmnopqrst123456"].join("_");
 
@@ -34,11 +43,15 @@ function queryYielding(
   };
 }
 
+function driverWith(options: CreateAgentSdkDriverOptions) {
+  return createAgentSdkCodingAgentDriver({ listChangedFiles: async () => [], ...options });
+}
+
 describe("createAgentSdkCodingAgentDriver", () => {
   it("maps a successful session: options, hook pass-through, changed-file tracking, turn count", async () => {
     const captured: { input?: Parameters<AgentSdkQueryFn>[0] } = {};
     const hooks = { PreToolUse: [{ hooks: ["policy-callback"] }] };
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding(
         [
           assistantMessage({ type: "text", text: "editing now" }),
@@ -74,8 +87,88 @@ describe("createAgentSdkCodingAgentDriver", () => {
     expect(captured.input!.options.hooks).toBe(hooks);
   });
 
+  it("enumerates tracked and untracked worktree changes with git", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "gittensory-agent-sdk-"));
+    try {
+      await execFileAsync("git", ["init"], { cwd: dir });
+      await execFileAsync("git", ["config", "user.email", "test@example.invalid"], { cwd: dir });
+      await execFileAsync("git", ["config", "user.name", "Test User"], { cwd: dir });
+      await writeFile(join(dir, "tracked.ts"), "export const value = 1;\n");
+      await execFileAsync("git", ["add", "tracked.ts"], { cwd: dir });
+      await execFileAsync("git", ["commit", "-m", "init"], { cwd: dir });
+
+      const driver = createAgentSdkCodingAgentDriver({
+        query: queryYielding([
+          assistantMessage({ type: "tool_use", name: "Bash", input: { command: "node mutate.js" } }),
+          { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "mutated" },
+        ]),
+      });
+
+      await writeFile(join(dir, "tracked.ts"), "export const value = 2;\n");
+      await writeFile(join(dir, "untracked.ts"), "export const fresh = true;\n");
+
+      const result = await driver.run({ ...task, workingDirectory: dir });
+
+      expect(result.ok).toBe(true);
+      expect(result.changedFiles).toEqual(["tracked.ts", "untracked.ts"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("derives changed files from the worktree after untracked mutating tools", async () => {
+    const driver = driverWith({
+      query: queryYielding([
+        assistantMessage({ type: "tool_use", name: "Bash", input: { command: "node mutate.js" } }),
+        { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "mutated" },
+      ]),
+      listChangedFiles: async (cwd) => {
+        expect(cwd).toBe(task.workingDirectory);
+        return ["packages/gittensory-engine/src/vulnerable.ts"];
+      },
+    });
+
+    const result = await driver.run(task);
+
+    expect(result.ok).toBe(true);
+    expect(result.changedFiles).toEqual(["packages/gittensory-engine/src/vulnerable.ts"]);
+  });
+
+  it("fails closed when changed-file enumeration is unavailable", async () => {
+    const driver = driverWith({
+      query: queryYielding([
+        { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done" },
+      ]),
+      listChangedFiles: async () => {
+        throw new Error("not a git worktree");
+      },
+    });
+
+    const result = await driver.run(task);
+
+    expect(result.ok).toBe(false);
+    expect(result.changedFiles).toEqual([]);
+    expect(result.error).toContain("agent_sdk_changed_files_unavailable: not a git worktree");
+  });
+
+  it("stringifies a non-Error changed-file enumeration failure", async () => {
+    const driver = driverWith({
+      query: queryYielding([
+        { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done" },
+      ]),
+      listChangedFiles: async () => {
+        throw "git unavailable";
+      },
+    });
+
+    const result = await driver.run(task);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("agent_sdk_changed_files_unavailable: git unavailable");
+  });
+
   it("maps a non-success result subtype to a structured failure named by the subtype", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding([
         assistantMessage({ type: "tool_use", name: "Edit", input: { file_path: "src/a.ts" } }),
         { type: "result", subtype: "error_max_turns", is_error: true, num_turns: 6 },
@@ -90,7 +183,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("treats a success-subtype result that still flags is_error as a failure", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding([
         { type: "result", subtype: "success", is_error: true, num_turns: 1, result: "refused" },
       ]),
@@ -101,7 +194,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("names a result frame with no usable subtype 'unknown'", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding([{ type: "result", is_error: true }]),
     });
     const result = await driver.run(task);
@@ -111,7 +204,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("treats a stream that ends without a result frame as a protocol failure", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding([assistantMessage({ type: "text", text: "started..." })]),
     });
     const result = await driver.run(task);
@@ -121,7 +214,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("returns a redacted structured failure when the stream throws an Error", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: () =>
         (async function* (): AsyncGenerator<Record<string, unknown>> {
           yield assistantMessage({ type: "text", text: "before the crash" });
@@ -137,7 +230,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("stringifies a non-Error throw instead of crashing", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: () =>
         (async function* (): AsyncGenerator<Record<string, unknown>> {
           throw "bridge exited 137";
@@ -149,7 +242,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("redacts secret shapes from the summary and transcript", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding([
         {
           type: "result",
@@ -168,7 +261,7 @@ describe("createAgentSdkCodingAgentDriver", () => {
   });
 
   it("skips malformed frames defensively and falls back to the count summary on empty result text", async () => {
-    const driver = createAgentSdkCodingAgentDriver({
+    const driver = driverWith({
       query: queryYielding([
         { type: "assistant" },
         { type: "assistant", message: { content: "not-an-array" } },
