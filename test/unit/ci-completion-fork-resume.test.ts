@@ -47,7 +47,7 @@ async function seedForkResumeRepo(env: ReturnType<typeof createTestEnv>, repo: s
   await upsertRepositoryFromGitHub(env, { name: repo.split("/")[1] ?? "repo", full_name: repo, private: false, owner: { login: owner ?? "owner" } }, 5001);
   // publicSurface/check/gate all OFF + no autonomy → reReviewStoredPullRequest is a clean no-op (no network),
   // so the test isolates resolution + coalesce + audit, exactly the head-SHA fix surface.
-  await upsertRepositorySettings(env, { repoFullName: repo, publicSurface: "off", checkRunMode: "off", gateCheckMode: "off", autonomy: {} });
+  await upsertRepositorySettings(env, { repoFullName: repo, publicSurface: "off", checkRunMode: "off", autonomy: {} });
   await upsertPullRequestFromGitHub(env, repo, { number: prNumber, title: "Fork PR", state: "open", user: { login: "outside-contributor" }, head: { sha: headSha }, labels: [], body: "fork change" });
 }
 

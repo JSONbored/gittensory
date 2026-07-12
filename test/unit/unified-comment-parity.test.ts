@@ -52,7 +52,6 @@ const settings: RepositorySettings = {
   publicSignalLevel: "standard",
   checkRunMode: "off",
   checkRunDetailLevel: "minimal",
-  gateCheckMode: "off",
   regateSweepOrderMode: "staleness",
   reviewCheckMode: "disabled",
   gatePack: "gittensor",

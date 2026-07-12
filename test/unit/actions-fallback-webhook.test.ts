@@ -115,7 +115,6 @@ async function seedRepoAndPr(env: ReturnType<typeof createTestEnv>, headSha: str
     autonomy: { merge: "observe", update_branch: "observe" },
     aiReviewMode: "off",
     gatePack: "oss-anti-slop",
-    gateCheckMode: "off",
     checkRunMode: "off",
     commentMode: "off",
     publicSurface: "off",

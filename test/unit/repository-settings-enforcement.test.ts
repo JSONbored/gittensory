@@ -15,7 +15,6 @@ function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
     publicSignalLevel: "standard",
     checkRunMode: "off",
     checkRunDetailLevel: "standard",
-    gateCheckMode: "enabled",
     regateSweepOrderMode: "staleness",
     reviewCheckMode: "required",
     gatePack: "gittensor",
