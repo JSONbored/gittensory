@@ -14,13 +14,23 @@ export type EnqueueItem = {
   priority?: number | null;
 };
 
+/** Lease-annotated view of an in-flight row: when it was claimed, for the expiry sweep (#4827). */
+export type QueueLeaseEntry = {
+  repoFullName: string;
+  identifier: string;
+  status: QueueStatus;
+  leasedAt: string | null;
+};
+
 export type PortfolioQueueStore = {
   dbPath: string;
   enqueue(item: EnqueueItem): QueueEntry;
   dequeueNext(): QueueEntry | null;
   listQueue(repoFullName?: string | null): QueueEntry[];
+  listInProgress(): QueueLeaseEntry[];
   markDone(repoFullName: string, identifier: string): QueueEntry | null;
   markFailed(repoFullName: string, identifier: string): QueueEntry | null;
+  reclaimStuckItem(repoFullName: string, identifier: string): QueueEntry | null;
   batchClaim(
     selectFn: (entries: QueueEntry[]) => Array<{ repoFullName: string; identifier: string }>,
   ): QueueEntry[];

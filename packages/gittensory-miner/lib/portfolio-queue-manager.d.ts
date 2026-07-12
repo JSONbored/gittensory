@@ -32,6 +32,7 @@ export type PortfolioQueueManager = {
   listQueue(repoFullName?: string | null): QueueEntry[];
   markDone(repoFullName: string, identifier: string): QueueEntry | null;
   markFailed(repoFullName: string, identifier: string): QueueEntry | null;
+  reclaimStuckItems(maxLeaseMs?: number): QueueEntry[];
   claimNextBatch(): QueueEntry[];
   close(): void;
 };
@@ -40,6 +41,7 @@ export type InitPortfolioQueueManagerOptions = {
   caps?: Partial<PortfolioCaps>;
   store?: PortfolioQueueStore;
   dbPath?: string;
+  staleLeaseMs?: number;
 };
 
 export function initPortfolioQueueManager(options?: InitPortfolioQueueManagerOptions): PortfolioQueueManager;

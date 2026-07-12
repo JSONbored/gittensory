@@ -4,6 +4,7 @@
 // single-row dequeue. Caps are plain constructor arguments — not wired to .gittensory-miner.yml here.
 import { nextEligibleItems } from "@jsonbored/gittensory-engine";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
+import { DEFAULT_MAX_LEASE_MS, sweepStuckItems } from "./portfolio-queue-expiry.js";
 
 const ITEM_ID_SEPARATOR = "::";
 
@@ -74,6 +75,9 @@ export function selectEligibleBatch(entries, caps) {
 export function initPortfolioQueueManager(options = {}) {
   const caps = normalizePortfolioCaps(options.caps ?? { globalWipCap: 1, perRepoWipCap: 1 });
   const store = options.store ?? initPortfolioQueueStore(options.dbPath);
+  // A lease older than this means the process that claimed the item almost certainly died; the item is swept back
+  // to 'queued' so it no longer occupies WIP capacity forever (#4827).
+  const staleLeaseMs = Number.isFinite(options.staleLeaseMs) ? options.staleLeaseMs : DEFAULT_MAX_LEASE_MS;
 
   return {
     caps,
@@ -91,7 +95,14 @@ export function initPortfolioQueueManager(options = {}) {
     markFailed(repoFullName, identifier) {
       return store.markFailed(repoFullName, identifier);
     },
+    /** Sweep leases orphaned by a crashed/killed process back to 'queued', returning the reclaimed items (#4827). */
+    reclaimStuckItems(maxLeaseMs = staleLeaseMs) {
+      return sweepStuckItems(store, Date.now(), maxLeaseMs);
+    },
     claimNextBatch() {
+      // Reclaim orphaned leases first, so an item stranded 'in_progress' by a dead process becomes eligible again
+      // instead of permanently consuming a WIP slot and starving the queue.
+      sweepStuckItems(store, Date.now(), staleLeaseMs);
       return store.batchClaim((entries) => selectEligibleBatch(entries, caps));
     },
     close() {

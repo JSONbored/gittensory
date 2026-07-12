@@ -53,6 +53,17 @@ function rowToEntry(row) {
   };
 }
 
+/** Lease-annotated projection of an in-flight row (adds `leasedAt`), consumed by the expiry sweep. Kept separate
+ *  from `rowToEntry` so the base entry shape every existing caller relies on is unchanged. */
+function rowToLeaseEntry(row) {
+  return {
+    repoFullName: row.repo_full_name,
+    identifier: row.identifier,
+    status: row.status,
+    leasedAt: row.leased_at ?? null,
+  };
+}
+
 /**
  * Opens the local portfolio/queue store, creating the table on first use. Rows are ordered highest-priority-first
  * with an insertion-order tie-break: `priority DESC, enqueued_at ASC, rowid ASC` — the implicit `rowid` guarantees
@@ -69,9 +80,20 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
       priority REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'in_progress', 'done')),
       enqueued_at TEXT NOT NULL,
+      leased_at TEXT,
       PRIMARY KEY (repo_full_name, identifier)
     )
   `);
+  // `leased_at` records when an item was flipped to 'in_progress', so a crashed/killed process's stuck lease can be
+  // swept back to 'queued' by age (see portfolio-queue-expiry.js) instead of stranding the item forever — the same
+  // recovery the claim-ledger and worktree-allocator stores already provide for their own tables (#4827). Additive
+  // migration for stores created before this column: CREATE TABLE IF NOT EXISTS never adds a column to a pre-existing
+  // table, so add it idempotently.
+  const hasLeasedAtColumn = db
+    .prepare("PRAGMA table_info(miner_portfolio_queue)")
+    .all()
+    .some((column) => column.name === "leased_at");
+  if (!hasLeasedAtColumn) db.exec("ALTER TABLE miner_portfolio_queue ADD COLUMN leased_at TEXT");
 
   // `rowid` is a stable, unique key assigned once at first insert (re-enqueue updates in place, never re-inserts),
   // so it is a deterministic total-order tie-break: two items sharing a priority AND an `enqueued_at` timestamp
@@ -95,18 +117,20 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
   // Claim the highest-priority queued item ATOMICALLY: one UPDATE selects the ordered top row in a subquery and
   // flips it to 'in_progress', RETURNING it — so two processes sharing the file can't both claim the same row (a
   // separate SELECT-then-UPDATE would race).
+  // Claiming stamps `leased_at` with the caller-supplied claim time; leaving 'in_progress' (done/failed/reclaim)
+  // clears it back to NULL so only genuinely in-flight rows carry a lease.
   const dequeueStatement = db.prepare(`
-    UPDATE miner_portfolio_queue SET status = 'in_progress'
+    UPDATE miner_portfolio_queue SET status = 'in_progress', leased_at = ?
     WHERE rowid = (
       SELECT rowid FROM miner_portfolio_queue WHERE status = 'queued' ${ORDER} LIMIT 1
     )
     RETURNING *
   `);
   const markDoneStatement = db.prepare(
-    "UPDATE miner_portfolio_queue SET status = 'done' WHERE repo_full_name = ? AND identifier = ? AND status <> 'done'",
+    "UPDATE miner_portfolio_queue SET status = 'done', leased_at = NULL WHERE repo_full_name = ? AND identifier = ? AND status <> 'done'",
   );
   const markFailedStatement = db.prepare(`
-    UPDATE miner_portfolio_queue SET status = 'queued'
+    UPDATE miner_portfolio_queue SET status = 'queued', leased_at = NULL
     WHERE repo_full_name = ? AND identifier = ? AND status = 'in_progress'
     RETURNING *
   `);
@@ -117,8 +141,16 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
   const listActiveStatement = db.prepare(
     `SELECT * FROM miner_portfolio_queue WHERE status IN ('queued', 'in_progress') ${ORDER}`,
   );
+  const listInProgressStatement = db.prepare(
+    `SELECT * FROM miner_portfolio_queue WHERE status = 'in_progress' ${ORDER}`,
+  );
+  const reclaimStatement = db.prepare(`
+    UPDATE miner_portfolio_queue SET status = 'queued', leased_at = NULL
+    WHERE repo_full_name = ? AND identifier = ? AND status = 'in_progress'
+    RETURNING *
+  `);
   const claimTargetStatement = db.prepare(`
-    UPDATE miner_portfolio_queue SET status = 'in_progress'
+    UPDATE miner_portfolio_queue SET status = 'in_progress', leased_at = ?
     WHERE repo_full_name = ? AND identifier = ? AND status = 'queued'
     RETURNING *
   `);
@@ -134,7 +166,20 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
       return rowToEntry(getStatement.get(repoFullName, identifier));
     },
     dequeueNext() {
-      const row = dequeueStatement.get();
+      const row = dequeueStatement.get(new Date().toISOString());
+      return row ? rowToEntry(row) : null;
+    },
+    /** In-flight ('in_progress') rows with their `leasedAt` claim time, for the expiry sweep (#4827). */
+    listInProgress() {
+      return listInProgressStatement.all().map(rowToLeaseEntry);
+    },
+    /** Reclaim a single stuck in-flight item back to 'queued' (clearing its lease), returning it — or null if it is
+     *  no longer 'in_progress' (already finished/reclaimed by another sweep). The sweep target of #4827. */
+    reclaimStuckItem(repoFullName, identifier) {
+      const row = reclaimStatement.get(
+        normalizeRepoFullName(repoFullName),
+        normalizeIdentifier(identifier),
+      );
       return row ? rowToEntry(row) : null;
     },
     listQueue(repoFullName) {
@@ -169,11 +214,12 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
         const entries = listActiveStatement.all().map(rowToEntry);
         const targets = selectFn(entries);
         if (!Array.isArray(targets)) throw new Error("invalid_batch_claim_selection");
+        const leasedAt = new Date().toISOString();
         const claimed = [];
         for (const target of targets) {
           const repoFullName = normalizeRepoFullName(target?.repoFullName);
           const identifier = normalizeIdentifier(target?.identifier);
-          const row = claimTargetStatement.get(repoFullName, identifier);
+          const row = claimTargetStatement.get(leasedAt, repoFullName, identifier);
           if (row) claimed.push(rowToEntry(row));
         }
         db.exec("COMMIT");
