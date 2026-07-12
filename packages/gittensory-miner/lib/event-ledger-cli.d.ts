@@ -68,6 +68,11 @@ export function runLedgerList(
   options?: { initEventLedger?: () => EventLedger },
 ): number;
 
+export function runLedgerScrape(
+  args: string[],
+  options?: { initEventLedger?: () => EventLedger },
+): number;
+
 export function runLedgerCli(
   subcommand: string | undefined,
   args: string[],

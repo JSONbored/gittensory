@@ -1,4 +1,5 @@
 import { initEventLedger } from "./event-ledger.js";
+import { renderEventLedgerMetrics } from "./event-ledger-metrics.js";
 
 const LEDGER_LIST_USAGE =
   "Usage: gittensory-miner ledger list [--repo <owner/repo>] [--since <seq>] [--type <eventType>] [--json]";
@@ -203,8 +204,31 @@ export function runLedgerList(args, options = {}) {
   }
 }
 
+const LEDGER_SCRAPE_USAGE = "Usage: gittensory-miner ledger scrape";
+
+// A Prometheus-scrape surface for the event ledger (#4841): render event-ledger entry counts by type as Prometheus
+// text-exposition to stdout, so a self-hoster's Grafana/alerting can scrape event activity instead of polling
+// `ledger list --json`. Read-only.
+export function runLedgerScrape(args, options = {}) {
+  const unknown = args.find((token) => token.startsWith("-"));
+  if (unknown) {
+    console.error(`Unknown option: ${unknown}. ${LEDGER_SCRAPE_USAGE}`);
+    return 2;
+  }
+  try {
+    return withEventLedger(options, (eventLedger) => {
+      process.stdout.write(renderEventLedgerMetrics(eventLedger.readEvents()));
+      return 0;
+    });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+}
+
 export function runLedgerCli(subcommand, args, options = {}) {
   if (subcommand === "list") return runLedgerList(args, options);
+  if (subcommand === "scrape") return runLedgerScrape(args, options);
   console.error(`Unknown ledger subcommand: ${subcommand ?? ""}. ${LEDGER_LIST_USAGE}`);
   return 2;
 }
