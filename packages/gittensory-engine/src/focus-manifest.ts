@@ -133,8 +133,11 @@ export type FocusManifestGateConfig = {
    *  "unaddressed" verdict become a hard blocker. DB-backed (dashboard-settable too); this overrides the
    *  stored value -- mirrors `aiReviewMode` above, not the config-as-code-only `unlinkedIssueGuardrail`
    *  pattern. Distinct from the pre-existing, config-as-code-only `review.linkedIssueSatisfaction` (#2173,
-   *  below) -- that field is parsed but not yet consumed by any decision path; this `gate:` field is the one
-   *  the merge/close decision actually reads. */
+   *  below) in type and storage -- but as of #4149 (`src/signals/focus-manifest.ts`'s
+   *  `resolveEffectiveSettings`, ~line 611-618) `review.linkedIssueSatisfaction` IS folded in as a
+   *  fallback alias whenever this `gate:` field is unset, so setting either spelling drives the same real
+   *  merge/close decision. See `src/types.ts`'s `linkedIssueSatisfactionGateMode` doc for the authoritative
+   *  cross-reference. */
   linkedIssueSatisfaction: GateRuleMode | null;
   dryRun: boolean | null;
   firstTimeContributorGrace: boolean | null;
