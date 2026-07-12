@@ -605,8 +605,8 @@ features:
       </p>
       <p>
         <code>blockedPaths</code> (top-level, alongside <code>wantedPaths</code>) is{" "}
-        <strong>fully retired</strong> (#2974) — the FocusManifest parser no longer reads this key at
-        all, it produces zero findings, and it is not enforceable under any{" "}
+        <strong>fully retired</strong> (#2974) — the FocusManifest parser no longer reads this key
+        at all, it produces zero findings, and it is not enforceable under any{" "}
         <code>gate.manifestPolicy</code> mode. Setting it in a config produces only a migration
         warning from <code>npm run selfhost:config-lint</code>, nothing else.{" "}
         <strong>The only mechanism that actually holds a PR for a touched path</strong> is{" "}
