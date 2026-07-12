@@ -116,6 +116,10 @@ export type CreateCodingAgentDriverOptions = {
   query?: AgentSdkQueryFn | undefined;
   /** Forwarded to the `agent-sdk` provider's session (#2343's PreToolUse interception point). */
   hooks?: AgentSdkHooks | undefined;
+  /** Optional injected changed-file enumerator for the `agent-sdk` provider (defaults to a real `git diff`/
+   *  `git ls-files` read over the task's working directory — a test harness pointing at a non-git fake path
+   *  should inject one, same seam as `query`). */
+  listChangedFiles?: ((cwd: string) => Promise<string[]>) | undefined;
   /** Known secret values the CLI providers strip from surfaced output, on top of the token-shape patterns. */
   knownSecrets?: readonly string[] | undefined;
 };
@@ -190,6 +194,7 @@ export function createCodingAgentDriver(options: CreateCodingAgentDriverOptions)
       return createAgentSdkCodingAgentDriver({
         ...(options.query !== undefined ? { query: options.query } : {}),
         ...(options.hooks !== undefined ? { hooks: options.hooks } : {}),
+        ...(options.listChangedFiles !== undefined ? { listChangedFiles: options.listChangedFiles } : {}),
       });
     /* v8 ignore next 2 -- isConfiguredCodingAgentDriver already rejects unknown names before this switch. */
     default:
@@ -209,6 +214,8 @@ export type RunCodingAgentAttemptOptions = {
   spawn?: CliSubprocessSpawnFn | undefined;
   query?: AgentSdkQueryFn | undefined;
   hooks?: AgentSdkHooks | undefined;
+  /** Optional injected changed-file enumerator for the `agent-sdk` provider (see `CreateCodingAgentDriverOptions`). */
+  listChangedFiles?: ((cwd: string) => Promise<string[]>) | undefined;
   knownSecrets?: readonly string[] | undefined;
   /** When supplied, the driver result is run through the lint guard (#4276) before being returned, so a
    *  live coding-agent edit that fails its own package's typecheck/node --check never reads as `ok: true`. */
@@ -227,6 +234,7 @@ function resolveDriverForAttempt(options: RunCodingAgentAttemptOptions, mode: Co
     spawn: options.spawn,
     query: options.query,
     hooks: options.hooks,
+    listChangedFiles: options.listChangedFiles,
     knownSecrets: options.knownSecrets,
   });
 }

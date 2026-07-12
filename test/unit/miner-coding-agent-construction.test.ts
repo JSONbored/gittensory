@@ -141,7 +141,9 @@ describe("constructProductionCodingAgentDriver (#5131)", () => {
     const captured: { input?: Parameters<AgentSdkQueryFn>[0] } = {};
     const driver = constructProductionCodingAgentDriver(
       { MINER_CODING_AGENT_PROVIDER: "agent-sdk" },
-      { query: queryCapturing(captured) },
+      // This test exercises hook wiring, not real git enumeration; task.workingDirectory is a fake path, so the
+      // real default enumerator would fail closed.
+      { query: queryCapturing(captured), listChangedFiles: async () => [] },
     );
     const result = await driver.run(task);
     expect(result.ok).toBe(true);
@@ -161,6 +163,7 @@ describe("constructProductionCodingAgentDriver (#5131)", () => {
       { MINER_CODING_AGENT_PROVIDER: "agent-sdk" },
       {
         query: queryCapturing(captured),
+        listChangedFiles: async () => [],
         houseRulesConfig: { repoFullName: "acme/widgets" },
         houseRulesOptions: { append },
       },

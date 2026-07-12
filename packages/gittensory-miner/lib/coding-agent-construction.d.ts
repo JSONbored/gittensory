@@ -6,6 +6,7 @@ export type ConstructProductionCodingAgentDriverOptions = {
   spawn?: CliSubprocessSpawnFn;
   query?: AgentSdkQueryFn;
   hooks?: AgentSdkHooks;
+  listChangedFiles?: (cwd: string) => Promise<string[]>;
   houseRulesConfig?: unknown;
   houseRulesOptions?: unknown;
 };

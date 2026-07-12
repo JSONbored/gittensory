@@ -515,6 +515,9 @@ describe("createCodingAgentDriver provider resolution (#4289)", () => {
     const driver = createCodingAgentDriver({
       providerName: "agent-sdk",
       hooks,
+      // This test exercises hook forwarding, not real git enumeration; cliTask's working directory is a fake
+      // path, so the real default enumerator would fail closed.
+      listChangedFiles: async () => [],
       query: (input) => {
         captured = input;
         return (async function* (): AsyncGenerator<Record<string, unknown>> {

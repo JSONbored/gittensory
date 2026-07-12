@@ -76,6 +76,7 @@ export function createRealCliSubprocessSpawn() {
  *   spawn?: import("@jsonbored/gittensory-engine").CliSubprocessSpawnFn,
  *   query?: import("@jsonbored/gittensory-engine").AgentSdkQueryFn,
  *   hooks?: import("@jsonbored/gittensory-engine").AgentSdkHooks,
+ *   listChangedFiles?: (cwd: string) => Promise<string[]>,
  *   houseRulesConfig?: unknown,
  *   houseRulesOptions?: unknown,
  * }} [options]
@@ -97,5 +98,6 @@ export function constructProductionCodingAgentDriver(env, options = {}) {
     spawn: options.spawn ?? createRealCliSubprocessSpawn(),
     ...(options.query !== undefined ? { query: options.query } : {}),
     ...(hooks !== undefined ? { hooks } : {}),
+    ...(options.listChangedFiles !== undefined ? { listChangedFiles: options.listChangedFiles } : {}),
   });
 }

@@ -99,6 +99,9 @@ const DRIVER_HARNESSES: DriverHarness[] = [
     make: (behavior) => {
       const recorded: RecordedInvocation = { cwds: [], prompts: [] };
       const driver = createAgentSdkCodingAgentDriver({
+        // This suite exercises the shared result-shape/scoping contract, not real git enumeration; the shared
+        // WORKTREE constant is not an actual git repo, so the real default enumerator would fail closed.
+        listChangedFiles: async () => [],
         query: (input) => {
           recorded.cwds.push(input.options.cwd);
           recorded.prompts.push(input.prompt);

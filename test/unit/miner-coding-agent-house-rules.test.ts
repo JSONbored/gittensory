@@ -75,6 +75,9 @@ describe("runHouseRulesEnforcedCodingAgentAttempt (#2343 follow-up)", () => {
       providerName: "agent-sdk",
       task,
       query: queryCapturing(captured),
+      // This test exercises hook defaulting, not real git enumeration; `task`'s working directory is a fake
+      // path, so the real default enumerator would fail closed.
+      listChangedFiles: async () => [],
     });
 
     expect(result.mode).toBe("live");
@@ -95,6 +98,7 @@ describe("runHouseRulesEnforcedCodingAgentAttempt (#2343 follow-up)", () => {
       task,
       query: queryCapturing(captured),
       hooks: callerHooks,
+      listChangedFiles: async () => [],
     });
 
     expect(captured.input!.options.hooks).toBe(callerHooks);
@@ -107,6 +111,7 @@ describe("runHouseRulesEnforcedCodingAgentAttempt (#2343 follow-up)", () => {
       providerName: "agent-sdk",
       task,
       query: queryCapturing(captured),
+      listChangedFiles: async () => [],
       houseRulesConfig: { repoFullName: "acme/widgets" },
       houseRulesOptions: { append },
     });
