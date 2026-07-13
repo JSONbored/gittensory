@@ -38,14 +38,32 @@ For provider selection and the CLI-specific model/timeout overrides, see
 
    ```text
    ~/.config/gittensory-miner/
-     claim-ledger.sqlite3      # soft issue claims (#2314)
-     plan-store.sqlite3        # persisted MCP plan DAGs (#2318)
-     portfolio-queue.sqlite3   # local portfolio queue
-     event-ledger.sqlite3      # manage-loop audit trail
-     governor-ledger.sqlite3   # governor decisions
+     laptop-state.sqlite3          # laptop-mode setup state, created by `init`
+     portfolio-queue.sqlite3       # prioritized work backlog across tracked repos (#2292)
+     claim-ledger.sqlite3          # soft issue claims (#2314)
+     plan-store.sqlite3            # persisted MCP plan DAGs (#2318)
+     run-state.sqlite3             # per-repo run state (idle/discovering/planning/preparing)
+     event-ledger.sqlite3          # append-only miner-loop event audit trail (#2290)
+     governor-ledger.sqlite3       # append-only governor allow/deny/throttle decisions (#2328)
+     governor-state.sqlite3        # governor cross-attempt counters/state (#5134)
+     attempt-log.sqlite3           # per-attempt coding-agent driver event trace (#4294)
+     worktree-allocator.sqlite3    # git-worktree-per-attempt allocation bookkeeping (#4297)
+     prediction-ledger.sqlite3     # predicted-gate verdicts, for later self-improve scoring (#4263)
+     replay-snapshot.sqlite3       # frozen historical-replay target snapshots (#3010)
+     policy-doc-cache.sqlite3      # ETag cache for discovery's policy-doc fetches (#4842)
+     policy-verdict-cache.sqlite3  # cache of resolved AI-usage-policy verdicts (#4843)
+     deny-hook-synthesis.sqlite3   # synthesized PreToolUse deny-hook proposals (#4522)
+     orb-export.sqlite3            # opt-in anonymized Orb telemetry export state (#4277)
    ```
 
-   Override the directory with `GITTENSORY_MINER_CONFIG_DIR` or `XDG_CONFIG_HOME` (same resolution chain as `@jsonbored/gittensory-mcp`).
+   Not every file appears immediately: `laptop-state` is written by `init`, and each of the others is created
+   the first time its subsystem actually runs (an attempt, a discovery pass, a replay, an Orb export, …), so a
+   fresh install that has only run `status`/`doctor` will show a subset. All sixteen default into this one
+   directory. Override the directory for every store at once with `GITTENSORY_MINER_CONFIG_DIR` or
+   `XDG_CONFIG_HOME` (same resolution chain as `@jsonbored/gittensory-mcp`); every store except `laptop-state.sqlite3`
+   (directory only) also honors its own `GITTENSORY_MINER_<NAME>_DB` path override — e.g.
+   `GITTENSORY_MINER_PORTFOLIO_QUEUE_DB` — to relocate an individual file. `doctor`'s `store-integrity:*` checks
+   report the persistent stores, so it is the quickest way to confirm what exists and is readable on disk.
 
 4. Optional per-repo miner goals: copy [`.gittensory-miner.yml.example`](../../.gittensory-miner.yml.example) to a target repo as `.gittensory-miner.yml`. See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md).
 
