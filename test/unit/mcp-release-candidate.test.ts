@@ -19,7 +19,7 @@ const FORBIDDEN_PUBLIC_LANGUAGE = /\b(wallet|hotkey|coldkey|raw trust|trust scor
 const ALLOWED_FILES = ["bin/gittensory-mcp.js", "lib/local-branch.js", "scripts/gittensor-score-preview.mjs", "package.json", "README.md", "CHANGELOG.md", "LICENSE"];
 const CHANGELOG = "# Changelog\n\n## mcp-v0.4.0 - 2026-06-02\n\n### Features\n- Add a thing\n";
 
-// A tokenless trusted-publishing workflow fixture (same shape as npm-publish.yml).
+// A tokenless trusted-publishing workflow fixture (same shape as publish-mcp.yml).
 const TOKENLESS_WORKFLOW = [
   "permissions:",
   "  contents: read",

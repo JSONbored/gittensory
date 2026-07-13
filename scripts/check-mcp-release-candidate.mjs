@@ -14,7 +14,7 @@ import {
 
 const PACKAGE_DIR = "packages/gittensory-mcp";
 const WORKSPACE = "@loopover/mcp";
-const PUBLISH_WORKFLOW = ".github/workflows/npm-publish.yml";
+const PUBLISH_WORKFLOW = ".github/workflows/publish-mcp.yml";
 const onWindows = process.platform === "win32";
 
 function arg(name) {

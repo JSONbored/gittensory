@@ -10,6 +10,16 @@
       "release-type": "node",
       "component": "engine",
       "package-name": "@loopover/engine"
+    },
+    "packages/gittensory-miner": {
+      "release-type": "node",
+      "component": "miner",
+      "package-name": "@loopover/miner"
+    },
+    "packages/gittensory-ui-kit": {
+      "release-type": "node",
+      "component": "ui-kit",
+      "package-name": "@loopover/ui-kit"
     }
   },
   "include-component-in-tag": true,

@@ -171,7 +171,7 @@ const REMEDIATION = {
   changelog_section_missing: "Run npm run changelog:mcp and commit the generated mcp-v<version> changelog section.",
   tarball_unsafe: "Remove unexpected or secret-bearing files from the package and rerun the dry-run.",
   cli_smoke_failed: "Fix the packed CLI so `gittensory-mcp --help` exits cleanly before tagging.",
-  publish_token_risk: "Restore tokenless trusted publishing (id-token: write + --provenance, no npm token) in npm-publish.yml.",
+  publish_token_risk: "Restore tokenless trusted publishing (id-token: write + --provenance, no npm token) in publish-mcp.yml.",
 };
 
 /** Aggregate individual check results into a pass/fail report with next steps. */

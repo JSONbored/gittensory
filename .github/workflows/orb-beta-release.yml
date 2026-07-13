@@ -59,7 +59,7 @@ jobs:
       # Pushed with the default GITHUB_TOKEN, which does NOT fire release-selfhost.yml's own
       # `push: tags:` trigger (GitHub suppresses workflow-triggered-workflow pushes to prevent
       # recursion) -- that's why the next step dispatches it explicitly instead of relying on this
-      # push alone. Mirrors publish-engine.yml / npm-publish.yml's identical reasoning and tagging
+      # push alone. Mirrors publish-engine.yml / publish-mcp.yml's identical reasoning and tagging
       # idiom.
       # Exposes created=true/false so the dispatch step below never fires against a tag this run didn't
       # actually just create -- a defense-in-depth backstop (independent of orb-release-core.mjs's own

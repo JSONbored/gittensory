@@ -2,7 +2,7 @@ export const MCP_RELEASE_DUE_MARKER = "<!-- gittensory:mcp-release-due -->";
 
 const DIRECT_MCP_PATHS = [
   "packages/gittensory-mcp/",
-  ".github/workflows/npm-publish.yml",
+  ".github/workflows/publish-mcp.yml",
   "src/mcp/",
   "src/services/mcp-compatibility.ts",
   "src/signals/local-branch.ts",
@@ -108,7 +108,7 @@ export function isMcpReleaseRelevantCommit(commit) {
   if (!parsed.type && !parsed.conventional) return false;
 
   const hasDirectMcpPath = hasAnyPath(files, DIRECT_MCP_PATHS);
-  const hasPackageReleasePath = hasAnyPath(files, ["packages/gittensory-mcp/", ".github/workflows/npm-publish.yml"]);
+  const hasPackageReleasePath = hasAnyPath(files, ["packages/gittensory-mcp/", ".github/workflows/publish-mcp.yml"]);
   const hasClientVisiblePath = hasAnyPath(files, CLIENT_VISIBLE_PATHS);
   const hasOnlySupportingVisiblePath = hasAnyPath(files, SUPPORTING_VISIBLE_PATHS) && !hasDirectMcpPath && !hasClientVisiblePath;
 
