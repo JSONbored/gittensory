@@ -129,9 +129,8 @@ docker compose logs loopover | grep selfhost_job_dead`}
       <h2>GitHub rate-limit responses or admission deferrals</h2>
       <p>
         Two independent signals cover this:{" "}
-        <code>loopover_github_rest_rate_limit_responses_total</code> counts actual 403/429
-        responses from GitHub, and the{" "}
-        <code>loopover_jobs_rate_limit_admission_deferred_total</code> /{" "}
+        <code>loopover_github_rest_rate_limit_responses_total</code> counts actual 403/429 responses
+        from GitHub, and the <code>loopover_jobs_rate_limit_admission_deferred_total</code> /{" "}
         <code>loopover_jobs_rate_limit_budget_deferred_total</code> /{" "}
         <code>loopover_jobs_rate_limited_by_type_total</code> counters track jobs the queue itself
         held back <em>before</em> making a request, to avoid tripping a limit. All three job-side
@@ -146,8 +145,8 @@ docker compose logs loopover | grep selfhost_job_dead`}
         a few seconds of delay to avoid a real 429. Treat it as a real problem only once it&apos;s
         <strong> sustained</strong> — which is exactly what{" "}
         <code>LoopoverGitHubRateLimitResponses</code> (real 403/429s observed) and{" "}
-        <code>LoopoverQueueRateLimitDeferralsHigh</code> (a sustained deferral rate, not a blip)
-        are tuned to alert on, rather than firing on every brief admission hold.
+        <code>LoopoverQueueRateLimitDeferralsHigh</code> (a sustained deferral rate, not a blip) are
+        tuned to alert on, rather than firing on every brief admission hold.
       </p>
       <CodeBlock
         lang="promql"
@@ -169,13 +168,13 @@ sum(rate(loopover_github_rest_rate_limit_responses_total[10m]))`}
       <h2>Low GitHub response-cache hit rate</h2>
       <p>
         <code>loopover_github_response_cache_total</code> (REST) and{" "}
-        <code>loopover_github_graphql_cache_total</code> (GraphQL) both carry a{" "}
-        <code>result</code> label — <code>hit</code>, <code>miss</code>, <code>set</code>,{" "}
-        <code>coalesced</code>, <code>bypassed</code>, or <code>error</code> — and a{" "}
-        <code>class</code> label identifying the endpoint family. A healthy cache should show most
-        traffic as <code>hit</code> for endpoints that are read repeatedly in one review/maintenance
-        pass (PR reads, check-run lookups); a low hit rate on those specific classes, not the
-        overall average, is the useful signal.
+        <code>loopover_github_graphql_cache_total</code> (GraphQL) both carry a <code>result</code>{" "}
+        label — <code>hit</code>, <code>miss</code>, <code>set</code>, <code>coalesced</code>,{" "}
+        <code>bypassed</code>, or <code>error</code> — and a <code>class</code> label identifying
+        the endpoint family. A healthy cache should show most traffic as <code>hit</code> for
+        endpoints that are read repeatedly in one review/maintenance pass (PR reads, check-run
+        lookups); a low hit rate on those specific classes, not the overall average, is the useful
+        signal.
       </p>
       <CodeBlock
         lang="promql"
@@ -231,9 +230,9 @@ curl -X DELETE "$QDRANT_URL/collections/gittensory"`}
         <code>LoopoverOrbExportErrorRateHigh</code> fires on a sustained error ratio there. The
         pull-mode relay loop (for installations receiving events outbound from Orb) reports through{" "}
         <code>loopover_orb_relay_drains_total</code> (<code>result=events</code> when it drained
-        something, <code>result=empty</code> otherwise) and{" "}
-        <code>loopover_orb_webhook_total</code> (<code>event</code> + <code>result</code> labels)
-        for what happened to each relayed event once enqueued locally.
+        something, <code>result=empty</code> otherwise) and <code>loopover_orb_webhook_total</code>{" "}
+        (<code>event</code> + <code>result</code> labels) for what happened to each relayed event
+        once enqueued locally.
       </p>
       <p>
         If exports are failing but the relay itself looks healthy, the export loop&apos;s Sentry
@@ -293,9 +292,9 @@ curl -X DELETE "$QDRANT_URL/collections/gittensory"`}
           unreachable from the container.
         </li>
         <li>
-          <code>LoopoverAiProviderCircuitOpen</code> fires on any circuit-open event in a
-          15-minute window — a single trip during a real but brief outage is expected; a rule that
-          keeps firing across multiple windows points at the persistent case above.
+          <code>LoopoverAiProviderCircuitOpen</code> fires on any circuit-open event in a 15-minute
+          window — a single trip during a real but brief outage is expected; a rule that keeps
+          firing across multiple windows points at the persistent case above.
         </li>
       </ul>
 

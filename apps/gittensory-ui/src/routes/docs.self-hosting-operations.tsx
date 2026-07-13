@@ -110,12 +110,12 @@ docker compose --profile postgres --profile observability --profile backup up -d
         Check sync health with <code>chronyc sources</code> (or <code>ntpq -p</code> on an{" "}
         <code>ntpd</code> host) — every configured source should show a nonzero <code>Reach</code>{" "}
         value; <code>Reach: 0</code> means that source has never successfully synced. The{" "}
-        <code>loopover_clock_skew_seconds</code> gauge on the <strong>Clock Sync (NTP)</strong>{" "}
-        row of the main Grafana dashboard tracks the live drift between this process and GitHub's
-        server time, sampled from the <code>Date</code> header of the GitHub App's own
-        installation-token mint calls — no extra network probe required. The bundled Prometheus
-        rules alert at 60s (warning) and 120s (critical) drift, both well under the margin that
-        actually breaks JWT auth.
+        <code>loopover_clock_skew_seconds</code> gauge on the <strong>Clock Sync (NTP)</strong> row
+        of the main Grafana dashboard tracks the live drift between this process and GitHub's server
+        time, sampled from the <code>Date</code> header of the GitHub App's own installation-token
+        mint calls — no extra network probe required. The bundled Prometheus rules alert at 60s
+        (warning) and 120s (critical) drift, both well under the margin that actually breaks JWT
+        auth.
       </p>
 
       <h2>Alerting — required for a 24/7 deployment</h2>
