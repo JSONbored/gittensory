@@ -199,6 +199,24 @@ Stores use the lightweight **`schema-version.js`** convention ([#4832](https://g
 
 **Rolling fleet upgrades:** upgrade and restart **one worker/state dir at a time** so isolated workers never share a directory mid-migration.
 
+## Backup & restore
+
+`gittensory-miner backup` and `gittensory-miner restore` (#4872) copy the **entire local-state directory** — every SQLite store plus any WAL/`-shm` sidecars — as one unit, so the set stays complete as stores are added. Both resolve the same directory the rest of the CLI uses (`GITTENSORY_MINER_CONFIG_DIR`, else the XDG default).
+
+Back up to a fresh directory (it refuses to overwrite an existing one, so a backup never silently clobbers a previous one):
+
+```sh
+gittensory-miner backup /var/backups/gittensory-miner/2026-07-13
+```
+
+Restore a backup over the live state directory:
+
+```sh
+gittensory-miner restore /var/backups/gittensory-miner/2026-07-13
+```
+
+**Stop the miner first.** These are plain file copies: a snapshot taken while a store is being written can capture a torn page, and a restore overwrites files a running miner may hold open. Stop the process (for a systemd unit, `systemctl stop gittensory-miner`) before either command. Pass `--json` to get a structured `{ ok, source, target, files }` (or `{ ok: false, error }`) result for a monitored backup job. To relocate the whole set instead of copying it, point `GITTENSORY_MINER_CONFIG_DIR` at the new path.
+
 ## Related docs
 
 - [`../DEPLOYMENT.md`](../DEPLOYMENT.md) — laptop vs fleet, volumes, systemd, scaling rules

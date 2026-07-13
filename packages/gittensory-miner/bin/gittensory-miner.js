@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { runAttempt } from "../lib/attempt-cli.js";
+import { runBackup, runRestore } from "../lib/backup-cli.js";
 import { printHelp, printVersion, runCli } from "../lib/cli.js";
 import { runDenyCheck } from "../lib/deny-check.js";
 import { runDiscover } from "../lib/discover-cli.js";
@@ -60,6 +61,14 @@ if (cliArgs[0] === "migrate") {
 // is dispatched here, before the opportunistic npm-registry update check is ever started.
 if (cliArgs[0] === "metrics") {
   process.exit(runMetrics(cliArgs.slice(1)));
+}
+
+// `backup`/`restore` are pure local file-copy of the state directory — offline, so dispatched before the update check.
+if (cliArgs[0] === "backup") {
+  process.exit(runBackup(cliArgs.slice(1)));
+}
+if (cliArgs[0] === "restore") {
+  process.exit(runRestore(cliArgs.slice(1)));
 }
 
 if (cliArgs[0] === "manage" && cliArgs[1] === "status") {
