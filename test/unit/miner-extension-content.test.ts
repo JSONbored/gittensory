@@ -94,7 +94,7 @@ describe("miner extension opportunity badge", () => {
       status: "ready",
     });
     expect(container.hidden).toBe(false);
-    expect(container.innerHTML).toContain("Gittensory opportunity");
+    expect(container.innerHTML).toContain("LoopOver opportunity");
     expect(container.innerHTML).toContain(formatted.tier);
 
     const missing = createMockContainer();
