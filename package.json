@@ -57,6 +57,7 @@
     "ui:openapi": "tsx scripts/write-ui-openapi.ts",
     "ui:openapi:check": "tsx scripts/write-ui-openapi.ts --check",
     "ui:openapi:settings-parity": "tsx scripts/check-openapi-settings-parity.mjs",
+    "cloudflare:schema": "tsx scripts/write-cloudflare-schema.ts",
     "ui:version-audit": "node scripts/check-ui-mcp-version-copy.mjs",
     "docs:drift-check": "node scripts/check-docs-drift.mjs",
     "manifest:drift-check": "tsx scripts/check-manifest-drift.mjs",
