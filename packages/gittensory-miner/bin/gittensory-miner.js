@@ -20,6 +20,7 @@ import { runOrbExportCli } from "../lib/orb-export.js";
 import { installCliSignalHandlers } from "../lib/process-lifecycle.js";
 import { runStateCli } from "../lib/run-state-cli.js";
 import { runInit } from "../lib/laptop-init.js";
+import { runInteractiveInit } from "../lib/init-wizard.js";
 import { loadMinerFileSecrets } from "../lib/env-file-indirection.js";
 import { runMigrate } from "../lib/migrate-cli.js";
 import { runDoctor, runStatus } from "../lib/status.js";
@@ -58,7 +59,13 @@ configureLogger({ ...logOptions, env: process.env });
 // Dispatch the local commands BEFORE the opportunistic npm-registry update check is even started, so they can
 // never reach that network path (the update check runs for the remaining commands below).
 if (cliArgs[0] === "init") {
-  process.exit(await runInit(cliArgs.slice(1)));
+  const initArgs = cliArgs.slice(1);
+  // `--interactive` is an opt-in guided flow (#5176); it prompts, writes a starter `.env`, then re-runs `doctor`.
+  // It is dispatched separately so the default (CI/non-interactive) `init` path below stays exactly as it was.
+  if (initArgs.includes("--interactive")) {
+    process.exit(await runInteractiveInit(initArgs));
+  }
+  process.exit(await runInit(initArgs));
 }
 
 if (cliArgs[0] === "status") {
