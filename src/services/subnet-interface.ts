@@ -9,7 +9,7 @@ const SUBNET_INTERFACE_SCHEMA_VERSION = "1.0";
 // below). Hardcoded like the other product-identity constants in this file (not env-driven): it's the same
 // stable, real app across every deployment of this descriptor, independent of which credentials any one
 // Worker instance happens to hold for its own operational purposes.
-const PUBLIC_GITHUB_APP_SLUG = "gittensory-orb";
+const PUBLIC_GITHUB_APP_SLUG = "loopover-orb";
 
 // Curated, contribution-relevant MCP tools surfaced to agents/devs who discover gittensor via metagraphed.
 // Names mirror src/mcp/server.ts registrations; the list is intentionally a miner-facing subset (not all 33).

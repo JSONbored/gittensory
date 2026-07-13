@@ -18,7 +18,7 @@ describe("public subnet-interface descriptor route", () => {
         mcp: { endpoint: "https://gittensory-api.aethereal.dev/mcp", transport: "http" },
         // The publicly installable App slug is a stable hardcoded product identity now (see
         // subnet-interface.ts) -- independent of the Worker's own GITHUB_APP_SLUG, which no longer exists.
-        githubApp: { slug: "gittensory-orb", installUrl: "https://github.com/apps/gittensory-orb" },
+        githubApp: { slug: "loopover-orb", installUrl: "https://github.com/apps/loopover-orb" },
       },
     });
   });

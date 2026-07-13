@@ -16,8 +16,8 @@ describe("buildSubnetInterfaceDescriptor", () => {
     expect(descriptor.interfaces.mcp.endpoint).toBe("https://gittensory-api.aethereal.dev/mcp");
     expect(descriptor.interfaces.mcp.transport).toBe("http");
     // The publicly installable App slug is a stable hardcoded product identity, not derived from any Worker
-    // var (the old review App's GITHUB_APP_SLUG was removed; gittensory-orb is the real, current, installable App).
-    expect(descriptor.interfaces.githubApp).toMatchObject({ kind: "github_app", slug: "gittensory-orb", installUrl: "https://github.com/apps/gittensory-orb" });
+    // var (the old review App's GITHUB_APP_SLUG was removed; loopover-orb is the real, current, installable App).
+    expect(descriptor.interfaces.githubApp).toMatchObject({ kind: "github_app", slug: "loopover-orb", installUrl: "https://github.com/apps/loopover-orb" });
 
     const toolNames = descriptor.interfaces.mcp.tools.map((tool) => tool.name);
     expect(toolNames).toContain("gittensory_get_decision_pack");
