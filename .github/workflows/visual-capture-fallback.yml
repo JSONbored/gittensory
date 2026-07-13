@@ -1,4 +1,4 @@
-name: Gittensory Visual Capture Fallback
+name: LoopOver Visual Capture Fallback
 
 # GitHub-Actions build-and-serve FALLBACK for a repo with no CI-produced preview deploy (#4112, part of the
 # #3607 visual-capture convergence epic). gittensory's preview-url.ts discovery chain (Deployments API ->
@@ -23,14 +23,14 @@ name: Gittensory Visual Capture Fallback
 # script -- standard GitHub Actions practice to keep an input's literal text out of the shell-parsed script,
 # regardless of how trusted its source is.
 #
-# Handoff: this job uploads its captured PNGs as a GitHub Actions artifact (`gittensory-visual-fallback`) and
+# Handoff: this job uploads its captured PNGs as a GitHub Actions artifact (`loopover-visual-fallback`) and
 # stops -- it never talks to gittensory directly and holds no credential to do so. On completion, GitHub
 # delivers a `workflow_run` webhook; gittensory's backend then lists + downloads that run's artifact using its
 # OWN, already-trusted GitHub App installation token -- never a token that passed through this job.
 #
 # Setup (self-hosted repos only -- NOT needed for gittensory-ui / metagraphed, which already have their own
 # preview-deploy pipeline): copy this file, unmodified, into the target repo's `.github/workflows/` at this
-# EXACT path and name (`visual-capture-fallback.yml` / "Gittensory Visual Capture Fallback") -- gittensory's
+# EXACT path and name (`visual-capture-fallback.yml` / "LoopOver Visual Capture Fallback") -- gittensory's
 # dispatch call and workflow_run listener both key off this fixed name. Then set `review.visual.actions_fallback:
 # true` in that repo's `.gittensory.yml` (see .gittensory.yml.example) to opt in; it activates ONLY when the
 # existing discovery chain finds no preview at all, so a repo with its own CI-produced preview is unaffected.
@@ -70,7 +70,7 @@ on:
 # GitHub renders run-name from these inputs and surfaces the result as workflow_run.display_title in the
 # completion webhook -- a workflow_dispatch run carries no natural PR association otherwise. See
 # actions-fallback.ts's parseFallbackRunCorrelation, which reads this EXACT "pr=<n> sha=<sha>" shape back out.
-run-name: "gittensory-visual-fallback pr=${{ inputs.pr_number }} sha=${{ inputs.head_sha }}"
+run-name: "loopover-visual-fallback pr=${{ inputs.pr_number }} sha=${{ inputs.head_sha }}"
 
 permissions:
   contents: read
@@ -85,9 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      GITTENSORY_DIST_DIR: ${{ inputs.dist_dir }}
-      GITTENSORY_SERVE_PORT: ${{ inputs.serve_port }}
-      GITTENSORY_ROUTES_JSON: ${{ inputs.routes }}
+      LOOPOVER_DIST_DIR: ${{ inputs.dist_dir }}
+      LOOPOVER_SERVE_PORT: ${{ inputs.serve_port }}
+      LOOPOVER_ROUTES_JSON: ${{ inputs.routes }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -102,17 +102,17 @@ jobs:
 
       - name: Build
         env:
-          GITTENSORY_BUILD_CMD: ${{ inputs.build_cmd }}
-        run: bash -euo pipefail -c "$GITTENSORY_BUILD_CMD"
+          LOOPOVER_BUILD_CMD: ${{ inputs.build_cmd }}
+        run: bash -euo pipefail -c "$LOOPOVER_BUILD_CMD"
 
       - name: Serve built output on localhost
         run: |
           set -euo pipefail
-          npx --yes serve@14 -l "tcp://127.0.0.1:${GITTENSORY_SERVE_PORT}" "$GITTENSORY_DIST_DIR" \
+          npx --yes serve@14 -l "tcp://127.0.0.1:${LOOPOVER_SERVE_PORT}" "$LOOPOVER_DIST_DIR" \
             > serve.log 2>&1 &
           echo $! > serve.pid
           for _ in $(seq 1 30); do
-            if curl --silent --fail --output /dev/null "http://127.0.0.1:${GITTENSORY_SERVE_PORT}/"; then
+            if curl --silent --fail --output /dev/null "http://127.0.0.1:${LOOPOVER_SERVE_PORT}/"; then
               echo "Local server is up."
               exit 0
             fi
@@ -128,7 +128,7 @@ jobs:
           # Mirrors slugifyRoutePath in src/review/visual/actions-fallback.ts EXACTLY -- both sides must
           # independently compute the same filename for the same route, or the download side can't find it.
           cat <<'JS' > "$RUNNER_TEMP/slugify-routes.mjs"
-          const routes = JSON.parse(process.env.GITTENSORY_ROUTES_JSON);
+          const routes = JSON.parse(process.env.LOOPOVER_ROUTES_JSON);
           const slugify = (path) => {
             const trimmed = path.replace(/^\/+|\/+$/g, "");
             if (trimmed === "") return "root";
@@ -152,10 +152,10 @@ jobs:
             [ -z "$route" ] && continue
             google-chrome-stable --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
               --window-size=1440,900 --screenshot="shots/${slug}--desktop.png" \
-              "http://127.0.0.1:${GITTENSORY_SERVE_PORT}${route}"
+              "http://127.0.0.1:${LOOPOVER_SERVE_PORT}${route}"
             google-chrome-stable --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
               --window-size=390,844 --screenshot="shots/${slug}--mobile.png" \
-              "http://127.0.0.1:${GITTENSORY_SERVE_PORT}${route}"
+              "http://127.0.0.1:${LOOPOVER_SERVE_PORT}${route}"
           done < routes.tsv
           ls -la shots/
 
@@ -168,7 +168,7 @@ jobs:
       - name: Upload captured screenshots
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: gittensory-visual-fallback
+          name: loopover-visual-fallback
           path: shots/*.png
           if-no-files-found: error
           retention-days: 1

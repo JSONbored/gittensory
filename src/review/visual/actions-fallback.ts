@@ -43,9 +43,9 @@ const API_VERSION = "2022-11-28";
 /** The workflow file this module dispatches and whose completions it listens for. */
 export const FALLBACK_WORKFLOW_FILE = "visual-capture-fallback.yml";
 /** The workflow's declared `name:` -- cross-checked against `workflow_run.name` before acting on a completion. */
-export const FALLBACK_WORKFLOW_NAME = "Gittensory Visual Capture Fallback";
+export const FALLBACK_WORKFLOW_NAME = "LoopOver Visual Capture Fallback";
 /** The artifact name the dispatched workflow uploads its captured PNGs under. */
-export const FALLBACK_ARTIFACT_NAME = "gittensory-visual-fallback";
+export const FALLBACK_ARTIFACT_NAME = "loopover-visual-fallback";
 
 // ---------------------------------------------------------------------------------------------------------
 // SSRF allowlist extension: the artifact-download redirect target.
@@ -129,7 +129,7 @@ export async function dispatchVisualCaptureFallback(params: {
 // Correlation: recover {prNumber, headSha} from a completed workflow_run's display_title.
 // ---------------------------------------------------------------------------------------------------------
 
-const RUN_NAME_PATTERN = /gittensory-visual-fallback pr=(\d+) sha=([0-9a-f]{40})/i;
+const RUN_NAME_PATTERN = /loopover-visual-fallback pr=(\d+) sha=([0-9a-f]{40})/i;
 
 /** Parse the `pr=<number> sha=<sha>` correlation this module's own `run-name:` embeds (see the workflow file)
  *  back out of a completed run's `display_title`. Returns null (fail-safe, never guesses) for anything that
