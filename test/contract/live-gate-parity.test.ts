@@ -9,10 +9,15 @@
  *
  * This suite closes that gap WITHOUT a live GitHub/DB round-trip: it replays each of the same 14
  * predicted-gate fixtures through BOTH paths --
- *   - PREDICTED: `buildPredictedGateVerdict` (`packages/gittensory-engine/src/predicted-gate.ts`), which
- *     internally uses the ENGINE package's OWN `buildPullRequestAdvisory`/`evaluateGateCheck`
- *     (`packages/gittensory-engine/src/advisory/gate-advisory.ts`) and reads gate policy directly from the
- *     manifest's public `.gittensory.yml`.
+ *   - PREDICTED: `buildPredictedGateVerdict`, imported below via `src/rules/predicted-gate.ts` -- the SAME
+ *     public re-export surface `engine-parity.test.ts` uses (that file's own top-of-file comment documents
+ *     it as such). `src/rules/predicted-gate.ts` is a single-line `export * from
+ *     "../../packages/gittensory-engine/src/predicted-gate.js"`: a live ES-module re-export, not a copy, so
+ *     it is GUARANTEED to be the exact same function reference as
+ *     `packages/gittensory-engine/src/predicted-gate.ts`'s own export -- there is no separate
+ *     implementation here to drift. That function internally uses the ENGINE package's OWN
+ *     `buildPullRequestAdvisory`/`evaluateGateCheck` (`packages/gittensory-engine/src/advisory/gate-advisory.ts`)
+ *     and reads gate policy directly from the manifest's public `.gittensory.yml`.
  *   - LIVE: this file's own `buildLiveGateVerdict`, which mirrors predicted-gate's assembly steps (synthetic
  *     PR, advisory, pre-merge/CLA/manifest-policy findings -- reusing the SAME exported pure helpers with
  *     the SAME inputs, so no independent reimplementation risk there) but resolves the gate-check ARGS via
@@ -40,6 +45,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+// `src/rules/predicted-gate.ts` is a guaranteed `export *` re-export of
+// `packages/gittensory-engine/src/predicted-gate.ts` (see the file-level comment above) -- this import
+// exercises the engine package's real implementation, not a separate copy.
 import { buildPredictedGateVerdict } from "../../src/rules/predicted-gate";
 import { evaluateClaCheck } from "../../src/review/cla-check";
 import { resolveHardGuardrailGlobs } from "../../src/review/guardrail-config";
