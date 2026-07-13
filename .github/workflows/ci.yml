@@ -389,6 +389,10 @@ jobs:
       - name: Extension typecheck
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
         run: npm run extension:typecheck && npm run miner-extension:typecheck
+      # gittensory-extension has no test suite of its own yet; only the miner extension is covered (#4865).
+      - name: Extension tests
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
+        run: npm run miner-extension:test
       # `npm run ui:build` also regenerates apps/gittensory-ui/public/openapi.json (needed for a
       # standalone build), but this step's trigger condition is a strict subset of "OpenAPI drift
       # check" above (push || ui==true, vs. push || ui==true || uiContract==true), so whenever this

@@ -28,6 +28,14 @@ The extension does not request the `unlimitedStorage` permission, so a paste is 
 being parsed or saved once it exceeds a conservative size bound well under `chrome.storage.local`'s default 10 MiB
 quota, instead of silently failing to save or leaving storage partially written.
 
+## Testing (#4865)
+
+`npm run test` runs the extension's vitest suite (one `*.test.js` file per source file) under a real coverage
+gate — each source file exposes its testable internals on `globalThis` behind a `__GITTENSORY_MINER_EXTENSION_TEST__`
+guard (e.g. `background.js` → `globalThis.__gittensoryMinerBackgroundInternals`), so tests import the file directly
+(a dynamic `import()`, after setting that flag and any needed `chrome.*`/`fetch` mocks) rather than needing a
+separate browser-extension test harness. `vitest.config.ts` documents the measured coverage baseline.
+
 ## Host permissions
 
 `manifest.json` grants `https://github.com/*` (for the issue-page content script) plus loopback host permissions —
