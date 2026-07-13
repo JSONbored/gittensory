@@ -40,3 +40,11 @@ the repo root is a ready-to-adapt persistent unit for this — a companion to
 `gittensory-miner.service.example` (the loop daemon), not a replacement for it. Its header comment
 carries the full install steps. Like the loop daemon, this is a `Type=simple` service, not a `.timer`
 job — the dashboard is a long-running HTTP server, not a periodic batch task.
+
+## Test coverage
+
+`npm test` runs with `--coverage` enabled (v8 provider) and enforces `vitest.config.ts`'s `coverage.thresholds`
+— a real measured baseline (#4865), not an aspirational target, so CI fails on a genuine regression (e.g. a
+large new feature landing with no tests) rather than staying silently unmeasured the way `apps/**` is by
+default at the repo root. `apps/gittensory-miner-extension` is not yet under this gate — its own test
+instrumentation needs to exist first (see #4865's own scope note).
