@@ -701,6 +701,19 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(plan.find((a) => a.actionClass === "close")?.expectedHeadSha).toBe("abc123");
     });
 
+    it("never co-approves a confirmed unlinked-issue-match close — no incoherent 'approves' review on a PR being closed (gate-review finding)", () => {
+      // Before the fix: the auto-approve guard omitted unlinkedIssueMatchViolated — the ONLY reviewGood close
+      // path — so a green/clean confirmed-farming PR got BOTH a bot "Gittensory approves — safe to merge" review
+      // AND a close. Under close autonomy `auto_with_approval` the approval lands immediately while the close is
+      // only staged, leaving a bot-approved farming PR that branch protection's "require approving reviews" could
+      // auto-merge before the staged close is ever actioned — the exact PR the guardrail exists to stop.
+      for (const close of ["auto", "auto_with_approval"] as const) {
+        const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { approve: "auto", close }, ...repeated, pr: { labels: [], mergeableState: "clean", headSha: "abc123" } }));
+        expect(classes(plan)).toContain("close");
+        expect(classes(plan)).not.toContain("approve");
+      }
+    });
+
     it("cites the repeat-specific reason and the standard close message template, tagged closeKind: heuristic (subject to the precision breaker)", () => {
       const action = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, ...repeated, pr: { labels: [] } })).find((a) => a.actionClass === "close");
       expect(action?.reason).toContain("#42");

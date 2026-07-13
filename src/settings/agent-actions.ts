@@ -1096,8 +1096,12 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // Never APPROVE a base-conflicting PR: it is closed below (willClose on isConflict), so a "Gittensory approves —
   // safe to merge" review on a PR we're about to close is incoherent (and a stale approval strands the PR if it
   // later goes green). A `behind`/`blocked` PR is fine to approve (it is rebased pre-review or the approval clears
-  // the block); only a hard `dirty` conflict is excluded here. (#ready-needs-mergeable, the #4220 report) */
-  if (reviewGood && !heldForManualReview && !linkedIssueCloseInFlight && !isConflict && acting("approve") && input.pr.reviewDecision !== "APPROVED" && !alreadyApprovedThisHead) {
+  // the block); only a hard `dirty` conflict is excluded here. (#ready-needs-mergeable, the #4220 report)
+  // `unlinkedIssueMatchViolated` is the ONE close path that fires while `reviewGood` is true (a confirmed repeat
+  // unlinked-issue-match closes a green, clean PR) — it must be excluded here for the same reason, or the bot
+  // co-approves the exact farming PR it is closing. Under close `auto_with_approval` the approval lands while the
+  // close is only staged, leaving a bot-approved PR that branch protection can auto-merge before the close runs. */
+  if (reviewGood && !heldForManualReview && !linkedIssueCloseInFlight && !unlinkedIssueMatchViolated && !isConflict && acting("approve") && input.pr.reviewDecision !== "APPROVED" && !alreadyApprovedThisHead) {
     actions.push({
       actionClass: "approve",
       requiresApproval: approval("approve"),
