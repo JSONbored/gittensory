@@ -45,6 +45,20 @@ function formatOpportunityBadge(entry) {
   };
 }
 
+// Mirrors ORB's shared RefreshMeta component's relative-time thresholds/format
+// (packages/gittensory-ui-kit/src/utils.ts's relativeTimeFromNow: just now / Xm ago / Xh ago / Xd ago),
+// reimplemented here because this content script ships unbundled and cannot import that package (#5192).
+function formatLastSyncedLabel(savedAt, nowMs) {
+  if (typeof savedAt !== "number" || !Number.isFinite(savedAt)) return null;
+  const deltaSeconds = Math.max(0, Math.floor((Number(nowMs) - savedAt) / 1000));
+  if (deltaSeconds < 60) return "last synced just now";
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) return `last synced ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `last synced ${hours}h ago`;
+  return `last synced ${Math.floor(hours / 24)}d ago`;
+}
+
 function escapeOpportunityHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => {
     switch (char) {
@@ -62,7 +76,7 @@ function escapeOpportunityHtml(value) {
   });
 }
 
-function renderOpportunityBadgeMarkup(badge) {
+function renderOpportunityBadgeMarkup(badge, lastSyncedLabel) {
   if (!badge || typeof badge !== "object") return "";
   return `
     <div class="gittensory-miner-opportunity-badge__header">
@@ -75,6 +89,11 @@ function renderOpportunityBadgeMarkup(badge) {
       <span>${escapeOpportunityHtml(badge.score)}</span>
     </div>
     <p class="gittensory-miner-opportunity-badge__why">${escapeOpportunityHtml(badge.why)}</p>
+    ${
+      lastSyncedLabel
+        ? `<p class="gittensory-miner-opportunity-badge__synced">${escapeOpportunityHtml(lastSyncedLabel)}</p>`
+        : ""
+    }
   `;
 }
 
@@ -84,6 +103,7 @@ const opportunityBadgeApi = {
   scoreToTier,
   buildOpportunityWhy,
   formatOpportunityBadge,
+  formatLastSyncedLabel,
   escapeOpportunityHtml,
   renderOpportunityBadgeMarkup,
 };

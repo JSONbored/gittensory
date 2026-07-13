@@ -39,7 +39,7 @@ async function loadIssueOpportunityContext(message) {
     };
   }
 
-  const rankedCandidates = await loadRankedCandidates();
+  const { rankedCandidates, savedAt } = await loadRankedCandidates();
   const rankedEntry = badgeApi.lookupRankedOpportunity(rankedCandidates, repoFullName, message.issueNumber);
   if (!rankedEntry) {
     return {
@@ -56,6 +56,7 @@ async function loadIssueOpportunityContext(message) {
     issueNumber: message.issueNumber,
     repoFullName,
     badge: badgeApi.formatOpportunityBadge(rankedEntry),
+    savedAt,
     status: "ready",
   };
 }
@@ -68,9 +69,14 @@ async function loadMinerExtensionSettings() {
   return { watchedRepos };
 }
 
+// Reads rankedCandidates alongside its savedAt sync timestamp (#5192). `savedAt` degrades to `null`
+// (never NaN) when absent -- e.g. data written before this field existed, or storage was cleared.
 async function loadRankedCandidates() {
-  const stored = await chrome.storage.local.get({ rankedCandidates: [] });
-  return Array.isArray(stored.rankedCandidates) ? stored.rankedCandidates : [];
+  const stored = await chrome.storage.local.get({ rankedCandidates: [], rankedCandidatesSavedAt: null });
+  return {
+    rankedCandidates: Array.isArray(stored.rankedCandidates) ? stored.rankedCandidates : [],
+    savedAt: typeof stored.rankedCandidatesSavedAt === "number" ? stored.rankedCandidatesSavedAt : null,
+  };
 }
 
 // Toolbar-icon badge (#5193). Reads `rankedCandidates` WITHOUT a default so `undefined` still means

@@ -53,12 +53,13 @@ async function loadOpportunityBadge(container, target) {
   renderOpportunityBadge(container, response.payload);
 }
 
-function renderOpportunityBadge(container, payload) {
+function renderOpportunityBadge(container, payload, nowMs = Date.now()) {
   if (!payload?.watched || !payload?.badge) {
     container.remove();
     return;
   }
-  const markup = badgeApi?.renderOpportunityBadgeMarkup?.(payload.badge);
+  const lastSyncedLabel = badgeApi?.formatLastSyncedLabel?.(payload.savedAt, nowMs) ?? null;
+  const markup = badgeApi?.renderOpportunityBadgeMarkup?.(payload.badge, lastSyncedLabel);
   if (!markup) {
     container.remove();
     return;
