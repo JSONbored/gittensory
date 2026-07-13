@@ -401,6 +401,22 @@ describe("runDiscover (#4247)", () => {
     expect(error).toHaveBeenCalledWith("Repository must be in owner/repo form: not-a-repo");
   });
 
+  it("emits JSON when portfolio queue open fails with --json (#4836)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const exitCode = await runDiscover(["acme/widgets", "--json"], {
+      initPortfolioQueue: () => {
+        throw new Error("portfolio_db_locked");
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "portfolio_db_locked",
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it("reports fan-out failures and exits non-zero without leaking the error", async () => {
     const portfolioQueue = tempQueueStore();
     const fetchCandidateIssuesWithSummary = vi.fn(async () => {

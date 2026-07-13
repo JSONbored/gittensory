@@ -157,7 +157,12 @@ export async function runDiscover(args, options = {}) {
   const enqueue = options.enqueueRankedDiscovery ?? enqueueRankedDiscovery;
 
   const ownsPortfolioQueue = options.initPortfolioQueue === undefined;
-  const portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
+  let portfolioQueue;
+  try {
+    portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
+  } catch (error) {
+    return reportCliFailure(parsed.json, describeCliError(error));
+  }
 
   // Local ETag cache so a repeated discover revalidates each repo's policy docs with a conditional GET instead of
   // re-downloading them (#4842). Opened inside its OWN try/catch, separate from the portfolio queue above: the
@@ -224,7 +229,7 @@ export async function runDiscover(args, options = {}) {
   } catch (error) {
     return reportCliFailure(parsed.json, describeCliError(error));
   } finally {
-    if (ownsPortfolioQueue) portfolioQueue.close();
+    if (ownsPortfolioQueue && portfolioQueue) portfolioQueue.close();
     if (ownsPolicyDocCache && policyDocCache) policyDocCache.close();
     if (ownsPolicyVerdictCache && policyVerdictCache) policyVerdictCache.close();
   }
