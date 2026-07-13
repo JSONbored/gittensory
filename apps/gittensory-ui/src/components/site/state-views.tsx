@@ -1,9 +1,13 @@
-import { Loader2, Inbox, AlertTriangle, RefreshCw } from "lucide-react";
+import { Loader2, Inbox, AlertTriangle, RefreshCw, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { notifyApiFailure } from "@/lib/api/request";
+import { notifyApiFailure, type ApiFailureKind } from "@/lib/api/request";
+
+/** `errorKind`s that mean "we never reached the server" as opposed to "the server answered with an
+ *  error" — StateBoundary/ErrorState use this to show connectivity-specific copy and iconography (#793). */
+const NETWORK_ERROR_KINDS: ReadonlySet<ApiFailureKind> = new Set(["network", "timeout"]);
 
 /**
  * Shared state primitives so every panel/route renders a consistent
@@ -140,8 +144,9 @@ export function StateActionButton({
 }
 
 export function ErrorState({
-  title = "Couldn't load this",
-  description = "Something went wrong fetching this data. You can retry, or come back in a moment. If this keeps happening, check status or try again shortly.",
+  title,
+  description,
+  errorKind,
   onRetry,
   retryLabel = "Try again",
   secondaryAction,
@@ -150,18 +155,34 @@ export function ErrorState({
 }: {
   title?: string;
   description?: ReactNode;
+  /** Distinguishes "couldn't reach the server at all" from "the server answered with an error" (#793).
+   *  Only changes the default `title`/`description` — an explicit `title`/`description` always wins. */
+  errorKind?: ApiFailureKind;
   onRetry?: () => void;
   retryLabel?: string;
   secondaryAction?: ReactNode;
   toastOnRetry?: boolean;
   className?: string;
 }) {
+  const isNetworkIssue = errorKind !== undefined && NETWORK_ERROR_KINDS.has(errorKind);
+  const resolvedTitle = title ?? (isNetworkIssue ? "Can't reach the server" : "Couldn't load this");
+  const resolvedDescription =
+    description ??
+    (isNetworkIssue
+      ? "We couldn't reach the API — check your connection and retry. This is a connectivity issue, not a problem with the data itself."
+      : "Something went wrong fetching this data. You can retry, or come back in a moment. If this keeps happening, check status or try again shortly.");
   return (
     <Shell
       role="alert"
-      icon={<AlertTriangle className="size-5 text-warning" aria-hidden />}
-      title={title}
-      description={description}
+      icon={
+        isNetworkIssue ? (
+          <WifiOff className="size-5 text-warning" aria-hidden />
+        ) : (
+          <AlertTriangle className="size-5 text-warning" aria-hidden />
+        )
+      }
+      title={resolvedTitle}
+      description={resolvedDescription}
       action={
         onRetry && (
           <StateActionButton
@@ -218,10 +239,12 @@ export function StateBoundary({
   isEmpty,
   loadingTitle = "Loading data…",
   loadingDescription = "Fetching the latest available signals for this view.",
+  loadingSkeleton,
   emptyTitle = "No data available yet",
   emptyDescription = "This view has no records to show. Refresh when the source data is available.",
-  errorTitle = "Couldn't load data",
-  errorDescription = "The data source did not respond. Retry the request, or check back once the service has recovered.",
+  errorTitle,
+  errorDescription,
+  errorKind,
   onRetry,
   onRefresh,
   errorLabel,
@@ -232,38 +255,58 @@ export function StateBoundary({
   isEmpty?: boolean;
   loadingTitle?: string;
   loadingDescription?: ReactNode;
+  /** Content-shaped placeholder (build with `@/components/ui/skeleton`) shown instead of the generic
+   *  spinner while loading, so the layout doesn't jump once data arrives (#793). */
+  loadingSkeleton?: ReactNode;
   emptyTitle?: string;
   emptyDescription?: ReactNode;
   errorTitle?: string;
   errorDescription?: ReactNode;
+  /** Distinguishes "couldn't reach the server at all" from "the server answered with an error" (#793). */
+  errorKind?: ApiFailureKind;
   onRetry?: () => void;
   onRefresh?: () => void;
   /** When provided, surfaces a global API-failure toast with a Retry action. */
   errorLabel?: string;
   children: ReactNode;
 }) {
+  const isNetworkIssue = errorKind !== undefined && NETWORK_ERROR_KINDS.has(errorKind);
+  // Preserve the pre-#793 defaults exactly when no errorKind is given; when one is given and the caller
+  // didn't override the copy, fall through to ErrorState's own network-aware defaults instead.
+  const resolvedErrorTitle = errorTitle ?? (isNetworkIssue ? undefined : "Couldn't load data");
+  const resolvedErrorDescription =
+    errorDescription ??
+    (isNetworkIssue
+      ? undefined
+      : "The data source did not respond. Retry the request, or check back once the service has recovered.");
+
   // When this boundary flips into the error state, surface a toast with Retry.
   useEffect(() => {
     if (isError && errorLabel) {
       notifyApiFailure({
         label: errorLabel,
-        kind: "network",
+        kind: errorKind ?? "network",
         message:
-          typeof errorDescription === "string" ? errorDescription : "Data source did not respond.",
+          typeof resolvedErrorDescription === "string"
+            ? resolvedErrorDescription
+            : "Data source did not respond.",
         retry: onRetry,
       });
     }
-  }, [isError, errorLabel, errorDescription, onRetry]);
+  }, [isError, errorLabel, errorKind, resolvedErrorDescription, onRetry]);
 
   if (isLoading) {
-    return <LoadingState title={loadingTitle} description={loadingDescription} />;
+    return (
+      loadingSkeleton ?? <LoadingState title={loadingTitle} description={loadingDescription} />
+    );
   }
 
   if (isError) {
     return (
       <ErrorState
-        title={errorTitle}
-        description={errorDescription}
+        title={resolvedErrorTitle}
+        description={resolvedErrorDescription}
+        errorKind={errorKind}
         onRetry={onRetry}
         toastOnRetry={false}
         secondaryAction={

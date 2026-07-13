@@ -24,7 +24,9 @@ import {
 } from "@/components/site/control-primitives";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { useSession } from "@/lib/api/session";
-import { EmptyState } from "@/components/site/state-views";
+import { EmptyState, StateBoundary } from "@/components/site/state-views";
+import { RefreshMeta } from "@/components/site/refresh-meta";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { cn } from "@/lib/utils";
 import { SnapshotReplayCard } from "@/components/site/snapshot-replay";
@@ -232,139 +234,149 @@ function AgentRuns() {
             and a public/private boundary.
           </p>
         </div>
-        <StatusPill status={sourceStatus}>{sourceLabel}</StatusPill>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusPill status={sourceStatus}>{sourceLabel}</StatusPill>
+          <RefreshMeta loadedAt={liveRuns.loadedAt} onRefresh={liveRuns.reload} />
+        </div>
       </header>
 
-      {canUseLiveRuns && liveRuns.status === "error" && liveRuns.error !== "disabled" && (
-        <div className="rounded-token border border-warning/30 bg-warning/5 p-3 text-token-xs text-warning">
-          Live runs are unavailable right now ({liveRuns.error}).
-        </div>
-      )}
-
-      <div className="rounded-token border border-border bg-transparent p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center gap-1.5 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-            <Filter className="size-3.5" />
-            Status
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {STATUS_FILTERS.map((s) => (
-              <Chip key={s} active={status === s} onClick={() => setStatus(s)}>
-                {s}
-              </Chip>
-            ))}
-          </div>
-          <span aria-hidden className="ml-2 hidden accent-divider-v-tall sm:inline-block" />
-          <div className="inline-flex items-center gap-1.5 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-            Kind
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {KIND_FILTERS.map((k) => (
-              <Chip key={k} active={kind === k} onClick={() => setKind(k)}>
-                {k}
-              </Chip>
-            ))}
-          </div>
-          <div className="ml-auto inline-flex items-center gap-2 rounded-token border border-border bg-background/40 px-2">
-            <Search className="size-3.5 text-muted-foreground" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search runs…"
-              className="w-40 border-0 bg-transparent py-1 text-token-sm outline-none placeholder:text-muted-foreground"
-            />
-          </div>
-        </div>
-      </div>
-
-      <SavedViews
-        current={{ status, kind, q }}
-        onApply={(v) =>
-          navigate({
-            search: () => ({
-              status: v.status === "all" ? undefined : v.status,
-              kind: v.kind === "all" ? undefined : v.kind,
-              q: v.q ? v.q : undefined,
-            }),
-            replace: true,
-          })
-        }
-      />
-
-      <div className="text-token-2xs text-muted-foreground">
-        Showing {filtered.length} of {runs.length}
-      </div>
-
-      {filtered.length === 0 ? (
-        <ul className="space-y-2">
-          <li>
-            <EmptyState
-              title="No runs match these filters"
-              description="Try clearing the status or kind filter, or search by repo or run id."
-              action={
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStatus("all");
-                    setKind("all");
-                    setQ("");
-                    toast("Filters cleared", {
-                      description: "Showing all available agent runs again.",
-                    });
-                  }}
-                  className="inline-flex min-w-0 items-center justify-center rounded-token border border-border bg-transparent px-3 py-1.5 text-center text-token-xs font-medium text-foreground transition-all duration-150 hover:bg-accent focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.98]"
-                >
-                  Clear filters
-                </button>
-              }
-            />
-          </li>
-        </ul>
-      ) : (
+      <StateBoundary
+        isLoading={canUseLiveRuns && liveRuns.status === "loading"}
+        isError={canUseLiveRuns && liveRuns.status === "error" && liveRuns.error !== "disabled"}
+        errorKind={liveRuns.status === "error" ? liveRuns.errorKind : undefined}
+        errorDescription={liveRuns.status === "error" ? liveRuns.error : undefined}
+        onRetry={liveRuns.reload}
+        onRefresh={liveRuns.reload}
+        loadingTitle="Loading agent runs…"
+        loadingSkeleton={<RunsListSkeleton />}
+      >
         <div className="space-y-5">
-          {grouped.map((bucket) => (
-            <section key={bucket.label} aria-label={bucket.label}>
-              <h2 className="sticky top-[6.25rem] z-[1] -mx-1 mb-2 bg-background/85 px-1 py-1 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground backdrop-blur">
-                {bucket.label} · {bucket.runs.length}
-              </h2>
-              <ul className="space-y-2">
-                {bucket.runs.map((r) => (
-                  <li key={r.id}>
+          <div className="rounded-token border border-border bg-transparent p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                <Filter className="size-3.5" />
+                Status
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {STATUS_FILTERS.map((s) => (
+                  <Chip key={s} active={status === s} onClick={() => setStatus(s)}>
+                    {s}
+                  </Chip>
+                ))}
+              </div>
+              <span aria-hidden className="ml-2 hidden accent-divider-v-tall sm:inline-block" />
+              <div className="inline-flex items-center gap-1.5 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                Kind
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {KIND_FILTERS.map((k) => (
+                  <Chip key={k} active={kind === k} onClick={() => setKind(k)}>
+                    {k}
+                  </Chip>
+                ))}
+              </div>
+              <div className="ml-auto inline-flex items-center gap-2 rounded-token border border-border bg-background/40 px-2">
+                <Search className="size-3.5 text-muted-foreground" />
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Search runs…"
+                  className="w-40 border-0 bg-transparent py-1 text-token-sm outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+            </div>
+          </div>
+
+          <SavedViews
+            current={{ status, kind, q }}
+            onApply={(v) =>
+              navigate({
+                search: () => ({
+                  status: v.status === "all" ? undefined : v.status,
+                  kind: v.kind === "all" ? undefined : v.kind,
+                  q: v.q ? v.q : undefined,
+                }),
+                replace: true,
+              })
+            }
+          />
+
+          <div className="text-token-2xs text-muted-foreground">
+            Showing {filtered.length} of {runs.length}
+          </div>
+
+          {filtered.length === 0 ? (
+            <ul className="space-y-2">
+              <li>
+                <EmptyState
+                  title="No runs match these filters"
+                  description="Try clearing the status or kind filter, or search by repo or run id."
+                  action={
                     <button
                       type="button"
-                      onClick={() => setSelected(r.id)}
-                      aria-current={selectedId === r.id ? "true" : undefined}
-                      className={cn(
-                        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-token border bg-transparent p-3 text-left transition-all duration-150 focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.99]",
-                        selectedId === r.id
-                          ? "border-mint/40 bg-mint/[0.04]"
-                          : "border-border hover:border-foreground/30",
-                      )}
+                      onClick={() => {
+                        setStatus("all");
+                        setKind("all");
+                        setQ("");
+                        toast("Filters cleared", {
+                          description: "Showing all available agent runs again.",
+                        });
+                      }}
+                      className="inline-flex min-w-0 items-center justify-center rounded-token border border-border bg-transparent px-3 py-1.5 text-center text-token-xs font-medium text-foreground transition-all duration-150 hover:bg-accent focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.98]"
                     >
-                      <StatusPill status={SIGNAL[r.signal_fidelity]}>
-                        {r.signal_fidelity}
-                      </StatusPill>
-                      <div className="min-w-0">
-                        <div className="truncate text-token-sm">{r.kind}</div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-token-2xs text-muted-foreground">
-                          <span className="font-mono">{r.id}</span>
-                          <span>·</span>
-                          <span>{r.source}</span>
-                          <span>·</span>
-                          <span>{r.repo}</span>
-                        </div>
-                      </div>
-                      <div className="text-right font-mono text-token-2xs text-muted-foreground">
-                        {new Date(r.created_at).toUTCString().slice(5, 22)}
-                      </div>
+                      Clear filters
                     </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+                  }
+                />
+              </li>
+            </ul>
+          ) : (
+            <div className="space-y-5">
+              {grouped.map((bucket) => (
+                <section key={bucket.label} aria-label={bucket.label}>
+                  <h2 className="sticky top-[6.25rem] z-[1] -mx-1 mb-2 bg-background/85 px-1 py-1 font-mono text-token-2xs uppercase tracking-wider text-muted-foreground backdrop-blur">
+                    {bucket.label} · {bucket.runs.length}
+                  </h2>
+                  <ul className="space-y-2">
+                    {bucket.runs.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(r.id)}
+                          aria-current={selectedId === r.id ? "true" : undefined}
+                          className={cn(
+                            "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-token border bg-transparent p-3 text-left transition-all duration-150 focus-ring motion-reduce:transition-none motion-reduce:active:scale-100 active:scale-[0.99]",
+                            selectedId === r.id
+                              ? "border-mint/40 bg-mint/[0.04]"
+                              : "border-border hover:border-foreground/30",
+                          )}
+                        >
+                          <StatusPill status={SIGNAL[r.signal_fidelity]}>
+                            {r.signal_fidelity}
+                          </StatusPill>
+                          <div className="min-w-0">
+                            <div className="truncate text-token-sm">{r.kind}</div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-token-2xs text-muted-foreground">
+                              <span className="font-mono">{r.id}</span>
+                              <span>·</span>
+                              <span>{r.source}</span>
+                              <span>·</span>
+                              <span>{r.repo}</span>
+                            </div>
+                          </div>
+                          <div className="text-right font-mono text-token-2xs text-muted-foreground">
+                            {new Date(r.created_at).toUTCString().slice(5, 22)}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </StateBoundary>
 
       <RunDrawer
         run={selected}
@@ -591,6 +603,23 @@ function SavedViews({
           Save view
         </button>
       )}
+    </div>
+  );
+}
+
+/** Content-shaped loading placeholder for the filter bar + run list, so the layout doesn't jump once
+ *  the first page of runs arrives (#793). Row count is arbitrary — just enough to fill the viewport. */
+function RunsListSkeleton() {
+  return (
+    <div className="space-y-5" aria-hidden>
+      <Skeleton className="h-11 w-full rounded-token" />
+      <ul className="space-y-2">
+        {Array.from({ length: 5 }, (_, index) => (
+          <li key={index}>
+            <Skeleton className="h-14 w-full rounded-token" />
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

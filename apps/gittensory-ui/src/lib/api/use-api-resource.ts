@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { getApiOrigin } from "./origin";
-import { apiFetch } from "./request";
+import { apiFetch, type ApiFailureKind } from "./request";
 
 type ResourceState<T> =
   | { status: "loading"; data: null; error: null; loadedAt: null }
   | { status: "ready"; data: T; error: null; loadedAt: number }
-  | { status: "error"; data: null; error: string; loadedAt: null };
+  | {
+      status: "error";
+      data: null;
+      error: string;
+      /** Absent for the synthetic "disabled" sentinel below — only real `apiFetch` failures carry one (#793). */
+      errorKind?: ApiFailureKind;
+      errorStatus?: number;
+      loadedAt: null;
+    };
 
 type UseApiResourceOptions = {
   enabled?: boolean;
@@ -42,7 +50,14 @@ export function useApiResource<T>(
     if (result.ok) {
       setState({ status: "ready", data: result.data, error: null, loadedAt: Date.now() });
     } else {
-      setState({ status: "error", data: null, error: result.message, loadedAt: null });
+      setState({
+        status: "error",
+        data: null,
+        error: result.message,
+        errorKind: result.kind,
+        errorStatus: result.status,
+        loadedAt: null,
+      });
     }
   }, [enabled, label, path, token]);
 
