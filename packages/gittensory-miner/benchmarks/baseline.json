@@ -1,0 +1,58 @@
+{
+  "note": "Machine-dependent micro-benchmark baseline for the gittensory-miner package (#4845). Numbers are only comparable within the same runtime; regenerate on yours with: npm run miner:bench -- --update-baseline",
+  "nodeVersion": "v18.19.1",
+  "generatedAt": "2026-07-13T00:39:43.992Z",
+  "results": [
+    {
+      "name": "discovery_throttle_resolve",
+      "group": "discovery-fanout",
+      "status": "ok",
+      "iterations": 300,
+      "meanMs": 0.004,
+      "medianMs": 0.0041,
+      "minMs": 0.0004,
+      "maxMs": 0.0517,
+      "opsPerSec": 250427.4268
+    },
+    {
+      "name": "forge_config_resolve",
+      "group": "discovery-fanout",
+      "status": "ok",
+      "iterations": 300,
+      "meanMs": 0.0657,
+      "medianMs": 0.0635,
+      "minMs": 0.0604,
+      "maxMs": 0.1609,
+      "opsPerSec": 15225.6664
+    },
+    {
+      "name": "http_retry_passthrough",
+      "group": "discovery-fanout",
+      "status": "ok",
+      "iterations": 300,
+      "meanMs": 0.0114,
+      "medianMs": 0.0104,
+      "minMs": 0.0064,
+      "maxMs": 0.0858,
+      "opsPerSec": 87376.7552
+    },
+    {
+      "name": "discovery_fanout_scheduler",
+      "group": "discovery-fanout",
+      "status": "unavailable",
+      "reason": "Unexpected token 'with'"
+    },
+    {
+      "name": "local_store_write",
+      "group": "local-store",
+      "status": "unavailable",
+      "reason": "No such built-in module: node:sqlite"
+    },
+    {
+      "name": "local_store_read",
+      "group": "local-store",
+      "status": "unavailable",
+      "reason": "No such built-in module: node:sqlite"
+    }
+  ]
+}
