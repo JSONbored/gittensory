@@ -148,6 +148,8 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for laptop vs fleet deployment.
 
 See [`docs/operations-runbook.md`](docs/operations-runbook.md) for SQLite concurrency guarantees, corruption recovery, multi-process collision response, and post-upgrade ledger migration ([#4875](https://github.com/JSONbored/gittensory/issues/4875)).
 
+See [`benchmarks/`](benchmarks/README.md) for the committed micro-benchmark suite over the discovery-fanout and local-store read/write paths — run `npm run miner:bench` and compare against `benchmarks/baseline.json` ([#4845](https://github.com/JSONbored/gittensory/issues/4845)).
+
 ### Laptop-mode quickstart
 
 Zero-infra local install — no Docker, Redis, or Postgres required:
