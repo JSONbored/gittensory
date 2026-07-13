@@ -174,6 +174,40 @@ describe("governor-state pause/resume control surface (#4851)", () => {
     expect(() => second.loadPauseState()).not.toThrow();
     expect(second.loadPauseState()).toMatchObject({ paused: true, reason: "first open" });
   });
+
+  it("REGRESSION: adds each missing pause column independently, not just when `paused` alone is absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-partial-migration-"));
+    roots.push(root);
+    const dbPath = join(root, "governor-state.sqlite3");
+
+    // Hand-build a file that already has `paused` but is missing `pause_reason`/`paused_at` -- a state a
+    // single "does `paused` exist?" guard would (incorrectly) treat as fully migrated and skip entirely,
+    // leaving upsertScalarStatement referencing columns that don't exist.
+    const raw = new DatabaseSync(dbPath);
+    raw.exec(`
+      CREATE TABLE governor_scalar_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        rate_limit_buckets_json TEXT NOT NULL,
+        rate_limit_backoff_json TEXT NOT NULL,
+        cap_usage_json TEXT NOT NULL,
+        paused INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    raw.prepare(
+      "INSERT INTO governor_scalar_state (id, rate_limit_buckets_json, rate_limit_backoff_json, cap_usage_json, paused, updated_at) VALUES (1, ?, ?, ?, 0, ?)",
+    ).run("{}", "{}", JSON.stringify({ budgetSpent: 3, turnsTaken: 1, elapsedMs: 50 }), "2026-07-01T00:00:00Z");
+    raw.close();
+
+    const state = openGovernorState(dbPath);
+    states.push(state);
+    expect(() => state.loadPauseState()).not.toThrow();
+    expect(state.loadPauseState()).toEqual({ paused: false, reason: null, pausedAt: null });
+    expect(state.loadCapUsage()).toEqual({ budgetSpent: 3, turnsTaken: 1, elapsedMs: 50 });
+
+    expect(() => state.savePauseState({ paused: true, reason: "partial-migration pause" })).not.toThrow();
+    expect(state.loadPauseState()).toMatchObject({ paused: true, reason: "partial-migration pause" });
+  });
 });
 
 describe("governor-state reputation history (#5134)", () => {

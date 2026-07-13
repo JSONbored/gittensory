@@ -51,17 +51,25 @@ function parseJsonColumn(value, fallback) {
 
 // Add the pause/resume columns (#4851) to an on-disk file created before they existed. `CREATE TABLE IF NOT
 // EXISTS` above is a no-op against an already-existing table, so a pre-#4851 file needs this explicit ALTER --
-// guarded by a column-presence check so it only ever runs once per file, same technique as
+// guarded by a per-column presence check (rather than a single `paused`-only check) so a file that somehow
+// has `paused` but not `pause_reason`/`paused_at` still gets the columns it's missing, same technique as
 // portfolio-queue.js's own post-creation column migration.
 function ensurePauseColumns(db) {
-  const hasPausedColumn = db
-    .prepare("PRAGMA table_info(governor_scalar_state)")
-    .all()
-    .some((column) => column.name === "paused");
-  if (hasPausedColumn) return;
-  db.exec("ALTER TABLE governor_scalar_state ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
-  db.exec("ALTER TABLE governor_scalar_state ADD COLUMN pause_reason TEXT");
-  db.exec("ALTER TABLE governor_scalar_state ADD COLUMN paused_at TEXT");
+  const existingColumns = new Set(
+    db
+      .prepare("PRAGMA table_info(governor_scalar_state)")
+      .all()
+      .map((column) => column.name),
+  );
+  if (!existingColumns.has("paused")) {
+    db.exec("ALTER TABLE governor_scalar_state ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!existingColumns.has("pause_reason")) {
+    db.exec("ALTER TABLE governor_scalar_state ADD COLUMN pause_reason TEXT");
+  }
+  if (!existingColumns.has("paused_at")) {
+    db.exec("ALTER TABLE governor_scalar_state ADD COLUMN paused_at TEXT");
+  }
 }
 
 /** Opens the local governor-state store, creating tables on first use. */
