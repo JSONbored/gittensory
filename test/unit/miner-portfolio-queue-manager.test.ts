@@ -50,9 +50,40 @@ describe("entriesToPortfolioQueue() / selectEligibleBatch() (#4285)", () => {
       "acme/beta",
       "acme/gamma",
     ]);
-    expect(parseQueueItemId(queueItemId("acme/beta", "b-queued-1"))).toEqual({
+    expect(parseQueueItemId(queueItemId("https://api.github.com", "acme/beta", "b-queued-1"))).toEqual({
+      apiBaseUrl: "https://api.github.com",
       repoFullName: "acme/beta",
       identifier: "b-queued-1",
+    });
+  });
+
+  it("queueItemId/parseQueueItemId round-trip a non-default apiBaseUrl (#5563)", () => {
+    const id = queueItemId("https://ghe.example.com/api/v3", "acme/widgets", "issue:7");
+    expect(parseQueueItemId(id)).toEqual({
+      apiBaseUrl: "https://ghe.example.com/api/v3",
+      repoFullName: "acme/widgets",
+      identifier: "issue:7",
+    });
+  });
+
+  it("parseQueueItemId rejects a malformed id", () => {
+    expect(() => parseQueueItemId(42 as never)).toThrow("invalid_queue_item_id");
+    expect(() => parseQueueItemId("no-separators-at-all")).toThrow("invalid_queue_item_id");
+    expect(() => parseQueueItemId("https://api.github.com::acme/widgets")).toThrow("invalid_queue_item_id");
+    expect(() => parseQueueItemId("::acme/widgets::issue:7")).toThrow("invalid_queue_item_id");
+    expect(() => parseQueueItemId("https://api.github.com::acme/widgets::")).toThrow("invalid_queue_item_id");
+  });
+
+  it("entriesToPortfolioQueue falls back to the github.com default when a row's apiBaseUrl is missing (#5563)", () => {
+    const entries = [
+      { repoFullName: "acme/alpha", identifier: "x", priority: 0, status: "queued", enqueuedAt: "t1" },
+    ] as QueueEntry[];
+    const id = entriesToPortfolioQueue(entries).buckets[0]?.items[0]?.id;
+    expect(id).toBeDefined();
+    expect(parseQueueItemId(id!)).toEqual({
+      apiBaseUrl: "https://api.github.com",
+      repoFullName: "acme/alpha",
+      identifier: "x",
     });
   });
 
@@ -108,6 +139,24 @@ describe("initPortfolioQueueManager().claimNextBatch() (#4285)", () => {
     expect(claimed.map((entry) => entry.identifier)).toEqual(["b-queued-1", "c-queued-1", "a-queued-1"]);
     expect(claimed.every((entry) => entry.status === "in_progress")).toBe(true);
     expect(manager.listQueue().find((entry) => entry.identifier === "a-queued-2")?.status).toBe("queued");
+  });
+
+  it("REGRESSION: claimNextBatch claims the correct host's row when two hosts share a repoFullName+identifier (#5563)", () => {
+    const manager = memoryManager({ globalWipCap: 4, perRepoWipCap: 2 });
+    manager.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1", priority: 1, apiBaseUrl: "https://api.github.com" });
+    manager.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1", priority: 1, apiBaseUrl: "https://ghe.example.com/api/v3" });
+
+    const claimed = manager.claimNextBatch();
+    expect(claimed).toHaveLength(2);
+    expect(claimed.map((entry) => entry.apiBaseUrl).sort()).toEqual([
+      "https://api.github.com",
+      "https://ghe.example.com/api/v3",
+    ]);
+    expect(claimed.every((entry) => entry.status === "in_progress")).toBe(true);
+    // Every row is genuinely claimed at the store level -- not one host's row claimed twice under two ids.
+    const rows = manager.listQueue("acme/widgets");
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.status === "in_progress")).toBe(true);
   });
 
   it("does not claim rows another writer already took inside the same transaction window", () => {

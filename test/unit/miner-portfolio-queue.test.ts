@@ -320,5 +320,42 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
       expect(store.listQueue("acme/widgets")).toHaveLength(2);
       expect(geEntry.apiBaseUrl).toBe("https://ghe.example.com/api/v3");
     });
+
+    it("REGRESSION: a legacy row violating the rebuilt table's status CHECK constraint is dropped, not a migration-aborting crash", () => {
+      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-legacy-corrupt-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-corrupt.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      // No CHECK on status here, simulating a hand-edited or otherwise corrupted legacy file -- the real
+      // baseline schema always enforces the CHECK, so this can only arise from external tampering.
+      legacy.exec(`
+        CREATE TABLE miner_portfolio_queue (
+          repo_full_name TEXT NOT NULL,
+          identifier TEXT NOT NULL,
+          priority REAL NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued',
+          enqueued_at TEXT NOT NULL,
+          leased_at TEXT,
+          PRIMARY KEY (repo_full_name, identifier)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 2");
+      legacy.exec(
+        "INSERT INTO miner_portfolio_queue (repo_full_name, identifier, priority, status, enqueued_at, leased_at) VALUES ('acme/corrupt', 'issue:1', 1, 'bogus', '2026-01-01T00:00:00.000Z', NULL)",
+      );
+      legacy.exec(
+        "INSERT INTO miner_portfolio_queue (repo_full_name, identifier, priority, status, enqueued_at, leased_at) VALUES ('acme/widgets', 'issue:5', 3, 'queued', '2026-01-01T00:00:00.000Z', NULL)",
+      );
+      legacy.close();
+
+      let opened: ReturnType<typeof initPortfolioQueueStore> | undefined;
+      expect(() => {
+        opened = initPortfolioQueueStore(dbPath);
+      }).not.toThrow();
+      const store = opened!;
+      stores.push(store);
+      // The corrupt row was dropped, not migrated -- only the valid row survived the rebuild.
+      expect(store.listQueue().map((entry) => entry.repoFullName)).toEqual(["acme/widgets"]);
+    });
   });
 });
