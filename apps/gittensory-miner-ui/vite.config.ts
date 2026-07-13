@@ -8,6 +8,7 @@ import { authPlugin } from "./vite-auth";
 import { governorApiPlugin } from "./vite-governor-api";
 import { ledgersApiPlugin } from "./vite-ledgers-api";
 import { portfolioQueueApiPlugin } from "./vite-portfolio-queue-api";
+import { queueActionsApiPlugin } from "./vite-queue-actions-api";
 import { rankedCandidatesApiPlugin } from "./vite-ranked-candidates-api";
 import { runStateApiPlugin } from "./vite-run-state-api";
 
@@ -24,6 +25,7 @@ export default defineConfig({
     portfolioQueueApiPlugin(),
     ledgersApiPlugin(),
     governorApiPlugin(),
+    queueActionsApiPlugin(),
     rankedCandidatesApiPlugin(),
   ],
   server: {
