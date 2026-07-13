@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
+import { authPlugin } from "./vite-auth";
 import { ledgersApiPlugin } from "./vite-ledgers-api";
 import { portfolioQueueApiPlugin } from "./vite-portfolio-queue-api";
 import { runStateApiPlugin } from "./vite-run-state-api";
@@ -14,6 +15,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
     tsconfigPaths(),
+    // Must run before the three API plugins below: it rejects any unauthenticated /api/* request before
+    // their own middlewares are reached (#4858).
+    authPlugin(),
     runStateApiPlugin(),
     portfolioQueueApiPlugin(),
     ledgersApiPlugin(),

@@ -15,3 +15,14 @@ Phase 6 data views (run history, portfolio cards) land in follow-up issues after
 | Env var                     | Required | Description                                                                                                                                                                                                                                            |
 | --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `VITE_MINER_UI_GRAFANA_URL` | No       | If set (and non-empty), renders a footer link to your ORB/Grafana dashboard at this URL. Unset ⇒ no link. Must be `VITE_`-prefixed so Vite exposes it to the client bundle. It is a plain navigational link — no token or credential is ever appended. |
+
+## Local API authentication
+
+`/api/*` (run-state, portfolio-queue, ledgers, and any future endpoint under that prefix) requires a
+same-origin session cookie — an unauthenticated request is rejected with `401`. The dev/preview server
+(`vite-auth.ts`) generates a random token once per process and sets it as an `HttpOnly; SameSite=Strict`
+cookie on every response; a browser that has loaded this app's own page (`/`) already carries the cookie
+automatically on every subsequent same-origin `fetch()` call, so none of the client-side data fetchers need
+to know about it. A request from another local process, or from a different page/origin the user has open
+(including a DNS-rebinding attempt), has no way to obtain the cookie and is rejected. There is nothing to
+configure — this is always on for both `vite dev` and `vite preview`.
