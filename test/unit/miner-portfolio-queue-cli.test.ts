@@ -47,10 +47,11 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       json: true,
       repoFullName: "acme/widgets",
     });
-    expect(parseQueueNextArgs(["--json"])).toEqual({ json: true });
+    expect(parseQueueNextArgs(["--json"])).toEqual({ json: true, dryRun: false });
     expect(parseQueueDoneArgs(["acme/widgets", "issue:42", "--json"])).toEqual({
       repoFullName: "acme/widgets",
       identifier: "issue:42",
+      dryRun: false,
       json: true,
     });
     expect(parseQueueDoneArgs(["acme/widgets"])).toEqual({
@@ -129,6 +130,36 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
     expect(log).toHaveBeenCalledWith("none");
   });
 
+  it("#4847: --dry-run reports what next/done would do and returns 0 without opening the portfolio queue", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const initPortfolioQueueSpy = vi.fn();
+
+    expect(runQueueNext(["--dry-run", "--json"], { initPortfolioQueue: initPortfolioQueueSpy })).toBe(0);
+    expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({ outcome: "dry_run" });
+
+    log.mockClear();
+    expect(runQueueNext(["--dry-run"], { initPortfolioQueue: initPortfolioQueueSpy })).toBe(0);
+    expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would dequeue the highest-priority queued item");
+
+    log.mockClear();
+    expect(
+      runQueueDone(["acme/widgets", "issue:9", "--dry-run", "--json"], { initPortfolioQueue: initPortfolioQueueSpy }),
+    ).toBe(0);
+    expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      outcome: "dry_run",
+      repoFullName: "acme/widgets",
+      identifier: "issue:9",
+    });
+
+    log.mockClear();
+    expect(runQueueDone(["acme/widgets", "issue:9", "--dry-run"], { initPortfolioQueue: initPortfolioQueueSpy })).toBe(
+      0,
+    );
+    expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would mark acme/widgets issue:9 done");
+  });
+
   it("runQueueDone marks an item done and rejects missing entries", () => {
     const portfolioQueue = tempQueueStore();
     portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:9", priority: 1 });
@@ -194,16 +225,64 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       expect(parseQueueReleaseArgs(["acme/widgets", "issue:1"])).toEqual({
         repoFullName: "acme/widgets",
         identifier: "issue:1",
+        dryRun: false,
         json: false,
       });
       expect(parseQueueRequeueArgs(["acme/widgets", "issue:1", "--json"])).toEqual({
         repoFullName: "acme/widgets",
         identifier: "issue:1",
+        dryRun: false,
         json: true,
       });
       // Wrong positional count surfaces the command-specific usage string.
       expect(parseQueueReleaseArgs(["only-one"])).toEqual({ error: expect.stringContaining("queue release") });
       expect(parseQueueRequeueArgs([])).toEqual({ error: expect.stringContaining("queue requeue") });
+    });
+
+    it("#4847: --dry-run reports what release/requeue would do and returns 0 without opening the portfolio queue", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const initPortfolioQueueSpy = vi.fn();
+
+      expect(
+        runQueueRelease(["acme/widgets", "issue:7", "--dry-run", "--json"], {
+          initPortfolioQueue: initPortfolioQueueSpy,
+        }),
+      ).toBe(0);
+      expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        outcome: "dry_run",
+        repoFullName: "acme/widgets",
+        identifier: "issue:7",
+      });
+
+      log.mockClear();
+      expect(
+        runQueueRelease(["acme/widgets", "issue:7", "--dry-run"], { initPortfolioQueue: initPortfolioQueueSpy }),
+      ).toBe(0);
+      expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+      expect(String(log.mock.calls[0]?.[0])).toContain(
+        "DRY RUN: would release acme/widgets issue:7 back to the queue",
+      );
+
+      log.mockClear();
+      expect(
+        runQueueRequeue(["acme/widgets", "issue:9", "--dry-run"], { initPortfolioQueue: initPortfolioQueueSpy }),
+      ).toBe(0);
+      expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+      expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would requeue acme/widgets issue:9");
+
+      log.mockClear();
+      expect(
+        runQueueRequeue(["acme/widgets", "issue:9", "--dry-run", "--json"], {
+          initPortfolioQueue: initPortfolioQueueSpy,
+        }),
+      ).toBe(0);
+      expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        outcome: "dry_run",
+        repoFullName: "acme/widgets",
+        identifier: "issue:9",
+      });
     });
 
     it("release returns a CLAIMED (in-progress) item to the queue", () => {

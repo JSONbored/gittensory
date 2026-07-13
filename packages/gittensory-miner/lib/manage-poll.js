@@ -8,7 +8,7 @@ import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const MANAGE_POLL_USAGE =
-  "Usage: gittensory-miner manage poll <owner/repo> <pr#> [--branch <name>] [--json]";
+  "Usage: gittensory-miner manage poll <owner/repo> <pr#> [--branch <name>] [--dry-run] [--json]";
 
 function parseRepoArg(value, usage) {
   if (!value) return { error: usage };
@@ -61,13 +61,19 @@ export function buildManagePollEventPayload(prNumber, pollResult, options = {}) 
 }
 
 export function parseManagePollArgs(args = []) {
-  const options = { json: false, branch: null };
+  const options = { json: false, branch: null, dryRun: false };
   const positional = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    // #4847: still runs the real (read-only) CI-check-run poll, but skips the event-ledger append and
+    // portfolio-queue enqueue.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token === "--branch") {
@@ -164,6 +170,45 @@ export async function runManagePoll(args = [], options = {}) {
   const parsed = parseManagePollArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  // #4847: the CI-check-run poll itself is a real, read-only GitHub signal -- the useful "what would this
+  // record?" output -- so a dry run still performs it for real. It never opens the event ledger or portfolio
+  // queue, though: a no-op event ledger is fed through recordManagePollSnapshot so its own real payload-building
+  // logic still runs, just without ever writing to local storage (ensurePortfolioRow: false skips the queue
+  // enqueue the same way).
+  if (parsed.dryRun) {
+    const noopEventLedger = { appendEvent: () => null };
+    try {
+      const result = await recordManagePollSnapshot(
+        { repoFullName: parsed.repoFullName, prNumber: parsed.prNumber, branch: parsed.branch },
+        {
+          eventLedger: noopEventLedger,
+          ensurePortfolioRow: false,
+          pollCheckRuns: options.pollCheckRuns,
+          fetchFn: options.fetchFn,
+          githubToken: options.githubToken ?? process.env.GITHUB_TOKEN ?? "",
+          apiBaseUrl: options.apiBaseUrl,
+          maxAttempts: options.maxAttempts,
+          minIntervalMs: options.minIntervalMs,
+          maxIntervalMs: options.maxIntervalMs,
+          sleepFn: options.sleepFn,
+          lastPolledAt: options.lastPolledAt,
+        },
+      );
+      const dryRunResult = { outcome: "dry_run", pollResult: result.pollResult, payload: result.payload };
+      if (parsed.json) {
+        console.log(JSON.stringify(dryRunResult, null, 2));
+      } else {
+        console.log(
+          `DRY RUN: ${result.payload.ciState} (${result.payload.gateVerdict}/${result.payload.outcome}). No event-ledger or portfolio-queue write was made.`,
+        );
+      }
+      return 0;
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
   }
 
   const ownsEventLedger = options.initEventLedger === undefined;

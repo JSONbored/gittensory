@@ -33,6 +33,7 @@ describe("gittensory-miner state CLI", () => {
     expect(parseStateSetArgs(["acme/widgets", "planning"])).toEqual({
       repoFullName: "acme/widgets",
       state: "planning",
+      dryRun: false,
       json: false,
     });
     expect(parseStateSetArgs(["acme/widgets", "bogus"])).toEqual({
@@ -61,6 +62,23 @@ describe("gittensory-miner state CLI", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining('"state":"discovering"'),
     );
+  });
+
+  it("#4847: --dry-run reports what a state set would do and returns 0 without writing the run-state store", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(runStateSet(["acme/widgets", "planning", "--dry-run", "--json"])).toBe(0);
+    expect(setRunState).not.toHaveBeenCalled();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      outcome: "dry_run",
+      repoFullName: "acme/widgets",
+      state: "planning",
+    });
+
+    log.mockClear();
+    expect(runStateSet(["acme/widgets", "planning", "--dry-run"])).toBe(0);
+    expect(setRunState).not.toHaveBeenCalled();
+    expect(String(log.mock.calls[0]?.[0])).toContain('DRY RUN: would set acme/widgets\'s run state to "planning"');
   });
 
   it("runStateSet returns exit code 2 for malformed repositories", () => {

@@ -38,16 +38,18 @@ afterEach(() => {
 
 describe("gittensory-miner claim ledger CLI (#4290)", () => {
   it("parseClaimClaimArgs, parseClaimReleaseArgs, and parseClaimListArgs validate argv", () => {
-    expect(parseClaimClaimArgs(["acme/widgets", "42", "--note", "wip", "--json"])).toEqual({
+    expect(parseClaimClaimArgs(["acme/widgets", "42", "--note", "wip", "--dry-run", "--json"])).toEqual({
       repoFullName: "acme/widgets",
       issueNumber: 42,
       note: "wip",
+      dryRun: true,
       json: true,
     });
     expect(parseClaimClaimArgs(["acme/widgets", "42"])).toEqual({
       repoFullName: "acme/widgets",
       issueNumber: 42,
       note: undefined,
+      dryRun: false,
       json: false,
     });
     expect(parseClaimClaimArgs(["acme/widgets"])).toEqual({
@@ -69,6 +71,7 @@ describe("gittensory-miner claim ledger CLI (#4290)", () => {
     expect(parseClaimReleaseArgs(["acme/widgets", "7", "--json"])).toEqual({
       repoFullName: "acme/widgets",
       issueNumber: 7,
+      dryRun: false,
       json: true,
     });
     expect(parseClaimReleaseArgs(["acme/widgets"])).toEqual({
@@ -151,6 +154,53 @@ describe("gittensory-miner claim ledger CLI (#4290)", () => {
         status: "active",
         note: "on it",
       }),
+    });
+  });
+
+  it("#4847: --dry-run reports what would happen and returns 0 without opening the claim ledger", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const openClaimLedgerSpy = vi.fn();
+
+    expect(
+      runClaimClaim(["acme/widgets", "42", "--note", "on it", "--dry-run", "--json"], {
+        openClaimLedger: openClaimLedgerSpy,
+      }),
+    ).toBe(0);
+    expect(openClaimLedgerSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      outcome: "dry_run",
+      repoFullName: "acme/widgets",
+      issueNumber: 42,
+      note: "on it",
+    });
+
+    log.mockClear();
+    expect(runClaimClaim(["acme/widgets", "42", "--dry-run"], { openClaimLedger: openClaimLedgerSpy })).toBe(0);
+    expect(openClaimLedgerSpy).not.toHaveBeenCalled();
+    expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would claim acme/widgets#42");
+    expect(String(log.mock.calls[0]?.[0])).not.toContain("note:");
+
+    log.mockClear();
+    expect(
+      runClaimClaim(["acme/widgets", "42", "--note", "on it", "--dry-run"], { openClaimLedger: openClaimLedgerSpy }),
+    ).toBe(0);
+    expect(openClaimLedgerSpy).not.toHaveBeenCalled();
+    expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would claim acme/widgets#42 (note: on it)");
+
+    log.mockClear();
+    expect(runClaimRelease(["acme/widgets", "42", "--dry-run"], { openClaimLedger: openClaimLedgerSpy })).toBe(0);
+    expect(openClaimLedgerSpy).not.toHaveBeenCalled();
+    expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would release the claim on acme/widgets#42");
+
+    log.mockClear();
+    expect(
+      runClaimRelease(["acme/widgets", "42", "--dry-run", "--json"], { openClaimLedger: openClaimLedgerSpy }),
+    ).toBe(0);
+    expect(openClaimLedgerSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      outcome: "dry_run",
+      repoFullName: "acme/widgets",
+      issueNumber: 42,
     });
   });
 

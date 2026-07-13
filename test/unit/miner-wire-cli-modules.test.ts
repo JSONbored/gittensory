@@ -42,12 +42,31 @@ describe("queue claim-batch — wires the WIP-cap-aware batch claimer (#4833)", 
   it("parses the wip flags, rejecting a non-numeric/negative value", () => {
     expect(parseQueueClaimBatchArgs(["--global-wip", "3", "--per-repo-wip", "1", "--json"])).toEqual({
       json: true,
+      dryRun: false,
       globalWipCap: 3,
       perRepoWipCap: 1,
     });
     expect(parseQueueClaimBatchArgs(["--global-wip", "x"])).toHaveProperty("error");
     expect(parseQueueClaimBatchArgs(["--per-repo-wip", "-1"])).toHaveProperty("error");
     expect(parseQueueClaimBatchArgs(["--bogus"])).toHaveProperty("error");
+  });
+
+  it("#4847: --dry-run reports what a claim would do and returns 0 without opening the manager", () => {
+    const initPortfolioQueueManagerSpy = vi.fn();
+    const spy = captureLog();
+
+    const jsonCode = runQueueClaimBatch(["--global-wip", "3", "--per-repo-wip", "2", "--dry-run", "--json"], {
+      initPortfolioQueueManager: initPortfolioQueueManagerSpy,
+    });
+    expect(jsonCode).toBe(0);
+    expect(initPortfolioQueueManagerSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(logs.join(""))).toEqual({ outcome: "dry_run", globalWipCap: 3, perRepoWipCap: 2 });
+
+    logs = [];
+    const textCode = runQueueClaimBatch(["--dry-run"], { initPortfolioQueueManager: initPortfolioQueueManagerSpy });
+    expect(textCode).toBe(0);
+    expect(logs.join("")).toContain("DRY RUN: would claim a batch (global-wip: 1, per-repo-wip: 1)");
+    spy.mockRestore();
   });
 
   it("claims a diversified batch across repos via the manager", () => {
@@ -99,6 +118,40 @@ describe("orb export — wires the anonymized telemetry batch-builder (#4833)", 
     closeables.push(store, ledger);
     return { openOrbExportStore: () => store, initEventLedger: () => ledger };
   };
+
+  it("#4847: --dry-run reports what an export would do and returns 0 without opening any store", () => {
+    const openOrbExportStoreSpy = vi.fn();
+    const initEventLedgerSpy = vi.fn();
+    const spy = captureLog();
+
+    const disabledCode = runOrbExportCli(["--dry-run", "--json"], {
+      openOrbExportStore: openOrbExportStoreSpy,
+      initEventLedger: initEventLedgerSpy,
+    });
+    expect(disabledCode).toBe(0);
+    expect(openOrbExportStoreSpy).not.toHaveBeenCalled();
+    expect(initEventLedgerSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(logs.join(""))).toEqual({ outcome: "dry_run", enabled: false });
+
+    logs = [];
+    const enabledCode = runOrbExportCli(["--enable", "--dry-run"], {
+      openOrbExportStore: openOrbExportStoreSpy,
+      initEventLedger: initEventLedgerSpy,
+    });
+    expect(enabledCode).toBe(0);
+    expect(openOrbExportStoreSpy).not.toHaveBeenCalled();
+    expect(logs.join("")).toContain("DRY RUN: would build and report an anonymized Orb export batch");
+
+    logs = [];
+    const disabledTextCode = runOrbExportCli(["--dry-run"], {
+      openOrbExportStore: openOrbExportStoreSpy,
+      initEventLedger: initEventLedgerSpy,
+    });
+    expect(disabledTextCode).toBe(0);
+    expect(openOrbExportStoreSpy).not.toHaveBeenCalled();
+    expect(logs.join("")).toContain("DRY RUN: orb export is opt-in and disabled — pass --enable");
+    spy.mockRestore();
+  });
 
   it("is opt-in: exports nothing (null batch) without --enable", () => {
     const spy = captureLog();

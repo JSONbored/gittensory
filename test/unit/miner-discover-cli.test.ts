@@ -88,6 +88,7 @@ describe("parseDiscoverArgs (#4247)", () => {
         { owner: "acme", repo: "gadgets" },
       ],
       search: null,
+      dryRun: false,
       json: true,
     });
   });
@@ -96,6 +97,7 @@ describe("parseDiscoverArgs (#4247)", () => {
     expect(parseDiscoverArgs(["--search", "label:bug"])).toEqual({
       targets: [],
       search: "label:bug",
+      dryRun: false,
       json: false,
     });
   });
@@ -136,6 +138,7 @@ describe("parseDiscoverArgs (#4247)", () => {
     ).toEqual({
       targets: [{ owner: "acme", repo: "widgets" }],
       search: null,
+      dryRun: false,
       json: false,
       apiBaseUrl: "https://ghe.example.com/api/v3",
       tokenEnv: "FORGE_PAT",
@@ -146,7 +149,17 @@ describe("parseDiscoverArgs (#4247)", () => {
     expect(parseDiscoverArgs(["acme/widgets"])).toEqual({
       targets: [{ owner: "acme", repo: "widgets" }],
       search: null,
+      dryRun: false,
       json: false,
+    });
+  });
+
+  it("parses --dry-run (#4847)", () => {
+    expect(parseDiscoverArgs(["acme/widgets", "--dry-run", "--json"])).toEqual({
+      targets: [{ owner: "acme", repo: "widgets" }],
+      search: null,
+      dryRun: true,
+      json: true,
     });
   });
 
@@ -334,6 +347,109 @@ describe("runDiscover (#4247)", () => {
 
     const queued = portfolioQueue.listQueue("acme/widgets");
     expect(queued.map((entry) => entry.identifier).sort()).toEqual(["issue:1", "issue:2"]);
+  });
+
+  it("#4847: --dry-run performs the real fan-out/rank but never opens any local store", async () => {
+    const initPortfolioQueue = vi.fn();
+    const initPolicyDocCache = vi.fn();
+    const initPolicyVerdictCache = vi.fn();
+    const fetchCandidateIssuesWithSummary = vi.fn(async (targets, token, fanOutOptions) => {
+      expect(fanOutOptions).toMatchObject({ policyDocCache: null, policyVerdictCache: null });
+      return {
+        issues: [fanOutIssue({ issueNumber: 1, title: "Add retry helper" })],
+        warnings: [],
+        rateLimitRemaining: 4990,
+        rateLimitResetAt: "2026-07-09T13:00:00.000Z",
+      };
+    });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const exitCode = await runDiscover(["acme/widgets", "--dry-run", "--json"], {
+      nowMs: NOW,
+      initPortfolioQueue,
+      initPolicyDocCache,
+      initPolicyVerdictCache,
+      fetchCandidateIssuesWithSummary,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(initPortfolioQueue).not.toHaveBeenCalled();
+    expect(initPolicyDocCache).not.toHaveBeenCalled();
+    expect(initPolicyVerdictCache).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(payload.outcome).toBe("dry_run");
+    expect(payload.fanOutCount).toBe(1);
+    expect(payload.enqueueSummary.enqueued).toBe(1);
+    expect(payload.ranked.map((entry: { issueNumber: number }) => entry.issueNumber)).toEqual([1]);
+
+    log.mockClear();
+    const textExitCode = await runDiscover(["acme/widgets", "--dry-run"], {
+      nowMs: NOW,
+      initPortfolioQueue,
+      initPolicyDocCache,
+      initPolicyVerdictCache,
+      fetchCandidateIssuesWithSummary,
+    });
+    expect(textExitCode).toBe(0);
+    expect(String(log.mock.calls[1]?.[0])).toContain("DRY RUN: no portfolio-queue write was made.");
+  });
+
+  it("#4847: --dry-run reports fan-out failures and exits non-zero without opening any local store", async () => {
+    const initPortfolioQueue = vi.fn();
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => {
+      throw new Error("github_unreachable");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const exitCode = await runDiscover(["acme/widgets", "--dry-run"], {
+      nowMs: NOW,
+      initPortfolioQueue,
+      fetchCandidateIssuesWithSummary,
+    });
+
+    expect(exitCode).toBe(2);
+    expect(initPortfolioQueue).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("github_unreachable");
+  });
+
+  it("#4847: --dry-run stringifies a thrown non-Error value instead of crashing", async () => {
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => {
+      throw "raw_string_fault";
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const exitCode = await runDiscover(["acme/widgets", "--dry-run"], { nowMs: NOW, fetchCandidateIssuesWithSummary });
+
+    expect(exitCode).toBe(2);
+    expect(error).toHaveBeenCalledWith("raw_string_fault");
+  });
+
+  it("#4847: --dry-run works in --search mode too, never calling the repo fan-out", async () => {
+    const initPortfolioQueue = vi.fn();
+    const searchCandidateIssuesWithSummary = vi.fn(async (query: string) => ({
+      issues: [fanOutIssue({ issueNumber: 9, title: `Result for ${query}` })],
+      warnings: [],
+      rateLimitRemaining: null,
+      rateLimitResetAt: null,
+    }));
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => {
+      throw new Error("must not be called in --search mode");
+    });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const exitCode = await runDiscover(["--search", "label:bug", "--dry-run", "--json"], {
+      nowMs: NOW,
+      initPortfolioQueue,
+      searchCandidateIssuesWithSummary,
+      fetchCandidateIssuesWithSummary,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(initPortfolioQueue).not.toHaveBeenCalled();
+    expect(fetchCandidateIssuesWithSummary).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(payload.outcome).toBe("dry_run");
+    expect(payload.ranked[0]?.title).toContain("Result for label:bug");
   });
 
   it("uses --search instead of repo targets and never calls the repo fan-out", async () => {

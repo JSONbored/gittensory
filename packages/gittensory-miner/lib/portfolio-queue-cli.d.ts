@@ -8,12 +8,13 @@ export type ParsedQueueListArgs =
     }
   | { error: string };
 
-export type ParsedQueueNextArgs = { json: boolean } | { error: string };
+export type ParsedQueueNextArgs = { json: boolean; dryRun: boolean } | { error: string };
 
 export type ParsedQueueDoneArgs =
   | {
       repoFullName: string;
       identifier: string;
+      dryRun: boolean;
       json: boolean;
     }
   | { error: string };
@@ -29,7 +30,7 @@ export function parseQueueReleaseArgs(args: string[]): ParsedQueueDoneArgs;
 export function parseQueueRequeueArgs(args: string[]): ParsedQueueDoneArgs;
 
 export type ParsedQueueClaimBatchArgs =
-  | { json: boolean; globalWipCap: number; perRepoWipCap: number }
+  | { json: boolean; dryRun: boolean; globalWipCap: number; perRepoWipCap: number }
   | { error: string };
 
 export function parseQueueClaimBatchArgs(args: string[]): ParsedQueueClaimBatchArgs;

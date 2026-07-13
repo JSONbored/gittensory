@@ -2,8 +2,8 @@ import { CLAIM_STATUSES, openClaimLedger } from "./claim-ledger.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const CLAIM_CLAIM_USAGE =
-  "Usage: gittensory-miner claim claim <owner/repo> <issue#> [--note <text>] [--json]";
-const CLAIM_RELEASE_USAGE = "Usage: gittensory-miner claim release <owner/repo> <issue#> [--json]";
+  "Usage: gittensory-miner claim claim <owner/repo> <issue#> [--note <text>] [--dry-run] [--json]";
+const CLAIM_RELEASE_USAGE = "Usage: gittensory-miner claim release <owner/repo> <issue#> [--dry-run] [--json]";
 const CLAIM_LIST_USAGE =
   "Usage: gittensory-miner claim list [--repo <owner/repo>] [--status active|released|expired] [--json]";
 
@@ -27,13 +27,18 @@ function parseIssueNumberArg(value, usage) {
 }
 
 export function parseClaimClaimArgs(args) {
-  const options = { json: false, note: undefined };
+  const options = { json: false, note: undefined, dryRun: false };
   const positional = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    // #4847: reports what a real claim would do and returns before opening the claim ledger at all.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token === "--note") {
@@ -64,17 +69,22 @@ export function parseClaimClaimArgs(args) {
     repoFullName: repo.repoFullName,
     issueNumber: issue.issueNumber,
     note: options.note,
+    dryRun: options.dryRun,
     json: options.json,
   };
 }
 
 export function parseClaimReleaseArgs(args) {
-  const options = { json: false };
+  const options = { json: false, dryRun: false };
   const positional = [];
 
   for (const token of args) {
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token.startsWith("-")) {
@@ -95,6 +105,7 @@ export function parseClaimReleaseArgs(args) {
   return {
     repoFullName: repo.repoFullName,
     issueNumber: issue.issueNumber,
+    dryRun: options.dryRun,
     json: options.json,
   };
 }
@@ -187,6 +198,18 @@ export function runClaimClaim(args, options = {}) {
     return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", repoFullName: parsed.repoFullName, issueNumber: parsed.issueNumber, note: parsed.note ?? null };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(
+        `DRY RUN: would claim ${parsed.repoFullName}#${parsed.issueNumber}${parsed.note ? ` (note: ${parsed.note})` : ""}. No claim-ledger write was made.`,
+      );
+    }
+    return 0;
+  }
+
   try {
     return withClaimLedger(options, (claimLedger) => {
       const claim = claimLedger.claimIssue(
@@ -210,6 +233,16 @@ export function runClaimRelease(args, options = {}) {
   const parsed = parseClaimReleaseArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", repoFullName: parsed.repoFullName, issueNumber: parsed.issueNumber };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(`DRY RUN: would release the claim on ${parsed.repoFullName}#${parsed.issueNumber}. No claim-ledger write was made.`);
+    }
+    return 0;
   }
 
   try {

@@ -9,6 +9,7 @@ export type ParsedStateSetArgs =
   | {
       repoFullName: string;
       state: "idle" | "discovering" | "planning" | "preparing";
+      dryRun: boolean;
       json: boolean;
     }
   | { error: string };

@@ -3,7 +3,7 @@ import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js
 
 const STATE_GET_USAGE = "Usage: gittensory-miner state get <owner/repo> [--json]";
 const STATE_SET_USAGE =
-  "Usage: gittensory-miner state set <owner/repo> <idle|discovering|planning|preparing> [--json]";
+  "Usage: gittensory-miner state set <owner/repo> <idle|discovering|planning|preparing> [--dry-run] [--json]";
 
 const allowedRunStates = new Set(RUN_STATES);
 
@@ -44,13 +44,18 @@ export function parseStateGetArgs(args) {
 }
 
 export function parseStateSetArgs(args) {
-  const options = { json: false };
+  const options = { json: false, dryRun: false };
   const positional = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    // #4847: reports what a real state set would do and returns before writing to the run-state store.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token.startsWith("-")) {
@@ -97,6 +102,16 @@ export function runStateSet(args) {
   const parsed = parseStateSetArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", repoFullName: parsed.repoFullName, state: parsed.state };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult));
+    } else {
+      console.log(`DRY RUN: would set ${parsed.repoFullName}'s run state to "${parsed.state}". No run-state write was made.`);
+    }
+    return 0;
   }
 
   try {

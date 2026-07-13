@@ -134,10 +134,10 @@ export function collectOrbExportBatch({ store, eventLedger, enabled = ORB_EXPORT
   return buildAnonymizedOrbBatch(outcomes, store.getOrCreateAnonSecret());
 }
 
-const ORB_EXPORT_USAGE = "Usage: gittensory-miner orb export [--enable] [--json]";
+const ORB_EXPORT_USAGE = "Usage: gittensory-miner orb export [--enable] [--dry-run] [--json]";
 
 export function parseOrbExportArgs(args) {
-  const options = { json: false, enable: false };
+  const options = { json: false, enable: false, dryRun: false };
   for (const token of args) {
     if (token === "--json") {
       options.json = true;
@@ -145,6 +145,12 @@ export function parseOrbExportArgs(args) {
     }
     if (token === "--enable") {
       options.enable = true;
+      continue;
+    }
+    // #4847: openOrbExportStore() itself creates the local SQLite file (a real write) even before any secret is
+    // generated, so a dry run reports what would happen and returns before opening any store at all.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     return { error: ORB_EXPORT_USAGE };
@@ -159,6 +165,18 @@ export function runOrbExportCli(args, options = {}) {
   const parsed = parseOrbExportArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", enabled: parsed.enable };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else if (parsed.enable) {
+      console.log("DRY RUN: would build and report an anonymized Orb export batch. No local writes were made.");
+    } else {
+      console.log("DRY RUN: orb export is opt-in and disabled — pass --enable to build an anonymized batch. No local writes were made.");
+    }
+    return 0;
   }
 
   // Open the stores INSIDE the try so a bad config path / SQLite open failure returns 2 instead of crashing the

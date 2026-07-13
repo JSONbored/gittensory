@@ -41,7 +41,7 @@ export function collectOrbExportBatch(options?: {
   enabled?: boolean;
 }): OrbExportRow[] | null;
 
-export type ParsedOrbExportArgs = { json: boolean; enable: boolean } | { error: string };
+export type ParsedOrbExportArgs = { json: boolean; enable: boolean; dryRun: boolean } | { error: string };
 
 export function parseOrbExportArgs(args: string[]): ParsedOrbExportArgs;
 

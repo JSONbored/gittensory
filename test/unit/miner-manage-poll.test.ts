@@ -62,6 +62,7 @@ describe("gittensory-miner manage poll (#2323/#2325)", () => {
       repoFullName: "acme/widgets",
       prNumber: 42,
       branch: "feat/x",
+      dryRun: false,
       json: true,
     });
     expect(parseManagePollArgs(["acme/widgets", "0"])).toEqual({
@@ -166,6 +167,69 @@ describe("gittensory-miner manage poll (#2323/#2325)", () => {
         payload: expect.objectContaining({ prNumber: 4, ciState: "success" }),
       }),
     );
+  });
+
+  it("#4847: --dry-run performs the real CI poll but never opens the event ledger or portfolio queue", async () => {
+    const initPortfolioQueue = vi.fn();
+    const initEventLedger = vi.fn();
+    const pollCheckRuns = vi.fn().mockResolvedValue(pollResult("success"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(
+      await runManagePoll(["acme/widgets", "4", "--branch", "feat/x", "--dry-run", "--json"], {
+        initPortfolioQueue,
+        initEventLedger,
+        pollCheckRuns,
+        lastPolledAt: "2026-07-04T12:10:00.000Z",
+      }),
+    ).toBe(0);
+    expect(pollCheckRuns).toHaveBeenCalledWith("acme/widgets", 4, expect.any(Object));
+    expect(initPortfolioQueue).not.toHaveBeenCalled();
+    expect(initEventLedger).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(payload.outcome).toBe("dry_run");
+    expect(payload.payload).toEqual(
+      expect.objectContaining({ prNumber: 4, ciState: "success", gateVerdict: "pass", outcome: "ready" }),
+    );
+
+    log.mockClear();
+    expect(
+      await runManagePoll(["acme/widgets", "4", "--dry-run"], {
+        initPortfolioQueue,
+        initEventLedger,
+        pollCheckRuns,
+        lastPolledAt: "2026-07-04T12:10:00.000Z",
+      }),
+    ).toBe(0);
+    expect(String(log.mock.calls[0]?.[0])).toContain(
+      "DRY RUN: success (pass/ready). No event-ledger or portfolio-queue write was made.",
+    );
+  });
+
+  it("#4847: --dry-run reports poll failures and exits non-zero without opening any local store", async () => {
+    const initPortfolioQueue = vi.fn();
+    const initEventLedger = vi.fn();
+    const pollCheckRuns = vi.fn().mockRejectedValue(new Error("github_404: not found"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(
+      await runManagePoll(["acme/widgets", "4", "--dry-run"], {
+        initPortfolioQueue,
+        initEventLedger,
+        pollCheckRuns,
+      }),
+    ).toBe(2);
+    expect(initPortfolioQueue).not.toHaveBeenCalled();
+    expect(initEventLedger).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("github_404: not found");
+  });
+
+  it("#4847: --dry-run stringifies a thrown non-Error value instead of crashing", async () => {
+    const pollCheckRuns = vi.fn().mockRejectedValue("raw_string_fault");
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(await runManagePoll(["acme/widgets", "4", "--dry-run"], { pollCheckRuns })).toBe(2);
+    expect(error).toHaveBeenCalledWith("raw_string_fault");
   });
 
   it("rejects invalid stores and poll failures", async () => {

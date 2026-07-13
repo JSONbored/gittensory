@@ -5,6 +5,7 @@ export type ParsedClaimClaimArgs =
       repoFullName: string;
       issueNumber: number;
       note: string | undefined;
+      dryRun: boolean;
       json: boolean;
     }
   | { error: string };
@@ -13,6 +14,7 @@ export type ParsedClaimReleaseArgs =
   | {
       repoFullName: string;
       issueNumber: number;
+      dryRun: boolean;
       json: boolean;
     }
   | { error: string };

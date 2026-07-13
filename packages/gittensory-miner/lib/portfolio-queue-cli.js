@@ -4,12 +4,12 @@ import { runPortfolioDashboard } from "./portfolio-dashboard.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const QUEUE_LIST_USAGE = "Usage: gittensory-miner queue list [--repo <owner/repo>] [--json]";
-const QUEUE_NEXT_USAGE = "Usage: gittensory-miner queue next [--json]";
-const QUEUE_DONE_USAGE = "Usage: gittensory-miner queue done <owner/repo> <identifier> [--json]";
-const QUEUE_RELEASE_USAGE = "Usage: gittensory-miner queue release <owner/repo> <identifier> [--json]";
-const QUEUE_REQUEUE_USAGE = "Usage: gittensory-miner queue requeue <owner/repo> <identifier> [--json]";
+const QUEUE_NEXT_USAGE = "Usage: gittensory-miner queue next [--dry-run] [--json]";
+const QUEUE_DONE_USAGE = "Usage: gittensory-miner queue done <owner/repo> <identifier> [--dry-run] [--json]";
+const QUEUE_RELEASE_USAGE = "Usage: gittensory-miner queue release <owner/repo> <identifier> [--dry-run] [--json]";
+const QUEUE_REQUEUE_USAGE = "Usage: gittensory-miner queue requeue <owner/repo> <identifier> [--dry-run] [--json]";
 const QUEUE_CLAIM_BATCH_USAGE =
-  "Usage: gittensory-miner queue claim-batch [--global-wip <n>] [--per-repo-wip <n>] [--json]";
+  "Usage: gittensory-miner queue claim-batch [--global-wip <n>] [--per-repo-wip <n>] [--dry-run] [--json]";
 
 function parseRepoArg(value, usage) {
   if (!value) return { error: usage };
@@ -22,12 +22,17 @@ function parseRepoArg(value, usage) {
 }
 
 function parseJsonFlag(args) {
-  const options = { json: false };
+  const options = { json: false, dryRun: false };
   const positional = [];
 
   for (const token of args) {
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    // #4847: reports what a real mutation would do and returns before opening the portfolio queue at all.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token.startsWith("-")) {
@@ -79,7 +84,7 @@ export function parseQueueNextArgs(args) {
   if (parsed.positional.length > 0) {
     return { error: QUEUE_NEXT_USAGE };
   }
-  return { json: parsed.json };
+  return { json: parsed.json, dryRun: parsed.dryRun };
 }
 
 /** Shared `<owner/repo> <identifier> [--json]` parse for the item-targeting subcommands (done/release/requeue).
@@ -102,6 +107,7 @@ function parseRepoIdentifierArgs(args, usage) {
   return {
     repoFullName: repo.repoFullName,
     identifier,
+    dryRun: parsed.dryRun,
     json: parsed.json,
   };
 }
@@ -181,6 +187,16 @@ export function runQueueNext(args, options = {}) {
     return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run" };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log("DRY RUN: would dequeue the highest-priority queued item. No portfolio-queue write was made.");
+    }
+    return 0;
+  }
+
   try {
     return withPortfolioQueue(options, (portfolioQueue) => {
       const entry = portfolioQueue.dequeueNext();
@@ -200,6 +216,16 @@ export function runQueueDone(args, options = {}) {
   const parsed = parseQueueDoneArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", repoFullName: parsed.repoFullName, identifier: parsed.identifier };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(`DRY RUN: would mark ${parsed.repoFullName} ${parsed.identifier} done. No portfolio-queue write was made.`);
+    }
+    return 0;
   }
 
   try {
@@ -226,6 +252,16 @@ export function runQueueRelease(args, options = {}) {
   const parsed = parseQueueReleaseArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", repoFullName: parsed.repoFullName, identifier: parsed.identifier };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(`DRY RUN: would release ${parsed.repoFullName} ${parsed.identifier} back to the queue. No portfolio-queue write was made.`);
+    }
+    return 0;
   }
 
   try {
@@ -255,6 +291,16 @@ export function runQueueRequeue(args, options = {}) {
     return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", repoFullName: parsed.repoFullName, identifier: parsed.identifier };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(`DRY RUN: would requeue ${parsed.repoFullName} ${parsed.identifier}. No portfolio-queue write was made.`);
+    }
+    return 0;
+  }
+
   try {
     return withPortfolioQueue(options, (portfolioQueue) => {
       const entry = portfolioQueue.requeueItem(parsed.repoFullName, parsed.identifier);
@@ -274,11 +320,15 @@ export function runQueueRequeue(args, options = {}) {
 }
 
 export function parseQueueClaimBatchArgs(args) {
-  const options = { json: false, globalWipCap: 1, perRepoWipCap: 1 };
+  const options = { json: false, dryRun: false, globalWipCap: 1, perRepoWipCap: 1 };
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token === "--global-wip" || token === "--per-repo-wip") {
@@ -302,6 +352,18 @@ export function runQueueClaimBatch(args, options = {}) {
   const parsed = parseQueueClaimBatchArgs(args);
   if ("error" in parsed) {
     return reportCliFailure(argsWantJson(args), parsed.error);
+  }
+
+  if (parsed.dryRun) {
+    const dryRunResult = { outcome: "dry_run", globalWipCap: parsed.globalWipCap, perRepoWipCap: parsed.perRepoWipCap };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(
+        `DRY RUN: would claim a batch (global-wip: ${parsed.globalWipCap}, per-repo-wip: ${parsed.perRepoWipCap}). No portfolio-queue write was made.`,
+      );
+    }
+    return 0;
   }
 
   // Open the manager INSIDE the try so a store open failure returns 2 instead of crashing; the finally guards the

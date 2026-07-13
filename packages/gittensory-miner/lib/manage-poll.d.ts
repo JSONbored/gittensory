@@ -28,6 +28,7 @@ export type ParsedManagePollArgs =
       repoFullName: string;
       prNumber: number;
       branch: string | null;
+      dryRun: boolean;
       json: boolean;
     }
   | { error: string };

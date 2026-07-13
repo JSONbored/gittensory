@@ -13,7 +13,7 @@ import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const DISCOVER_USAGE =
-  "Usage: gittensory-miner discover <owner/repo> [<owner/repo>...] | --search <query> [--json] [--api-base-url <url>] [--token-env <VAR>]";
+  "Usage: gittensory-miner discover <owner/repo> [<owner/repo>...] | --search <query> [--dry-run] [--json] [--api-base-url <url>] [--token-env <VAR>]";
 
 const MAX_DISCOVER_TITLE_DISPLAY_LENGTH = 240;
 const OSC_SEQUENCE_PATTERN = /\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g;
@@ -43,13 +43,18 @@ export function parseDiscoverArgs(args) {
   // `--api-base-url` and `--token-env` (#4784) thread the tenant's forge host and credential env var into the
   // fan-out; they are kept off the parsed result unless supplied, so callers that pass neither see the exact
   // pre-#4784 `{ targets, search, json }` shape.
-  const options = { json: false, search: null, apiBaseUrl: null, tokenEnv: null };
+  const options = { json: false, dryRun: false, search: null, apiBaseUrl: null, tokenEnv: null };
   const targets = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === "--json") {
       options.json = true;
+      continue;
+    }
+    // #4847: fetches + ranks exactly as a real run, but skips opening any local store and makes zero writes.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token === "--search") {
@@ -91,6 +96,7 @@ export function parseDiscoverArgs(args) {
   return {
     targets,
     search: options.search,
+    dryRun: options.dryRun,
     json: options.json,
     ...(options.apiBaseUrl !== null ? { apiBaseUrl: options.apiBaseUrl } : {}),
     ...(options.tokenEnv !== null ? { tokenEnv: options.tokenEnv } : {}),
@@ -155,6 +161,48 @@ export async function runDiscover(args, options = {}) {
   const searchTargets = options.searchCandidateIssuesWithSummary ?? searchCandidateIssuesWithSummary;
   const rankIssues = options.rankCandidateIssuesWithSummary ?? rankCandidateIssuesWithSummary;
   const enqueue = options.enqueueRankedDiscovery ?? enqueueRankedDiscovery;
+
+  // #4847: fetch + rank are read-only GitHub GETs and pure local computation, so a dry run still does them for
+  // real (that's the useful "what would this discover?" output) -- but it never opens any local store (portfolio
+  // queue, policy-doc cache, policy-verdict cache), since opening a not-yet-existing SQLite store file is itself
+  // a write. The ranked issues are fed through a no-op queue stub so enqueueRankedDiscovery's own classification
+  // logic (valid/invalid, below-min-rank) still runs for real, just without ever touching the real queue.
+  if (parsed.dryRun) {
+    const fanOutOptions = { apiBaseUrl, forge: options.forge, policyDocCache: null, policyVerdictCache: null };
+    try {
+      const fanOut =
+        parsed.search !== null
+          ? await searchTargets(parsed.search, githubToken, fanOutOptions)
+          : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
+      const rankedSummary = rankIssues(fanOut.issues, {
+        nowMs: options.nowMs,
+        goalSpecsByRepo: options.goalSpecsByRepo,
+        goalSpecContentByRepo: options.goalSpecContentByRepo,
+      });
+      const noopQueueStore = { enqueue: () => {} };
+      const enqueueSummary = enqueue(rankedSummary.issues, { queueStore: noopQueueStore });
+      const result = {
+        outcome: "dry_run",
+        fanOutCount: fanOut.issues.length,
+        warnings: fanOut.warnings,
+        rateLimitRemaining: fanOut.rateLimitRemaining,
+        rateLimitResetAt: fanOut.rateLimitResetAt,
+        ranked: rankedSummary.issues,
+        usedDefaultGoalSpec: rankedSummary.usedDefaultGoalSpec,
+        enqueueSummary,
+      };
+      if (parsed.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(renderDiscoverSummary(result));
+        console.log("\nDRY RUN: no portfolio-queue write was made.");
+      }
+      return 0;
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
+  }
 
   const ownsPortfolioQueue = options.initPortfolioQueue === undefined;
   let portfolioQueue;

@@ -19,6 +19,7 @@ export type ParsedDiscoverArgs =
   | {
       targets: FanoutTarget[];
       search: string | null;
+      dryRun: boolean;
       json: boolean;
       /** Present only when `--api-base-url` is supplied (#4784); threads the tenant's forge host to the fan-out. */
       apiBaseUrl?: string;
