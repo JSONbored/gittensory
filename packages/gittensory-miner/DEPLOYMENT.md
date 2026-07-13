@@ -92,6 +92,28 @@ The image entrypoint is `gittensory-miner`; pass subcommands after the image nam
 - **`GITHUB_TOKEN`** — supplied by the operator at run time; the image contains no credentials.
 - **Scale** — launch additional containers with the same volume (or partitioned config dirs) for parallel attempts.
 
+**Secret-file alternative (`GITHUB_TOKEN_FILE`).** A plain `-e GITHUB_TOKEN` value is visible in plaintext
+via `docker inspect`/`docker compose config` and any full-env dump of the running container. For Docker
+Swarm/Kubernetes-managed secrets (mounted as a file, e.g. at `/run/secrets/github_token`), set
+`GITHUB_TOKEN_FILE` to that mount path instead — the miner reads and trims the file's contents at startup and
+uses it exactly as if `GITHUB_TOKEN` had been set directly:
+
+```sh
+docker run --rm -it \
+  -e GITTENSORY_MINER_CONFIG_DIR=/data/miner \
+  -e GITHUB_TOKEN_FILE=/run/secrets/github_token \
+  -v miner-data:/data/miner \
+  -v /path/to/your/secret:/run/secrets/github_token:ro \
+  gittensory-miner:latest \
+  doctor
+```
+
+If both `GITHUB_TOKEN` and `GITHUB_TOKEN_FILE` are set, the plain `GITHUB_TOKEN` value always wins (same
+precedence rule as ORB's own `src/selfhost/load-file-secrets.ts`). A missing or unreadable `GITHUB_TOKEN_FILE`
+fails the container fast with a clear error naming the file path, rather than silently proceeding with no
+credential. The same `<NAME>_FILE` convention works for any credential the miner reads from a plain env var —
+not only `GITHUB_TOKEN`.
+
 The repo-root [`docker-compose.yml`](../../docker-compose.yml) documents the **self-hosted review stack** (the `gittensory` API/orb), not the miner CLI. Miners are clients of that stack (or of github.com directly) and do not require it to run locally.
 
 ### Docker Compose (fleet mode)

@@ -19,6 +19,7 @@ import { runOrbExportCli } from "../lib/orb-export.js";
 import { installCliSignalHandlers } from "../lib/process-lifecycle.js";
 import { runStateCli } from "../lib/run-state-cli.js";
 import { runInit } from "../lib/laptop-init.js";
+import { loadMinerFileSecrets } from "../lib/env-file-indirection.js";
 import { runMigrate } from "../lib/migrate-cli.js";
 import { runDoctor, runStatus } from "../lib/status.js";
 import {
@@ -27,6 +28,18 @@ import {
   startUpdateCheck,
 } from "../lib/update-check.js";
 import { resolveMinerVersion } from "../lib/version.js";
+
+// Resolve any `<NAME>_FILE` secret-mount vars (GITHUB_TOKEN_FILE, etc.) into their plain counterparts FIRST,
+// before anything else reads process.env -- every subcommand below (and the coding-agent driver construction
+// deeper in the call graph) reads plain env vars, so this single early pass is all that's needed for the whole
+// CLI (#5178). A broken secret mount fails the process fast and loud with a clear message, instead of an
+// uncaught-exception stack trace or a silent empty credential surfacing as a confusing GitHub 401 later.
+try {
+  loadMinerFileSecrets();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 // Register signal + crash handlers once, before any command runs, so an interrupted run closes its open ledgers
 // cleanly instead of dying mid-write (#4826). Covers every subcommand below, including the local ones.
