@@ -148,6 +148,69 @@ describe("miner extension opportunity badge", () => {
     expect(() => internals.parseRankedCandidatesJson('{"not":"array"}')).toThrow();
   });
 
+  it("rejects a pasted ranked-candidates JSON payload over the storage-size bound with a clear error, before ever attempting to parse it (#4863)", () => {
+    const internals = loadOptionsInternals();
+    const oversized = "not valid json but that must not matter".padEnd(
+      internals.MAX_RANKED_CANDIDATES_JSON_CHARS + 1,
+      "x",
+    );
+
+    expect(() => internals.parseRankedCandidatesJson(oversized)).toThrow(/too large/i);
+    // Invariant: the size check runs before JSON.parse, so an oversized-but-invalid payload fails on size,
+    // not on a JSON syntax error -- proven by using text that isn't valid JSON at all.
+    try {
+      internals.parseRankedCandidatesJson(oversized);
+    } catch (error) {
+      expect(String(error)).not.toMatch(/Unexpected token/i);
+    }
+  });
+
+  it("accepts a pasted ranked-candidates JSON payload exactly at the storage-size bound (#4863)", () => {
+    const internals = loadOptionsInternals();
+    const padding = "x".repeat(internals.MAX_RANKED_CANDIDATES_JSON_CHARS - 4);
+    const atLimit = `["${padding}"]`;
+    expect(atLimit).toHaveLength(internals.MAX_RANKED_CANDIDATES_JSON_CHARS);
+
+    expect(internals.parseRankedCandidatesJson(atLimit)).toEqual([padding]);
+  });
+
+  it("regression: an oversized paste surfaces its error through the save flow and never reaches chrome.storage.local.set (#4863)", async () => {
+    const localSetCalls: Array<Record<string, unknown>> = [];
+    const elements = {
+      "#settings": createFormMock(),
+      "#status": { textContent: "" },
+      "#watchedRepos": { value: "JSONbored/gittensory" },
+      "#rankedCandidatesJson": { value: "" },
+    };
+    const context: Record<string, unknown> = {
+      __GITTENSORY_MINER_EXTENSION_TEST__: true,
+      document: { querySelector: (selector: string) => elements[selector as keyof typeof elements] ?? null },
+      chrome: {
+        storage: {
+          sync: { get: async () => ({ watchedRepos: [] }), set: async () => {}, remove: async () => {} },
+          local: {
+            get: async () => ({ rankedCandidates: [] }),
+            set: async (value: Record<string, unknown>) => {
+              localSetCalls.push(value);
+            },
+          },
+        },
+      },
+      window: { setTimeout: () => 0 },
+    };
+    context.globalThis = context;
+    const vmContext = createContext(context);
+    new Script(optionsScript).runInContext(vmContext);
+    await flushPromises();
+
+    const internals = vmContext.__gittensoryMinerOptionsInternals as { MAX_RANKED_CANDIDATES_JSON_CHARS: number };
+    elements["#rankedCandidatesJson"].value = "x".repeat(internals.MAX_RANKED_CANDIDATES_JSON_CHARS + 1);
+    await elements["#settings"].dispatchSubmit();
+
+    expect(elements["#status"].textContent).toMatch(/too large/i);
+    expect(localSetCalls).toHaveLength(0);
+  });
+
   it("REGRESSION (dead-field removal): no discoveryIndexUrl config field remains in the UI or background reads", () => {
     expect(optionsHtml).not.toMatch(/discoveryIndexUrl/);
     expect(backgroundScript).not.toMatch(/discoveryIndexUrl/);
@@ -482,5 +545,6 @@ function loadOptionsInternals() {
     parseWatchedRepos: (text: string) => string[];
     parseRankedCandidatesJson: (text: string) => unknown[];
     removeLegacyDiscoveryIndexUrl: () => Promise<void>;
+    MAX_RANKED_CANDIDATES_JSON_CHARS: number;
   };
 }

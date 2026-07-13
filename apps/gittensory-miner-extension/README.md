@@ -23,3 +23,7 @@ every save, and looks up the current issue there. When no ranked signal is cache
 degrades gracefully by staying hidden. The badge itself shows a "last synced" relative-time label (mirroring ORB's
 shared `RefreshMeta` component's thresholds) so a contributor can tell how stale the pasted data is; the label is
 omitted entirely for a cache saved before this field existed.
+
+The extension does not request the `unlimitedStorage` permission, so a paste is rejected with a clear error before
+being parsed or saved once it exceeds a conservative size bound well under `chrome.storage.local`'s default 10 MiB
+quota, instead of silently failing to save or leaving storage partially written.
