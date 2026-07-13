@@ -1,4 +1,6 @@
 import { resolveAiPolicyVerdict } from "@loopover/engine";
+import { listRecentOwnSubmissions } from "./governor-state.js";
+import { resolveRejection } from "./rejection-state-machine.js";
 
 // Real rejectionSignaled resolver (#5132, Wave 3.5 follow-up). iterate-policy.ts's own doc comment: "True
 // when the target repo (or this contributor's history with it) has signaled it does not want automated/
@@ -8,16 +10,19 @@ import { resolveAiPolicyVerdict } from "@loopover/engine";
 // fetched live and scanned via the engine's own resolveAiPolicyVerdict -- the same check
 // opportunity-fanout.js already runs during discovery, applied here at attempt time instead.
 //
-// The SECOND trigger (a prior submission from this same miner was closed/rejected on this exact repo) is
-// DELIBERATELY not resolved here: it would need each of this miner's recorded own-submissions
-// (governor-state.js's listRecentOwnSubmissions, #5134) checked against its live PR outcome via
-// rejection-state-machine.js's resolveRejection -- a second, separately-scoped fetch-and-classify pipeline.
-// Not fabricated as "no rejection history" -- explicitly left as a known, documented gap for a follow-up,
-// same discipline as SelfReviewContext's bounties/issueQuality (#5145) and this file's own callers should
-// not assume a false result here means "no rejection signal of any kind."
+// The SECOND trigger (a prior submission from this same miner was closed/rejected on this exact repo) is now
+// resolved by resolveOwnRejectionHistory (#5655), closing the gap this header previously documented: it checks
+// each of this miner's recorded own-submissions on the repo (governor-state.js's listRecentOwnSubmissions,
+// #5134) against its live PR outcome via rejection-state-machine.js's resolveRejection (#4278) -- consuming both
+// upstream modules without modifying either. resolveRejectionSignaled now returns true if EITHER trigger fires,
+// so `rejectionSignaled` finally means what iterate-policy.ts's doc comment has always said.
 
 const DEFAULT_RAW_CONTENT_BASE_URL = "https://raw.githubusercontent.com";
 const MAX_POLICY_DOC_BYTES = 128 * 1024;
+const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
+// Bound the per-call PR-status fetch fan-out (#5655): a miner with a long submission history on one repo must
+// not trigger an unbounded burst of GitHub API calls on every attempt -- only the N most recent are checked.
+const DEFAULT_MAX_REJECTION_HISTORY_CHECKS = 10;
 
 function parseRepoFullName(repoFullName) {
   if (typeof repoFullName !== "string") return null;
@@ -79,6 +84,70 @@ async function fetchPolicyDoc(target, path, resolved) {
   }
 }
 
+async function fetchPullRequestPayload(target, prNumber, resolved) {
+  const url = `${resolved.githubApiBaseUrl}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/pulls/${prNumber}`;
+  const headers = { accept: "application/vnd.github+json", "user-agent": "loopover-miner" };
+  if (resolved.githubToken) headers.authorization = `Bearer ${resolved.githubToken}`;
+  const response = await resolved.fetchImpl(url, { method: "GET", headers });
+  if (!response.ok) return null;
+  return await response.json();
+}
+
+/**
+ * Resolve the SECOND `rejectionSignaled` trigger (#5655): has a prior submission from THIS miner on THIS exact
+ * repo already been closed/rejected? Reads this miner's own recorded submissions on the repo
+ * (`listRecentOwnSubmissions`, #5134), fetches each one's live PR state, and runs it through `resolveRejection`
+ * (#4278) -- returning `true` if ANY was closed without merge. Bounded (only the most recent
+ * `maxRejectionHistoryChecks` submissions with a real PR number are fetched) and fully fail-open: a wholesale
+ * failure to read submissions resolves to `false` (never fabricated as a rejection), and any single PR
+ * fetch/parse failure is skipped so it never blocks the others. Consumes both upstream modules without modifying
+ * either. Every dependency is injectable for testing.
+ *
+ * @param {string} repoFullName
+ * @param {{ listSubmissions?: typeof listRecentOwnSubmissions, fetchImpl?: typeof fetch, githubToken?: string, githubApiBaseUrl?: string, maxRejectionHistoryChecks?: number }} [options]
+ * @returns {Promise<boolean>}
+ */
+export async function resolveOwnRejectionHistory(repoFullName, options = {}) {
+  const target = parseRepoFullName(repoFullName);
+  if (!target) return false;
+  const listSubmissions = options.listSubmissions ?? listRecentOwnSubmissions;
+  const resolved = {
+    fetchImpl: options.fetchImpl ?? fetch,
+    githubToken: typeof options.githubToken === "string" ? options.githubToken.trim() : (process.env.GITHUB_TOKEN ?? ""),
+    githubApiBaseUrl:
+      typeof options.githubApiBaseUrl === "string" && options.githubApiBaseUrl.trim() ? options.githubApiBaseUrl.trim() : DEFAULT_GITHUB_API_BASE_URL,
+    maxChecks:
+      Number.isInteger(options.maxRejectionHistoryChecks) && options.maxRejectionHistoryChecks > 0
+        ? options.maxRejectionHistoryChecks
+        : DEFAULT_MAX_REJECTION_HISTORY_CHECKS,
+  };
+
+  let submissions;
+  try {
+    submissions = listSubmissions({ repoFullName });
+  } catch {
+    return false; // wholesale failure to read own submissions -- fail open, never fabricate a rejection
+  }
+  const checkable = (Array.isArray(submissions) ? submissions : [])
+    .filter((submission) => submission && Number.isInteger(submission.pullRequestNumber) && submission.pullRequestNumber > 0)
+    .slice(0, resolved.maxChecks);
+  if (checkable.length === 0) return false; // no prior submissions on this repo -- no fetch attempted
+
+  for (const submission of checkable) {
+    try {
+      const payload = await fetchPullRequestPayload(target, submission.pullRequestNumber, resolved);
+      if (!payload) continue;
+      // No signal (gate/duplicate context isn't available here) -- resolveRejection returns non-null only for a
+      // PR that is closed-without-merge, which is exactly the "was it rejected" question this check asks.
+      const rejection = resolveRejection(payload, undefined, { repoFullName, prNumber: submission.pullRequestNumber });
+      if (rejection) return true;
+    } catch {
+      // Individual PR fetch/parse/classify failure -- skip this one, keep checking the rest (fail open).
+    }
+  }
+  return false;
+}
+
 /**
  * Resolve whether the target repo has an explicit, live AI-usage-policy ban -- the first of
  * `rejectionSignaled`'s two documented triggers. Returns `false` (never throws) on any fetch/parse failure,
@@ -97,5 +166,8 @@ export async function resolveRejectionSignaled(repoFullName, options = {}) {
   const contributing = aiUsage && aiUsage.trim() ? null : await fetchPolicyDoc(target, "CONTRIBUTING.md", resolved);
 
   const verdict = resolveAiPolicyVerdict({ aiUsage, contributing });
-  return !verdict.allowed;
+  // First trigger: an explicit live AI-usage-policy ban. A ban short-circuits -- no need to also check history.
+  if (!verdict.allowed) return true;
+  // Second trigger (#5655): a prior submission from this same miner on this exact repo was closed/rejected.
+  return resolveOwnRejectionHistory(repoFullName, options);
 }

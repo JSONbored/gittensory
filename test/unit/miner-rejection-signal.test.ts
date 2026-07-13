@@ -4,7 +4,10 @@ vi.mock("@loopover/engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 
-import { resolveRejectionSignaled } from "../../packages/gittensory-miner/lib/rejection-signal.js";
+import {
+  resolveOwnRejectionHistory,
+  resolveRejectionSignaled,
+} from "../../packages/gittensory-miner/lib/rejection-signal.js";
 
 // resolveRejectionSignaled fetches plain markdown text (AI-USAGE.md/CONTRIBUTING.md), never JSON, so
 // json() is never actually called -- it's here only to satisfy SelfReviewContextFetch's response shape.
@@ -231,11 +234,185 @@ describe("resolveRejectionSignaled (#5132)", () => {
     const fetchSpy = vi.fn(async () => textResponse(null, 404));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
     try {
-      const result = await resolveRejectionSignaled("acme/widgets");
+      const result = await resolveRejectionSignaled("acme/widgets", { listSubmissions: () => [] });
       expect(result).toBe(false);
       expect(fetchSpy).toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+function jsonResponse(payload: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  };
+}
+
+const CLOSED_WITHOUT_MERGE = {
+  state: "closed",
+  merged: false,
+  closed_at: "2026-07-01T00:00:00Z",
+  merged_at: null,
+};
+const MERGED = {
+  state: "closed",
+  merged: true,
+  closed_at: "2026-07-01T00:00:00Z",
+  merged_at: "2026-07-01T00:00:00Z",
+};
+
+describe("resolveOwnRejectionHistory (#5655)", () => {
+  it("returns true when a prior submission on the repo resolves to a closed-without-merge PR", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: unknown) => jsonResponse(CLOSED_WITHOUT_MERGE));
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => [{ pullRequestNumber: 42 }],
+      fetchImpl,
+    });
+    expect(result).toBe(true);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/repos/acme/widgets/pulls/42");
+  });
+
+  it("returns false and fetches nothing when no prior submission on this repo has a real PR number", async () => {
+    const fetchImpl = vi.fn();
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => [{ pullRequestNumber: null }, { pullRequestNumber: 0 }, {}],
+      fetchImpl,
+    });
+    expect(result).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("bounds the fetch count to maxRejectionHistoryChecks (no unbounded fan-out)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(MERGED)); // none rejected -> it checks up to the cap
+    const submissions = Array.from({ length: 15 }, (_, i) => ({ pullRequestNumber: i + 1 }));
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => submissions,
+      fetchImpl,
+      maxRejectionHistoryChecks: 3,
+    });
+    expect(result).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails open on an individual PR fetch failure while still checking the rest", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes("/pulls/1")) throw new Error("network unreachable");
+      return jsonResponse(CLOSED_WITHOUT_MERGE);
+    });
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => [{ pullRequestNumber: 1 }, { pullRequestNumber: 2 }],
+      fetchImpl,
+    });
+    expect(result).toBe(true); // PR 1 failed, but PR 2's rejection is still detected
+  });
+
+  it("treats a non-array submissions result as empty and fetches nothing", async () => {
+    const fetchImpl = vi.fn();
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: (() => null) as never,
+      fetchImpl,
+    });
+    expect(result).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails open to false (never throws) on a wholesale failure to read submissions", async () => {
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => {
+        throw new Error("db unavailable");
+      },
+      fetchImpl: vi.fn(),
+    });
+    expect(result).toBe(false);
+  });
+
+  it("treats a non-2xx PR response as not-a-rejection", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 404));
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => [{ pullRequestNumber: 7 }],
+      fetchImpl,
+    });
+    expect(result).toBe(false);
+  });
+
+  it("does not treat a merged PR as a rejection", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(MERGED));
+    const result = await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => [{ pullRequestNumber: 9 }],
+      fetchImpl,
+    });
+    expect(result).toBe(false);
+  });
+
+  it("sends the auth header and hits the configured API base when an auth value is provided", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: unknown) => jsonResponse(MERGED));
+    const injectedAuthValue = "fake-auth-placeholder";
+    await resolveOwnRejectionHistory("acme/widgets", {
+      listSubmissions: () => [{ pullRequestNumber: 9 }],
+      fetchImpl,
+      githubToken: injectedAuthValue,
+      githubApiBaseUrl: "https://api.example.internal",
+    });
+    const init = fetchImpl.mock.calls[0]?.[1] as { headers?: Record<string, string> };
+    expect(init?.headers?.authorization).toBe(`Bearer ${injectedAuthValue}`);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain(
+      "https://api.example.internal/repos/acme/widgets/pulls/9",
+    );
+  });
+
+  it("returns false for a malformed repoFullName without reading submissions", async () => {
+    const listSubmissions = vi.fn();
+    const result = await resolveOwnRejectionHistory("not-a-repo", { listSubmissions, fetchImpl: vi.fn() });
+    expect(result).toBe(false);
+    expect(listSubmissions).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveRejectionSignaled combines both triggers (#5655)", () => {
+  it("returns true from the policy-ban trigger even with a clean rejection history (short-circuits)", async () => {
+    const listSubmissions = vi.fn(() => []);
+    const result = await resolveRejectionSignaled("acme/widgets", {
+      fetchImpl: routedFetch({
+        "AI-USAGE.md": () => textResponse("No AI-generated pull requests, please."),
+        "CONTRIBUTING.md": () => textResponse("Welcome, contributors!"),
+      }),
+      listSubmissions,
+    });
+    expect(result).toBe(true);
+    expect(listSubmissions).not.toHaveBeenCalled();
+  });
+
+  it("returns true from the own-rejection-history trigger when the policy docs are clean", async () => {
+    const policyFetch = routedFetch({
+      "AI-USAGE.md": () => textResponse("AI contributions are welcome here."),
+      "CONTRIBUTING.md": () => textResponse("Welcome, contributors!"),
+    });
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.includes("/pulls/") ? jsonResponse(CLOSED_WITHOUT_MERGE) : policyFetch(url),
+    );
+    const result = await resolveRejectionSignaled("acme/widgets", {
+      fetchImpl,
+      listSubmissions: () => [{ pullRequestNumber: 42 }],
+    });
+    expect(result).toBe(true);
+  });
+
+  it("returns false when neither trigger fires (clean policy + no prior rejection)", async () => {
+    const policyFetch = routedFetch({
+      "AI-USAGE.md": () => textResponse("AI contributions are welcome here."),
+      "CONTRIBUTING.md": () => textResponse("Welcome, contributors!"),
+    });
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.includes("/pulls/") ? jsonResponse(MERGED) : policyFetch(url),
+    );
+    const result = await resolveRejectionSignaled("acme/widgets", {
+      fetchImpl,
+      listSubmissions: () => [{ pullRequestNumber: 42 }],
+    });
+    expect(result).toBe(false);
   });
 });
