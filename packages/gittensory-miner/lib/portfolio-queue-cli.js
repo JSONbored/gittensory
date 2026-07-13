@@ -1,9 +1,11 @@
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { initPortfolioQueueManager } from "./portfolio-queue-manager.js";
+import { resolvePortfolioQueueCaps } from "./portfolio-queue-caps.js";
 import { runPortfolioDashboard } from "./portfolio-dashboard.js";
 
 const QUEUE_LIST_USAGE = "Usage: gittensory-miner queue list [--repo <owner/repo>] [--json]";
-const QUEUE_NEXT_USAGE = "Usage: gittensory-miner queue next [--json]";
+const QUEUE_NEXT_USAGE =
+  "Usage: gittensory-miner queue next [--global-wip <n>] [--per-repo-wip <n>] [--json]";
 const QUEUE_DONE_USAGE = "Usage: gittensory-miner queue done <owner/repo> <identifier> [--json]";
 const QUEUE_RELEASE_USAGE = "Usage: gittensory-miner queue release <owner/repo> <identifier> [--json]";
 const QUEUE_REQUEUE_USAGE = "Usage: gittensory-miner queue requeue <owner/repo> <identifier> [--json]";
@@ -72,13 +74,36 @@ export function parseQueueListArgs(args) {
   return options;
 }
 
-export function parseQueueNextArgs(args) {
-  const parsed = parseJsonFlag(args);
-  if ("error" in parsed) return parsed;
-  if (parsed.positional.length > 0) {
-    return { error: QUEUE_NEXT_USAGE };
+function parsePortfolioQueueCapArgs(args, usage) {
+  const options = { json: false, globalWipCap: undefined, perRepoWipCap: undefined };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--json") {
+      options.json = true;
+      continue;
+    }
+    if (token === "--global-wip" || token === "--per-repo-wip") {
+      const value = Number(args[index + 1]);
+      if (args[index + 1] === undefined || !Number.isFinite(value) || value < 0) {
+        return { error: usage };
+      }
+      if (token === "--global-wip") options.globalWipCap = value;
+      else options.perRepoWipCap = value;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      return { error: `Unknown option: ${token}` };
+    }
+    return { error: usage };
   }
-  return { json: parsed.json };
+
+  return options;
+}
+
+export function parseQueueNextArgs(args) {
+  return parsePortfolioQueueCapArgs(args, QUEUE_NEXT_USAGE);
 }
 
 /** Shared `<owner/repo> <identifier> [--json]` parse for the item-targeting subcommands (done/release/requeue).
@@ -183,19 +208,30 @@ export function runQueueNext(args, options = {}) {
     return 2;
   }
 
+  const caps = resolvePortfolioQueueCaps({
+    env: options.env ?? process.env,
+    cliCaps: { globalWipCap: parsed.globalWipCap, perRepoWipCap: parsed.perRepoWipCap },
+  });
+
+  const ownsManager = options.initPortfolioQueueManager === undefined;
+  let manager;
   try {
-    return withPortfolioQueue(options, (portfolioQueue) => {
-      const entry = portfolioQueue.dequeueNext();
-      if (parsed.json) {
-        console.log(JSON.stringify({ entry }, null, 2));
-      } else {
-        console.log(entry ? entry.identifier : "none");
-      }
-      return 0;
+    manager = (options.initPortfolioQueueManager ?? initPortfolioQueueManager)({
+      caps,
+      dbPath: options.dbPath,
     });
+    const entry = manager.claimNextBatch()[0] ?? null;
+    if (parsed.json) {
+      console.log(JSON.stringify({ entry }, null, 2));
+    } else {
+      console.log(entry ? entry.identifier : "none");
+    }
+    return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 2;
+  } finally {
+    if (ownsManager) manager?.close();
   }
 }
 
@@ -286,26 +322,7 @@ export function runQueueRequeue(args, options = {}) {
 }
 
 export function parseQueueClaimBatchArgs(args) {
-  const options = { json: false, globalWipCap: 1, perRepoWipCap: 1 };
-  for (let index = 0; index < args.length; index += 1) {
-    const token = args[index];
-    if (token === "--json") {
-      options.json = true;
-      continue;
-    }
-    if (token === "--global-wip" || token === "--per-repo-wip") {
-      const value = Number(args[index + 1]);
-      if (args[index + 1] === undefined || !Number.isFinite(value) || value < 0) {
-        return { error: QUEUE_CLAIM_BATCH_USAGE };
-      }
-      if (token === "--global-wip") options.globalWipCap = value;
-      else options.perRepoWipCap = value;
-      index += 1;
-      continue;
-    }
-    return { error: QUEUE_CLAIM_BATCH_USAGE };
-  }
-  return options;
+  return parsePortfolioQueueCapArgs(args, QUEUE_CLAIM_BATCH_USAGE);
 }
 
 /** Claim the next caps-aware batch via the WIP-cap-aware batch claimer (portfolio-queue-manager.js), which also
@@ -319,11 +336,17 @@ export function runQueueClaimBatch(args, options = {}) {
 
   // Open the manager INSIDE the try so a store open failure returns 2 instead of crashing; the finally guards the
   // close with `?.` since the initializer may have thrown before assigning.
+  const caps = resolvePortfolioQueueCaps({
+    env: options.env ?? process.env,
+    cliCaps: { globalWipCap: parsed.globalWipCap, perRepoWipCap: parsed.perRepoWipCap },
+  });
+
   const ownsManager = options.initPortfolioQueueManager === undefined;
   let manager;
   try {
     manager = (options.initPortfolioQueueManager ?? initPortfolioQueueManager)({
-      caps: { globalWipCap: parsed.globalWipCap, perRepoWipCap: parsed.perRepoWipCap },
+      caps,
+      dbPath: options.dbPath,
     });
     const claimed = manager.claimNextBatch();
     if (parsed.json) {

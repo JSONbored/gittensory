@@ -8,7 +8,9 @@ export type ParsedQueueListArgs =
     }
   | { error: string };
 
-export type ParsedQueueNextArgs = { json: boolean } | { error: string };
+export type ParsedQueueNextArgs =
+  | { json: boolean; globalWipCap?: number; perRepoWipCap?: number }
+  | { error: string };
 
 export type ParsedQueueDoneArgs =
   | {
@@ -29,7 +31,7 @@ export function parseQueueReleaseArgs(args: string[]): ParsedQueueDoneArgs;
 export function parseQueueRequeueArgs(args: string[]): ParsedQueueDoneArgs;
 
 export type ParsedQueueClaimBatchArgs =
-  | { json: boolean; globalWipCap: number; perRepoWipCap: number }
+  | { json: boolean; globalWipCap?: number; perRepoWipCap?: number }
   | { error: string };
 
 export function parseQueueClaimBatchArgs(args: string[]): ParsedQueueClaimBatchArgs;
@@ -63,13 +65,19 @@ export function runQueueRequeue(
 
 export function runQueueClaimBatch(
   args: string[],
-  options?: { initPortfolioQueueManager?: (opts: unknown) => PortfolioQueueManager },
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    dbPath?: string;
+    initPortfolioQueueManager?: (opts: unknown) => PortfolioQueueManager;
+  },
 ): number;
 
 export function runQueueCli(
   subcommand: string | undefined,
   args: string[],
   options?: {
+    env?: NodeJS.ProcessEnv;
+    dbPath?: string;
     initPortfolioQueue?: () => PortfolioQueueStore;
     initPortfolioQueueManager?: (opts: unknown) => PortfolioQueueManager;
   },

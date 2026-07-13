@@ -6,6 +6,7 @@ import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
 } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+import { initPortfolioQueueManager } from "../../packages/gittensory-miner/lib/portfolio-queue-manager.js";
 import {
   parseQueueDoneArgs,
   parseQueueListArgs,
@@ -33,6 +34,13 @@ function tempQueueStore() {
   return store;
 }
 
+function managerOptions(store: ReturnType<typeof initPortfolioQueueStore>, caps = { globalWipCap: 1, perRepoWipCap: 1 }) {
+  return {
+    initPortfolioQueueManager: (opts: { caps?: { globalWipCap: number; perRepoWipCap: number } }) =>
+      initPortfolioQueueManager({ store, caps: opts.caps ?? caps }),
+  };
+}
+
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   closeDefaultPortfolioQueueStore();
@@ -47,7 +55,12 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       json: true,
       repoFullName: "acme/widgets",
     });
-    expect(parseQueueNextArgs(["--json"])).toEqual({ json: true });
+    expect(parseQueueNextArgs(["--json"])).toEqual({ json: true, globalWipCap: undefined, perRepoWipCap: undefined });
+    expect(parseQueueNextArgs(["--global-wip", "2", "--json"])).toEqual({
+      json: true,
+      globalWipCap: 2,
+      perRepoWipCap: undefined,
+    });
     expect(parseQueueDoneArgs(["acme/widgets", "issue:42", "--json"])).toEqual({
       repoFullName: "acme/widgets",
       identifier: "issue:42",
@@ -97,35 +110,37 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
     });
   });
 
-  it("runQueueNext claims the highest-priority queued item", () => {
+  it("runQueueNext claims the highest-priority queued item under WIP caps (#4850)", () => {
     const portfolioQueue = tempQueueStore();
     portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1", priority: 10 });
     portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:2", priority: 90 });
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    expect(
-      runQueueNext([], {
-        initPortfolioQueue: () => portfolioQueue,
-      }),
-    ).toBe(0);
+    expect(runQueueNext([], managerOptions(portfolioQueue))).toBe(0);
     expect(log).toHaveBeenCalledWith("issue:2");
 
     log.mockClear();
-    expect(
-      runQueueNext(["--json"], {
-        initPortfolioQueue: () => portfolioQueue,
-      }),
-    ).toBe(0);
+    expect(runQueueNext([], managerOptions(portfolioQueue))).toBe(0);
+    expect(log).toHaveBeenCalledWith("none");
+
+    log.mockClear();
+    expect(runQueueNext(["--global-wip", "2", "--per-repo-wip", "2", "--json"], managerOptions(portfolioQueue))).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
       entry: expect.objectContaining({ identifier: "issue:1", status: "in_progress" }),
     });
+  });
+
+  it("runQueueNext honors global WIP cap from CLI flags (#4850)", () => {
+    const portfolioQueue = tempQueueStore();
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1", priority: 10 });
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:2", priority: 20 });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runQueueNext(["--global-wip", "1"], managerOptions(portfolioQueue))).toBe(0);
+    expect(log).toHaveBeenCalledWith("issue:2");
 
     log.mockClear();
-    expect(
-      runQueueNext([], {
-        initPortfolioQueue: () => portfolioQueue,
-      }),
-    ).toBe(0);
+    expect(runQueueNext(["--global-wip", "1"], managerOptions(portfolioQueue))).toBe(0);
     expect(log).toHaveBeenCalledWith("none");
   });
 
@@ -153,7 +168,7 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
   it("runQueueCli dispatches list, next, and done subcommands", () => {
     const portfolioQueue = tempQueueStore();
     portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:3", priority: 1 });
-    const options = { initPortfolioQueue: () => portfolioQueue };
+    const options = { ...managerOptions(portfolioQueue), initPortfolioQueue: () => portfolioQueue };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     expect(runQueueCli("list", ["--json"], options)).toBe(0);
