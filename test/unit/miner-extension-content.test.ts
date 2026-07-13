@@ -153,6 +153,145 @@ describe("miner extension opportunity badge", () => {
     expect(backgroundScript).not.toMatch(/discoveryIndexUrl/);
   });
 
+  it("formats a relative 'last synced' label across the same buckets as ORB's RefreshMeta, clamping missing/invalid input to null (#5192)", () => {
+    const badge = loadBadgeInternals();
+    const NOW_MS = Date.parse("2026-07-10T12:00:00.000Z");
+
+    expect(badge.formatLastSyncedLabel(NOW_MS, NOW_MS)).toBe("last synced just now");
+    expect(badge.formatLastSyncedLabel(NOW_MS - 59_000, NOW_MS)).toBe("last synced just now");
+    expect(badge.formatLastSyncedLabel(NOW_MS - 60_000, NOW_MS)).toBe("last synced 1m ago");
+    expect(badge.formatLastSyncedLabel(NOW_MS - 59 * 60_000, NOW_MS)).toBe("last synced 59m ago");
+    expect(badge.formatLastSyncedLabel(NOW_MS - 60 * 60_000, NOW_MS)).toBe("last synced 1h ago");
+    expect(badge.formatLastSyncedLabel(NOW_MS - 23 * 60 * 60_000, NOW_MS)).toBe("last synced 23h ago");
+    expect(badge.formatLastSyncedLabel(NOW_MS - 24 * 60 * 60_000, NOW_MS)).toBe("last synced 1d ago");
+    expect(badge.formatLastSyncedLabel(NOW_MS + 5_000, NOW_MS)).toBe("last synced just now");
+
+    expect(badge.formatLastSyncedLabel(null, NOW_MS)).toBeNull();
+    expect(badge.formatLastSyncedLabel(undefined, NOW_MS)).toBeNull();
+    expect(badge.formatLastSyncedLabel(Number.NaN, NOW_MS)).toBeNull();
+    expect(badge.formatLastSyncedLabel("not-a-timestamp", NOW_MS)).toBeNull();
+    // Invariant: a falsy-but-coercible-to-0 value must never be read as "the epoch", i.e. a real timestamp.
+    expect(badge.formatLastSyncedLabel("", NOW_MS)).toBeNull();
+  });
+
+  it("renders the last-synced label inside the badge markup when present, and omits it (no NaN, no crash) when absent (#5192)", () => {
+    const ranked = rankCandidateIssues([rawIssue()], { nowMs: NOW })[0]!;
+    const badge = loadBadgeInternals();
+    const formatted = badge.formatOpportunityBadge(ranked);
+
+    const withLabel = badge.renderOpportunityBadgeMarkup(formatted, "last synced 3m ago");
+    expect(withLabel).toContain("last synced 3m ago");
+    expect(withLabel).toContain(formatted.tier);
+
+    const withoutLabel = badge.renderOpportunityBadgeMarkup(formatted, null);
+    expect(withoutLabel).not.toContain("last synced");
+    expect(withoutLabel).not.toContain("NaN");
+    // Invariant: adding/omitting the sync label never touches the ranking-derived fields.
+    expect(withoutLabel).toContain(formatted.tier);
+    expect(withoutLabel).toContain(formatted.score);
+  });
+
+  it("plumbs savedAt from background context through content.js into a rendered 'last synced' label (#5192)", () => {
+    const internals = loadContentInternals();
+    const container = createMockContainer();
+    const ranked = rankCandidateIssues([rawIssue()], { nowMs: NOW })[0]!;
+    const badge = loadBadgeInternals();
+    const formatted = badge.formatOpportunityBadge(ranked);
+    const savedAt = NOW - 5 * 60_000;
+
+    internals.renderOpportunityBadge(container, { watched: true, badge: formatted, savedAt, status: "ready" }, NOW);
+    expect(container.innerHTML).toContain("last synced 5m ago");
+  });
+
+  it("regression: a cache saved before savedAt existed renders the badge without a sync label instead of crashing or showing NaN (#5192)", () => {
+    const internals = loadContentInternals();
+    const container = createMockContainer();
+    const ranked = rankCandidateIssues([rawIssue()], { nowMs: NOW })[0]!;
+    const badge = loadBadgeInternals();
+    const formatted = badge.formatOpportunityBadge(ranked);
+
+    internals.renderOpportunityBadge(container, { watched: true, badge: formatted, status: "ready" }, NOW);
+    expect(container.hidden).toBe(false);
+    expect(container.innerHTML).not.toContain("last synced");
+    expect(container.innerHTML).not.toContain("NaN");
+  });
+
+  it("includes savedAt in the ready background payload and omits it when there's no ranked signal (#5192)", async () => {
+    const ranked = rankCandidateIssues([rawIssue()], { nowMs: NOW });
+    const savedAt = NOW - 60_000;
+    const ready = loadBackgroundInternals({
+      watchedRepos: ["JSONbored/gittensory"],
+      rankedCandidates: ranked,
+      rankedCandidatesSavedAt: savedAt,
+    });
+    const readyPayload = await ready.loadIssueOpportunityContext({
+      owner: "JSONbored",
+      repo: "gittensory",
+      issueNumber: 145,
+    });
+    expect(readyPayload.status).toBe("ready");
+    expect(readyPayload.savedAt).toBe(savedAt);
+
+    const noSignal = loadBackgroundInternals({
+      watchedRepos: ["JSONbored/gittensory"],
+      rankedCandidates: [],
+      rankedCandidatesSavedAt: savedAt,
+    });
+    const noSignalPayload = await noSignal.loadIssueOpportunityContext({
+      owner: "JSONbored",
+      repo: "gittensory",
+      issueNumber: 145,
+    });
+    expect(noSignalPayload.status).toBe("no-signal");
+    expect(noSignalPayload.badge).toBeNull();
+  });
+
+  it("writes a rankedCandidatesSavedAt timestamp alongside rankedCandidates on every save, including re-paste/overwrite (#5192)", async () => {
+    const localSetCalls: Array<Record<string, unknown>> = [];
+    let fakeNowMs = Date.parse("2026-07-10T12:00:00.000Z");
+    const elements = {
+      "#settings": createFormMock(),
+      "#status": { textContent: "" },
+      "#watchedRepos": { value: "JSONbored/gittensory" },
+      "#rankedCandidatesJson": { value: "[]" },
+    };
+    const context: Record<string, unknown> = {
+      __GITTENSORY_MINER_EXTENSION_TEST__: true,
+      Date: { now: () => fakeNowMs },
+      document: { querySelector: (selector: string) => elements[selector as keyof typeof elements] ?? null },
+      chrome: {
+        storage: {
+          sync: { get: async () => ({ watchedRepos: [] }), set: async () => {}, remove: async () => {} },
+          local: {
+            get: async () => ({ rankedCandidates: [] }),
+            set: async (value: Record<string, unknown>) => {
+              localSetCalls.push(value);
+            },
+          },
+        },
+      },
+      window: { setTimeout: () => 0 },
+    };
+    context.globalThis = context;
+    const vmContext = createContext(context);
+    new Script(optionsScript).runInContext(vmContext);
+    await flushPromises();
+
+    await elements["#settings"].dispatchSubmit();
+    fakeNowMs = Date.parse("2026-07-10T12:05:00.000Z");
+    await elements["#settings"].dispatchSubmit();
+
+    expect(localSetCalls).toHaveLength(2);
+    expect(localSetCalls[0]).toEqual({
+      rankedCandidates: [],
+      rankedCandidatesSavedAt: Date.parse("2026-07-10T12:00:00.000Z"),
+    });
+    expect(localSetCalls[1]).toEqual({
+      rankedCandidates: [],
+      rankedCandidatesSavedAt: Date.parse("2026-07-10T12:05:00.000Z"),
+    });
+  });
+
   it("purges a discoveryIndexUrl value already synced by an older extension version, on load and on save", async () => {
     const synced: Record<string, unknown> = {
       watchedRepos: [],
@@ -251,7 +390,11 @@ function loadBadgeInternals() {
   return vmContext.__gittensoryMinerOpportunityBadgeTestExports as {
     lookupRankedOpportunity: (ranked: unknown[], repoFullName: string, issueNumber: number) => Record<string, unknown> | null;
     formatOpportunityBadge: (entry: Record<string, unknown>) => { tier: string; score: string; why: string };
-    renderOpportunityBadgeMarkup: (badge: { tier: string; score: string; why: string }) => string;
+    formatLastSyncedLabel: (savedAt: unknown, nowMs: number) => string | null;
+    renderOpportunityBadgeMarkup: (
+      badge: { tier: string; score: string; why: string },
+      lastSyncedLabel?: string | null,
+    ) => string;
   };
 }
 
@@ -275,13 +418,18 @@ function loadContentInternals() {
     matchGitHubIssueTarget: (
       pathname: string,
     ) => { kind: "issue"; owner: string; repo: string; issueNumber: number } | null;
-    renderOpportunityBadge: (container: ReturnType<typeof createMockContainer>, payload: unknown) => void;
+    renderOpportunityBadge: (
+      container: ReturnType<typeof createMockContainer>,
+      payload: unknown,
+      nowMs?: number,
+    ) => void;
   };
 }
 
 function loadBackgroundInternals({
   watchedRepos = [] as string[],
   rankedCandidates = [] as unknown[],
+  rankedCandidatesSavedAt = null as number | null,
 } = {}) {
   const context: Record<string, unknown> = {
     __GITTENSORY_MINER_EXTENSION_TEST__: true,
@@ -291,7 +439,7 @@ function loadBackgroundInternals({
           get: async () => ({ watchedRepos }),
         },
         local: {
-          get: async () => ({ rankedCandidates }),
+          get: async () => ({ rankedCandidates, rankedCandidatesSavedAt }),
         },
       },
       runtime: { onMessage: { addListener: () => {} } },
@@ -310,6 +458,7 @@ function loadBackgroundInternals({
     }) => Promise<{
       status: string;
       badge: { tier: string; why: string } | null;
+      savedAt?: number | null;
     }>;
   };
 }

@@ -18,5 +18,8 @@ available for the current issue.
 ## Local ranked cache
 
 Laptop-mode installs can paste JSON from a miner `discover` run into the options page. The extension stores that list in
-`chrome.storage.local.rankedCandidates` and looks up the current issue there. When no ranked signal is cached for the
-current issue, the badge degrades gracefully by staying hidden.
+`chrome.storage.local.rankedCandidates`, alongside a `chrome.storage.local.rankedCandidatesSavedAt` timestamp updated on
+every save, and looks up the current issue there. When no ranked signal is cached for the current issue, the badge
+degrades gracefully by staying hidden. The badge itself shows a "last synced" relative-time label (mirroring ORB's
+shared `RefreshMeta` component's thresholds) so a contributor can tell how stale the pasted data is; the label is
+omitted entirely for a cache saved before this field existed.

@@ -48,7 +48,7 @@ form.addEventListener("submit", async (event) => {
     const repos = parseWatchedRepos(watchedRepos.value);
     const rankedCandidates = parseRankedCandidatesJson(rankedCandidatesJson.value);
     await chrome.storage.sync.set({ watchedRepos: repos });
-    await chrome.storage.local.set({ rankedCandidates });
+    await chrome.storage.local.set({ rankedCandidates, rankedCandidatesSavedAt: Date.now() });
     await refreshSettings();
     showStatus(
       rankedCandidates.length > 0
