@@ -176,13 +176,21 @@ function writeCachedPolicyDoc(cache, url, etag, content) {
   }
 }
 
-// Read a repo's previously-resolved verdict for the SAME decisive doc + ETag (#4843). A cache that is absent, or
-// whose read throws (corrupt/locked file), is treated as a plain miss — the caller resolves the verdict fresh,
-// per the same "never risk a stale policy" rule as the doc cache above.
-function readCachedPolicyVerdict(cache, repoFullName) {
+// A bare `owner/repo` is NOT a safe policy-verdict cache key: two different tenant forge hosts (#4784's
+// per-tenant `apiBaseUrl`) can each have their own unrelated repo of the same name, and their policy docs are
+// wholly independent. Scope the key by host, mirroring policy-doc-cache.js's own precedent of keying on the full
+// request URL rather than a bare path.
+function policyVerdictCacheKey(apiBaseUrl, repoFullName) {
+  return `${apiBaseUrl}::${repoFullName}`;
+}
+
+// Read a repo scope's previously-resolved verdict for the SAME decisive doc + ETag (#4843). A cache that is
+// absent, or whose read throws (corrupt/locked file), is treated as a plain miss — the caller resolves the
+// verdict fresh, per the same "never risk a stale policy" rule as the doc cache above.
+function readCachedPolicyVerdict(cache, repoScope) {
   if (!cache) return null;
   try {
-    return cache.get(repoFullName);
+    return cache.get(repoScope);
   } catch {
     return null;
   }
@@ -191,12 +199,12 @@ function readCachedPolicyVerdict(cache, repoFullName) {
 // Persist the freshly-resolved verdict against the ETag of the doc that decided it, so the next run can reuse it
 // outright once that ETag is confirmed unchanged. Only ever called with a real ETag; a write that throws must
 // never fail discovery — it degrades to "not cached", so the next run just resolves the verdict again.
-function writeCachedPolicyVerdict(cache, repoFullName, decisiveDoc, etag, verdict) {
+function writeCachedPolicyVerdict(cache, repoScope, decisiveDoc, etag, verdict) {
   if (!cache || etag === null) return;
   try {
-    cache.put(repoFullName, decisiveDoc, etag, verdict);
+    cache.put(repoScope, decisiveDoc, etag, verdict);
   } catch {
-    // Leave this repo uncached; the next run just resolves the verdict fresh again.
+    // Leave this repo scope uncached; the next run just resolves the verdict fresh again.
   }
 }
 
@@ -229,20 +237,22 @@ async function fetchRepoDoc(target, path, githubToken, options, summary, warning
   }
 }
 
-// Resolve a repo's AI-usage-policy verdict, reusing a cached one when the deciding doc's ETag hasn't moved since
-// it was last resolved (#4843). Only ever consulted with an ETag that a same-run conditional-GET just confirmed
-// is current, so a cache hit is exactly as correct as recomputing — it just skips the (cheap, but not free) parse.
-function resolveOrCacheVerdict(cache, repoFullName, decisiveDoc, etag, computeVerdict) {
+// Resolve a repo scope's AI-usage-policy verdict, reusing a cached one when the deciding doc's ETag hasn't moved
+// since it was last resolved (#4843). Only ever consulted with an ETag that a same-run conditional-GET just
+// confirmed is current, so a cache hit is exactly as correct as recomputing — it just skips the (cheap, but not
+// free) parse.
+function resolveOrCacheVerdict(cache, repoScope, decisiveDoc, etag, computeVerdict) {
   if (etag !== null) {
-    const cached = readCachedPolicyVerdict(cache, repoFullName);
+    const cached = readCachedPolicyVerdict(cache, repoScope);
     if (cached && cached.decisiveDoc === decisiveDoc && cached.etag === etag) return cached.verdict;
   }
   const verdict = computeVerdict();
-  writeCachedPolicyVerdict(cache, repoFullName, decisiveDoc, etag, verdict);
+  writeCachedPolicyVerdict(cache, repoScope, decisiveDoc, etag, verdict);
   return verdict;
 }
 
 async function resolveRepoAiPolicy(target, githubToken, options, summary, warnings) {
+  const repoScope = policyVerdictCacheKey(options.apiBaseUrl, target.repoFullName);
   const { content: aiUsage, etag: aiUsageEtag } = await fetchRepoDoc(
     target,
     "AI-USAGE.md",
@@ -256,7 +266,7 @@ async function resolveRepoAiPolicy(target, githubToken, options, summary, warnin
   // CONTRIBUTING.md (the exact case resolveAiPolicyVerdict was fixed to handle in #2900, which can only fire if
   // both docs reach it).
   if (aiUsage !== null && aiUsage.trim().length > 0) {
-    return resolveOrCacheVerdict(options.policyVerdictCache, target.repoFullName, "AI-USAGE.md", aiUsageEtag, () =>
+    return resolveOrCacheVerdict(options.policyVerdictCache, repoScope, "AI-USAGE.md", aiUsageEtag, () =>
       resolveAiPolicyVerdict({ aiUsage, contributing: null }),
     );
   }
@@ -270,7 +280,7 @@ async function resolveRepoAiPolicy(target, githubToken, options, summary, warnin
   );
   return resolveOrCacheVerdict(
     options.policyVerdictCache,
-    target.repoFullName,
+    repoScope,
     "CONTRIBUTING.md",
     contributingEtag,
     () => resolveAiPolicyVerdict({ aiUsage: null, contributing }),

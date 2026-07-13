@@ -54,7 +54,7 @@ describe("gittensory-miner policy-verdict cache store (#4843)", () => {
   it("stores and reads back a decisive doc + ETag + verdict, and reports its db path", () => {
     const store = openStore();
     const write = store.put(REPO, "AI-USAGE.md", '"v1"', VERDICT);
-    expect(write).toMatchObject({ repoFullName: REPO, decisiveDoc: "AI-USAGE.md", etag: '"v1"', verdict: VERDICT });
+    expect(write).toMatchObject({ repoScope: REPO, decisiveDoc: "AI-USAGE.md", etag: '"v1"', verdict: VERDICT });
     expect(typeof write.updatedAt).toBe("string");
     expect(store.get(REPO)).toEqual({ decisiveDoc: "AI-USAGE.md", etag: '"v1"', verdict: VERDICT });
     expect(store.dbPath).toBe(":memory:");
@@ -78,13 +78,13 @@ describe("gittensory-miner policy-verdict cache store (#4843)", () => {
     expect(store.get(REPO)?.verdict).toEqual(withFatigue);
   });
 
-  it("rejects a non-string or empty repoFullName on both get and put", () => {
+  it("rejects a non-string or empty repoScope on both get and put", () => {
     const store = openStore();
-    expect(() => store.get("")).toThrow("invalid_policy_verdict_repo_full_name");
-    expect(() => store.get("   ")).toThrow("invalid_policy_verdict_repo_full_name");
+    expect(() => store.get("")).toThrow("invalid_policy_verdict_repo_scope");
+    expect(() => store.get("   ")).toThrow("invalid_policy_verdict_repo_scope");
     // @ts-expect-error deliberately passing a non-string to exercise the guard.
-    expect(() => store.get(42)).toThrow("invalid_policy_verdict_repo_full_name");
-    expect(() => store.put("", "AI-USAGE.md", '"v1"', VERDICT)).toThrow("invalid_policy_verdict_repo_full_name");
+    expect(() => store.get(42)).toThrow("invalid_policy_verdict_repo_scope");
+    expect(() => store.put("", "AI-USAGE.md", '"v1"', VERDICT)).toThrow("invalid_policy_verdict_repo_scope");
   });
 
   it("rejects a decisive doc outside the AI-USAGE.md/CONTRIBUTING.md pair", () => {

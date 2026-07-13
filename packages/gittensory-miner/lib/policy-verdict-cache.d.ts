@@ -9,15 +9,17 @@ export type PolicyVerdictCacheEntry = {
 };
 
 export type PolicyVerdictCacheWrite = PolicyVerdictCacheEntry & {
-  repoFullName: string;
+  repoScope: string;
   updatedAt: string;
 };
 
 export type PolicyVerdictCacheStore = {
   dbPath: string;
-  get(repoFullName: string): PolicyVerdictCacheEntry | null;
+  /** `repoScope` must uniquely identify a tenant forge host + repo (see `policyVerdictCacheKey` in
+   *  opportunity-fanout.js) -- a bare `owner/repo` is not safe across multiple forge hosts. */
+  get(repoScope: string): PolicyVerdictCacheEntry | null;
   put(
-    repoFullName: string,
+    repoScope: string,
     decisiveDoc: PolicyVerdictDecisiveDoc,
     etag: string,
     verdict: AiPolicyVerdict,

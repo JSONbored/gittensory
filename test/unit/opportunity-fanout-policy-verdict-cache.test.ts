@@ -16,7 +16,9 @@ import { initPolicyVerdictCacheStore } from "../../packages/gittensory-miner/lib
 const API = "https://api.test";
 const AI_USAGE_URL = `${API}/repos/acme/widgets/contents/AI-USAGE.md`;
 const CONTRIBUTING_URL = `${API}/repos/acme/widgets/contents/CONTRIBUTING.md`;
-const REPO = "acme/widgets";
+// Cache keys are scoped by tenant host + repo (#4784/#4843's own fix), not a bare "owner/repo" -- see
+// policyVerdictCacheKey in opportunity-fanout.js.
+const REPO_SCOPE = `${API}::acme/widgets`;
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/ai-policy");
 const ALLOWED_AI_USAGE = readFileSync(join(fixtureDir, "allowed-encourages-ai.md"), "utf8");
@@ -54,23 +56,23 @@ const issue = (number: number) => ({
 
 /** A minimal in-memory PolicyVerdictCache that records its writes, so a test can assert exactly what got cached. */
 function fakeVerdictCache(
-  overrides: { getImpl?: (repoFullName: string) => unknown; putImpl?: () => void } = {},
+  overrides: { getImpl?: (repoScope: string) => unknown; putImpl?: () => void } = {},
 ) {
   const store = new Map<string, { decisiveDoc: string; etag: string; verdict: unknown }>();
-  const puts: Array<{ repoFullName: string; decisiveDoc: string; etag: string; verdict: unknown }> = [];
+  const puts: Array<{ repoScope: string; decisiveDoc: string; etag: string; verdict: unknown }> = [];
   return {
     store,
     puts,
-    get(repoFullName: string) {
-      if (overrides.getImpl) return overrides.getImpl(repoFullName);
-      return store.get(repoFullName) ?? null;
+    get(repoScope: string) {
+      if (overrides.getImpl) return overrides.getImpl(repoScope);
+      return store.get(repoScope) ?? null;
     },
-    put(repoFullName: string, decisiveDoc: string, etag: string, verdict: unknown) {
+    put(repoScope: string, decisiveDoc: string, etag: string, verdict: unknown) {
       if (overrides.putImpl) overrides.putImpl();
       const entry = { decisiveDoc, etag, verdict };
-      store.set(repoFullName, entry);
-      puts.push({ repoFullName, decisiveDoc, etag, verdict });
-      return { repoFullName, ...entry, updatedAt: "t" };
+      store.set(repoScope, entry);
+      puts.push({ repoScope, decisiveDoc, etag, verdict });
+      return { repoScope, ...entry, updatedAt: "t" };
     },
   };
 }
@@ -94,9 +96,9 @@ function stubFetch(
   return calls;
 }
 
-async function discover(policyVerdictCache: unknown) {
+async function discover(policyVerdictCache: unknown, apiBaseUrl: string = API) {
   return fetchCandidateIssuesWithSummary([{ owner: "acme", repo: "widgets" }], "token", {
-    apiBaseUrl: API,
+    apiBaseUrl,
     // biome-ignore lint/suspicious/noExplicitAny: the injected fake satisfies the structural PolicyVerdictCache surface.
     policyVerdictCache: policyVerdictCache as any,
   });
@@ -120,14 +122,14 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
 
     expect(result.issues.map((entry) => entry.issueNumber)).toEqual([1]);
     expect(cache.puts).toHaveLength(1);
-    expect(cache.puts[0]).toMatchObject({ repoFullName: REPO, decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
+    expect(cache.puts[0]).toMatchObject({ repoScope: REPO_SCOPE, decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
   });
 
   it("reuses a cached verdict outright when the decisive doc's ETag is unchanged", async () => {
     const cache = fakeVerdictCache();
     // Deliberately WRONG (blocking) verdict planted under a matching decisiveDoc + ETag: if the fresh "allowed"
     // fixture were re-resolved, the issue would survive. Its absence proves the cached verdict won, not a fresh one.
-    cache.store.set(REPO, {
+    cache.store.set(REPO_SCOPE, {
       decisiveDoc: "AI-USAGE.md",
       etag: '"v1"',
       verdict: { allowed: false, matchedPhrase: "fake-cached-ban", source: "AI-USAGE.md" },
@@ -143,7 +145,7 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
 
   it("recomputes when the decisive doc's ETag has changed", async () => {
     const cache = fakeVerdictCache();
-    cache.store.set(REPO, {
+    cache.store.set(REPO_SCOPE, {
       decisiveDoc: "AI-USAGE.md",
       etag: '"v-old"',
       verdict: { allowed: false, matchedPhrase: "fake-cached-ban", source: "AI-USAGE.md" },
@@ -161,7 +163,7 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
     const cache = fakeVerdictCache();
     // Simulates a repo that previously had no AI-USAGE.md (CONTRIBUTING.md was decisive) and now does; the
     // decisiveDoc mismatch alone must force a recompute even though this ETag string happens to collide.
-    cache.store.set(REPO, {
+    cache.store.set(REPO_SCOPE, {
       decisiveDoc: "CONTRIBUTING.md",
       etag: '"v1"',
       verdict: { allowed: false, matchedPhrase: "fake-cached-ban", source: "CONTRIBUTING.md" },
@@ -173,6 +175,39 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
     expect(result.issues.map((entry) => entry.issueNumber)).toEqual([1]);
     expect(cache.puts).toHaveLength(1);
     expect(cache.puts[0]).toMatchObject({ decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
+  });
+
+  it("REGRESSION: does not share a cached verdict across two different tenant forge hosts with the same owner/repo (#4843)", async () => {
+    const cache = fakeVerdictCache();
+    const secondHost = "https://ghe.example.com/api/v3";
+    // Both hosts happen to serve identical bytes (same ETag string too) for their own, wholly unrelated
+    // "acme/widgets" repo -- a coincidence real ETags can produce (e.g. two hosts both using a weak/hash-derived
+    // ETag scheme). A bare `owner/repo` cache key would incorrectly treat these as the same repo.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/contents/AI-USAGE.md")) return contentResponse(ALLOWED_AI_USAGE, '"v1"');
+      if (url.includes("/repos/acme/widgets/issues?") || url.includes("/api/v3/repos/acme/widgets/issues?")) {
+        return jsonResponse([issue(1)]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const first = await discover(cache, API);
+    expect(first.issues.map((entry) => entry.issueNumber)).toEqual([1]);
+    expect(cache.puts).toHaveLength(1);
+    expect(cache.puts[0]?.repoScope).toBe(REPO_SCOPE);
+
+    // A DIFFERENT host, same owner/repo, same ETag string: without host-scoping this would hit the FIRST host's
+    // cache entry and skip resolution entirely. It must instead be treated as a fresh, independent repo.
+    cache.puts.length = 0;
+    const second = await discover(cache, secondHost);
+    expect(second.issues.map((entry) => entry.issueNumber)).toEqual([1]);
+    expect(cache.puts).toHaveLength(1);
+    expect(cache.puts[0]?.repoScope).toBe(`${secondHost}::acme/widgets`);
+    expect(cache.puts[0]?.repoScope).not.toBe(REPO_SCOPE);
+
+    // Both hosts' entries coexist independently in the cache.
+    expect(cache.store.size).toBe(2);
   });
 
   it("caches and reuses a verdict decided by CONTRIBUTING.md when AI-USAGE.md is absent", async () => {
@@ -258,7 +293,7 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
     stubFetch(() => contentResponse(ALLOWED_AI_USAGE, '"v1"'));
     const first = await discover(store);
     expect(first.issues.map((entry) => entry.issueNumber)).toEqual([1]);
-    expect(store.get(REPO)).toMatchObject({ decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
+    expect(store.get(REPO_SCOPE)).toMatchObject({ decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
 
     vi.unstubAllGlobals();
     stubFetch(() => contentResponse(ALLOWED_AI_USAGE, '"v1"'));
@@ -268,6 +303,6 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
     // The verdict really landed on disk: a freshly reopened handle still has it.
     const reopened = initPolicyVerdictCacheStore(dbPath);
     stores.push(reopened);
-    expect(reopened.get(REPO)).toMatchObject({ decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
+    expect(reopened.get(REPO_SCOPE)).toMatchObject({ decisiveDoc: "AI-USAGE.md", etag: '"v1"' });
   });
 });

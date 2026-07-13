@@ -3,11 +3,16 @@ import { applySchemaMigrations } from "./schema-version.js";
 
 // Local cache of resolved AI-usage-policy verdicts (#4843). Even with #4842's conditional-GET doc cache, the small
 // but non-zero cost of resolving `resolveAiPolicyVerdict` from raw doc text was still paid on every discover run.
-// This stores the verdict itself, keyed by repo + the ETag of whichever doc actually decided it, so a repeat run
-// against an unchanged repo reuses the prior verdict outright once opportunity-fanout.js's same-run conditional-GET
-// confirms that doc's ETag hasn't moved -- never served blindly, exactly the same "cheaper, never less correct"
-// discipline as policy-doc-cache.js. 100% local/client-side, same as every other store this package owns via
-// local-store.js: the file lives only on this machine and is never uploaded, synced, or phoned home with.
+// This stores the verdict itself, keyed by repo SCOPE (the tenant's `apiBaseUrl` plus `owner/repo` -- see
+// `policyVerdictCacheKey` in opportunity-fanout.js, same "the caller owns what makes a cache key" precedent as
+// policy-doc-cache.js keying on the full request URL) + the ETag of whichever doc actually decided it, so a
+// repeat run against an unchanged repo reuses the prior verdict outright once opportunity-fanout.js's same-run
+// conditional-GET confirms that doc's ETag hasn't moved -- never served blindly, exactly the same "cheaper, never
+// less correct" discipline as policy-doc-cache.js. `owner/repo` alone is NOT a safe key: two different tenant
+// forge hosts can each have their own unrelated `acme/widgets`, and without the host in the key a verdict
+// resolved against one host's docs could be served for the other's. 100% local/client-side, same as every other
+// store this package owns via local-store.js: the file lives only on this machine and is never uploaded, synced,
+// or phoned home with.
 
 const defaultDbFileName = "policy-verdict-cache.sqlite3";
 const DECISIVE_DOCS = new Set(["AI-USAGE.md", "CONTRIBUTING.md"]);
@@ -20,10 +25,10 @@ function normalizeDbPath(dbPath) {
   return normalizeLocalStoreDbPath(dbPath, resolvePolicyVerdictCacheDbPath(), "invalid_policy_verdict_cache_db_path");
 }
 
-function normalizeRepoFullName(repoFullName) {
-  if (typeof repoFullName !== "string") throw new Error("invalid_policy_verdict_repo_full_name");
-  const trimmed = repoFullName.trim();
-  if (!trimmed) throw new Error("invalid_policy_verdict_repo_full_name");
+function normalizeRepoScope(repoScope) {
+  if (typeof repoScope !== "string") throw new Error("invalid_policy_verdict_repo_scope");
+  const trimmed = repoScope.trim();
+  if (!trimmed) throw new Error("invalid_policy_verdict_repo_scope");
   return trimmed;
 }
 
@@ -53,7 +58,7 @@ export function initPolicyVerdictCacheStore(dbPath = resolvePolicyVerdictCacheDb
   const db = openLocalStoreDb(resolvedPath);
   db.exec(`
     CREATE TABLE IF NOT EXISTS policy_verdict_cache (
-      repo_full_name TEXT PRIMARY KEY,
+      repo_scope TEXT PRIMARY KEY,
       decisive_doc TEXT NOT NULL,
       etag TEXT NOT NULL,
       verdict TEXT NOT NULL,
@@ -64,12 +69,12 @@ export function initPolicyVerdictCacheStore(dbPath = resolvePolicyVerdictCacheDb
   applySchemaMigrations(db, []);
 
   const getStatement = db.prepare(
-    "SELECT decisive_doc, etag, verdict FROM policy_verdict_cache WHERE repo_full_name = ?",
+    "SELECT decisive_doc, etag, verdict FROM policy_verdict_cache WHERE repo_scope = ?",
   );
   const putStatement = db.prepare(`
-    INSERT INTO policy_verdict_cache (repo_full_name, decisive_doc, etag, verdict, updated_at)
+    INSERT INTO policy_verdict_cache (repo_scope, decisive_doc, etag, verdict, updated_at)
     VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(repo_full_name) DO UPDATE SET
+    ON CONFLICT(repo_scope) DO UPDATE SET
       decisive_doc = excluded.decisive_doc,
       etag = excluded.etag,
       verdict = excluded.verdict,
@@ -78,21 +83,21 @@ export function initPolicyVerdictCacheStore(dbPath = resolvePolicyVerdictCacheDb
 
   return {
     dbPath: resolvedPath,
-    /** The last-known `{ decisiveDoc, etag, verdict }` for a repo, or null when it has never been cached. */
-    get(repoFullName) {
-      const row = getStatement.get(normalizeRepoFullName(repoFullName));
+    /** The last-known `{ decisiveDoc, etag, verdict }` for a repo scope, or null when it has never been cached. */
+    get(repoScope) {
+      const row = getStatement.get(normalizeRepoScope(repoScope));
       if (!row) return null;
       return { decisiveDoc: row.decisive_doc, etag: row.etag, verdict: JSON.parse(row.verdict) };
     },
     /** Record the resolved verdict against the ETag of the doc that decided it, so the next run can reuse it. */
-    put(repoFullName, decisiveDoc, etag, verdict) {
-      const normalizedRepoFullName = normalizeRepoFullName(repoFullName);
+    put(repoScope, decisiveDoc, etag, verdict) {
+      const normalizedRepoScope = normalizeRepoScope(repoScope);
       const normalizedDecisiveDoc = normalizeDecisiveDoc(decisiveDoc);
       const normalizedEtag = normalizeEtag(etag);
       const serializedVerdict = serializeVerdict(verdict);
       const updatedAt = new Date().toISOString();
-      putStatement.run(normalizedRepoFullName, normalizedDecisiveDoc, normalizedEtag, serializedVerdict, updatedAt);
-      return { repoFullName: normalizedRepoFullName, decisiveDoc: normalizedDecisiveDoc, etag: normalizedEtag, verdict, updatedAt };
+      putStatement.run(normalizedRepoScope, normalizedDecisiveDoc, normalizedEtag, serializedVerdict, updatedAt);
+      return { repoScope: normalizedRepoScope, decisiveDoc: normalizedDecisiveDoc, etag: normalizedEtag, verdict, updatedAt };
     },
     close() {
       db.close();
