@@ -37,10 +37,10 @@ describe("local write-tool specs (#780)", () => {
     expect(s.command.endsWith("--draft")).toBe(true);
   });
 
-  it("close_pr closes with a preceding comment when one is supplied", () => {
+  it("close_pr closes FIRST (unconditionally), then best-effort comments when one is supplied", () => {
     const s = buildClosePrSpec({ repoFullName: "o/r", number: 7, comment: "Closing: lost the claim to #5" });
     expect(s.action).toBe("close_pr");
-    expect(s.command).toBe("gh pr comment 7 --repo 'o/r' --body 'Closing: lost the claim to #5' && gh pr close 7 --repo 'o/r'");
+    expect(s.command).toBe("gh pr close 7 --repo 'o/r' && gh pr comment 7 --repo 'o/r' --body 'Closing: lost the claim to #5'");
     expect(s.boundary).toBe(LOCAL_WRITE_BOUNDARY);
     expect(s.inputs).toEqual({ repoFullName: "o/r", number: 7, comment: "Closing: lost the claim to #5" });
   });

@@ -1821,39 +1821,53 @@ export async function regatePullRequest(
     );
     return;
   }
-  // #orb-retry-storm: record the repair attempt NOW — after rate-limit admission — so the cap in
-  // surfaceRepairPriorityPullNumbers counts actual executions, not queued dispatches that may have
-  // been deferred or dropped before running (the old dispatch-time recording let rate-limit deferrals
-  // exhaust the 2-attempt budget without ever trying the repair).
-  if (repairHeadSha) {
-    await recordAuditEvent(env, {
-      eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
-      actor: "gittensory",
-      targetKey: regateRepairTargetKey(repoFullName, prNumber, repairHeadSha),
-      outcome: "completed",
-      detail: `outage-repair re-review executing for ${repoFullName}#${prNumber}`,
-      metadata: { repoFullName, prNumber, headSha: repairHeadSha },
-    });
-  }
   const settings = await resolveRepositorySettings(env, repoFullName);
-  await reReviewStoredPullRequest(
-    env,
-    deliveryId,
-    installationId,
-    repoFullName,
-    prNumber,
-    undefined,
-    // Run the AI review on the sweep for BOTH advisory and block modes (#sweep-all-modes) — only skip when AI is
-    // OFF. The #1462 per-(repo,pr,headSha,mode) cache bounds the cost: an unchanged PR re-gates from cache with no
-    // re-spend, so an advisory PR gets a posted review without burning a token every sweep tick. `force` (#regate-
-    // churn req 8) bypasses that cache/cooldown reuse entirely for an explicit manual re-gate request.
-    {
-      skipAiReview: settings.aiReviewMode === "off",
-      ...(force ? { force: true } : {}),
-    },
-  ).catch((error) => {
+  // #orb-retry-storm/#5385-sentry (GITTENSORY-1E): record the repair attempt only once
+  // reReviewStoredPullRequest confirms it actually got PAST the review pipeline's own readiness gate
+  // (prReadyForReview) -- not merely once the job cleared rate-limit admission above. A PR legitimately
+  // waiting on a still-missing branch-protection-required check defers UNCONDITIONALLY and INDEFINITELY
+  // (prReadyForReview's own deliberate #3947 design -- there is no finalize escape for that specific case),
+  // so recording the OLD way (before ever checking readiness) charged a full attempt to a healthy PR doing
+  // nothing wrong on every ~2-minute sweep tick, exhausting the 5-attempt budget in ~10 minutes -- an order
+  // of magnitude shorter than realistic required-CI latency -- and firing a false "repair exhausted" alert
+  // for a review that was never actually broken. Mirrors the same "count executions, not deferrals"
+  // reasoning #orb-retry-storm already applied one layer out (rate-limit admission, above).
+  //
+  // `reachedReadiness` is set via reReviewStoredPullRequest's own onReachedReadiness callback -- NOT inferred
+  // from whether the call below returns vs. throws. A retryable error (GitHub rate limit / actuation-lock
+  // contention) can surface from real post-readiness work, and that is still a genuinely executed attempt that
+  // must consume the repair budget before the queue retries the message, or a repair stuck behind repeated
+  // contention could reselect indefinitely without ever exhausting. Conversely, an error thrown BEFORE
+  // readiness (e.g. a DB read failing) must NOT charge the budget for a pass that never got a real chance to
+  // review -- the callback (fired exactly once, right as the gate passes) is the only way to tell these apart
+  // once the call has thrown, since the boolean return value alone is lost on a throw.
+  let reachedReadiness = false;
+  try {
+    await reReviewStoredPullRequest(
+      env,
+      deliveryId,
+      installationId,
+      repoFullName,
+      prNumber,
+      undefined,
+      // Run the AI review on the sweep for BOTH advisory and block modes (#sweep-all-modes) — only skip when AI is
+      // OFF. The #1462 per-(repo,pr,headSha,mode) cache bounds the cost: an unchanged PR re-gates from cache with no
+      // re-spend, so an advisory PR gets a posted review without burning a token every sweep tick. `force` (#regate-
+      // churn req 8) bypasses that cache/cooldown reuse entirely for an explicit manual re-gate request.
+      {
+        skipAiReview: settings.aiReviewMode === "off",
+        ...(force ? { force: true } : {}),
+        onReachedReadiness: () => {
+          reachedReadiness = true;
+        },
+      },
+    );
+  } catch (error) {
     /* v8 ignore next -- retryable/rate-limit propagation is exercised by queue retry tests; this catch only preserves that contract. */
-    if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) throw error;
+    if (isGitHubRateLimitedError(error) || isRetryableJobError(error)) {
+      // The finally block below still records the attempt (if reached) before this rethrow completes.
+      throw error;
+    }
     console.error(
       JSON.stringify({
         level: "warn",
@@ -1864,7 +1878,21 @@ export async function regatePullRequest(
         error: errorMessage(error),
       }),
     );
-  });
+  } finally {
+    // Best-effort, same as every other recordAuditEvent call in this file (`.catch(() => undefined)`) -- a
+    // failure writing THIS audit row must never replace a pending rethrown retryable error (or a normal
+    // return) with its own, which `finally` would otherwise do per JS semantics.
+    if (repairHeadSha && reachedReadiness) {
+      await recordAuditEvent(env, {
+        eventType: REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
+        actor: "gittensory",
+        targetKey: regateRepairTargetKey(repoFullName, prNumber, repairHeadSha),
+        outcome: "completed",
+        detail: `outage-repair re-review executing for ${repoFullName}#${prNumber}`,
+        metadata: { repoFullName, prNumber, headSha: repairHeadSha },
+      }).catch(() => undefined);
+    }
+  }
 }
 
 export function changedPathsForGuardrail(
@@ -3050,6 +3078,18 @@ async function runAgentMaintenancePlanAndExecute(
  * re-run auto-maintain. Shared by the CI-completion (check_suite/check_run) handler below, mirroring reviewbot's
  * "the CI event WAKES the existing row and re-runs the full review". The PR's persisted head SHA is used as-is
  * (never overwritten from the CI payload — reviewbot scope parity). Best-effort throughout.
+ *
+ * Returns `true` once the review pipeline's own readiness gate (`prReadyForReview`, below) has actually
+ * passed and this call is genuinely proceeding with a real review/gate attempt; `false` for every early
+ * decline before that point (PR missing/closed, terminal-state reconcile, automation-bot skip, or
+ * `prReadyForReview` itself deferring — e.g. CI/required-context still pending). regatePullRequest (#5385-
+ * sentry, GITTENSORY-1E) uses this to only charge its bounded repair-attempt budget for a pass that actually
+ * got a chance to review, not one `prReadyForReview` correctly, harmlessly declined.
+ *
+ * `options.onReachedReadiness` fires the instant the gate passes, BEFORE any further (throwable) work runs —
+ * a side channel so a caller can still know readiness was reached even when this call later THROWS instead of
+ * returning (e.g. a retryable GitHub-rate-limit/lock-contention error surfacing from the post-readiness public-
+ * surface publish below). The `true`/`false` return value alone cannot carry that signal across a throw.
  */
 export async function reReviewStoredPullRequest(
   env: Env,
@@ -3058,14 +3098,14 @@ export async function reReviewStoredPullRequest(
   repoFullName: string,
   prNumber: number,
   previewPollAttempt?: number,
-  options: { skipAiReview?: boolean; force?: boolean } = {},
-): Promise<void> {
+  options: { skipAiReview?: boolean; force?: boolean; onReachedReadiness?: () => void } = {},
+): Promise<boolean> {
   const [repo, settings] = await Promise.all([
     getRepository(env, repoFullName),
     resolveRepositorySettings(env, repoFullName),
   ]);
   let pr = await getPullRequest(env, repoFullName, prNumber);
-  if (!pr || pr.state !== "open") return;
+  if (!pr || pr.state !== "open") return false;
   const automationBotSkipEnabled = resolveSkipAutomationBotPullRequests(
     isSkipAutomationBotPullRequestsEnabledGlobally(env),
     settings.skipAutomationBotAuthors,
@@ -3105,7 +3145,7 @@ export async function reReviewStoredPullRequest(
     if (current?.state === "open" && current.updatedAt === pr.updatedAt) {
       await upsertPullRequestFromGitHub(env, repoFullName, live).catch(() => undefined);
     }
-    return;
+    return false;
   }
   if (live?.head?.sha && live.head.sha !== pr.headSha) {
     await upsertPullRequestFromGitHub(env, repoFullName, live).catch(
@@ -3125,7 +3165,7 @@ export async function reReviewStoredPullRequest(
     isTrustedAutomationBotAuthor(pr.authorLogin) &&
     live?.head?.sha === storedHeadShaBeforeResync
   )
-    return;
+    return false;
   // Operator review flow: rebase-if-behind → wait for ALL CI to finish → only THEN review. Defers (returns) when
   // a rebase fired a synchronize, or CI is still running — the synchronize / CI-completion webhook re-triggers
   // once the head is current and CI has settled (the sweep backstops a missed event). REST-budget dedup
@@ -3152,7 +3192,10 @@ export async function reReviewStoredPullRequest(
         ),
     ))
   )
-    return;
+    return false;
+  // Fire BEFORE any further (throwable) work below -- this is the one instant readiness is confirmed, so a
+  // caller learns it even if this call goes on to THROW instead of returning (see the JSDoc above).
+  options.onReachedReadiness?.();
   const [cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
     await Promise.all([
       listOtherOpenPullRequests(env, repoFullName, prNumber),
@@ -3268,6 +3311,7 @@ export async function reReviewStoredPullRequest(
       }),
     );
   });
+  return true;
 }
 
 /**
@@ -3787,7 +3831,21 @@ async function wakeOverCapSiblingPullRequests(
 ): Promise<void> {
   await Promise.all(
     siblingPrNumbers.map(async (prNumber) => {
-      const key = `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}`;
+      // #5385-sentry (GITTENSORY-1D): keyed by the sibling's CURRENT head SHA (not just its number) and held for
+      // a much longer cooldown than the 60s CI-completion-burst window CI_COALESCE_WINDOW_SECONDS was designed
+      // for -- a repeat over-cap discovery for an UNCHANGED head within the cooldown has nothing new to learn
+      // from a fresh full re-review; a new commit changes the head SHA and naturally resets the guard, mirroring
+      // the identical "a new commit resets the CI-stuck-finalize guard" idiom used above (#orb-ci-stuck-repeat).
+      // Without this, a contributor who repeatedly opens (and has auto-closed) near-duplicate PRs re-triggers
+      // THIS sibling's full review/gate republish every time the cap is recomputed, even though nothing about
+      // the sibling itself changed -- confirmed live: one PR published 27 redundant review surfaces in 2 hours
+      // this way, driven entirely by a different PR's open/close churn. Fail open to the tighter, headSha-less
+      // key on a lookup miss (PR not found locally) rather than skip the wake outright.
+      const sibling = await getPullRequest(env, repoFullName, prNumber).catch(() => null);
+      const key = sibling?.headSha
+        ? `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}#${sibling.headSha}`
+        : `contributor-cap-wake:${repoFullName.toLowerCase()}#${prNumber}`;
+      const cooldownSeconds = sibling?.headSha ? Math.round(AI_REVIEW_NON_CACHEABLE_RETRY_COOLDOWN_MS / 1000) : CI_COALESCE_WINDOW_SECONDS;
       if (await getTransientKey(env, key)) return;
       try {
         await env.JOBS.send({
@@ -3808,7 +3866,7 @@ async function wakeOverCapSiblingPullRequests(
         );
         return; // do NOT claim — a later discovery should retry the enqueue
       }
-      await putTransientKey(env, key, "1", CI_COALESCE_WINDOW_SECONDS);
+      await putTransientKey(env, key, "1", cooldownSeconds);
     }),
   );
 }

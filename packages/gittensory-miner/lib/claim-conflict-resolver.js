@@ -29,6 +29,10 @@ import { buildClosePrSpec } from "@jsonbored/gittensory-engine";
  * Assemble the real competing-claims set from a fetched LiveIssueSnapshot: every OTHER open PR referencing
  * the issue, excluding `selfPrNumber` and any PR authored by `minerLogin` itself (case-insensitive, mirrors
  * checkSubmissionFreshness's own author comparison -- a login can be echoed back with different casing).
+ * Excluding same-author PRs is deliberate, not an edge case slipping through: a miner never competes against
+ * its own work, so if this login somehow has ANOTHER open PR on the same issue (e.g. a retry after a crash
+ * left a stale one behind), that PR is never treated as a competing claim to lose against -- only a genuinely
+ * different claimant's PR can trigger a real close.
  * Pure given its inputs.
  *
  * @param {import("./submission-freshness-check.js").LiveIssueSnapshot | null | undefined} snapshot

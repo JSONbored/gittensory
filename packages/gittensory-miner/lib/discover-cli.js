@@ -6,6 +6,7 @@ import {
   searchCandidateIssuesWithSummary,
 } from "./opportunity-fanout.js";
 import { rankCandidateIssuesWithSummary } from "./opportunity-ranker.js";
+import { initPolicyDocCacheStore } from "./policy-doc-cache.js";
 import { enqueueRankedDiscovery } from "./portfolio-discovery.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 
@@ -149,7 +150,6 @@ export async function runDiscover(args, options = {}) {
   // A `--api-base-url` flag (or `options.apiBaseUrl`) surfaces the fan-out's existing forge-host override at the CLI
   // (#4784); `options.forge` carries any remaining per-tenant forge knobs for a programmatic caller.
   const apiBaseUrl = parsed.apiBaseUrl ?? options.apiBaseUrl;
-  const fanOutOptions = { apiBaseUrl, forge: options.forge };
   const fetchTargets = options.fetchCandidateIssuesWithSummary ?? fetchCandidateIssuesWithSummary;
   const searchTargets = options.searchCandidateIssuesWithSummary ?? searchCandidateIssuesWithSummary;
   const rankIssues = options.rankCandidateIssuesWithSummary ?? rankCandidateIssuesWithSummary;
@@ -157,6 +157,23 @@ export async function runDiscover(args, options = {}) {
 
   const ownsPortfolioQueue = options.initPortfolioQueue === undefined;
   const portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
+
+  // Local ETag cache so a repeated discover revalidates each repo's policy docs with a conditional GET instead of
+  // re-downloading them (#4842). Opened inside its OWN try/catch, separate from the portfolio queue above: the
+  // queue is required infrastructure (discovery genuinely cannot enqueue anything without it, so a real open
+  // failure should abort the run), but the policy-doc cache is a pure performance optimization -- a corrupt or
+  // unwritable cache DB must degrade to "no cache" (every doc fetched in full, exactly as before #4842) rather
+  // than fail discovery outright.
+  let policyDocCache = null;
+  let ownsPolicyDocCache = false;
+  try {
+    ownsPolicyDocCache = options.initPolicyDocCache === undefined;
+    policyDocCache = (options.initPolicyDocCache ?? initPolicyDocCacheStore)();
+  } catch {
+    policyDocCache = null;
+    ownsPolicyDocCache = false;
+  }
+  const fanOutOptions = { apiBaseUrl, forge: options.forge, policyDocCache };
 
   try {
     const fanOut =
@@ -195,5 +212,6 @@ export async function runDiscover(args, options = {}) {
     return 2;
   } finally {
     if (ownsPortfolioQueue) portfolioQueue.close();
+    if (ownsPolicyDocCache && policyDocCache) policyDocCache.close();
   }
 }

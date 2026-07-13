@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { initPolicyDocCacheStore } from "../../packages/gittensory-miner/lib/policy-doc-cache.js";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
@@ -23,6 +24,17 @@ function tempQueueStore() {
   const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-"));
   roots.push(root);
   const store = initPortfolioQueueStore(join(root, "portfolio-queue.sqlite3"));
+  stores.push(store);
+  return store;
+}
+
+// An injected policy-doc cache keeps runDiscover from opening the real on-disk cache in ~/.config for every test
+// that only cares about the fan-out/rank/enqueue path (#4842). runDiscover doesn't own an injected store, so the
+// afterEach hook below closes it.
+function tempPolicyDocCacheStore() {
+  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-pdc-"));
+  roots.push(root);
+  const store = initPolicyDocCacheStore(join(root, "policy-doc-cache.sqlite3"));
   stores.push(store);
   return store;
 }
@@ -288,6 +300,7 @@ describe("runDiscover (#4247)", () => {
     const exitCode = await runDiscover(["acme/widgets", "--json"], {
       nowMs: NOW,
       initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
       fetchCandidateIssuesWithSummary,
       searchCandidateIssuesWithSummary,
     });
@@ -328,6 +341,7 @@ describe("runDiscover (#4247)", () => {
     const exitCode = await runDiscover(["--search", "label:bug"], {
       nowMs: NOW,
       initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
       fetchCandidateIssuesWithSummary,
       searchCandidateIssuesWithSummary,
     });
@@ -351,6 +365,7 @@ describe("runDiscover (#4247)", () => {
     const exitCode = await runDiscover(["acme/widgets"], {
       nowMs: NOW,
       initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
       fetchCandidateIssuesWithSummary,
     });
 
@@ -382,6 +397,7 @@ describe("runDiscover (#4247)", () => {
 
     const exitCode = await runDiscover(["acme/widgets"], {
       initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
       fetchCandidateIssuesWithSummary,
     });
 
@@ -404,7 +420,11 @@ describe("runDiscover (#4247)", () => {
       }));
       vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-      const exitCode = await runDiscover(["acme/widgets"], { nowMs: NOW, fetchCandidateIssuesWithSummary });
+      const exitCode = await runDiscover(["acme/widgets"], {
+        nowMs: NOW,
+        fetchCandidateIssuesWithSummary,
+        initPolicyDocCache: () => tempPolicyDocCacheStore(),
+      });
       expect(exitCode).toBe(0);
 
       // runDiscover owned and closed this store itself (no initPortfolioQueue override was passed); reopening
@@ -433,7 +453,12 @@ describe("runDiscover (#4247)", () => {
 
       const exitCode = await runDiscover(
         ["acme/widgets", "--api-base-url", "https://ghe.example.com/api/v3", "--token-env", "FORGE_PAT"],
-        { nowMs: NOW, initPortfolioQueue: () => portfolioQueue, fetchCandidateIssuesWithSummary },
+        {
+          nowMs: NOW,
+          initPortfolioQueue: () => portfolioQueue,
+          initPolicyDocCache: () => tempPolicyDocCacheStore(),
+          fetchCandidateIssuesWithSummary,
+        },
       );
 
       expect(exitCode).toBe(0);
@@ -464,6 +489,7 @@ describe("runDiscover (#4247)", () => {
       const exitCode = await runDiscover(["acme/widgets"], {
         nowMs: NOW,
         initPortfolioQueue: () => portfolioQueue,
+        initPolicyDocCache: () => tempPolicyDocCacheStore(),
         fetchCandidateIssuesWithSummary,
         forge: { tokenEnvVar: "FORGE_PAT" },
       });
@@ -493,6 +519,7 @@ describe("runDiscover (#4247)", () => {
     const exitCode = await runDiscover(["acme/widgets"], {
       nowMs: NOW,
       initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
       fetchCandidateIssuesWithSummary,
       githubToken: "explicit-token",
       apiBaseUrl: "https://programmatic.example.com",
@@ -537,6 +564,7 @@ describe("runDiscover (#4247)", () => {
     const exitCode = await runDiscover(["acme/widgets", "--json"], {
       nowMs: NOW,
       initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
       fetchCandidateIssuesWithSummary,
       rankCandidateIssuesWithSummary,
       goalSpecContentByRepo,
@@ -549,6 +577,72 @@ describe("runDiscover (#4247)", () => {
     );
     const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
     expect(payload.usedDefaultGoalSpec).toBe(false);
+  });
+
+  it("opens and closes the default on-disk policy-doc cache when no override is supplied", async () => {
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-pdc-default-"));
+    roots.push(root);
+    const cacheDbPath = join(root, "policy-doc-cache.sqlite3");
+    const previousCacheDbPath = process.env.GITTENSORY_MINER_POLICY_DOC_CACHE_DB;
+    process.env.GITTENSORY_MINER_POLICY_DOC_CACHE_DB = cacheDbPath;
+    try {
+      const portfolioQueue = tempQueueStore();
+      const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+        issues: [fanOutIssue()],
+        warnings: [],
+        rateLimitRemaining: null,
+        rateLimitResetAt: null,
+      }));
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      // No initPolicyDocCache override: runDiscover opens the default on-disk cache at the env path and closes it
+      // in its finally block. Reopening the same file confirms the default code path created a usable store.
+      const exitCode = await runDiscover(["acme/widgets"], {
+        nowMs: NOW,
+        fetchCandidateIssuesWithSummary,
+        initPortfolioQueue: () => portfolioQueue,
+      });
+      expect(exitCode).toBe(0);
+      expect(existsSync(cacheDbPath)).toBe(true);
+
+      const reopened = initPolicyDocCacheStore(cacheDbPath);
+      stores.push(reopened);
+      expect(reopened.get("https://api.github.com/repos/acme/widgets/contents/AI-USAGE.md")).toBeNull();
+    } finally {
+      if (previousCacheDbPath === undefined) delete process.env.GITTENSORY_MINER_POLICY_DOC_CACHE_DB;
+      else process.env.GITTENSORY_MINER_POLICY_DOC_CACHE_DB = previousCacheDbPath;
+    }
+  });
+
+  it("REGRESSION: a corrupt/unopenable policy-doc cache degrades to no cache instead of failing discovery", async () => {
+    const portfolioQueue = tempQueueStore();
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+      issues: [fanOutIssue()],
+      warnings: [],
+      rateLimitRemaining: null,
+      rateLimitResetAt: null,
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const initPolicyDocCache = vi.fn(() => {
+      throw new Error("disk full");
+    });
+
+    const exitCode = await runDiscover(["acme/widgets"], {
+      nowMs: NOW,
+      initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache,
+      fetchCandidateIssuesWithSummary,
+    });
+
+    // The cache is a pure optimization: an open failure must never abort discovery (unlike the portfolio queue,
+    // which IS required infrastructure) -- this is the exact bug a real contributor PR was blocked over.
+    expect(exitCode).toBe(0);
+    expect(initPolicyDocCache).toHaveBeenCalledTimes(1);
+    expect(fetchCandidateIssuesWithSummary).toHaveBeenCalledWith(
+      [{ owner: "acme", repo: "widgets" }],
+      "",
+      expect.objectContaining({ policyDocCache: null }),
+    );
   });
 });
 

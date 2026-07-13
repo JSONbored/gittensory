@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +54,49 @@ describe("resolveMinerGoalSpec (#5132)", () => {
     expect(parsed.spec.killSwitch.paused).toBe(true);
   });
 
+  it("REGRESSION: rejects symlinked miner goal specs without reading the target", () => {
+    const repoPath = tempRepo();
+    const outsidePath = join(tempRepo(), "outside.yml");
+    writeFileSync(outsidePath, "killSwitch:\n  paused: true\n");
+    symlinkSync(outsidePath, join(repoPath, ".gittensory-miner.yml"));
+
+    const parsed = resolveMinerGoalSpec(repoPath);
+
+    expect(parsed.present).toBe(false);
+    expect(parsed.spec.killSwitch).toEqual({ paused: false });
+  });
+
+  it("REGRESSION: ignores oversized miner goal specs before reading them into memory", () => {
+    const repoPath = tempRepo();
+    writeFileSync(join(repoPath, ".gittensory-miner.yml"), `${"#".repeat(32_769)}\nkillSwitch:\n  paused: true\n`);
+
+    const parsed = resolveMinerGoalSpec(repoPath);
+
+    expect(parsed.present).toBe(false);
+    expect(parsed.spec.killSwitch).toEqual({ paused: false });
+  });
+
+  it("REGRESSION: bounds the READ itself, not just the fstat-reported size, so a file that grows between the two still gets rejected", () => {
+    const repoPath = tempRepo();
+    // fstat reports a small, well-within-limit size, but the injected readSync keeps yielding bytes past the
+    // cap anyway -- simulating a file that grows after fstatSync ran but before the read loop finishes (the
+    // TOCTOU window a size check alone, without also bounding the read, cannot close.
+    const parsed = resolveMinerGoalSpec(repoPath, {
+      existsSync: (path) => path.endsWith(".gittensory-miner.yml") && !path.includes(".github"),
+      openSync: () => 999,
+      fstatSync: () => ({ isFile: () => true, size: 10 }) as unknown as import("node:fs").Stats,
+      readSync: (_fd, buffer, offset, length) => {
+        const n = Math.min(length, 4096);
+        buffer.fill(0x23, offset, offset + n); // '#' bytes, parses as a YAML comment if ever read
+        return n;
+      },
+      closeSync: () => {},
+    });
+
+    expect(parsed.present).toBe(false);
+    expect(parsed.spec.killSwitch).toEqual({ paused: false });
+  });
+
   it("degrades to safe defaults on malformed content instead of throwing", () => {
     const repoPath = tempRepo();
     writeFileSync(join(repoPath, ".gittensory-miner.yml"), "killSwitch: [unterminated");
@@ -67,7 +110,7 @@ describe("resolveMinerGoalSpec (#5132)", () => {
     const repoPath = tempRepo();
     const parsed = resolveMinerGoalSpec(repoPath, {
       existsSync: (path) => path.endsWith(".gittensory-miner.yml") && !path.includes(".github"),
-      readFileSync: () => {
+      openSync: () => {
         throw new Error("EACCES: permission denied");
       },
     });

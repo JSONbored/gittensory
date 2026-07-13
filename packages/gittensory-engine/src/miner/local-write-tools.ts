@@ -45,13 +45,15 @@ export function buildOpenPrSpec(input: { repoFullName: string; base: string; hea
 }
 
 /** Close a pull request the miner itself opened (e.g. it lost a claim-conflict adjudication to an earlier
- *  claimant, #4848) -- never used against a PR the miner does not own. `comment`, when supplied, is posted
- *  before the close via a separate `gh pr comment` so the reason survives on the PR even though `gh pr close`
- *  itself has no comment-body flag. */
+ *  claimant, #4848) -- never used against a PR the miner does not own. The close runs FIRST and
+ *  unconditionally -- it's the safety-critical action (never leave a known-losing PR open); `comment`, when
+ *  supplied, is a best-effort follow-up posted only once the close itself succeeds (`gh pr close` has no
+ *  comment-body flag of its own, and a transient `gh pr comment` failure must never mask or block the close
+ *  it's explaining). */
 export function buildClosePrSpec(input: { repoFullName: string; number: number; comment?: string | undefined }): LocalWriteActionSpec {
   const closeCommand = `gh pr close ${input.number} --repo ${sq(input.repoFullName)}`;
   const command = input.comment
-    ? `gh pr comment ${input.number} --repo ${sq(input.repoFullName)} --body ${sq(input.comment)} && ${closeCommand}`
+    ? `${closeCommand} && gh pr comment ${input.number} --repo ${sq(input.repoFullName)} --body ${sq(input.comment)}`
     : closeCommand;
   return spec(
     "close_pr",

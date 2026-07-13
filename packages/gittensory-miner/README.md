@@ -16,6 +16,9 @@ Current scope is intentionally small:
 Environment variables read by the miner are documented in [`docs/env-reference.md`](docs/env-reference.md).
 Regenerate that file with `npm run miner:env-reference` from the repo root after adding or removing env reads.
 
+Config precedence (`.gittensory-miner.yml` vs operator env vs CLI flags) is documented in
+[`docs/config-precedence.md`](docs/config-precedence.md).
+
 Real miner commands land in follow-up issues.
 
 The package also includes the first metadata-only discovery primitive: `fetchCandidateIssues` lists open issue
@@ -83,16 +86,33 @@ Phase 6 of the same roadmap tracker and hasn't been scaffolded yet. (#4279)
 
 ## Local storage
 
-Four independent local SQLite stores back the commands above. Each keeps its own file, its own table, and its own
-env-var override — this is a DRY pass over their shared path-resolution/open boilerplate (`local-store.js`), not a
-merge into one database. (#4272)
+Independent local SQLite stores back the commands above. Each keeps its own file, its own table(s), and (for most stores) its own env-var override — this is a DRY pass over their shared path-resolution/open boilerplate (`local-store.js`), not a merge into one database. (#4272)
 
-| Store | File | Table | Module | Env var override |
+See [`docs/env-reference.md`](docs/env-reference.md) for the full `GITTENSORY_MINER_*` / `MINER_*` env-var list.
+
+| Store | File | Primary table(s) | Module | Env var override |
 | --- | --- | --- | --- | --- |
+| Laptop bootstrap | `laptop-state.sqlite3` | `laptop_meta` | `laptop-init.js` | `GITTENSORY_MINER_CONFIG_DIR` (path only) |
 | Run state | `run-state.sqlite3` | `miner_run_state` | `run-state.js` | `GITTENSORY_MINER_RUN_STATE_DB` |
 | Claim ledger | `claim-ledger.sqlite3` | `miner_claims` | `claim-ledger.js` | `GITTENSORY_MINER_CLAIM_LEDGER_DB` |
 | Portfolio queue | `portfolio-queue.sqlite3` | `miner_portfolio_queue` | `portfolio-queue.js` | `GITTENSORY_MINER_PORTFOLIO_QUEUE_DB` |
 | Event ledger | `event-ledger.sqlite3` | `miner_event_ledger` | `event-ledger.js` | `GITTENSORY_MINER_EVENT_LEDGER_DB` |
+| Plan store | `plan-store.sqlite3` | `miner_plans` | `plan-store.js` | `GITTENSORY_MINER_PLAN_STORE_DB` |
+| Governor ledger | `governor-ledger.sqlite3` | `governor_events` | `governor-ledger.js` | `GITTENSORY_MINER_GOVERNOR_LEDGER_DB` |
+| Governor state | `governor-state.sqlite3` | `governor_scalar_state`, `governor_reputation_history`, `governor_own_submissions` | `governor-state.js` | `GITTENSORY_MINER_GOVERNOR_STATE_DB` |
+| Attempt log | `attempt-log.sqlite3` | `attempt_log_events` | `attempt-log.js` | `GITTENSORY_MINER_ATTEMPT_LOG_DB` |
+| Prediction ledger | `prediction-ledger.sqlite3` | `predictions` | `prediction-ledger.js` | `GITTENSORY_MINER_PREDICTION_LEDGER_DB` |
+| Replay snapshot | `replay-snapshot.sqlite3` | `replay_snapshots` | `replay-snapshot.js` | `GITTENSORY_MINER_REPLAY_SNAPSHOT_DB` |
+| Deny-hook synthesis | `deny-hook-synthesis.sqlite3` | `deny_rule_proposals` | `deny-hook-synthesis.js` | `GITTENSORY_MINER_DENY_HOOK_SYNTHESIS_DB` |
+| Worktree allocator | `worktree-allocator.sqlite3` | `worktree_slots` | `worktree-allocator.js` | `GITTENSORY_MINER_WORKTREE_ALLOCATOR_DB` |
+| Orb export | `orb-export.sqlite3` | `orb_export_meta` | `orb-export.js` | `GITTENSORY_MINER_ORB_EXPORT_DB` |
+| Policy-doc cache | `policy-doc-cache.sqlite3` | `policy_doc_cache` | `policy-doc-cache.js` | `GITTENSORY_MINER_POLICY_DOC_CACHE_DB` |
+
+The policy-doc cache is the only store above that holds no miner state of its own: it caches the last-known ETag +
+body of each target repo's fetched policy docs (AI-USAGE.md/CONTRIBUTING.md) so a repeated `discover` revalidates
+them with a conditional GET (`If-None-Match`) instead of re-downloading static content, spending no extra
+rate-limit budget when GitHub answers `304 Not Modified`. It is pure optimization — deleting the file only forces
+the next run to refetch in full (#4842).
 
 Every store resolves its file the same way: the store-specific env var above, else `GITTENSORY_MINER_CONFIG_DIR`,
 else `XDG_CONFIG_HOME` (falling back to `~/.config`), joined with `gittensory-miner/<file>`. Every store also opens

@@ -4,6 +4,9 @@ export function resolveMinerGoalSpec(
   repoPath: string,
   options?: {
     existsSync?: (path: string) => boolean;
-    readFileSync?: (path: string, encoding: "utf8") => string;
+    openSync?: (path: string, flags: number) => number;
+    fstatSync?: (fd: number) => import("node:fs").Stats;
+    readSync?: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => number;
+    closeSync?: (fd: number) => void;
   },
 ): ParsedMinerGoalSpec;
