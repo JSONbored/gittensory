@@ -13,7 +13,7 @@ name: UI Preview Deploy
 #
 # Required repo secrets:
 #   CLOUDFLARE_API_TOKEN   — token with "Workers Scripts:Edit" on the account
-#   CLOUDFLARE_ACCOUNT_ID  — the Cloudflare account id that owns gittensory-ui
+#   CLOUDFLARE_ACCOUNT_ID  — the Cloudflare account id that owns loopover-ui
 
 on:
   workflow_run:
@@ -124,7 +124,7 @@ jobs:
           cat > preview-dist/server/wrangler.preview.json <<'JSON'
           {
             "compatibility_date": "2026-05-28",
-            "name": "gittensory-ui",
+            "name": "loopover-ui",
             "workers_dev": true,
             "preview_urls": true,
             "compatibility_flags": ["nodejs_compat"],
@@ -169,12 +169,12 @@ jobs:
         run: |
           set -o pipefail
           out=$(wrangler versions upload --config preview-dist/server/wrangler.preview.json 2>&1 | tee /dev/stderr)
-          # Take a workers.dev URL that belongs to the gittensory-ui worker, so any other URL in the logs
+          # Take a workers.dev URL that belongs to the loopover-ui worker, so any other URL in the logs
           # (or a changed output format) can't be recorded as the preview by mistake. Tolerant of the
-          # version-alias prefix (`<alias>-gittensory-ui.<sub>.workers.dev`).
-          url=$(printf '%s\n' "$out" | grep -oiE 'https://[a-z0-9.-]+\.workers\.dev' | grep -i 'gittensory-ui' | head -n1)
+          # version-alias prefix (`<alias>-loopover-ui.<sub>.workers.dev`).
+          url=$(printf '%s\n' "$out" | grep -oiE 'https://[a-z0-9.-]+\.workers\.dev' | grep -i 'loopover-ui' | head -n1)
           if [ -z "$url" ]; then
-            echo "::error::Could not parse an expected gittensory-ui preview URL from wrangler output"
+            echo "::error::Could not parse an expected loopover-ui preview URL from wrangler output"
             exit 1
           fi
           echo "preview_url=$url" >> "$GITHUB_OUTPUT"
