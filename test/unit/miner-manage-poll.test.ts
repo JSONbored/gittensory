@@ -187,5 +187,18 @@ describe("gittensory-miner manage poll (#2323/#2325)", () => {
       }),
     ).toBe(2);
     expect(error).toHaveBeenCalledWith("github_404: not found");
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      await runManagePoll(["acme/widgets", "9", "--json"], {
+        initPortfolioQueue: () => portfolioQueue,
+        initEventLedger: () => eventLedger,
+        pollCheckRuns: vi.fn().mockRejectedValue(new Error("github_404: not found")),
+      }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "github_404: not found",
+    });
   });
 });

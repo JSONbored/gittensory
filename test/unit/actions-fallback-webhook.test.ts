@@ -183,10 +183,10 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         installation: { id: 9101 },
         workflow_run: {
           id: 501,
-          name: "Gittensory Visual Capture Fallback",
+          name: "LoopOver Visual Capture Fallback",
           event: "workflow_dispatch",
           conclusion: "success",
-          display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe",
+          display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe",
         },
       },
     } as never);
@@ -227,7 +227,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 510, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 510, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -269,7 +269,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 520, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 520, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -298,7 +298,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
           action: "completed",
           repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
           installation: { id: 9101 },
-          workflow_run: { id: 511, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+          workflow_run: { id: 511, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
         },
       } as never),
     ).resolves.toBeUndefined();
@@ -330,7 +330,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
           action: "completed",
           repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
           installation: { id: 9101 },
-          workflow_run: { id: 512, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+          workflow_run: { id: 512, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
         },
       } as never),
     ).resolves.toBeUndefined();
@@ -357,7 +357,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
           action: "completed",
           repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
           installation: { id: 9101 },
-          workflow_run: { id: 513, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+          workflow_run: { id: 513, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
         },
       } as never),
     ).resolves.toBeUndefined();
@@ -397,7 +397,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
           action: "completed",
           repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
           installation: { id: 9101 },
-          workflow_run: { id: 514, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+          workflow_run: { id: 514, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
         },
       } as never),
     ).resolves.toBeUndefined();
@@ -454,7 +454,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 503, name: "Gittensory Visual Capture Fallback", event: "pull_request", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 503, name: "LoopOver Visual Capture Fallback", event: "pull_request", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -483,7 +483,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 504, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "failure", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 504, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "failure", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -513,7 +513,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "requested",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 589, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: null, display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 589, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: null, display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -536,7 +536,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 590, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "failure", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 590, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "failure", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -557,7 +557,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 591, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 591, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -578,7 +578,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 592, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "manually triggered" },
+        workflow_run: { id: 592, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "manually triggered" },
       },
     } as never);
 
@@ -609,7 +609,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 505, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "manually triggered" },
+        workflow_run: { id: 505, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "manually triggered" },
       },
     } as never);
 
@@ -638,7 +638,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         action: "completed",
         repository: { name: "fallback-repo", full_name: "owner/fallback-repo", owner: { login: "owner" } },
         installation: { id: 9101 },
-        workflow_run: { id: 506, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "gittensory-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
+        workflow_run: { id: 506, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success", display_title: "loopover-visual-fallback pr=55 sha=cafebabecafebabecafebabecafebabecafebabe" },
       },
     } as never);
 
@@ -654,7 +654,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
         type: "github-webhook",
         deliveryId: "no-repo",
         eventName: "workflow_run",
-        payload: { action: "completed", workflow_run: { id: 507, name: "Gittensory Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success" } },
+        payload: { action: "completed", workflow_run: { id: 507, name: "LoopOver Visual Capture Fallback", event: "workflow_dispatch", conclusion: "success" } },
       } as never),
     ).resolves.toBeUndefined();
   });

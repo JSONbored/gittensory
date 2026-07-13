@@ -8,6 +8,7 @@ import {
   initPredictionLedger,
   resolvePredictionLedgerDbPath,
 } from "../../packages/gittensory-miner/lib/prediction-ledger.js";
+import * as predictionLedger from "../../packages/gittensory-miner/lib/prediction-ledger.js";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -111,5 +112,19 @@ describe("gittensory-miner calibration CLI (#4849)", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(runCalibrationCli(["--bogus"], envForTempStores())).toBe(1);
     expect(String(err.mock.calls[0]?.[0])).toContain("Unknown option");
+  });
+
+  it("emits JSON when ledger open fails with --json (#4836)", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(predictionLedger, "initPredictionLedger").mockImplementation(() => {
+      throw new Error("corrupt_prediction_ledger");
+    });
+    expect(runCalibrationCli(["--json"], envForTempStores())).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "corrupt_prediction_ledger",
+    });
+    expect(err).not.toHaveBeenCalled();
   });
 });

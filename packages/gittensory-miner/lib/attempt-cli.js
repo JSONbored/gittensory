@@ -13,6 +13,7 @@
 // query (attempt-log.js's schema has no repo+issue index, and reenqueue counts aren't tracked anywhere yet).
 
 import { resolveCodingAgentModeFromConfig } from "@jsonbored/gittensory-engine";
+import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 import { constructProductionCodingAgentDriver } from "./coding-agent-construction.js";
 import { runSlopAssessment } from "./slop-assessment.js";
 import { fetchLiveIssueSnapshot } from "./live-issue-snapshot.js";
@@ -34,7 +35,8 @@ import { checkMinerKillSwitch } from "./governor-kill-switch.js";
 import { buildAttemptGovernorContext, buildAttemptLoopInput } from "./attempt-input-builder.js";
 import { runMinerAttempt } from "./attempt-runner.js";
 
-const ATTEMPT_USAGE = "Usage: gittensory-miner attempt <owner/repo> <issue#> --miner-login <login> [--base <branch>] [--live] [--json]";
+const ATTEMPT_USAGE =
+  "Usage: gittensory-miner attempt <owner/repo> <issue#> --miner-login <login> [--base <branch>] [--live] [--dry-run] [--json]";
 
 function parseRepoTarget(value) {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -44,7 +46,7 @@ function parseRepoTarget(value) {
 }
 
 export function parseAttemptArgs(args) {
-  const options = { json: false, minerLogin: null, base: "main", live: false };
+  const options = { json: false, minerLogin: null, base: "main", live: false, dryRun: false };
   const positional = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -58,6 +60,14 @@ export function parseAttemptArgs(args) {
     // requiring an explicit --live flag before this command will ever request live mode.
     if (token === "--live") {
       options.live = true;
+      continue;
+    }
+    // #4847: distinct from --live's absence above -- --live only ever gated the coding-agent DRIVER's mode,
+    // but a non---live run still opened every store and made real worktree/claim/ledger writes. --dry-run
+    // short-circuits BEFORE any of that infrastructure is even opened, guaranteeing zero writes rather than
+    // merely skipping the driver.
+    if (token === "--dry-run") {
+      options.dryRun = true;
       continue;
     }
     if (token === "--miner-login") {
@@ -93,6 +103,7 @@ export function parseAttemptArgs(args) {
     minerLogin: options.minerLogin,
     base: options.base,
     live: options.live,
+    dryRun: options.dryRun,
     json: options.json,
   };
 }
@@ -139,8 +150,7 @@ export function buildAttemptDeps(env, ledgers) {
 export async function runAttempt(args, options = {}) {
   const parsed = parseAttemptArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
-    return 2;
+    return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
   const env = options.env ?? process.env;
@@ -149,13 +159,38 @@ export async function runAttempt(args, options = {}) {
   const mode = resolveMode({ env, agentDryRun: !parsed.live });
 
   if (mode === "paused") {
-    console.error(
+    return reportCliFailure(
+      parsed.json,
       `Coding-agent execution is globally paused (MINER_CODING_AGENT_PAUSED). Not running attempt for ${parsed.repoFullName}#${parsed.issueNumber}.`,
+      3,
     );
-    return 3;
   }
 
   const attemptId = options.attemptId ?? `${parsed.repoFullName.replace("/", "_")}-${parsed.issueNumber}-${nowMs}`;
+
+  // #4847: reports what a real run would do and returns BEFORE any store (allocator/claim/event/attempt-log/
+  // governor ledger) is even opened, so this is a provable zero-write path -- not just "opened but didn't
+  // write to" the local stores, and nowhere near the real worktree clone, claim, or coding-agent driver.
+  if (parsed.dryRun) {
+    const dryRunResult = {
+      outcome: "dry_run",
+      repoFullName: parsed.repoFullName,
+      issueNumber: parsed.issueNumber,
+      minerLogin: parsed.minerLogin,
+      base: parsed.base,
+      mode,
+      attemptId,
+    };
+    if (parsed.json) {
+      console.log(JSON.stringify(dryRunResult, null, 2));
+    } else {
+      console.log(
+        `DRY RUN: would attempt ${parsed.repoFullName}#${parsed.issueNumber} for ${parsed.minerLogin} (mode: ${mode}, base: ${parsed.base}). No worktree, claim, or ledger writes were made.`,
+      );
+    }
+    options.onResult?.(dryRunResult);
+    return 0;
+  }
 
   let allocator = null;
   let claimLedger = null;
@@ -222,9 +257,12 @@ export async function runAttempt(args, options = {}) {
       const buildDeps = options.buildAttemptDeps ?? buildAttemptDeps;
       deps = buildDeps(env, { claimLedger, eventLedger, attemptLog, governorLedger, nowMs });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(`Attempt for ${parsed.repoFullName}#${parsed.issueNumber} is blocked: ${reason}`);
-      return 3;
+      const reason = describeCliError(error);
+      return reportCliFailure(
+        parsed.json,
+        `Attempt for ${parsed.repoFullName}#${parsed.issueNumber} is blocked: ${reason}`,
+        3,
+      );
     }
 
     // Real worktree preparation (repo-clone.js + attempt-worktree.js, #5237): the allocator above only
@@ -461,8 +499,7 @@ export async function runAttempt(args, options = {}) {
         return 2;
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 2;
+    return reportCliFailure(parsed.json, describeCliError(error));
   } finally {
     // worktreeResult.attemptOk is set to the REAL runMinerAttempt outcome (submitted = true) once that call
     // happens; every earlier blocked path (rejection/worktree-prep-failure/infeasible) never sets it, since

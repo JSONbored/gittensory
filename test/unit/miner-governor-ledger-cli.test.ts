@@ -141,6 +141,13 @@ describe("gittensory-miner governor ledger CLI (#2328)", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(await runGovernorCli("tail", [])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown governor subcommand");
+    error.mockClear();
+    log.mockClear();
+    expect(await runGovernorCli("tail", ["--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: expect.stringContaining("Unknown governor subcommand"),
+    });
   });
 
   it("rejects unknown options from argv parsing", async () => {

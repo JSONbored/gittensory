@@ -68,6 +68,13 @@ describe("gittensory-miner state CLI", () => {
     expect(runStateSet(["not-a-repo", "idle"])).toBe(2);
     expect(error).toHaveBeenCalledWith("Repository must be in owner/repo form.");
     expect(setRunState).not.toHaveBeenCalled();
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runStateSet(["not-a-repo", "idle", "--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "Repository must be in owner/repo form.",
+    });
   });
 
   it("runStateGet returns exit code 2 when the store read fails", () => {
@@ -77,5 +84,12 @@ describe("gittensory-miner state CLI", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(runStateGet(["acme/widgets"])).toBe(2);
     expect(error).toHaveBeenCalledWith("invalid_repo_full_name");
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runStateGet(["acme/widgets", "--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "invalid_repo_full_name",
+    });
   });
 });

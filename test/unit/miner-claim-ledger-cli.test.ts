@@ -184,6 +184,17 @@ describe("gittensory-miner claim ledger CLI (#4290)", () => {
       }),
     ).toBe(2);
     expect(error).toHaveBeenCalledWith("claim_not_found");
+    error.mockClear();
+    log.mockClear();
+    expect(
+      runClaimRelease(["acme/widgets", "404", "--json"], {
+        openClaimLedger: () => claimLedger,
+      }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "claim_not_found",
+    });
   });
 
   it("runClaimList prints table and JSON output with repo and status filters", () => {
@@ -237,6 +248,19 @@ describe("gittensory-miner claim ledger CLI (#4290)", () => {
       }),
     ).toBe(2);
     expect(error).toHaveBeenCalledWith("ledger_broken");
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      runClaimClaim(["acme/widgets", "1", "--json"], {
+        openClaimLedger: () => {
+          throw new Error("ledger_broken");
+        },
+      }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "ledger_broken",
+    });
 
     error.mockClear();
     expect(

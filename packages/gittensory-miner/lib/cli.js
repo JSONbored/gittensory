@@ -1,3 +1,5 @@
+import { argsWantJson, reportCliFailure } from "./cli-error.js";
+
 export function printVersion(input) {
   console.log(`${input.packageName}/${input.packageVersion} (node ${process.version})`);
 }
@@ -17,14 +19,15 @@ export function printHelp(input) {
       "  gittensory-miner init [--json] [--verify-token]              Bootstrap laptop-mode local SQLite state",
       "  gittensory-miner status [--json]                              Show installed versions + local state paths",
       "  gittensory-miner doctor [--json]                              Check this laptop is set up correctly",
+      "  gittensory-miner migrate [--json]                             Apply pending schema migrations to existing local stores",
       "  gittensory-miner metrics                                      Print prediction-calibration counters in Prometheus text format",
       "  gittensory-miner manage status [--json]                       Show managed PR rows from local portfolio + ledger",
       "  gittensory-miner manage poll <owner/repo> <pr#> [--branch <name>] [--json]",
       "  gittensory-miner discover <owner/repo> [<owner/repo>...] [--json]",
       "  gittensory-miner discover --search <query> [--json]           Fan out, rank, and enqueue candidates",
-      "  gittensory-miner attempt <owner/repo> <issue#> --miner-login <login> [--base <branch>] [--live] [--json]",
-      "  gittensory-miner loop <owner/repo> [<owner/repo>...] --miner-login <login> [--base <branch>] [--live]",
-      "  gittensory-miner loop --search <query> --miner-login <login> [--max-cycles <n>] [--cycle-delay-ms <ms>] [--json]",
+      "  gittensory-miner attempt <owner/repo> <issue#> --miner-login <login> [--base <branch>] [--live] [--dry-run] [--json]",
+      "  gittensory-miner loop <owner/repo> [<owner/repo>...] --miner-login <login> [--base <branch>] [--live] [--dry-run]",
+      "  gittensory-miner loop --search <query> --miner-login <login> [--max-cycles <n>] [--cycle-delay-ms <ms>] [--dry-run] [--json]",
       "                                                                 Autonomous discover->claim->attempt->reenter loop",
       "  gittensory-miner queue list [--repo <owner/repo>] [--json]    List portfolio backlog rows",
       "  gittensory-miner queue next [--json]                          Claim the highest-priority queued item",
@@ -55,6 +58,6 @@ export function printHelp(input) {
 
 export function runCli(cliArgs, input) {
   const command = cliArgs[0] ?? "";
-  console.error(`Unknown command: ${command}. Run ${input.packageName} --help.`);
-  return 1;
+  const message = `Unknown command: ${command}. Run ${input.packageName} --help.`;
+  return reportCliFailure(argsWantJson(cliArgs), message, 1);
 }

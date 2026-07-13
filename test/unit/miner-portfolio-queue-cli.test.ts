@@ -148,6 +148,18 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       }),
     ).toBe(2);
     expect(error).toHaveBeenCalledWith("queue_entry_not_found");
+    error.mockClear();
+    log.mockClear();
+    expect(
+      runQueueDone(["acme/widgets", "issue:404", "--json"], {
+        initPortfolioQueue: () => portfolioQueue,
+      }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "queue_entry_not_found",
+    });
+    expect(error).not.toHaveBeenCalled();
   });
 
   it("runQueueCli dispatches list, next, and done subcommands", () => {
@@ -167,6 +179,14 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
     expect(runQueueCli("peek", [])).toBe(2);
     expect(runQueueList(["--verbose"])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown queue subcommand");
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runQueueCli("peek", ["--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: expect.stringContaining("Unknown queue subcommand"),
+    });
+    expect(error).not.toHaveBeenCalled();
   });
 
   describe("release / requeue escape hatch (#4828)", () => {
@@ -218,6 +238,15 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
 
       expect(runQueueRelease(["acme/widgets", "issue:8"], { initPortfolioQueue: () => portfolioQueue })).toBe(2);
       expect(error).toHaveBeenCalledWith("queue_entry_not_in_progress");
+      error.mockClear();
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(
+        runQueueRelease(["acme/widgets", "issue:8", "--json"], { initPortfolioQueue: () => portfolioQueue }),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        ok: false,
+        error: "queue_entry_not_in_progress",
+      });
     });
 
     it("requeue puts a COMPLETED (done) item back on the queue, keeping its position", () => {
@@ -243,6 +272,15 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       expect(error).toHaveBeenCalledWith("queue_entry_not_requeuable");
       // Absent item too.
       expect(runQueueRequeue(["acme/widgets", "issue:404"], { initPortfolioQueue: () => portfolioQueue })).toBe(2);
+      error.mockClear();
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(
+        runQueueRequeue(["acme/widgets", "issue:10", "--json"], { initPortfolioQueue: () => portfolioQueue }),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        ok: false,
+        error: "queue_entry_not_requeuable",
+      });
     });
 
     it("the shared parser rejects a bad option, a malformed repo, and an empty identifier", () => {
@@ -274,6 +312,15 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       expect(runQueueRelease(["acme/widgets", "issue:1"], { initPortfolioQueue: () => throwingStore })).toBe(2);
       expect(runQueueRequeue(["acme/widgets", "issue:1"], { initPortfolioQueue: () => throwingStore })).toBe(2);
       expect(error).toHaveBeenCalledWith("db_locked");
+      error.mockClear();
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(
+        runQueueRelease(["acme/widgets", "issue:1", "--json"], { initPortfolioQueue: () => throwingStore }),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        ok: false,
+        error: "db_locked",
+      });
 
       // A thrown non-Error is stringified rather than crashing (the String(error) fallback branch).
       const throwingNonError = {

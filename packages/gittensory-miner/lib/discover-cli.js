@@ -10,6 +10,7 @@ import { initPolicyDocCacheStore } from "./policy-doc-cache.js";
 import { initPolicyVerdictCacheStore } from "./policy-verdict-cache.js";
 import { enqueueRankedDiscovery } from "./portfolio-discovery.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
+import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const DISCOVER_USAGE =
   "Usage: gittensory-miner discover <owner/repo> [<owner/repo>...] | --search <query> [--json] [--api-base-url <url>] [--token-env <VAR>]";
@@ -138,8 +139,7 @@ export function renderDiscoverSummary(result) {
 export async function runDiscover(args, options = {}) {
   const parsed = parseDiscoverArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
-    return 2;
+    return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
   // Credential env var is per-tenant (#4784): a `--token-env FORGE_PAT` flag (or `options.tokenEnv`) reads a
@@ -157,7 +157,12 @@ export async function runDiscover(args, options = {}) {
   const enqueue = options.enqueueRankedDiscovery ?? enqueueRankedDiscovery;
 
   const ownsPortfolioQueue = options.initPortfolioQueue === undefined;
-  const portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
+  let portfolioQueue;
+  try {
+    portfolioQueue = (options.initPortfolioQueue ?? initPortfolioQueueStore)();
+  } catch (error) {
+    return reportCliFailure(parsed.json, describeCliError(error));
+  }
 
   // Local ETag cache so a repeated discover revalidates each repo's policy docs with a conditional GET instead of
   // re-downloading them (#4842). Opened inside its OWN try/catch, separate from the portfolio queue above: the
@@ -222,10 +227,9 @@ export async function runDiscover(args, options = {}) {
     }
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 2;
+    return reportCliFailure(parsed.json, describeCliError(error));
   } finally {
-    if (ownsPortfolioQueue) portfolioQueue.close();
+    if (ownsPortfolioQueue && portfolioQueue) portfolioQueue.close();
     if (ownsPolicyDocCache && policyDocCache) policyDocCache.close();
     if (ownsPolicyVerdictCache && policyVerdictCache) policyVerdictCache.close();
   }

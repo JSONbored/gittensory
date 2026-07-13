@@ -136,14 +136,14 @@ describe("isGithubArtifactStorageUrl (SSRF allowlist extension)", () => {
 
 describe("parseFallbackRunCorrelation", () => {
   it("parses a matching run-name display_title", () => {
-    expect(parseFallbackRunCorrelation("gittensory-visual-fallback pr=42 sha=0123456789abcdef0123456789abcdef01234567")).toEqual({
+    expect(parseFallbackRunCorrelation("loopover-visual-fallback pr=42 sha=0123456789abcdef0123456789abcdef01234567")).toEqual({
       prNumber: 42,
       headSha: "0123456789abcdef0123456789abcdef01234567",
     });
   });
 
   it("lowercases an upper-case sha", () => {
-    expect(parseFallbackRunCorrelation("gittensory-visual-fallback pr=1 sha=ABCDEF0123456789ABCDEF0123456789ABCDEF01")?.headSha).toBe(
+    expect(parseFallbackRunCorrelation("loopover-visual-fallback pr=1 sha=ABCDEF0123456789ABCDEF0123456789ABCDEF01")?.headSha).toBe(
       "abcdef0123456789abcdef0123456789abcdef01",
     );
   });
@@ -162,7 +162,7 @@ describe("parseFallbackRunCorrelation", () => {
   });
 
   it("returns null when the pr number is not a positive integer", () => {
-    expect(parseFallbackRunCorrelation("gittensory-visual-fallback pr=0 sha=0123456789abcdef0123456789abcdef01234567")).toBeNull();
+    expect(parseFallbackRunCorrelation("loopover-visual-fallback pr=0 sha=0123456789abcdef0123456789abcdef01234567")).toBeNull();
   });
 });
 

@@ -127,6 +127,17 @@ describe("gittensory-miner plan store CLI (#2318)", () => {
       }),
     ).toBe(2);
     expect(error).toHaveBeenCalledWith("plan_not_found");
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      runPlanShow(["missing", "--json"], {
+        openPlanStore: () => planStore,
+      }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "plan_not_found",
+    });
   });
 
   it("runPlanCli dispatches list and show subcommands", () => {
@@ -145,5 +156,12 @@ describe("gittensory-miner plan store CLI (#2318)", () => {
     expect(runPlanCli("save", [])).toBe(2);
     expect(runPlanList(["--verbose"])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown plan subcommand");
+    error.mockClear();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runPlanCli("save", ["--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: expect.stringContaining("Unknown plan subcommand"),
+    });
   });
 });
