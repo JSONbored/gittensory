@@ -100,6 +100,42 @@ gittensory-miner status --json
 
 4. **Claims are local bookkeeping only.** Two miners on different machines claiming the same GitHub issue is a **fleet coordination** problem (duplicate-cluster adjudication in the engine), not something SQLite resolves — split state dirs and use operational claim hygiene.
 
+## Backup and restore
+
+Proactive tooling (#4872), not just the reactive "ledger corrupted" scenario below — run `backup-miner.sh` on a
+schedule (cron, systemd timer, etc.) so a good restore point always exists before anything goes wrong.
+
+- **[`scripts/backup-miner.sh`](../../../scripts/backup-miner.sh)** — backs up every `*.sqlite3` file currently
+  present under `GITTENSORY_MINER_CONFIG_DIR` into a new timestamped directory, using SQLite's own online
+  `.backup` command (safe even while the miner is running — see the corruption scenario's warning below about
+  why a plain `cp` is not) plus a `PRAGMA integrity_check` on each resulting file before it's kept. Stores
+  discovered by glob, not a hardcoded list, so a newly added store is backed up automatically without this doc
+  or the script needing an update.
+
+  ```sh
+  sh scripts/backup-miner.sh
+  # Env overrides: GITTENSORY_MINER_CONFIG_DIR (source), GITTENSORY_MINER_BACKUP_DIR (default
+  # $GITTENSORY_MINER_CONFIG_DIR/backups), GITTENSORY_MINER_BACKUP_RETAIN (default 7 — oldest backups beyond
+  # this count are pruned after a fully successful run; a run with any failed store skips pruning so no older,
+  # good backup is ever lost to make room for a bad one).
+  ```
+
+- **[`scripts/restore-miner.sh`](../../../scripts/restore-miner.sh)** — the read side. **Stop the miner first**
+  (this script does not detect a running process). Validates every store file in the chosen backup with
+  `PRAGMA integrity_check` **before** copying anything into place — a half-good backup can never produce a
+  half-restored state directory. Requires an explicit `--yes` flag (it overwrites live state) and defaults to
+  the newest backup when no directory is given:
+
+  ```sh
+  sh scripts/restore-miner.sh --yes                          # newest backup
+  sh scripts/restore-miner.sh --yes /path/to/backups/<ts>     # a specific one
+  gittensory-miner doctor --json                              # verify afterward
+  ```
+
+  Also removes any leftover `-wal`/`-shm` sidecar files from the live directory after restoring each store —
+  those hold in-flight writes from *before* the restore, and leaving them in place would let SQLite silently
+  replay stale pre-restore writes back on top of the freshly restored file on next open.
+
 ## Scenario: ledger corrupted
 
 **Symptoms**
@@ -136,7 +172,7 @@ gittensory-miner status --json
    | Tier | When | Action |
    |------|------|--------|
    | **A — single store reset** | One ledger is corrupt; others healthy; you accept losing that store's history | Remove only the bad `*.sqlite3` (and any `-wal`/`-shm` siblings). Next command recreates an empty store. |
-   | **B — restore from backup** | You have a recent quiesced backup | Stop miner → restore the known-good file → restart. |
+   | **B — restore from backup** | You have a recent backup from `backup-miner.sh` (see **Backup and restore** above) | Stop miner → `sh scripts/restore-miner.sh --yes` → restart. |
    | **C — full re-init** | Multiple files suspect or state is disposable | Archive dir → `gittensory-miner init` → reconfigure env/goals. Rebuild claims/plans from GitHub metadata as needed. |
 
 4. **Never copy a live SQLite file** from a running miner as backup — stop first, or use SQLite's `.backup` command:
