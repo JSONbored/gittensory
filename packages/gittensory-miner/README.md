@@ -19,6 +19,9 @@ Regenerate that file with `npm run miner:env-reference` from the repo root after
 Config precedence (`.gittensory-miner.yml` vs operator env vs CLI flags) is documented in
 [`docs/config-precedence.md`](docs/config-precedence.md).
 
+A committed micro-benchmark for the discovery-ranking and local-store read/write paths lives at
+[`BENCHMARKS.md`](BENCHMARKS.md) — run it with `npm run benchmark:miner` from the repo root.
+
 Real miner commands land in follow-up issues.
 
 The package also includes the first metadata-only discovery primitive: `fetchCandidateIssues` lists open issue

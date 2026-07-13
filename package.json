@@ -19,6 +19,7 @@
     "selfhost:env-reference:check": "node scripts/gen-selfhost-env-reference.mjs --check",
     "miner:env-reference": "node packages/gittensory-miner/scripts/generate-env-reference.mjs",
     "miner:env-reference:check": "node packages/gittensory-miner/scripts/generate-env-reference.mjs --check",
+    "benchmark:miner": "node packages/gittensory-miner/scripts/benchmark.mjs",
     "command-reference": "node scripts/gen-command-reference.mjs",
     "command-reference:check": "node scripts/gen-command-reference.mjs --check",
     "selfhost:validate-observability": "node scripts/validate-observability-configs.mjs",
