@@ -1,4 +1,5 @@
 import { resolveAiPolicyVerdict } from "@loopover/engine";
+import { resolveOwnRejectionHistory } from "./own-rejection-history.js";
 
 // Real rejectionSignaled resolver (#5132, Wave 3.5 follow-up). iterate-policy.ts's own doc comment: "True
 // when the target repo (or this contributor's history with it) has signaled it does not want automated/
@@ -97,5 +98,8 @@ export async function resolveRejectionSignaled(repoFullName, options = {}) {
   const contributing = aiUsage && aiUsage.trim() ? null : await fetchPolicyDoc(target, "CONTRIBUTING.md", resolved);
 
   const verdict = resolveAiPolicyVerdict({ aiUsage, contributing });
-  return !verdict.allowed;
+  // #5655: combine BOTH documented triggers — a live policy-doc ban OR this miner's own prior submission on
+  // this repo having been closed without merge. Policy ban short-circuits (no need to hit the GitHub API).
+  if (!verdict.allowed) return true;
+  return resolveOwnRejectionHistory(repoFullName, { ...options, fetchImpl: resolved.fetchImpl });
 }

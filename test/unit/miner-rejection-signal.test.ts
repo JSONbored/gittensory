@@ -238,4 +238,18 @@ describe("resolveRejectionSignaled (#5132)", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("resolves true via the own-rejection-history trigger even when the policy docs are clean (#5655)", async () => {
+    // Clean policy docs (verdict allowed) but a prior own submission on this repo is closed-without-merge →
+    // the second trigger alone must flip rejectionSignaled true.
+    const fetchImpl = (async (url: string) => {
+      if (url.includes("/pulls/")) {
+        return { ok: true, json: async () => ({ state: "closed", merged: false }) } as unknown as Response;
+      }
+      return textResponse("Contributions welcome — open a PR anytime!");
+    }) as unknown as typeof fetch;
+    const listSubmissions = () => [{ pullRequestNumber: 42 }];
+    const result = await resolveRejectionSignaled("acme/widgets", { fetchImpl, listSubmissions });
+    expect(result).toBe(true);
+  });
 });
