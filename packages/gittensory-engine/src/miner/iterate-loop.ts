@@ -17,10 +17,10 @@
 //
 // BOUNDED INSIDE THE LOOP: both the iteration ceiling (`input.maxIterations`) and the optional cumulative
 // budget (`input.budget`, evaluated every iteration via attempt-metering.ts's `accumulateAttemptUsage`/
-// `evaluateAttemptBudget` against real per-iteration turns/costUsd/wallClockMs -- tokens stays an honest 0,
-// no driver reports a real token count today, #5395) are enforced here every iteration -- not left to an
-// external caller to remember, and not just capped after the fact between loop cycles (loop-cli.js's own
-// governor cap usage). A `maxIterations <= 0` input abandons immediately, before ever invoking the driver.
+// `evaluateAttemptBudget` against real per-iteration turns/costUsd/wallClockMs/tokens, #5395/#5653) are
+// enforced here every iteration -- not left to an external caller to remember, and not just capped after the
+// fact between loop cycles (loop-cli.js's own governor cap usage). A `maxIterations <= 0` input abandons
+// immediately, before ever invoking the driver.
 //
 // AUDITABLE: every iteration's decision (continue / handoff / abandon) is recorded via the injected
 // `appendAttemptLogEvent` dependency (attempt-log.ts's normalized event shape) before this function returns
@@ -120,8 +120,8 @@ export type IterateLoopResult = {
   totalCostUsd: number;
   /** The real accumulated {@link AttemptMeterTotals} across every iteration that ran (attempt-metering.ts,
    *  #5395) -- a superset of `totalTurnsUsed`/`totalCostUsd` above that also carries `wallClockMs` (real,
-   *  measured around each driver invocation) and `tokens` (always 0 today -- no driver reports a real token
-   *  count, an honest absence rather than a fabricated number). */
+   *  measured around each driver invocation) and `tokens` (real per-iteration token usage when the driver
+   *  reports one, #5653 -- 0 for a driver/iteration that reports no token signal, never fabricated). */
   finalMeterTotals: AttemptMeterTotals;
   /** The budget axes breached at the point this attempt abandoned, when `input.budget` was set and at least
    *  one axis was at/over its ceiling -- empty when no budget was configured or none breached. */
@@ -328,10 +328,11 @@ async function runIterateLoopCore(input: IterateLoopInput, deps: IterateLoopDeps
     const iterationElapsedMs = Math.max(0, nowMs() - iterationStartMs);
     totalTurnsUsed += driverResult.turnsUsed ?? 0;
     totalCostUsd += driverResult.costUsd ?? 0;
-    // tokens stays an honest 0: no CodingAgentDriver reports a real per-iteration token count today (#5395) --
-    // an absence, never a fabricated number, matching this package's costUsd discipline elsewhere.
+    // Real per-iteration tokens (#5653): CodingAgentDriverResult.tokensUsed is now populated by every driver
+    // that reports one (Agent SDK's own result-message usage, or CLI JSON/JSONL stdout) -- 0 only when the
+    // driver genuinely reports no token signal for this iteration, same honest-absence discipline as costUsd.
     tracker.totals = accumulateAttemptUsage(tracker.totals, {
-      tokens: 0,
+      tokens: driverResult.tokensUsed ?? 0,
       turns: driverResult.turnsUsed ?? 0,
       wallClockMs: iterationElapsedMs,
       costUsd: driverResult.costUsd ?? 0,

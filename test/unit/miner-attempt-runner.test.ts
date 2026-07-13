@@ -92,8 +92,13 @@ function driverReturning(result: CodingAgentDriverResult): CodingAgentDriver {
   return { async run() { return result; } };
 }
 
-function okDriverResult(changedFiles: string[] = ["src/upload.ts"], turnsUsed = 5, costUsd = 0.42): CodingAgentDriverResult {
-  return { ok: true, changedFiles, summary: "added retry logic", turnsUsed, costUsd };
+function okDriverResult(
+  changedFiles: string[] = ["src/upload.ts"],
+  turnsUsed = 5,
+  costUsd = 0.42,
+  tokensUsed = 1234,
+): CodingAgentDriverResult {
+  return { ok: true, changedFiles, summary: "added retry logic", turnsUsed, costUsd, tokensUsed };
 }
 
 // ── Governor "everything allows" fixture, mirroring test/unit/miner-governor-chokepoint.test.ts's own ────────
@@ -162,6 +167,8 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
     expect(result.loopResult.outcome).toBe("handoff");
     // Real per-iteration driver costUsd summed into the loop result (#5135's loop needs this for budgetSpent).
     expect(result.loopResult.totalCostUsd).toBe(0.42);
+    // Real per-iteration driver tokensUsed summed into finalMeterTotals.tokens (#5653) -- was hardcoded 0 before.
+    expect(result.loopResult.finalMeterTotals.tokens).toBe(1234);
   });
 
   it("defaults the open_pr body to an empty string when the loop input never set one", async () => {

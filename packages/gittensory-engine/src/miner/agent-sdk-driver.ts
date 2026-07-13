@@ -76,6 +76,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
+/** Real token count from the SDK's own result message (#5653). Both `SDKResultSuccess` and `SDKResultError`
+ *  declare `usage: NonNullableUsage` unconditionally -- present whenever a result message arrived at all, same
+ *  as `total_cost_usd`. `NonNullableUsage`'s `input_tokens`/`output_tokens` are themselves non-nullable numbers
+ *  once `usage` exists, but this driver reads `resultMessage` as a loosely-typed record (like every other field
+ *  read here), so both are re-validated defensively rather than trusted from an untyped source. Returns
+ *  undefined (never a fabricated 0) when `usage` is absent or malformed. */
+function tokensFromResultMessage(resultMessage: Record<string, unknown> | null): number | undefined {
+  const usage = asRecord(resultMessage?.usage);
+  const inputTokens = typeof usage?.input_tokens === "number" ? usage.input_tokens : undefined;
+  const outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : undefined;
+  if (inputTokens === undefined && outputTokens === undefined) return undefined;
+  return (inputTokens ?? 0) + (outputTokens ?? 0);
+}
+
 async function listWorktreeChangedFiles(cwd: string): Promise<string[]> {
   const [tracked, untracked] = await Promise.all([
     execFileAsync("git", ["-C", cwd, "diff", "--name-only", "HEAD", "--"]),
@@ -168,6 +182,7 @@ export function createAgentSdkCodingAgentDriver(
       // or not (the session was billed either way), absent only when the stream produced no result message.
       const costUsd =
         typeof resultMessage?.total_cost_usd === "number" ? resultMessage.total_cost_usd : undefined;
+      const tokensUsed = tokensFromResultMessage(resultMessage);
       const resultText =
         typeof resultMessage?.result === "string" ? redactSecrets(resultMessage.result) : "";
       const transcript = redactSecrets(
@@ -194,6 +209,7 @@ export function createAgentSdkCodingAgentDriver(
           transcript,
           turnsUsed,
           costUsd,
+          tokensUsed,
           error: `agent_sdk_${subtype === "success" ? "errored" : subtype}`,
         };
       }
@@ -210,6 +226,7 @@ export function createAgentSdkCodingAgentDriver(
           transcript,
           turnsUsed,
           costUsd,
+          tokensUsed,
           error: `agent_sdk_changed_files_unavailable: ${detail}`,
         };
       }
@@ -222,6 +239,7 @@ export function createAgentSdkCodingAgentDriver(
         transcript,
         turnsUsed,
         costUsd,
+        tokensUsed,
       };
     },
   };

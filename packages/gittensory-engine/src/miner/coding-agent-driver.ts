@@ -23,6 +23,10 @@ export type CodingAgentDriverResult = {
   /** Real dollar cost of this driver run, when the provider reports one. Absent (not zero) when the provider
    *  never got far enough to have a cost, or reports no cost signal at all -- never fabricated. */
   costUsd?: number | undefined;
+  /** Real token count (input + output) of this driver run, when the provider reports one (#5653). Absent (not
+   *  zero) when the provider never got far enough, or reports no token signal at all -- never fabricated,
+   *  mirroring `costUsd`'s own convention. */
+  tokensUsed?: number | undefined;
   error?: string | undefined;
 };
 

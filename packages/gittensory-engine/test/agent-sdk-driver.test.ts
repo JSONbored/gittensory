@@ -117,6 +117,123 @@ test("success fails closed when changed-file enumeration is unavailable, but sti
   assert.equal(result.costUsd, 0.0042);
 });
 
+test("success reports real input+output tokens from the SDK's own usage field (#5653)", async () => {
+  const driver = driverWith({
+    query: queryYielding([
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        num_turns: 3,
+        result: "done",
+        total_cost_usd: 0.01,
+        usage: { input_tokens: 1000, output_tokens: 234 },
+      },
+    ]),
+  });
+
+  const result = await driver.run(task);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tokensUsed, 1234);
+});
+
+test("failure (non-success subtype) still reports real tokens -- the session was billed either way, same as costUsd", async () => {
+  const driver = driverWith({
+    query: queryYielding([
+      {
+        type: "result",
+        subtype: "error_max_turns",
+        is_error: true,
+        num_turns: 6,
+        total_cost_usd: 0.05,
+        usage: { input_tokens: 500, output_tokens: 100 },
+      },
+    ]),
+  });
+
+  const result = await driver.run(task);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.tokensUsed, 600);
+});
+
+test("tokensUsed is undefined (never a fabricated 0) when the result message carries no usage field at all", async () => {
+  const driver = driverWith({
+    query: queryYielding([
+      { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done" },
+    ]),
+  });
+
+  const result = await driver.run(task);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tokensUsed, undefined);
+});
+
+test("tokensUsed is undefined when usage exists but is malformed (not an object, or non-numeric fields)", async () => {
+  const malformedUsage = driverWith({
+    query: queryYielding([
+      { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", usage: "not-an-object" },
+    ]),
+  });
+  const malformedResult = await malformedUsage.run(task);
+  assert.equal(malformedResult.tokensUsed, undefined);
+
+  const nonNumericFields = driverWith({
+    query: queryYielding([
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        num_turns: 2,
+        result: "done",
+        usage: { input_tokens: "a lot", output_tokens: null },
+      },
+    ]),
+  });
+  const nonNumericResult = await nonNumericFields.run(task);
+  assert.equal(nonNumericResult.tokensUsed, undefined);
+});
+
+test("tokensUsed sums whichever of input/output tokens IS a real number, when only input is present", async () => {
+  const driver = driverWith({
+    query: queryYielding([
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        num_turns: 2,
+        result: "done",
+        usage: { input_tokens: 42 },
+      },
+    ]),
+  });
+
+  const result = await driver.run(task);
+
+  assert.equal(result.tokensUsed, 42);
+});
+
+test("tokensUsed sums whichever of input/output tokens IS a real number, when only output is present", async () => {
+  const driver = driverWith({
+    query: queryYielding([
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        num_turns: 2,
+        result: "done",
+        usage: { output_tokens: 17 },
+      },
+    ]),
+  });
+
+  const result = await driver.run(task);
+
+  assert.equal(result.tokensUsed, 17);
+});
+
 test("success stringifies a non-Error changed-file enumeration failure", async () => {
   const driver = driverWith({
     query: queryYielding([

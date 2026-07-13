@@ -466,6 +466,10 @@ export async function runAttempt(args, options = {}) {
       // is 0 for those -- an honest absence, not a fabricated number.
       totalTurnsUsed: result.loopResult.totalTurnsUsed,
       totalCostUsd: result.loopResult.totalCostUsd,
+      // Real accumulated tokens (#5653) -- read from finalMeterTotals rather than a flat totalTokensUsed field
+      // (IterateLoopResult has no such flat field, unlike turns/cost). 0 when no driver reported a token signal
+      // on any iteration this attempt ran, never fabricated.
+      totalTokensUsed: result.loopResult.finalMeterTotals.tokens,
       iterationsUsed: result.loopResult.iterationsUsed,
       ...("reason" in result ? { reason: result.reason } : {}),
       ...("decision" in result ? { decision: result.decision } : {}),
@@ -481,10 +485,10 @@ export async function runAttempt(args, options = {}) {
     // AMS reporting export exposes -- distinct from the per-iteration attempt_started/attempt_tool_edit/... trail
     // iterate-loop.ts already writes. No fallback for an unconfigured provider: buildAttemptDeps already fails
     // closed (throws) on the same env before a worktree is even allocated, so reaching this point guarantees
-    // resolveFirstConfiguredCodingAgentDriverName(env) resolves a real name. tokensUsed is deliberately omitted
-    // (normalizes to null): no driver reports real token usage today (#5395), and null-for-"no signal" is more
-    // honest here than a fabricated 0. A logging failure must never fail an otherwise-successful attempt --
-    // mirrors iterate-loop.ts's own safeAppendAttemptLogEvent non-fatal handling.
+    // resolveFirstConfiguredCodingAgentDriverName(env) resolves a real name. costUsd/tokensUsed are both real,
+    // driver-reported accumulated totals (#5653) -- 0 when no iteration's driver reported a signal, never
+    // fabricated. A logging failure must never fail an otherwise-successful attempt -- mirrors iterate-loop.ts's
+    // own safeAppendAttemptLogEvent non-fatal handling.
     try {
       attemptLog.appendAttemptLogEvent({
         eventType: "attempt_outcome_summary",
@@ -494,6 +498,7 @@ export async function runAttempt(args, options = {}) {
         reason: `attempt finished with outcome: ${result.outcome}`,
         provider: resolveFirstConfiguredCodingAgentDriverName(env),
         costUsd: finalResult.totalCostUsd,
+        tokensUsed: finalResult.totalTokensUsed,
       });
     } catch {
       // Deliberately swallowed -- see comment above.

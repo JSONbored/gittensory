@@ -474,6 +474,108 @@ describe("createCliSubprocessCodingAgentDriver (#4266)", () => {
     });
   });
 
+  describe("REGRESSION: real token-usage extraction, ported from src/selfhost/ai.ts's extractCliUsage (#5653)", () => {
+    it("sums claude's top-level input_tokens + output_tokens from its single JSON result on success", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ type: "result", subtype: "success", result: "done", input_tokens: 1000, output_tokens: 234 }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(1234);
+    });
+
+    it("extracts tokens from a nested `usage` object, not just top-level fields", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ usage: { input_tokens: 500, output_tokens: 100 } }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(600);
+    });
+
+    it("tolerates codex's alternate key spellings (camelCase) across a JSONL stream", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: '{"type":"start"}\n{"tokenUsage":{"inputTokens":50,"outputTokens":25}}\n{"type":"end"}',
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "codex", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(75);
+    });
+
+    it("prefers an explicit total_tokens field over summing input+output, when the CLI reports one directly", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ input_tokens: 100, output_tokens: 50, total_tokens: 999 }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(999);
+    });
+
+    it("takes the largest token value seen across a multi-event codex stream (cumulative, matches the cost convention)", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: '{"total_tokens":10}\n{"total_tokens":70}\n{"total_tokens":30}',
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "codex", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(70);
+    });
+
+    it("stays undefined (never fabricated) when stdout carries no token field at all", async () => {
+      const { spawn } = fakeSpawn({ stdout: "plain text output, no JSON", code: 0 });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.ok).toBe(true);
+      expect(result.tokensUsed).toBeUndefined();
+    });
+
+    it("ignores non-numeric/negative token field values instead of throwing or fabricating a number", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ input_tokens: "a lot", output_tokens: -5 }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.ok).toBe(true);
+      expect(result.tokensUsed).toBeUndefined();
+    });
+
+    it("sums whichever of input/output tokens IS a real number, when only input is present", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ input_tokens: 42 }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(42);
+    });
+
+    it("sums whichever of input/output tokens IS a real number, when only output is present", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ output_tokens: 17 }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.tokensUsed).toBe(17);
+    });
+
+    it("reports both a real cost and real tokens from the same result, independently", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ total_cost_usd: 0.02, input_tokens: 10, output_tokens: 5 }),
+        code: 0,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.costUsd).toBe(0.02);
+      expect(result.tokensUsed).toBe(15);
+    });
+  });
+
   describe("two-tier stalled-output timeout regression (#5196 — guards the #4994/#5053 CLI-stall outage)", () => {
     it("surfaces a distinct 'stalled' error (not a full timeout) when the CLI emits zero stdout past firstOutputTimeoutMs", async () => {
       // #4994/#5053: a claude/codex process that produced NO output was killed only at the full timeoutMs, masking

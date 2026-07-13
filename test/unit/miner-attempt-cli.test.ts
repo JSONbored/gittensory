@@ -53,6 +53,19 @@ function fakeCodingTaskSpec() {
   };
 }
 
+/** A minimal but real-shaped IterateLoopResult stand-in for a mocked runMinerAttempt result (#5653) --
+ *  attempt-cli.js reads `finalMeterTotals.tokens` unconditionally (the real loop always produces one), so
+ *  every mocked `loopResult` needs one too, not just the flat totalTurnsUsed/totalCostUsd fields. */
+function fakeLoopResult(overrides: Record<string, unknown> = {}) {
+  return {
+    totalTurnsUsed: 0,
+    totalCostUsd: 0,
+    iterationsUsed: 0,
+    finalMeterTotals: { tokens: 0, turns: 0, wallClockMs: 0, costUsd: 0 },
+    ...overrides,
+  };
+}
+
 /** The default set of injected options a test needs to reach past every real dependency and into (or
  *  through) the final runMinerAttempt call, without doing any real network/git/subprocess work. */
 function readyPipelineOptions(overrides: Record<string, unknown> = {}) {
@@ -313,7 +326,13 @@ describe("runAttempt (#5132)", () => {
       outcome: "submitted",
       spec: { command: "gh pr create", cwd: worktreeResult.worktreePath, timeoutMs: 1000 },
       execResult: { code: 0 },
-      loopResult: { outcome: "handoff", totalTurnsUsed: 3, totalCostUsd: 0.42, iterationsUsed: 2 },
+      loopResult: fakeLoopResult({
+        outcome: "handoff",
+        totalTurnsUsed: 3,
+        totalCostUsd: 0.42,
+        iterationsUsed: 2,
+        finalMeterTotals: { tokens: 1234, turns: 3, wallClockMs: 500, costUsd: 0.42 },
+      }),
     });
 
     const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
@@ -341,6 +360,7 @@ describe("runAttempt (#5132)", () => {
       submissionMode: "observe",
       totalTurnsUsed: 3,
       totalCostUsd: 0.42,
+      totalTokensUsed: 1234,
       iterationsUsed: 2,
       spec: { command: "gh pr create", cwd: worktreeResult.worktreePath, timeoutMs: 1000 },
       execResult: { code: 0 },
@@ -387,8 +407,9 @@ describe("runAttempt (#5132)", () => {
       mode: "dry_run",
       provider: "noop",
       costUsd: 0.42,
+      // Real accumulated tokens (#5653), read the same way as costUsd -- from the loop's own finalMeterTotals.
+      tokensUsed: 1234,
     });
-    expect(summaryCalls[0]).not.toHaveProperty("tokensUsed");
   });
 
   it("#5185: writes attempt_outcome_summary with the real provider/cost on a non-submitted outcome too", async () => {
@@ -398,7 +419,7 @@ describe("runAttempt (#5132)", () => {
     const runMinerAttemptSpy = vi.fn().mockResolvedValue({
       outcome: "abandon",
       reason: "self_review_ambiguous",
-      loopResult: { outcome: "abandon", totalTurnsUsed: 1, totalCostUsd: 0, iterationsUsed: 1 },
+      loopResult: fakeLoopResult({ outcome: "abandon", totalTurnsUsed: 1, totalCostUsd: 0, iterationsUsed: 1 }),
     });
 
     const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
@@ -428,7 +449,7 @@ describe("runAttempt (#5132)", () => {
       outcome: "submitted",
       spec: { command: "gh pr create", cwd: "/tmp/work", timeoutMs: 1000 },
       execResult: { code: 0 },
-      loopResult: { outcome: "handoff", totalTurnsUsed: 1, totalCostUsd: 0, iterationsUsed: 1 },
+      loopResult: fakeLoopResult({ outcome: "handoff", totalTurnsUsed: 1, totalCostUsd: 0, iterationsUsed: 1 }),
     });
     const brokenAttemptLog: AttemptLog = {
       dbPath: ":memory:",
@@ -462,7 +483,7 @@ describe("runAttempt (#5132)", () => {
       outcome: "submitted",
       spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
       execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/123\n", stderr: "", timedOut: false },
-      loopResult: { outcome: "handoff", totalTurnsUsed: 3, totalCostUsd: 0.42, iterationsUsed: 2 },
+      loopResult: fakeLoopResult({ outcome: "handoff", totalTurnsUsed: 3, totalCostUsd: 0.42, iterationsUsed: 2 }),
     });
     const resolveClaimConflictSpy = vi.fn().mockResolvedValue({ checked: true, isWinner: true, winnerNumber: 123, competingCount: 0 });
 
@@ -516,7 +537,7 @@ describe("runAttempt (#5132)", () => {
           outcome: "submitted",
           spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
           execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/9\n" },
-          loopResult: {},
+          loopResult: fakeLoopResult(),
         }),
       }),
       // resolveClaimConflict deliberately omitted -- exercises the real module-level default.
@@ -544,7 +565,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
-      ...readyPipelineOptions({ runMinerAttempt: async () => ({ outcome: "abandon", loopResult: {} }) }),
+      ...readyPipelineOptions({ runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }) }),
       resolveClaimConflict: resolveClaimConflictSpy,
     });
 
@@ -568,7 +589,7 @@ describe("runAttempt (#5132)", () => {
           outcome: "submitted",
           spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
           execResult: { code: 0 },
-          loopResult: {},
+          loopResult: fakeLoopResult(),
         }),
       }),
       resolveClaimConflict: resolveClaimConflictSpy,
@@ -595,7 +616,7 @@ describe("runAttempt (#5132)", () => {
           outcome: "submitted",
           spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
           execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/6\n" },
-          loopResult: {},
+          loopResult: fakeLoopResult(),
         }),
       }),
       resolveClaimConflict: async () => lossResult,
@@ -607,7 +628,7 @@ describe("runAttempt (#5132)", () => {
   it("resolves live mode only when --live is passed, and threads it through to the real loopInput", async () => {
     const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "abandon", loopResult: {} });
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "abandon", loopResult: fakeLoopResult() });
 
     const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--live", "--json"], {
       env: { MINER_CODING_AGENT_PROVIDER: "noop" },
@@ -635,7 +656,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
-      ...readyPipelineOptions({ runMinerAttempt: async () => ({ outcome: "abandon", loopResult: {} }) }),
+      ...readyPipelineOptions({ runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }) }),
     });
 
     expect(exitCode).toBe(7);
@@ -643,9 +664,9 @@ describe("runAttempt (#5132)", () => {
   });
 
   it.each([
-    ["stale", 8, { outcome: "stale", reason: "expired", loopResult: {} }],
-    ["blocked", 9, { outcome: "blocked", decision: { allow: false }, loopResult: {} }],
-    ["governed", 10, { outcome: "governed", decision: { allowed: false }, loopResult: {} }],
+    ["stale", 8, { outcome: "stale", reason: "expired", loopResult: fakeLoopResult() }],
+    ["blocked", 9, { outcome: "blocked", decision: { allow: false }, loopResult: fakeLoopResult() }],
+    ["governed", 10, { outcome: "governed", decision: { allowed: false }, loopResult: fakeLoopResult() }],
   ] as const)("reports a real %s outcome with exit code %i", async (_label, expectedExitCode, mockResult) => {
     const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -680,7 +701,7 @@ describe("runAttempt (#5132)", () => {
       initGovernorLedger: () => governorLedger,
       ...readyPipelineOptions({
         cleanupAttemptWorktree: cleanupAttemptWorktreeSpy,
-        runMinerAttempt: async () => ({ outcome: "governed", decision: { allowed: false }, loopResult: {} }),
+        runMinerAttempt: async () => ({ outcome: "governed", decision: { allowed: false }, loopResult: fakeLoopResult() }),
       }),
     });
 
@@ -852,7 +873,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
-      ...readyPipelineOptions({ resolveRejectionSignaled: resolveRejectionSignaledSpy, fetchImpl, runMinerAttempt: async () => ({ outcome: "abandon", loopResult: {} }) }),
+      ...readyPipelineOptions({ resolveRejectionSignaled: resolveRejectionSignaledSpy, fetchImpl, runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }) }),
     });
 
     expect(resolveRejectionSignaledSpy).toHaveBeenCalledWith("acme/widgets", { fetchImpl });
@@ -931,7 +952,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
-      ...readyPipelineOptions({ prepareAttemptWorktree: prepareAttemptWorktreeSpy, runMinerAttempt: async () => ({ outcome: "abandon", loopResult: {} }) }),
+      ...readyPipelineOptions({ prepareAttemptWorktree: prepareAttemptWorktreeSpy, runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }) }),
     });
 
     expect(prepareAttemptWorktreeSpy).toHaveBeenCalledWith("acme/widgets", expect.any(String), expect.objectContaining({ baseBranch: "develop" }));
@@ -949,7 +970,7 @@ describe("runAttempt (#5132)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
-      ...readyPipelineOptions({ fetchSelfReviewContext: fetchSelfReviewContextSpy, runMinerAttempt: async () => ({ outcome: "abandon", loopResult: {} }) }),
+      ...readyPipelineOptions({ fetchSelfReviewContext: fetchSelfReviewContextSpy, runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }) }),
     });
 
     expect(fetchSelfReviewContextSpy).toHaveBeenCalledWith("acme/widgets", {
@@ -991,7 +1012,7 @@ describe("runAttempt (#5132)", () => {
       initAttemptLog: () => submittedLedgers.attemptLog,
       initGovernorLedger: () => submittedLedgers.governorLedger,
       ...readyPipelineOptions({
-        runMinerAttempt: async () => ({ outcome: "submitted", spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1 }, execResult: { code: 0 }, loopResult: {} }),
+        runMinerAttempt: async () => ({ outcome: "submitted", spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1 }, execResult: { code: 0 }, loopResult: fakeLoopResult() }),
       }),
       onResult,
     });
@@ -1007,7 +1028,7 @@ describe("runAttempt: real per-repo kill switch (#5392)", () => {
     const worktreeResult = fakeWorktreeResult();
     const resolveMinerGoalSpecSpy = vi.fn().mockReturnValue({ present: true, spec: { ...DEFAULT_MINER_GOAL_SPEC, killSwitch: { paused: true } }, warnings: [] });
     const checkMinerKillSwitchSpy = vi.fn().mockReturnValue({ scope: "repo" as const, active: true });
-    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "governed", decision: { allowed: false }, loopResult: {} });
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "governed", decision: { allowed: false }, loopResult: fakeLoopResult() });
 
     await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
       env: { MINER_CODING_AGENT_PROVIDER: "noop" },
@@ -1036,7 +1057,7 @@ describe("runAttempt: real per-repo kill switch (#5392)", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-cli-repo-"));
     roots.push(repoRoot);
     writeFileSync(join(repoRoot, ".gittensory-miner.yml"), "killSwitch:\n  paused: true\n");
-    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "governed", decision: { allowed: false }, loopResult: {} });
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "governed", decision: { allowed: false }, loopResult: fakeLoopResult() });
 
     await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
       env: { MINER_CODING_AGENT_PROVIDER: "noop" },
@@ -1063,7 +1084,7 @@ describe("runAttempt: real per-repo kill switch (#5392)", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const repoRoot = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-cli-repo-"));
     roots.push(repoRoot);
-    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "abandon", loopResult: {} });
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "abandon", loopResult: fakeLoopResult() });
 
     await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
       env: { MINER_CODING_AGENT_PROVIDER: "noop" },
@@ -1101,7 +1122,7 @@ describe("runAttempt: real claim-ledger wiring (#5393)", () => {
         outcome: "submitted",
         spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1 },
         execResult: { code: 0 },
-        loopResult: {},
+        loopResult: fakeLoopResult(),
       };
     });
 
@@ -1134,7 +1155,7 @@ describe("runAttempt: real claim-ledger wiring (#5393)", () => {
       initEventLedger: () => eventLedger,
       initAttemptLog: () => attemptLog,
       initGovernorLedger: () => governorLedger,
-      ...readyPipelineOptions({ runMinerAttempt: async () => ({ outcome: "abandon", loopResult: {} }) }),
+      ...readyPipelineOptions({ runMinerAttempt: async () => ({ outcome: "abandon", loopResult: fakeLoopResult() }) }),
     });
 
     expect(releaseClaimSpy).toHaveBeenCalledWith("acme/widgets", 7);

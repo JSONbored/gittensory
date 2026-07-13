@@ -122,41 +122,69 @@ function resolveDefaultBuildArgs(command: string): (task: CodingAgentDriverTask)
   throw new Error(`unsupported_cli_subprocess_command:${command}`);
 }
 
-/** Best-effort real dollar-cost extraction from a CLI's own stdout. Mirrors src/selfhost/ai.ts's
- *  `extractCliUsage`/`COST_KEYS` (redeclared here, not imported, per this file's own no-src-import
- *  convention) but narrowed to just the cost field this driver's `CodingAgentDriverResult` surfaces -- tokens
- *  and model aren't part of that shape. Tries the whole trimmed stdout as one JSON object first (claude's
- *  `--output-format json` shape, empirically confirmed to carry `total_cost_usd`, the exact same field name
- *  the Agent-SDK's own result message carries), then scans line by line (codex's `--json` JSONL stream,
- *  "still evolving" per src/selfhost/ai.ts's own comment, so multiple real key spellings are tolerated). A
- *  missing/malformed field means "no cost signal", never an error -- never fabricated. */
+/** Best-effort real dollar-cost AND token-usage extraction from a CLI's own stdout. Mirrors src/selfhost/ai.ts's
+ *  `extractCliUsage`/`COST_KEYS`/`INPUT_TOKEN_KEYS`/`OUTPUT_TOKEN_KEYS`/`TOTAL_TOKEN_KEYS` (redeclared here, not
+ *  imported, per this file's own no-src-import convention) -- ported in full as of #5653 (previously narrowed
+ *  to just cost; tokens were left out at the time, not because the data doesn't exist). Tries the whole trimmed
+ *  stdout as one JSON object first (claude's `--output-format json` shape, empirically confirmed to carry
+ *  `total_cost_usd`, the exact same field name the Agent-SDK's own result message carries), then scans line by
+ *  line (codex's `--json` JSONL stream, "still evolving" per src/selfhost/ai.ts's own comment, so multiple real
+ *  key spellings are tolerated, and usage/token_usage/tokenUsage/usage_metadata sub-objects are all checked, same
+ *  as src/selfhost/ai.ts). A missing/malformed field means "no signal", never an error -- never fabricated. */
 const COST_KEYS = ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd"] as const;
+const INPUT_TOKEN_KEYS = ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"] as const;
+const OUTPUT_TOKEN_KEYS = ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"] as const;
+const TOTAL_TOKEN_KEYS = ["total_tokens", "totalTokens"] as const;
+
+type CliUsage = { costUsd?: number; inputTokens?: number; outputTokens?: number; totalTokens?: number };
 
 function finiteNonNegativeNumber(value: unknown): number | undefined {
   const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
-function costUsdFromRecord(record: Record<string, unknown>): number | undefined {
-  let best: number | undefined;
-  for (const key of COST_KEYS) {
+function maxNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+  let out: number | undefined;
+  for (const key of keys) {
     const n = finiteNonNegativeNumber(record[key]);
-    if (n !== undefined) best = Math.max(best ?? 0, n);
+    if (n !== undefined) out = Math.max(out ?? 0, n);
   }
-  return best;
+  return out;
 }
 
-function extractCostUsd(stdout: string): number | undefined {
+function asPlainRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function mergeCliUsage(out: CliUsage, record: Record<string, unknown>): void {
+  const nested = [
+    record,
+    asPlainRecord(record.usage),
+    asPlainRecord(record.token_usage),
+    asPlainRecord(record.tokenUsage),
+    asPlainRecord(record.usage_metadata),
+    asPlainRecord(record.usageMetadata),
+  ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  for (const entry of nested) {
+    const costUsd = maxNumber(entry, COST_KEYS);
+    if (costUsd !== undefined) out.costUsd = Math.max(out.costUsd ?? 0, costUsd);
+    const inputTokens = maxNumber(entry, INPUT_TOKEN_KEYS);
+    if (inputTokens !== undefined) out.inputTokens = Math.max(out.inputTokens ?? 0, inputTokens);
+    const outputTokens = maxNumber(entry, OUTPUT_TOKEN_KEYS);
+    if (outputTokens !== undefined) out.outputTokens = Math.max(out.outputTokens ?? 0, outputTokens);
+    const totalTokens = maxNumber(entry, TOTAL_TOKEN_KEYS);
+    if (totalTokens !== undefined) out.totalTokens = Math.max(out.totalTokens ?? 0, totalTokens);
+  }
+}
+
+function extractCliUsage(stdout: string): CliUsage {
+  const usage: CliUsage = {};
   const trimmed = stdout.trim();
-  if (!trimmed) return undefined;
-  let best: number | undefined;
+  if (!trimmed) return usage;
   const tryLine = (text: string): void => {
     try {
-      const parsed = JSON.parse(text) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const n = costUsdFromRecord(parsed as Record<string, unknown>);
-        if (n !== undefined) best = Math.max(best ?? 0, n);
-      }
+      const parsed = asPlainRecord(JSON.parse(text));
+      if (parsed) mergeCliUsage(usage, parsed);
     } catch {
       /* not JSON -- best-effort only */
     }
@@ -165,7 +193,16 @@ function extractCostUsd(stdout: string): number | undefined {
   for (const line of trimmed.split(/\r?\n/)) {
     if (line.trim()) tryLine(line);
   }
-  return best;
+  return usage;
+}
+
+/** Real token count (input + output) from `extractCliUsage`'s CliUsage, when either is present -- prefers an
+ *  explicit `totalTokens` key if the CLI reported one directly (never double-counted against input+output),
+ *  otherwise sums input+output. Undefined (never a fabricated 0) when neither is present. */
+function totalTokensFromUsage(usage: CliUsage): number | undefined {
+  if (usage.totalTokens !== undefined) return usage.totalTokens;
+  if (usage.inputTokens === undefined && usage.outputTokens === undefined) return undefined;
+  return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 }
 
 /** Claude Code's `--output-format json` sometimes exits non-zero while still emitting a structured
@@ -328,13 +365,15 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
           };
         }
       }
-      const costUsd = extractCostUsd(spawned.stdout);
+      const usage = extractCliUsage(spawned.stdout);
+      const tokensUsed = totalTokensFromUsage(usage);
       return {
         ok: true,
         changedFiles: [],
         summary: `${options.command} completed for ${task.attemptId}`,
         transcript,
-        ...(costUsd !== undefined ? { costUsd } : {}),
+        ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+        ...(tokensUsed !== undefined ? { tokensUsed } : {}),
       };
     },
   };
