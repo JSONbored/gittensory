@@ -977,6 +977,11 @@ async function createOrUpdateNamedCheckRun(
       const legacyNames = check.supersedeLegacyNames ?? [];
       if (legacyNames.length === 0 || check.checkRunId) return;
       for (const legacyName of legacyNames) {
+        const legacyConclusion =
+          legacyName === GITTENSORY_LEGACY_ORB_GATE_CHECK_NAME
+            ? check.conclusion
+            : "neutral";
+        if (!legacyConclusion) continue;
         try {
           const existing = await octokit.request(
             "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
@@ -1005,7 +1010,7 @@ async function createOrUpdateNamedCheckRun(
               check_run_id: legacyRun.id,
               name: legacyName,
               status: "completed",
-              conclusion: "neutral",
+              conclusion: legacyConclusion,
               output: outputForCheckRunUpdate({
                 title: `${LOOPOVER_GATE_CHECK_NAME} superseded this legacy check`,
                 summary:

@@ -1433,6 +1433,134 @@ describe("GitHub check runs", () => {
     );
   });
 
+  it("does not neutralize the legacy Orb gate name while the renamed gate is still pending", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    const patchedIds: number[] = [];
+    let newCheckBody: { name?: string; status?: string; conclusion?: string } = {};
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens"))
+          return Response.json({ token: "installation-token" });
+        if (url.includes("/commits/legacy-orb-pending/check-runs")) {
+          const checkName = new URL(url).searchParams.get("check_name");
+          if (checkName === "LoopOver Orb Review Agent")
+            return Response.json({ total_count: 0, check_runs: [] });
+          if (checkName === "Gittensory Gate")
+            return Response.json({ total_count: 0, check_runs: [] });
+          if (checkName === "Gittensory Orb Review Agent")
+            return Response.json({
+              total_count: 1,
+              check_runs: [
+                {
+                  id: 421,
+                  name: "Gittensory Orb Review Agent",
+                  status: "in_progress",
+                },
+              ],
+            });
+        }
+        if (url.includes("/check-runs/421") && method === "PATCH") {
+          patchedIds.push(421);
+          return Response.json({ id: 421 });
+        }
+        if (url.includes("/check-runs") && method === "POST") {
+          newCheckBody = JSON.parse(String(init?.body)) as typeof newCheckBody;
+          return Response.json({ id: 89 }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    const result = await createOrUpdatePendingGateCheckRun(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      123,
+      "JSONbored/gittensory",
+      gateAdvisory("legacy-orb-pending"),
+    );
+
+    expect(result).toMatchObject({ kind: "published", id: 89 });
+    expect(newCheckBody).toMatchObject({
+      name: "LoopOver Orb Review Agent",
+      status: "in_progress",
+    });
+    expect(newCheckBody).not.toHaveProperty("conclusion");
+    expect(patchedIds).toEqual([]);
+  });
+
+  it("mirrors a failed renamed gate verdict to the legacy Orb gate name", async () => {
+    const privateKey = await generatePrivateKeyPem();
+    let legacyPatchBody: { name?: string; status?: string; conclusion?: string } = {};
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/access_tokens"))
+          return Response.json({ token: "installation-token" });
+        if (url.includes("/commits/legacy-orb-failure/check-runs")) {
+          const checkName = new URL(url).searchParams.get("check_name");
+          if (checkName === "LoopOver Orb Review Agent")
+            return Response.json({ total_count: 0, check_runs: [] });
+          if (checkName === "Gittensory Gate")
+            return Response.json({ total_count: 0, check_runs: [] });
+          if (checkName === "Gittensory Orb Review Agent")
+            return Response.json({
+              total_count: 1,
+              check_runs: [
+                {
+                  id: 422,
+                  name: "Gittensory Orb Review Agent",
+                  status: "in_progress",
+                },
+              ],
+            });
+        }
+        if (url.includes("/check-runs/422") && method === "PATCH") {
+          legacyPatchBody = JSON.parse(String(init?.body)) as typeof legacyPatchBody;
+          return Response.json({ id: 422 });
+        }
+        if (url.includes("/check-runs") && method === "POST")
+          return Response.json({ id: 90 }, { status: 201 });
+        return new Response("not found", { status: 404 });
+      },
+    );
+
+    const result = await createOrUpdateGateCheckRun(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: privateKey }),
+      123,
+      "JSONbored/gittensory",
+      gateAdvisory("legacy-orb-failure"),
+      {},
+      {
+        gate: {
+          enabled: true,
+          conclusion: "failure",
+          title: "LoopOver Orb Review Agent failed",
+          summary: "A configured hard blocker was found.",
+          blockers: [
+            {
+              code: "duplicate_pr",
+              severity: "warning",
+              title: "Duplicate pull request",
+              detail: "Another pull request already claims this work.",
+            },
+          ],
+          warnings: [],
+        },
+      },
+    );
+
+    expect(result).toMatchObject({ kind: "published", id: 90 });
+    expect(legacyPatchBody).toMatchObject({
+      name: "Gittensory Orb Review Agent",
+      status: "completed",
+      conclusion: "failure",
+    });
+  });
+
   it("leaves an already-completed legacy Gate check alone while posting the renamed review-agent check", async () => {
     const privateKey = await generatePrivateKeyPem();
     const calls: string[] = [];

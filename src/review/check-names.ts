@@ -10,10 +10,8 @@ export const LOOPOVER_GATE_CHECK_NAME = "LoopOver Orb Review Agent";
  *  finishes. Keep this until self-hosters can no longer be upgrading across that rename boundary. */
 export const GITTENSORY_LEGACY_GATE_CHECK_NAME = "Gittensory Gate";
 /** Pre-rebrand check-run name ("Gittensory Orb Review Agent"), retired by the LoopOver rebrand's hard
- *  cutover (#5327 — no dual-emit window). Same NOT-dead-code reasoning as
- *  {@link GITTENSORY_LEGACY_GATE_CHECK_NAME}: `finalizeLegacyPendingCheckRuns` also supersedes any run still
- *  pending under THIS name so a self-hoster mid-flight across the rebrand deploy never sees a permanently-
- *  pending status. */
+ *  cutover (#5327 — no dual-emit window). This was once the active required Gate name, so legacy
+ *  finalization must mirror the renamed Gate's terminal conclusion rather than neutralizing it early. */
 export const GITTENSORY_LEGACY_ORB_GATE_CHECK_NAME = "Gittensory Orb Review Agent";
 /** Pre-rebrand check-run name ("Gittensory Context"), retired by the LoopOver rebrand's hard cutover
  *  (#5327). Unlike the two Gate-check legacy names above, this one is NOT fed into
