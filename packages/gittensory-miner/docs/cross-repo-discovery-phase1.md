@@ -23,7 +23,7 @@ The cross-repo ranker is a **new join over existing signals**, not a new scoring
 | [`src/signals/reward-risk.ts`](../../../src/signals/reward-risk.ts) → [`packages/gittensory-engine/src/reward-risk.ts`](../../../packages/gittensory-engine/src/reward-risk.ts) | Opportunity factors (`competitionFactor`, `freshnessFactor`) for repo-level ranking; backend shim delegates to the engine implementation. |
 | [`src/services/decision-pack.ts`](../../../src/services/decision-pack.ts) | Existing per-miner, per-repo opportunity pack (reactive baseline the Phase 1 tools extend). |
 
-Hosted and stdio MCP surfaces expose the composed shortlist via `gittensory_find_opportunities` (#2308 / #2309).
+Hosted and stdio MCP surfaces expose the composed shortlist: `gittensory_find_opportunities` on the hosted server, `loopover_find_opportunities` in the stdio `@loopover/mcp` CLI (renamed by #5648) (#2308 / #2309).
 
 ## Phase 1 issue batch
 
@@ -39,7 +39,7 @@ Hosted and stdio MCP surfaces expose the composed shortlist via `gittensory_find
 | [#2306](https://github.com/JSONbored/gittensory/issues/2306) | AI-policy fixture corpus + integration test |
 | [#2307](https://github.com/JSONbored/gittensory/issues/2307) | Cross-repo GitHub search/listing fan-out (metadata-only) |
 | [#2308](https://github.com/JSONbored/gittensory/issues/2308) | Hosted `gittensory_find_opportunities` MCP tool |
-| [#2309](https://github.com/JSONbored/gittensory/issues/2309) | Stdio `gittensory_find_opportunities` in `@loopover/mcp` |
+| [#2309](https://github.com/JSONbored/gittensory/issues/2309) | Stdio `loopover_find_opportunities` in `@loopover/mcp` |
 | [#2310](https://github.com/JSONbored/gittensory/issues/2310) | Miner package `test:miner-pack` / `build:miner` parity checks |
 | [#2311](https://github.com/JSONbored/gittensory/issues/2311) | End-to-end Phase 1 discovery pipeline fixture test |
 
@@ -49,7 +49,7 @@ Hosted and stdio MCP surfaces expose the composed shortlist via `gittensory_find
 
 ## Acceptance (Phase 1)
 
-- A miner can ask for a deterministic, metadata-only, cross-repo ranked shortlist via MCP (`gittensory_find_opportunities`).
+- A miner can ask for a deterministic, metadata-only, cross-repo ranked shortlist via MCP (`gittensory_find_opportunities` hosted / `loopover_find_opportunities` stdio).
 - AI-PR-banned repos are hard-skipped upstream and never appear in output.
 - No raw scores, rewards, hotkeys, wallet data, or source contents cross the public boundary.
 - All Phase 1 implementation issues stay read-only on GitHub (GET/search/list only).
