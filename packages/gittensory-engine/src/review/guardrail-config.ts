@@ -1,9 +1,7 @@
 import type { RepositorySettings } from "../types/predicted-gate-types.js";
 
-// New-brand (`loopover`) and legacy (`gittensory`) entries are both listed — this is a Set-membership guardrail
-// list (order doesn't matter, unlike the loaders' priority-ordered candidate lists), so a contributor PR touching
-// EITHER the new canonical `.loopover.*` config file or a still-supported legacy `.gittensory.*` one gets the same
-// hard-guardrail protection (#4773 — dual-read, additive; the legacy globs are never removed).
+// This is a Set-membership guardrail list (order doesn't matter, unlike the loaders' priority-ordered candidate
+// lists): a contributor PR touching the canonical `.loopover.*` config file gets hard-guardrail protection.
 export const CONFIG_AS_CODE_GUARDRAIL_GLOBS = [
   ".loopover.yml",
   ".loopover.yaml",
@@ -11,12 +9,6 @@ export const CONFIG_AS_CODE_GUARDRAIL_GLOBS = [
   ".github/loopover.yml",
   ".github/loopover.yaml",
   ".github/loopover.json",
-  ".gittensory.yml",
-  ".gittensory.yaml",
-  ".gittensory.json",
-  ".github/gittensory.yml",
-  ".github/gittensory.yaml",
-  ".github/gittensory.json",
   "**/codecov.yml",
   "**/codecov.yaml",
   "**/.codecov.yml",

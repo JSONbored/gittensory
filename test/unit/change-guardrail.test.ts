@@ -131,9 +131,9 @@ describe("change-guardrail glob matching", () => {
     expect(matchesAny("src/a/f.js", [atCap])).toBe(false); // wrong extension — genuinely doesn't match
   });
 
-  it("a wildcard-free literal glob (e.g. an exact guarded file like '.gittensory.yml') is never treated as unsafe", () => {
-    expect(matchesAny(".gittensory.yml", [".gittensory.yml"])).toBe(true);
-    expect(matchesAny("other-file.yml", [".gittensory.yml"])).toBe(false);
+  it("a wildcard-free literal glob (e.g. an exact guarded file like '.loopover.yml') is never treated as unsafe", () => {
+    expect(matchesAny(".loopover.yml", [".loopover.yml"])).toBe(true);
+    expect(matchesAny("other-file.yml", [".loopover.yml"])).toBe(false);
   });
 
   it("a mix of one pathological glob among otherwise-fine globs still forces a hold for ANY path (fail-safe dominates)", () => {

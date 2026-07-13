@@ -200,8 +200,8 @@ describe("parseFocusManifestContent", () => {
     expect(manifest.warnings.join(" ")).toMatch(/not valid YAML/i);
   });
 
-  it("parses .gittensory.yml.example with zero warnings (#2554: doc must match parser exactly)", () => {
-    const content = readFileSync(".gittensory.yml.example", "utf8");
+  it("parses .loopover.yml.example with zero warnings (#2554: doc must match parser exactly)", () => {
+    const content = readFileSync(".loopover.yml.example", "utf8");
     const manifest = parseFocusManifestContent(content, "repo_file");
     expect(manifest.warnings).toEqual([]);
     expect(manifest.present).toBe(true);
@@ -233,7 +233,7 @@ describe("parseFocusManifestContent", () => {
   });
 });
 
-// #1670: `.gittensory.yml.example` is meant to be THE exhaustive reference -- every field a maintainer
+// #1670: `.loopover.yml.example` is meant to be THE exhaustive reference -- every field a maintainer
 // can configure, with a comment, default, and allowed values. The "parses with zero warnings" test above
 // only proves whatever IS in the file is valid; it can never catch a field that's simply missing from the
 // doc entirely. Each map below uses `satisfies Record<keyof T, string>` so adding a field to a config type
@@ -242,8 +242,8 @@ describe("parseFocusManifestContent", () => {
 // raw settings-layer aliases of a `gate:` field that already documents the same knob under its friendlier
 // name (`resolveEffectiveSettings` maps `gate.linkedIssue` -> `settings.linkedIssueGateMode`, etc.) --
 // documenting both would just be confusing about which one to actually use.
-describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
-  const exampleContent = readFileSync(".gittensory.yml.example", "utf8");
+describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
+  const exampleContent = readFileSync(".loopover.yml.example", "utf8");
 
   const GATE_FIELD_TOKENS = {
     enabled: "enabled:",
@@ -295,7 +295,7 @@ describe(".gittensory.yml.example field-exhaustiveness (#1670)", () => {
   // silently vanishing from the exhaustiveness check.
   const SETTINGS_GATE_ALIASED_FIELDS = ["linkedIssueGateMode", "duplicatePrGateMode", "selfAuthoredLinkedIssueGateMode", "qualityGateMode", "qualityGateMinScore", "aiReviewMode", "aiReviewByok", "aiReviewProvider", "aiReviewModel", "aiReviewAllAuthors"] as const;
 
-  // Settings fields that are DELIBERATELY absent from `.gittensory.yml.example` (unlike the gate-aliased fields
+  // Settings fields that are DELIBERATELY absent from `.loopover.yml.example` (unlike the gate-aliased fields
   // above, these are never documented anywhere in the public template): agentGlobalFreezeOverride is an
   // operator-only emergency lever, settable only from the operator's own private self-host config (source:
   // "api_record" in parseSettingsOverride, focus-manifest.ts) -- never from a repo's own committed, maintainer-
@@ -2037,7 +2037,7 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     // "api_record" (normalizeSource, focus-manifest.ts) -- the operator-private-config trust level -- so
     // agentGlobalFreezeOverride parses through and can overlay the DB value. See the dedicated
     // "agentGlobalFreezeOverride: operator-only" describe block below for the source-gating itself (an
-    // explicit source: "repo_file" manifest, mirroring a real repo-owned `.gittensory.yml`, drops it instead).
+    // explicit source: "repo_file" manifest, mirroring a real repo-owned `.loopover.yml`, drops it instead).
     expect(resolveEffectiveSettings({ agentGlobalFreezeOverride: false } as unknown as RepositorySettings, m).agentGlobalFreezeOverride).toBe(true);
   });
 
@@ -2049,7 +2049,7 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
       expect(resolveEffectiveSettings({ agentGlobalFreezeOverride: false } as unknown as RepositorySettings, m).agentGlobalFreezeOverride).toBe(true);
     });
 
-    it("source: repo_file (a real repo-owned .gittensory.yml) — drops it with an operator-only warning; the DB value survives", () => {
+    it("source: repo_file (a real repo-owned .loopover.yml) — drops it with an operator-only warning; the DB value survives", () => {
       const m = parseFocusManifest({ source: "repo_file", settings: { agentGlobalFreezeOverride: true } });
       expect(m.settings.agentGlobalFreezeOverride).toBeUndefined();
       expect(m.warnings).toContain("Ignored settings.agentGlobalFreezeOverride: operator-only, not settable from a repo-owned manifest.");
@@ -2694,7 +2694,7 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(parsedFalse.settings.typeLabelsEnabled).toBe(false);
 
     // Simulates PR #1's private-config layering: a global default of `true` (DB, standing in for the
-    // global .gittensory.yml layer already merged upstream) overridden by a per-repo `settings:` block.
+    // global .loopover.yml layer already merged upstream) overridden by a per-repo `settings:` block.
     const db = { typeLabelsEnabled: true } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabelsEnabled: false } }));
     expect(eff.typeLabelsEnabled).toBe(false); // settings: override wins over the DB/global-default value
@@ -2713,7 +2713,7 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     const db = { typeLabels: { bug: "kind:bug", feature: "kind:feature", priority: "kind:priority" } } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { typeLabels: { priority: "custom:priority" } } }));
     // bug/feature must come from the DB-persisted value, NOT be reset to the built-in gittensor:* defaults —
-    // this is the regression this test guards: a `.gittensory.yml` naming only `priority` must never silently
+    // this is the regression this test guards: a `.loopover.yml` naming only `priority` must never silently
     // discard a DB-customized bug/feature label.
     expect(eff.typeLabels).toEqual({ bug: "kind:bug", feature: "kind:feature", priority: "custom:priority" });
   });
@@ -2849,7 +2849,7 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     } as unknown as RepositorySettings;
     const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { linkedIssueLabelPropagation: { enabled: true } } }));
     // The DB-configured mappings must survive a manifest override that only names `enabled` — this is the
-    // regression this test guards: a `.gittensory.yml` flipping the feature on must never silently discard a
+    // regression this test guards: a `.loopover.yml` flipping the feature on must never silently discard a
     // DB-persisted mapping list back to the built-in empty default.
     expect(eff.linkedIssueLabelPropagation).toEqual({
       enabled: true,
@@ -4060,8 +4060,8 @@ describe("overlayReviewConfig / review.shared_config (#2046)", () => {
 
   it("preserves sharedConfigSource from the override when set", () => {
     const base = parseReviewConfigMapping({ tone: "house" }, []);
-    const override = { ...parseReviewConfigMapping({ profile: "assertive" }, []), sharedConfigSource: "_shared/.gittensory.yml" };
-    expect(overlayReviewConfig(base, override).sharedConfigSource).toBe("_shared/.gittensory.yml");
+    const override = { ...parseReviewConfigMapping({ profile: "assertive" }, []), sharedConfigSource: "_shared/.loopover.yml" };
+    expect(overlayReviewConfig(base, override).sharedConfigSource).toBe("_shared/.loopover.yml");
   });
 
   it("is byte-identical to the override when the base is empty", () => {

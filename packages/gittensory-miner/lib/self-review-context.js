@@ -26,7 +26,7 @@ const DEFAULT_MAX_PAGES = 10;
 
 // Mirrors src/signals/focus-manifest-loader.ts's MANIFEST_FILE_CANDIDATES exactly -- first candidate that
 // resolves wins, same as the live gate's own lookup order.
-const MANIFEST_FILE_CANDIDATES = [".gittensory.yml", ".github/gittensory.yml", ".gittensory.json", ".github/gittensory.json"];
+const MANIFEST_FILE_CANDIDATES = [".loopover.yml", ".github/loopover.yml", ".loopover.json", ".github/loopover.json"];
 
 function parseRepoFullName(repoFullName) {
   if (typeof repoFullName !== "string") return null;

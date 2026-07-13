@@ -194,9 +194,8 @@ samples in `metrics` rather than averaging noise into the calibration signal.
 
 `resolveGateVerdictCalibrationConfig()`, `ingestGateVerdictCalibrationSignals()`, and
 `computeGateVerdictCompositeCalibrationScore()` provide the pure engine contract for opt-in cross-product calibration.
-The hosted review stack remains responsible for loading the repo's current `.loopover.yml` (or legacy
-`.gittensory.yml`, dual-read indefinitely — #4773) or private config; the engine contract is
-deliberately default-off and safe to call at ingestion time.
+The hosted review stack remains responsible for loading the repo's current `.loopover.yml` or
+private config; the engine contract is deliberately default-off and safe to call at ingestion time.
 
 The preferred config-as-code surface is:
 
@@ -387,8 +386,8 @@ never copied into the Markdown, and the renderer fails closed if a blocked priva
 `resolveFindingSeverityCalibrationConfig()`, `ingestFindingSeverityCalibrationSignals()`, and
 `computeFindingSeverityCompositeCalibrationScore()` provide the pure engine contract for the opt-in finding-severity
 calibration signal. It sits in the same family as objective-anchor and pairwise-judge: the hosted review stack decides
-whether a repo is opted in from its resolved `.loopover.yml`/private config (legacy `.gittensory.yml` also still
-works, #4773), and the engine contract is deliberately default-off and safe to call at ingestion time.
+whether a repo is opted in from its resolved `.loopover.yml`/private config, and the engine contract is
+deliberately default-off and safe to call at ingestion time.
 
 The preferred config-as-code surface is:
 
@@ -631,7 +630,7 @@ module defines the storage contract only — it does not wire into live governor
 
 ## MinerGoalSpec
 
-`MinerGoalSpec` is the type surface for a repo's `.gittensory-miner.yml` (miner-side analogue of `.gittensory.yml`).
+`MinerGoalSpec` is the type surface for a repo's `.gittensory-miner.yml` (miner-side analogue of `.loopover.yml`).
 `DEFAULT_MINER_GOAL_SPEC` is the safe default a repo with no file behaves as — minable (`minerEnabled: true`, an
 explicit opt-out), no path/label preferences, one concurrent claim, `neutral` discovery.
 

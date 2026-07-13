@@ -2,10 +2,10 @@
 # .gittensory.minimal.yml — smallest safe starter config for a new repo
 # ============================================================================
 #
-# Copy this file to your repo root as `.gittensory.yml` and customize from here.
-# (This filename is not read directly — only `.gittensory.yml` / `.github/gittensory.yml` are.)
+# Copy this file to your repo root as `.loopover.yml` and customize from here.
+# (This filename is not read directly — only `.loopover.yml` / `.github/loopover.yml` are.)
 # Also shipped at config/examples/gittensory.minimal.yml for self-host operators.
-# For every supported field, defaults, and examples see `.gittensory.yml.example` or
+# For every supported field, defaults, and examples see `.loopover.yml.example` or
 # config/examples/gittensory.full.yml.
 #
 # Safe by default:

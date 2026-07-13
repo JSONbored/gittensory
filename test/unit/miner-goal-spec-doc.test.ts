@@ -24,9 +24,9 @@ const SPEC_FIELDS = [
 ] as const;
 
 describe("miner goal spec docs (#2300)", () => {
-  it("documents every MinerGoalSpec field and the relationship to .gittensory.yml", () => {
+  it("documents every MinerGoalSpec field and the relationship to .loopover.yml", () => {
     const doc = readFileSync(docPath, "utf8");
-    expect(doc).toContain("Relationship to `.gittensory.yml`");
+    expect(doc).toContain("Relationship to `.loopover.yml`");
     expect(doc).toContain("wantedPaths");
     expect(doc).toContain("blockedPaths");
     for (const field of SPEC_FIELDS) {

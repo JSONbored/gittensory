@@ -227,9 +227,8 @@ GET /v1/installations/:id/repair`}
       </h2>
       <p>
         Every setting can be committed to <code>.loopover.yml</code> at the repo root instead of, or
-        layered over, the dashboard (the legacy <code>.gittensory.yml</code> name also still works,
-        indefinitely — #4773). Precedence is <code>.loopover.yml</code> &gt; repository settings
-        &gt; safe defaults; an unset field falls back to the next layer. It only chooses{" "}
+        layered over, the dashboard. Precedence is <code>.loopover.yml</code> &gt; repository
+        settings &gt; safe defaults; an unset field falls back to the next layer. It only chooses{" "}
         <em>what</em> LoopOver does — a configured blocker gates every author identically,
         regardless of config.
       </p>

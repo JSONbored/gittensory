@@ -282,7 +282,7 @@ Public GitHub surfaces:
   app/infra state) resolves to a neutral, non-blocking gate. Adding a blocker must keep it
   confirmed-contributor-gated through `evaluateGateCheck`.
 
-Config as code (`.loopover.yml`; the legacy `.gittensory.yml` filename is dual-read indefinitely, #4773) — every repository setting is controllable from the config file:
+Config as code (`.loopover.yml`) — every repository setting is controllable from the config file:
 
 - **`settings:`** is a partial of the repository settings: any behaviour a maintainer can toggle in the
   dashboard can be set here as code — `commentMode`, `publicAudienceMode`, `publicSurface`, `checkRunMode`,
@@ -303,8 +303,7 @@ Config as code (`.loopover.yml`; the legacy `.gittensory.yml` filename is dual-r
   a hand-maintained AGENTS.md/CLAUDE.md — absent it, an existing hand-written file is left alone and
   generation is skipped.
 - Precedence: `.loopover.yml` `gate:` > `.loopover.yml` `settings:` > dashboard repository settings >
-  safe defaults; unset fields fall back to the next layer (the legacy `.gittensory.yml` filename works
-  identically wherever `.loopover.yml` does, #4773). The committed root `.gittensory.yml` is the
+  safe defaults; unset fields fall back to the next layer. The committed root `.loopover.yml` is the
   worked example. Resolved once in `resolveRepositorySettings`, so the whole app honours the file.
 - The config chooses **what** LoopOver does (gate on/off, blockers, comments, labels, surface, panel
   content); it never changes **who** can be blocked — only confirmed Gittensor contributors are ever

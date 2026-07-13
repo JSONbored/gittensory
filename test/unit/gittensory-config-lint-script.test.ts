@@ -9,22 +9,22 @@ import { MAX_FOCUS_MANIFEST_BYTES } from "../../src/signals/focus-manifest";
 describe("formatLintReport (#2906)", () => {
   it("reports a valid manifest's summary and recognized fields, no warnings", () => {
     const result = lintManifestText("wantedPaths:\n  - src/\n");
-    expect(formatLintReport(".gittensory.yml", result)).toBe(
-      ".gittensory.yml: Manifest parsed 1 recognized field.\n  recognized fields: wantedPaths",
+    expect(formatLintReport(".loopover.yml", result)).toBe(
+      ".loopover.yml: Manifest parsed 1 recognized field.\n  recognized fields: wantedPaths",
     );
   });
 
   it("reports warnings without a recognized-fields line when none are recognized", () => {
     const result = lintManifestText("unknownSecretKey: super-secret-value\n");
-    expect(formatLintReport(".gittensory.yml", result)).toBe(
+    expect(formatLintReport(".loopover.yml", result)).toBe(
       [
-        ".gittensory.yml: Manifest has 2 warnings.",
+        ".loopover.yml: Manifest has 2 warnings.",
         "  - Manifest contained no recognized focus fields; falling back to deterministic signals.",
         "  - Manifest contains unknown top-level field: unknownSecretKey.",
       ].join("\n"),
     );
     // Never echoes the raw supplied value into the report (#2906 dogfoods config-lint's own secret-redaction).
-    expect(formatLintReport(".gittensory.yml", result)).not.toContain("super-secret-value");
+    expect(formatLintReport(".loopover.yml", result)).not.toContain("super-secret-value");
   });
 
   it("reports both recognized fields and warnings together for a partially-valid manifest", () => {

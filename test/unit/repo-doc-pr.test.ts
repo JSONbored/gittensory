@@ -39,7 +39,7 @@ async function seedInstalledRepo(env: ReturnType<typeof createTestEnv>, options:
   await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: REPO, private: false, owner: { login: "owner" }, ...(options.defaultBranch !== undefined ? { default_branch: options.defaultBranch } : {}) }, 555);
 }
 
-// #3002: repo-doc generation is opt-in per repo via .gittensory.yml `repoDocGeneration:` -- defaults to fully
+// #3002: repo-doc generation is opt-in per repo via .loopover.yml `repoDocGeneration:` -- defaults to fully
 // disabled, so every test exercising behavior PAST that gate needs it explicitly enabled. Defaults `enabled` to
 // true here (the common case for these tests) while letting callers override scope/allowOverwriteExisting.
 async function seedRepoDocGenerationConfig(env: ReturnType<typeof createTestEnv>, repoFullName: string, overrides: { enabled?: boolean; scope?: string[]; allowOverwriteExisting?: boolean } = {}): Promise<void> {
@@ -81,7 +81,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
     expect(result).toEqual({ opened: false, reason: "repository is not installed" });
   });
 
-  it("#3002: declines by default when repo-doc generation has no .gittensory.yml config at all", async () => {
+  it("#3002: declines by default when repo-doc generation has no .loopover.yml config at all", async () => {
     const env = envWithKey();
     await seedInstalledRepo(env, { defaultBranch: "main" });
     await seedProfileData(env);
@@ -91,16 +91,16 @@ describe("openRepoDocPullRequest (#3000)", () => {
       return new Response("unexpected", { status: 500 });
     });
     const result = await openRepoDocPullRequest(env, REPO, "live");
-    expect(result).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.gittensory.yml repoDocGeneration.enabled)" });
+    expect(result).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.loopover.yml repoDocGeneration.enabled)" });
   });
 
-  it("#3002: declines when explicitly disabled via .gittensory.yml", async () => {
+  it("#3002: declines when explicitly disabled via .loopover.yml", async () => {
     const env = envWithKey();
     await seedInstalledRepo(env, { defaultBranch: "main" });
     await seedProfileData(env);
     await seedRepoDocGenerationConfig(env, REPO, { enabled: false });
     const result = await openRepoDocPullRequest(env, REPO, "live");
-    expect(result).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.gittensory.yml repoDocGeneration.enabled)" });
+    expect(result).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.loopover.yml repoDocGeneration.enabled)" });
   });
 
   it("#3002: declines when enabled but scope excludes \"agents\"", async () => {
@@ -109,7 +109,7 @@ describe("openRepoDocPullRequest (#3000)", () => {
     await seedProfileData(env);
     await seedRepoDocGenerationConfig(env, REPO, { scope: ["skills"] });
     const result = await openRepoDocPullRequest(env, REPO, "live");
-    expect(result).toEqual({ opened: false, reason: 'repo-doc generation scope does not include "agents" for this repository (.gittensory.yml repoDocGeneration.scope)' });
+    expect(result).toEqual({ opened: false, reason: 'repo-doc generation scope does not include "agents" for this repository (.loopover.yml repoDocGeneration.scope)' });
   });
 
   it("declines with the profile's own reason when the repo has no RAG index yet", async () => {

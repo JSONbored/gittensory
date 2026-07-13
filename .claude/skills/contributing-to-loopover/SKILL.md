@@ -121,7 +121,7 @@ minor-version deprecation cycle.
   with `loopover_check_before_start` + `loopover_validate_linked_issue`.
 - **A linked, currently-open, unassigned, eligible issue is always required before opening a PR** —
   there is no "small enough to skip it" exemption, no matter how self-evident the fix looks. This
-  holds regardless of what the committed root `.gittensory.yml`'s `linkedIssuePolicy` says: that
+  holds regardless of what the committed root `.loopover.yml`'s `linkedIssuePolicy` says: that
   file is a non-representative **example** checked into the repo, not the live enforced rule. If no
   suitable open issue exists, open one yourself first, then link it from the PR.
 - **Run the pre-start checks** via MCP: `loopover_check_before_start` (is it claimed / a duplicate
@@ -146,7 +146,7 @@ minor-version deprecation cycle.
    - Comments: sparse but dense; explain *why*, anchor non-obvious logic to an issue number
      (`(#1234)`). Don't narrate the obvious.
    - **Config-as-code parity:** a new per-repo gate/setting field must be wired in *every* site
-     (DB migration + Drizzle/types + the settings resolver + OpenAPI + the `.gittensory.yml` schema)
+     (DB migration + Drizzle/types + the settings resolver + OpenAPI + the `.loopover.yml` schema)
      in the **same** PR — partial wiring fails review. (See the per-repo-setting checklist in
      `reference.md`.)
    - UI: use design tokens (`text-token-*`, `rounded-token`, `border-hairline`, …) in
@@ -250,7 +250,7 @@ Run the MCP predictor with your actual PR shape:
 - `loopover_lint_pr_text` — your commit + PR body must read as **strong**: Conventional Commit
   subject, traceability (a linked, currently-open, eligible issue — no no-issue rationale accepted),
   and a body that says what changed, why, and how it was validated.
-- `gittensory_predict_gate` — simulate the repo's public `.gittensory.yml` gate. Resolve any
+- `gittensory_predict_gate` — simulate the repo's public `.loopover.yml` gate. Resolve any
   predicted blocker (the duplicate-PR blocker is the one that hard-fails here) before opening.
 
 Resolve **every** finding before you push. The engine MERGES only a clean + green + gate-passing PR

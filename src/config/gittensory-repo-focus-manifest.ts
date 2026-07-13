@@ -1,6 +1,6 @@
 /**
  * Bundled fallback for JSONbored/gittensory when the repo file is not yet reachable
- * (local dev, pre-merge branches). Keep aligned with `.gittensory.yml` at repo root.
+ * (local dev, pre-merge branches). Keep aligned with `.loopover.yml` at repo root.
  */
 export const GITTENSORY_REPO_FOCUS_MANIFEST_YAML = `# Gittensory repo focus manifest — machine-readable contributor policy for this project.
 # Private maintainerNotes stay in authenticated API surfaces only.
@@ -33,7 +33,7 @@ testExpectations:
 issueDiscoveryPolicy: discouraged
 
 # Authoritative gate config, config-as-code (layered OVER dashboard repository settings:
-# .gittensory.yml > DB settings > safe defaults). ONLY confirmed Gittensor contributors are ever
+# .loopover.yml > DB settings > safe defaults). ONLY confirmed Gittensor contributors are ever
 # hard-blocked (see PR #644); these fields only choose what the gate does, not who it applies to.
 gate:
   # enabled: false             # set false to disable the gate from config (turning it on is a dashboard setting)

@@ -301,7 +301,7 @@ describe("check-docs-drift script", () => {
         "src/github/commands.ts": baseCommandsSource,
         "src/types.ts": buildRepositorySettingsSource(baseSettingsExtraFields),
         "packages/gittensory-engine/src/focus-manifest.ts": buildFocusManifestSource(baseFocusManifestReviewFields),
-        ".gittensory.yml.example": buildYmlExampleText(baseSettingsExtraFields, baseFocusManifestReviewFields),
+        ".loopover.yml.example": buildYmlExampleText(baseSettingsExtraFields, baseFocusManifestReviewFields),
         "apps/gittensory-ui/src/routes/docs.tuning.tsx": [buildFlagsPageText(baseFlagNames), buildGateModePageText()].join("\n"),
         "apps/gittensory-ui/src/routes/docs.privacy-security.tsx": buildFlagsPageText(baseFlagNames),
         "apps/gittensory-ui/src/routes/docs.maintainer-workflow.tsx": buildDocsPageText(allBaseCommandIds),
@@ -457,13 +457,13 @@ describe("check-docs-drift script", () => {
       expect(hit).toBeDefined();
     });
 
-    it("catches a RepositorySettings field with zero .gittensory.yml.example mention and no alias/exclude entry (#4617)", () => {
+    it("catches a RepositorySettings field with zero .loopover.yml.example mention and no alias/exclude entry (#4617)", () => {
       const files = baseFixtures();
       files["src/types.ts"] = files["src/types.ts"]!.replace("};", "  totallyUndocumentedField: boolean;\n};");
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
       const hit = result.failures.find(
-        (failure) => failure.includes(".gittensory.yml.example") && failure.includes("totallyUndocumentedField"),
+        (failure) => failure.includes(".loopover.yml.example") && failure.includes("totallyUndocumentedField"),
       );
       expect(hit).toBeDefined();
       // This exact shape -- a plain, non-*GateMode-named field -- is invisible to the OLD narrow check: it
@@ -478,7 +478,7 @@ describe("check-docs-drift script", () => {
       for (const row of SETTINGS_ALIAS_MANIFEST) {
         const files = baseFixtures();
         files["src/types.ts"] = files["src/types.ts"]!.replace("};", `  ${row.field}: string;\n};`);
-        files[".gittensory.yml.example"] += `\n${row.aliases[0]}`;
+        files[".loopover.yml.example"] += `\n${row.aliases[0]}`;
         const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
         expect(result.failures, `${row.field} should pass via alias ${row.aliases[0]}`).toEqual([]);
@@ -500,7 +500,7 @@ describe("check-docs-drift script", () => {
 
     it("catches a FocusManifest field nested inside another config type with zero yml mention -- the exact review.visual.production_url shape (#4617)", () => {
       const files = baseFixtures();
-      // A SECOND VisualConfig-shaped leaf that the synthetic .gittensory.yml.example never mentions.
+      // A SECOND VisualConfig-shaped leaf that the synthetic .loopover.yml.example never mentions.
       files["packages/gittensory-engine/src/focus-manifest.ts"] = files["packages/gittensory-engine/src/focus-manifest.ts"]!.replace(
         "productionUrl: string | null;",
         "productionUrl: string | null;\n  totallyUndocumentedNestedField: string | null;",
@@ -508,7 +508,7 @@ describe("check-docs-drift script", () => {
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
       const hit = result.failures.find(
-        (failure) => failure.includes(".gittensory.yml.example") && failure.includes("review.visual.totally_undocumented_nested_field"),
+        (failure) => failure.includes(".loopover.yml.example") && failure.includes("review.visual.totally_undocumented_nested_field"),
       );
       expect(hit).toBeDefined();
       // A check that only enumerated FocusManifest's own TOP-LEVEL fields (never recursing into `review`, let
@@ -529,7 +529,7 @@ describe("check-docs-drift script", () => {
           "visual: VisualConfig;",
           `${leafName}: string | null;\n  visual: VisualConfig;`,
         );
-        files[".gittensory.yml.example"] += `\n${row.aliases[0]}`;
+        files[".loopover.yml.example"] += `\n${row.aliases[0]}`;
         const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
         expect(result.failures, `${row.field} should pass via alias ${row.aliases[0]}`).toEqual([]);

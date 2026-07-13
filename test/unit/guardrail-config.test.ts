@@ -5,13 +5,11 @@ import {
   resolveHardGuardrailGlobs,
 } from "../../src/review/guardrail-config";
 
-describe("CONFIG_AS_CODE_GUARDRAIL_GLOBS (#4773 — dual-brand config filenames)", () => {
-  it("guards both the new-brand .loopover.* config files and the legacy .gittensory.* ones", () => {
+describe("CONFIG_AS_CODE_GUARDRAIL_GLOBS", () => {
+  it("guards the .loopover.* config files", () => {
     for (const ext of ["yml", "yaml", "json"]) {
       expect(CONFIG_AS_CODE_GUARDRAIL_GLOBS).toContain(`.loopover.${ext}`);
       expect(CONFIG_AS_CODE_GUARDRAIL_GLOBS).toContain(`.github/loopover.${ext}`);
-      expect(CONFIG_AS_CODE_GUARDRAIL_GLOBS).toContain(`.gittensory.${ext}`);
-      expect(CONFIG_AS_CODE_GUARDRAIL_GLOBS).toContain(`.github/gittensory.${ext}`);
     }
   });
 });

@@ -3,10 +3,9 @@
 // siblings) own collecting GeneratorFormState, this module only turns it into text. Key names and
 // nesting match the real manifest schema (packages/gittensory-engine/src/focus-manifest.ts's
 // gateConfigToJson `gate.aiReview` shape, the same shape documented in this repo's own root
-// .gittensory.yml under the commented-out `aiReview:` example) — no parallel schema. Every field is
+// .loopover.yml under the commented-out `aiReview:` example) — no parallel schema. Every field is
 // optional so a fresh/partial form never produces invalid output; unset keys are omitted entirely.
-// The generated header names the new-brand `.loopover.yml` filename; the legacy `.gittensory.yml`
-// name still works identically if that's what a self-hoster already has committed (#4773).
+// The generated header names the `.loopover.yml` filename.
 
 export type AiCombineStrategy = "single" | "consensus" | "synthesis";
 export type AiProvider = "anthropic" | "openai";

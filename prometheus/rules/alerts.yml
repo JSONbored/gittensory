@@ -479,7 +479,7 @@ groups:
           runbook: "Check provider health and circuit-breaker state (loopover_ai_provider_failures_total / loopover_ai_provider_circuit_open_total) and verify AI_PROVIDER credentials are still valid for every configured reviewer."
 
       - alert: LoopoverAiReviewOnMergeFloorBypassAttempted
-        # A repo's .gittensory.yml tried to loosen the operator's onMerge/combine/reviewer-count floor and
+        # A repo's .loopover.yml tried to loosen the operator's onMerge/combine/reviewer-count floor and
         # got clamped back to the operator's own configured minimum (#3901). A governance/config signal, not
         # an operational outage, but same absolute-increase style as LoopoverAiProviderCircuitOpen above:
         # any occurrence (> 0) over 1h is worth a look, sustained 5m so a single instantaneous blip doesn't
@@ -491,7 +491,7 @@ groups:
         annotations:
           summary: "a repo's review-floor clamp fired"
           description: "{{ $value | printf \"%.0f\" }} onMerge/combine/reviewer-count clamp event(s) over the last 1h — a repo config tried to loosen below the operator's configured floor."
-          runbook: "Check which repo's .gittensory.yml requested the loosened setting (loopover_ai_review_onmerge_clamped_total is labeled by mode) and confirm whether that repo's floor should be adjusted or the request declined."
+          runbook: "Check which repo's .loopover.yml requested the loosened setting (loopover_ai_review_onmerge_clamped_total is labeled by mode) and confirm whether that repo's floor should be adjusted or the request declined."
 
       - alert: LoopoverAiProviderCircuitOpen
         # A provider's circuit breaker opens after AI_PROVIDER_FAILURE_THRESHOLD consecutive failures and

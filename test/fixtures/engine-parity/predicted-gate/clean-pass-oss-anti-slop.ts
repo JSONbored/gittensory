@@ -16,6 +16,6 @@ export default definePredictedGateFixture({
     blockerCodes: [],
     warningCodes: [],
     funnelPresent: true,
-    noteIncludes: ["public .gittensory.yml", "slop score is NOT evaluated pre-submission"],
+    noteIncludes: ["public .loopover.yml", "slop score is NOT evaluated pre-submission"],
   },
 });

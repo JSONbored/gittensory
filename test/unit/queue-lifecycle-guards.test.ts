@@ -1816,11 +1816,11 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       if (url.includes("/check-runs")) return Response.json({ id: 900 }, { status: 201 });
       if (url.includes("/labels")) return Response.json([{ name: "review-evasion" }]);
       if (url.includes("/pulls/42/files")) return Response.json([]);
-      // A .gittensory.yml content fetch (raw.githubusercontent.com) must resolve to SOMETHING with no opinion
+      // A .loopover.yml content fetch (raw.githubusercontent.com) must resolve to SOMETHING with no opinion
       // on reviewEvasionProtection -- otherwise a miss here falls through to the bundled JSONbored/gittensory
       // fallback manifest (gittensory-repo-focus-manifest.ts), whose OWN checked-in reviewEvasionProtection:
       // close would silently outrank every test below's DB-level override (yml > DB precedence, #config-as-code).
-      if (url.includes("raw.githubusercontent.com") && url.includes("gittensory.y")) return new Response("source: repo_file\n", { status: 200 });
+      if (url.includes("raw.githubusercontent.com") && url.includes("loopover.y")) return new Response("source: repo_file\n", { status: 200 });
       return new Response("not found", { status: 404 });
     });
   }
@@ -3095,7 +3095,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
         if (url.includes("/access_tokens")) return Response.json({ token: "t" });
         if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
         if (method === "PATCH" && url.endsWith("/pulls/42")) return new Response("server error", { status: 500 });
-        if (url.includes("raw.githubusercontent.com") && url.includes("gittensory.y")) return new Response("source: repo_file\n", { status: 200 });
+        if (url.includes("raw.githubusercontent.com") && url.includes("loopover.y")) return new Response("source: repo_file\n", { status: 200 });
         return new Response("not found", { status: 404 });
       });
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
@@ -3147,7 +3147,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
         if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
         if (url.includes("/labels")) return Response.json([{ name: "review-evasion" }]);
         if (url.includes("/pulls/42/files")) return Response.json([]);
-        if (url.includes("raw.githubusercontent.com") && url.includes("gittensory.y")) return new Response("source: repo_file\n", { status: 200 });
+        if (url.includes("raw.githubusercontent.com") && url.includes("loopover.y")) return new Response("source: repo_file\n", { status: 200 });
         return new Response("not found", { status: 404 });
       });
       const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
@@ -4250,7 +4250,7 @@ describe("auto-action convergence: end-to-end plan+execute for the general heuri
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") return new Response("settings:\n  hardGuardrailGlobs:\n    - .github/workflows/**\n");
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") return new Response("settings:\n  hardGuardrailGlobs:\n    - .github/workflows/**\n");
       if (url === "https://api.github.com/graphql") return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/pulls/61/files")) return Response.json([{ filename: ".github/workflows/ci.yml", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+  x: 1" }]);

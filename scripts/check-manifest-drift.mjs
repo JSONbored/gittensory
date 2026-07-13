@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Cross-checks the bundled fallback YAML in src/config/gittensory-repo-focus-manifest.ts
-// (GITTENSORY_REPO_FOCUS_MANIFEST_YAML) against the real root .gittensory.yml. The bundled string exists so
+// (GITTENSORY_REPO_FOCUS_MANIFEST_YAML) against the real root .loopover.yml. The bundled string exists so
 // the focus-manifest engine still has a sane default when the live repo file is unreachable (local dev,
 // pre-merge branches) -- see that file's own header comment -- but nothing in CI previously caught the two
 // silently diverging once someone edited one and forgot the other. This script parses both with the `yaml`
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { GITTENSORY_REPO_FOCUS_MANIFEST_YAML } from "../src/config/gittensory-repo-focus-manifest.ts";
 
-const ROOT_MANIFEST_PATH = ".gittensory.yml";
+const ROOT_MANIFEST_PATH = ".loopover.yml";
 
 function defaultReadFile(root, relativePath) {
   return readFileSync(join(root, relativePath), "utf8");
@@ -33,7 +33,7 @@ function sortKeysDeep(value) {
 }
 
 /**
- * Deep-compares the real root .gittensory.yml against the bundled fallback YAML constant. `readFile(root,
+ * Deep-compares the real root .loopover.yml against the bundled fallback YAML constant. `readFile(root,
  * relativePath)` and `bundledYaml` are both injectable so tests can simulate a diverged pair without
  * touching the real filesystem or the real bundled constant. Returns `{ failures, rootManifest,
  * bundledManifest }` -- pure given its inputs, no process.exit/console side effects of its own (those live

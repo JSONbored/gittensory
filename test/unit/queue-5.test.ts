@@ -1274,11 +1274,11 @@ describe("queue processors", () => {
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 307, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
       const seen = { comments: [] as string[] };
       // advisoryAiRouting is config-as-code only (never DB-writable via upsertRepositorySettings) — enable
-      // chatQa the real way, through the repo's published `.gittensory.yml` raw-fetch, same as production.
+      // chatQa the real way, through the repo's published `.loopover.yml` raw-fetch, same as production.
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1311,7 +1311,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n  commandRateLimitPolicy: hold\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1348,7 +1348,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           // chatQa enabled, but commandRateLimitPolicy is NOT set -- pr_author must not be granted.
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
         }
@@ -1384,7 +1384,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n  commandRateLimitPolicy: hold\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1420,7 +1420,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n  commandRateLimitPolicy: hold\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1456,7 +1456,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1511,7 +1511,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1561,7 +1561,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1609,11 +1609,11 @@ describe("queue processors", () => {
       await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 309, title: "Rate limit target", state: "open", user: { login: "oktofeesh1" }, author_association: "NONE", labels: [], body: "" });
       const seen = { comments: [] as string[] };
       // advisoryAiRouting is config-as-code only -- enable intentRouting the real way, through the repo's
-      // published `.gittensory.yml` raw-fetch, same as the chat full-dispatch test above.
+      // published `.loopover.yml` raw-fetch, same as the chat full-dispatch test above.
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1644,7 +1644,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1693,7 +1693,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1727,7 +1727,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1758,7 +1758,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1793,7 +1793,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1821,7 +1821,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1850,7 +1850,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -1882,7 +1882,7 @@ describe("queue processors", () => {
       vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (url.includes("raw.githubusercontent.com") && url.includes(".gittensory.yml")) {
+        if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
           return new Response("settings:\n  advisoryAiRouting:\n    intentRouting: true\n", { status: 200 });
         }
         if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
@@ -2383,7 +2383,7 @@ describe("queue processors", () => {
   it("notifies issue-watchers when a new grabbable maintainer-created issue opens (#699 path B)", async () => {
     const enqueued: Array<{ type: string; events?: Array<{ eventType: string; recipientLogin: string; pullNumber: number }> }> = [];
     const env = createTestEnv({ JOBS: { async send(message: { type: string }) { enqueued.push(message); } } as unknown as Queue });
-    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .gittensory.yml → empty manifest
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .loopover.yml → empty manifest
     const watcherLogins = Array.from({ length: 205 }, (_, index) => `watcher-${String(index + 1).padStart(3, "0")}`);
     for (const login of watcherLogins) {
       await upsertIssueWatchSubscription(env, { login, repoFullName: "JSONbored/gittensory" });
@@ -2420,7 +2420,7 @@ describe("queue processors", () => {
     const enqueueNotifyEvaluateJobs = async (loginOrder: string[]): Promise<Array<{ type: string; events: Array<{ dedupKey: string }> }>> => {
       const enqueued: Array<{ type: string; events?: Array<{ dedupKey: string }> }> = [];
       const env = createTestEnv({ JOBS: { async send(message: { type: string }) { enqueued.push(message); } } as unknown as Queue });
-      vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .gittensory.yml → empty manifest
+      vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .loopover.yml → empty manifest
       // listIssueWatchersForRepo has no ORDER BY -- insertion order IS read-back order, so inserting in a
       // different order here genuinely reproduces two logically-identical detection passes disagreeing on
       // notificationEvents' arrival order, exactly the redelivery scenario the review is concerned about.
@@ -2458,7 +2458,7 @@ describe("queue processors", () => {
 
   it("appends issue-side slop findings to the issue advisory only when slop is opted in (#533)", async () => {
     const env = createTestEnv();
-    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .gittensory.yml → empty manifest
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 })); // no .loopover.yml → empty manifest
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertRepositoryFromGitHub(env, { name: "other", full_name: "JSONbored/other", private: false, owner: { login: "JSONbored" } }, 123);
     await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", slopGateMode: "advisory" });
@@ -5254,7 +5254,7 @@ describe("queue processors", () => {
     });
 
     // Authorization used to be hardcoded to maintainer-only here, ignoring whatever a repo's own
-    // .gittensory.yml commandAuthorization configured -- a self-hoster who wants their contributors to be
+    // .loopover.yml commandAuthorization configured -- a self-hoster who wants their contributors to be
     // able to trigger test generation had no way to widen it. It now respects settings.commandAuthorization,
     // the exact same resolved (and safely clamped) policy the text-command version already uses.
     it("dispatches generation for a COLLABORATOR (not just a maintainer) once the repo widens commandAuthorization for generate-tests", async () => {
@@ -6638,7 +6638,7 @@ describe("queue processors", () => {
 
     it("never fetches a linked issue and keeps normal behavior when propagation is left at its default (disabled) (#priority-linked-issue-gate)", async () => {
       // Deliberately NOT "JSONbored/gittensory" (unlike its two sibling tests above): this repo's own
-      // `.gittensory.yml` now enables propagation for itself (#priority-linked-issue-gate-ownership
+      // `.loopover.yml` now enables propagation for itself (#priority-linked-issue-gate-ownership
       // dogfooding), and `resolveRepositorySettings` falls back to the bundled
       // `GITTENSORY_REPO_FOCUS_MANIFEST_YAML` copy of it whenever a live manifest fetch is unavailable
       // (`isGittensorySelfRepo`, `src/signals/focus-manifest-loader.ts`) -- exactly the case in this test's

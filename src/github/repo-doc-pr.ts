@@ -11,14 +11,14 @@
 // gets a pull request with everything outside the markers preserved byte-for-byte, and a repo whose marker
 // block is missing or malformed gets neither a silent overwrite nor a guess -- just a reported reason.
 //
-// CONFIG-AS-CODE GATE (#3002): this whole feature is opt-in per repo via `.gittensory.yml repoDocGeneration:`
+// CONFIG-AS-CODE GATE (#3002): this whole feature is opt-in per repo via `.loopover.yml repoDocGeneration:`
 // (src/signals/focus-manifest.ts) -- a manifest-only surface with no DB-backed counterpart, since there is no
 // dashboard toggle for it. `enabled`/`scope` are checked BEFORE any profile extraction or GitHub call (the
 // common case is disabled, so this must be cheap); `allowOverwriteExisting` is checked later, once refresh
 // reports `manual-review-required` (the "this file looks hand-maintained" signal), and lets that specific case
 // proceed as a fresh wholesale generate instead of skipping.
 //
-// SKILL FILE, ADDITIVE (#3001): when `.gittensory.yml repoDocGeneration.scope` includes `"skills"` AND the repo
+// SKILL FILE, ADDITIVE (#3001): when `.loopover.yml repoDocGeneration.scope` includes `"skills"` AND the repo
 // profile's contribution workflow warrants one (src/review/repo-skill-render.ts's shouldGenerateRepoSkill), a
 // generated skill file rides along in the SAME commit/PR as AGENTS.md/CLAUDE.md -- there is no parallel
 // delivery path. It gets its OWN marker pair and its own refreshGeneratedDoc call (reused unchanged, per that
@@ -121,7 +121,7 @@ Every fact above was read directly from this repository, not templated or guesse
 
 ## Opting out
 
-Set \`repoDocGeneration.enabled: false\` in this repository's \`.gittensory.yml\` (or simply close this pull request) -- no further action is taken until it is re-enabled.
+Set \`repoDocGeneration.enabled: false\` in this repository's \`.loopover.yml\` (or simply close this pull request) -- no further action is taken until it is re-enabled.
 `;
 }
 
@@ -144,8 +144,8 @@ export async function openRepoDocPullRequest(env: Env, repoFullName: string, mod
     if (!repository?.installationId) return { opened: false, reason: "repository is not installed" };
 
     const manifest = await loadRepoFocusManifest(env, repoFullName);
-    if (!manifest.repoDocGeneration.enabled) return { opened: false, reason: "repo-doc generation is not enabled for this repository (.gittensory.yml repoDocGeneration.enabled)" };
-    if (!manifest.repoDocGeneration.scope.includes("agents")) return { opened: false, reason: 'repo-doc generation scope does not include "agents" for this repository (.gittensory.yml repoDocGeneration.scope)' };
+    if (!manifest.repoDocGeneration.enabled) return { opened: false, reason: "repo-doc generation is not enabled for this repository (.loopover.yml repoDocGeneration.enabled)" };
+    if (!manifest.repoDocGeneration.scope.includes("agents")) return { opened: false, reason: 'repo-doc generation scope does not include "agents" for this repository (.loopover.yml repoDocGeneration.scope)' };
 
     const profile = await extractRepoProfile(env, repoFullName);
     if (!profile.present) return { opened: false, reason: profile.reason };

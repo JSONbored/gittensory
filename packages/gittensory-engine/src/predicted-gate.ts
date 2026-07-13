@@ -63,7 +63,7 @@ export type PredictedGateVerdict = {
 };
 
 const PREDICTED_GATE_NOTE_BASE =
-  "Predicted from the repo's public .gittensory.yml gate config + safe defaults. The maintainer may have " +
+  "Predicted from the repo's public .loopover.yml gate config + safe defaults. The maintainer may have " +
   "private dashboard overrides not reflected here, and the dual-model AI-consensus blocker is only " +
   "evaluated on a real PR. ";
 // The slop score is ALWAYS disclaimed: it needs the diff CONTENT, which the metadata-only oracle never receives.
@@ -224,7 +224,7 @@ export function buildPredictedGateVerdict(args: {
   const advisory = buildPullRequestAdvisory(repo, syntheticPr, { otherOpenPullRequests: openSiblings, requireLinkedIssue, linkedIssueAuthorLogins });
 
   // Deterministic pre-merge checks parity (#11/#18): the LIVE gate enforces the repo's `review.pre_merge_checks`
-  // (from the SAME public .gittensory.yml the predictor already reads). With the PR's changed paths supplied,
+  // (from the SAME public .loopover.yml the predictor already reads). With the PR's changed paths supplied,
   // evaluate ALL of them exactly as live (path-gated checks now have their `whenPaths` to match against); without
   // paths, evaluate only the PATH-INDEPENDENT checks (empty `whenPaths` — title/description/label assertions),
   // whose inputs are exactly the real PR's, and disclaim the path-gated ones in the note.

@@ -1193,7 +1193,7 @@ describe("GitHub backfill", () => {
     );
   });
 
-  it("REGRESSION (#2912): repair diagnostics honor a .gittensory.yml-only checkRunMode: enabled override (DB row left at off)", async () => {
+  it("REGRESSION (#2912): repair diagnostics honor a .loopover.yml-only checkRunMode: enabled override (DB row left at off)", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
     // DB row explicitly says checkRunMode: off; only the yml manifest turns it on, so this only passes if the
@@ -1201,7 +1201,7 @@ describe("GitHub backfill", () => {
     await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", checkRunMode: "off" });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
-      if (url.endsWith("/.gittensory.yml")) return new Response("settings:\n  checkRunMode: enabled\n", { status: 200 });
+      if (url.endsWith("/.loopover.yml")) return new Response("settings:\n  checkRunMode: enabled\n", { status: 200 });
       return new Response("Not Found", { status: 404 });
     });
 
@@ -1408,14 +1408,14 @@ describe("GitHub backfill", () => {
     expect(result.repos[0]).toMatchObject({ status: "skipped", warnings: ["Backfill is disabled for this repository."] });
   });
 
-  it("REGRESSION (#2912): honors a .gittensory.yml-only backfillEnabled: false override (DB row left at its true default)", async () => {
+  it("REGRESSION (#2912): honors a .loopover.yml-only backfillEnabled: false override (DB row left at its true default)", async () => {
     const env = createTestEnv();
     await seedRegisteredRepo(env);
     // No upsertRepositorySettings call: the DB row stays at its default (backfillEnabled: true). Only the
     // yml manifest disables it, so this only passes if the resolver (not the raw DB accessor) is consulted.
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
-      if (url.endsWith("/.gittensory.yml")) return new Response("settings:\n  backfillEnabled: false\n", { status: 200 });
+      if (url.endsWith("/.loopover.yml")) return new Response("settings:\n  backfillEnabled: false\n", { status: 200 });
       return new Response("Not Found", { status: 404 });
     });
 

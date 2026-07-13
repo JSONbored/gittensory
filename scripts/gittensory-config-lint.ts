@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 // Wires up the previously-unwired src/selfhost/config-lint.ts validator (#2906): a self-hoster (or the
-// maintainer, dogfooding on JSONbored/gittensory) can now actually run it against a real .gittensory.yml or
+// maintainer, dogfooding on JSONbored/gittensory) can now actually run it against a real .loopover.yml or
 // private-config file and get actionable feedback, instead of the validator existing only in its own test suite.
 import { lstatSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -10,12 +10,12 @@ import { MAX_FOCUS_MANIFEST_BYTES } from "../src/signals/focus-manifest";
 function usage(): string {
   return `Usage: npm run selfhost:config-lint -- [path]
 
-Validates a Gittensory focus manifest (.gittensory.yml, a per-repo/global self-host
+Validates a Gittensory focus manifest (.loopover.yml, a per-repo/global self-host
 private-config file, or any equivalent YAML/JSON file with the same shape) and reports
 unrecognized top-level fields and parser warnings, without echoing any of the file's values.
 
 Options:
-  path   Manifest file to lint. Defaults to ".gittensory.yml" in the current directory.`;
+  path   Manifest file to lint. Defaults to ".loopover.yml" in the current directory.`;
 }
 
 export function readManifestTextForLint(path: string): string {
@@ -50,7 +50,7 @@ function main(): void {
     console.log(usage());
     return;
   }
-  const path = args[0] ?? ".gittensory.yml";
+  const path = args[0] ?? ".loopover.yml";
   let text;
   try {
     text = readManifestTextForLint(path);

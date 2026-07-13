@@ -101,7 +101,7 @@ describe("performRepoDocRefresh (#3003)", () => {
     await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: REPO, private: false, owner: { login: "owner" } }, 555);
     // repoDocGeneration is NOT enabled for this repo.
     const result = await performRepoDocRefresh(env, REPO);
-    expect(result).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.gittensory.yml repoDocGeneration.enabled)" });
+    expect(result).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.loopover.yml repoDocGeneration.enabled)" });
     expect(await getLastRepoDocRefreshAttemptedAt(env, REPO)).not.toBeNull();
   });
 

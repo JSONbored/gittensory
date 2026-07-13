@@ -89,9 +89,9 @@ services:
     environment:
       PORT: "8787"
       DATABASE_PATH: /data/loopover.sqlite
-      # Container-private per-repo config (#1390): point at a mounted dir holding {owner}__{repo}/.gittensory.yml
-      # files layered over an optional root .gittensory.yml global default, itself layered over an optional
-      # _shared/.gittensory.yml cross-repo base for multi-repo operators (#1959) — a higher layer overrides only the
+      # Container-private per-repo config (#1390): point at a mounted dir holding {owner}__{repo}/.loopover.yml
+      # files layered over an optional root .loopover.yml global default, itself layered over an optional
+      # _shared/.loopover.yml cross-repo base for multi-repo operators (#1959) — a higher layer overrides only the
       # keys it sets; anything it doesn't mention is inherited from the next layer down — see
       # config/examples/README.md). Keeps each repo's policy OUT of the public GitHub repo so contributors can't
       # game the rules. Empty/unmounted ⇒ repos use the public file / defaults.
@@ -142,8 +142,8 @@ services:
       # ORB_BROKER_URL: https://api.loopover.ai   # override only for a private Orb deployment
     volumes:
       - loopover-data:/data
-      # Container-private per-repo config dir (read-only). Create ./gittensory-config/{owner}__{repo}/.gittensory.yml
-      # locally, optionally alongside a ./gittensory-config/.gittensory.yml global default that every per-repo file
+      # Container-private per-repo config dir (read-only). Create ./gittensory-config/{owner}__{repo}/.loopover.yml
+      # locally, optionally alongside a ./gittensory-config/.loopover.yml global default that every per-repo file
       # is deep-merged over (gitignored — never commit real policy; see config/examples/ for generic templates).
       # Absent ⇒ Docker mounts an empty dir ⇒ defaults apply.
       - ./gittensory-config:/config:ro

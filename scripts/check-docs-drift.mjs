@@ -4,7 +4,7 @@
 // @gittensory commands (src/github/commands.ts's two command catalogs), gate-mode dimensions (src/types.ts's
 // *GateMode fields on RepositorySettings) against specific docs pages, and -- the widened part (#4617) -- the
 // FULL RepositorySettings field surface plus every parseable FocusManifest field (packages/gittensory-engine)
-// against .gittensory.yml.example. Nothing else in CI catches a docs page/example silently falling behind when
+// against .loopover.yml.example. Nothing else in CI catches a docs page/example silently falling behind when
 // a new flag/command/gate-mode/settings/manifest field is added to source but the place documenting that
 // surface is never updated -- a reviewer has to notice by eye, and often doesn't (#4617's own audit found
 // `agentGlobalFreezeOverride` and `review.visual.production_url` this way: both fully live in code, neither
@@ -90,25 +90,25 @@ export function extractRepositorySettingsFields(typesText) {
 }
 
 /** RepositorySettings fields deliberately excluded from the "every field must have SOME
- *  `.gittensory.yml.example` mention" check below, for three distinct reasons -- flagging any as "undocumented"
+ *  `.loopover.yml.example` mention" check below, for three distinct reasons -- flagging any as "undocumented"
  *  would be a false drift signal, not a real gap:
  *   - Not a maintainer-settable knob at all: `repoFullName` is the row's own identity key (set once at
  *     creation, the opposite of something a maintainer overrides via config); `createdAt`/`updatedAt` are
  *     DB-row bookkeeping timestamps.
  *   - `agentGlobalFreezeOverride`: genuinely settable, but DELIBERATELY never documented in the PUBLIC
- *     `.gittensory.yml.example` -- it is settable only from the self-host operator's own PRIVATE config
+ *     `.loopover.yml.example` -- it is settable only from the self-host operator's own PRIVATE config
  *     (`source: "api_record"` in `parseSettingsOverride`, packages/gittensory-engine/src/focus-manifest.ts),
  *     never from a repo's own committed, maintainer-owned manifest (#4391's scope-leak fix). Documenting it in
  *     the public example would misleadingly suggest a repo maintainer can set it themselves -- see the same
  *     exclusion, with the same rationale, in `SETTINGS_OPERATOR_ONLY_FIELDS` in
- *     test/unit/focus-manifest.test.ts's `.gittensory.yml.example field-exhaustiveness` suite. (An #4617 audit
+ *     test/unit/focus-manifest.test.ts's `.loopover.yml.example field-exhaustiveness` suite. (An #4617 audit
  *     pass first flagged this field as an undocumented gap without that context; cross-checking the existing
  *     exhaustiveness suite before "fixing" it here caught the false positive.)
  *   - `skipAutomationBotAuthors`: genuinely settable (global env default + per-repo `inherit`/`off`/`enabled`
  *     override, mirroring `moderationGateMode`'s shape), but DELIBERATELY not wired into the
- *     FocusManifest/`.gittensory.yml` parsing path -- DB-only for now, confirmed as an intentional scope choice
+ *     FocusManifest/`.loopover.yml` parsing path -- DB-only for now, confirmed as an intentional scope choice
  *     for this feature rather than an oversight. It is correctly absent from `FocusManifestSettings` (so the
- *     separate `.gittensory.yml.example` field-exhaustiveness suite never expected a token for it either). */
+ *     separate `.loopover.yml.example` field-exhaustiveness suite never expected a token for it either). */
 const NOT_YML_CONFIGURABLE_SETTINGS_FIELDS = new Set([
   "repoFullName",
   "createdAt",
@@ -117,15 +117,15 @@ const NOT_YML_CONFIGURABLE_SETTINGS_FIELDS = new Set([
   "skipAutomationBotAuthors",
 ]);
 
-/** RepositorySettings fields whose `.gittensory.yml.example` documentation exists under a DIFFERENT, shorter
+/** RepositorySettings fields whose `.loopover.yml.example` documentation exists under a DIFFERENT, shorter
  *  name than the field itself -- almost always because the yml groups several sibling fields under one named
  *  block (`gate.aiReview.*`, `gate.cla.*`, `gate.slop.*`, `gate.copycat.*`, `gate.readiness.*`) and so drops the
  *  shared prefix the flat RepositorySettings field name carries to distinguish it from its siblings (e.g.
  *  `aiReviewCloseConfidence` is documented as just `closeConfidence`, nested under the `aiReview:` block --
- *  verified against the real `.gittensory.yml.example` for every row below). A field landing here is a
+ *  verified against the real `.loopover.yml.example` for every row below). A field landing here is a
  *  deliberate, reviewed judgment call that it IS genuinely documented, just not findable by a literal name
  *  match -- unlike GATE_MODE_MANIFEST (checked against specific docs ROUTE pages), `aliases` here is checked
- *  against the WHOLE `.gittensory.yml.example` file, matching #4617's "SOME mention" ask, so one representative
+ *  against the WHOLE `.loopover.yml.example` file, matching #4617's "SOME mention" ask, so one representative
  *  alias per row is enough. Any `*GateMode` field is deliberately absent from this manifest even though its own
  *  yml key is ALSO renamed the same way -- GATE_MODE_MANIFEST above already owns that exhaustive cross-check. */
 export const SETTINGS_ALIAS_MANIFEST = [
@@ -152,7 +152,7 @@ export const SETTINGS_ALIAS_MANIFEST = [
   { field: "requireFreshRebaseWindowMinutes", aliases: ["requireFreshRebaseWindow"] },
 ];
 
-/** camelCase -> snake_case, matching the casing convention `.gittensory.yml`'s `review:` block (and everything
+/** camelCase -> snake_case, matching the casing convention `.loopover.yml`'s `review:` block (and everything
  *  nested under it, e.g. `review.visual.*`) uses for its own keys -- e.g. `productionUrl` -> `production_url`.
  *  Every OTHER FocusManifest-reachable block keeps its source field's camelCase spelling verbatim in the yml
  *  (matching the top-level manifest fields and the `gate:`/`settings:` blocks), for which this is a harmless
@@ -217,7 +217,7 @@ export function extractFocusManifestFields(focusManifestText) {
 }
 
 /** FocusManifest leaf fields (dotted paths, same shape `extractFocusManifestFields` returns) whose
- *  `.gittensory.yml.example` documentation exists under a shorter name than their own doc comment's dotted-path
+ *  `.loopover.yml.example` documentation exists under a shorter name than their own doc comment's dotted-path
  *  tag would suggest -- e.g. `review.footerText`'s own field carries no `` `review.footer.text` `` tag at all
  *  (unlike most of its siblings), and is in fact documented as just `footer:` (a nested `text:` sub-key).
  *  Mirrors SETTINGS_ALIAS_MANIFEST's reasoning exactly, one level down. */
@@ -228,7 +228,7 @@ export const FOCUS_MANIFEST_ALIAS_MANIFEST = [
 ];
 
 // The real current *GateMode fields on RepositorySettings in src/types.ts. Each row maps the field to its
-// .gittensory.yml alias(es) (the field's own DB/settings name, plus any config-as-code YAML path it is also
+// .loopover.yml alias(es) (the field's own DB/settings name, plus any config-as-code YAML path it is also
 // known by) and the docs route filenames (relative to apps/gittensory-ui/src/routes/) that must document it.
 // Adding a new *GateMode field to src/types.ts without adding a row here is a docs-drift failure by design
 // (see checkDocsDrift step 3) -- the manifest is the single place that maps "a gate dimension exists" to
@@ -258,7 +258,7 @@ function defaultReadFile(root, relativePath) {
 /**
  * Cross-check feature flags, @gittensory commands, gate-mode dimensions, the full RepositorySettings surface,
  * and every parseable FocusManifest field between their code source of truth and wherever they're meant to be
- * documented exhaustively (specific docs pages for the first three; `.gittensory.yml.example` for the last
+ * documented exhaustively (specific docs pages for the first three; `.loopover.yml.example` for the last
  * two, #4617). `readFile(root, relativePath)` is injectable so tests can simulate a broken/incomplete docs
  * page or source file without touching the real filesystem. Returns `{ failures, counts }` -- pure given its
  * inputs, no process.exit/console side effects of its own (those live in main()).
@@ -318,7 +318,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
     const manifestFields = new Set(GATE_MODE_MANIFEST.map((row) => row.field));
     for (const field of gateModeFields) {
       if (!manifestFields.has(field)) {
-        failures.push(`src/types.ts declares ${field} but GATE_MODE_MANIFEST in scripts/check-docs-drift.mjs has no entry for it -- add a row mapping it to its .gittensory.yml alias(es) and the docs pages that must document it`);
+        failures.push(`src/types.ts declares ${field} but GATE_MODE_MANIFEST in scripts/check-docs-drift.mjs has no entry for it -- add a row mapping it to its .loopover.yml alias(es) and the docs pages that must document it`);
       }
     }
 
@@ -333,7 +333,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
     }
   }
 
-  // 4. The FULL RepositorySettings surface (#4617): every field, not just *GateMode, vs .gittensory.yml.example.
+  // 4. The FULL RepositorySettings surface (#4617): every field, not just *GateMode, vs .loopover.yml.example.
   // A field passes when its literal name appears anywhere in the example file, when it's already covered
   // exhaustively by GATE_MODE_MANIFEST above (checked against docs pages, not repeated here), when it's judged
   // not yml-configurable at all (NOT_YML_CONFIGURABLE_SETTINGS_FIELDS), or when SETTINGS_ALIAS_MANIFEST records
@@ -346,7 +346,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
   } else {
     const gateModeManifestFields = new Set(GATE_MODE_MANIFEST.map((row) => row.field));
     const settingsAliases = new Map(SETTINGS_ALIAS_MANIFEST.map((row) => [row.field, row.aliases]));
-    const ymlExampleText = read(".gittensory.yml.example");
+    const ymlExampleText = read(".loopover.yml.example");
     for (const field of repositorySettingsFields) {
       if (NOT_YML_CONFIGURABLE_SETTINGS_FIELDS.has(field)) continue;
       if (gateModeManifestFields.has(field)) continue;
@@ -354,13 +354,13 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
       const aliases = settingsAliases.get(field);
       if (aliases?.some((alias) => ymlExampleText.includes(alias))) continue;
       failures.push(
-        `.gittensory.yml.example: missing any mention of RepositorySettings field "${field}" -- document it there (or the relevant reference doc), or add a SETTINGS_ALIAS_MANIFEST row in scripts/check-docs-drift.mjs if it's already documented under a different yml key name`,
+        `.loopover.yml.example: missing any mention of RepositorySettings field "${field}" -- document it there (or the relevant reference doc), or add a SETTINGS_ALIAS_MANIFEST row in scripts/check-docs-drift.mjs if it's already documented under a different yml key name`,
       );
     }
   }
 
   // 5. Every parseable FocusManifest field (#4617), excluding gate:/settings: (already exhaustively covered by
-  // step 4 above through their RepositorySettings mirror), vs .gittensory.yml.example.
+  // step 4 above through their RepositorySettings mirror), vs .loopover.yml.example.
   const focusManifestText = read("packages/gittensory-engine/src/focus-manifest.ts");
   const focusManifestFields = extractFocusManifestFields(focusManifestText);
   if (focusManifestFields.length < 15) {
@@ -369,7 +369,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
     );
   } else {
     const focusManifestAliases = new Map(FOCUS_MANIFEST_ALIAS_MANIFEST.map((row) => [row.field, row.aliases]));
-    const ymlExampleText = read(".gittensory.yml.example");
+    const ymlExampleText = read(".loopover.yml.example");
     for (const path of focusManifestFields) {
       const segments = path.split(".");
       const leaf = segments[segments.length - 1];
@@ -379,7 +379,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
       if (aliases?.some((alias) => ymlExampleText.includes(alias))) continue;
       const prettyPath = segments.map(toSnakeCase).join(".");
       failures.push(
-        `.gittensory.yml.example: missing any mention of FocusManifest field "${prettyPath}" -- document it there, or add a FOCUS_MANIFEST_ALIAS_MANIFEST row in scripts/check-docs-drift.mjs if it's already documented under a different yml key name`,
+        `.loopover.yml.example: missing any mention of FocusManifest field "${prettyPath}" -- document it there, or add a FOCUS_MANIFEST_ALIAS_MANIFEST row in scripts/check-docs-drift.mjs if it's already documented under a different yml key name`,
       );
     }
   }

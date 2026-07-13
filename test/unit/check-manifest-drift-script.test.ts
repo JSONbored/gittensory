@@ -12,7 +12,7 @@ const TSX_BIN = join(process.cwd(), "node_modules", ".bin", "tsx");
 describe("check-manifest-drift script", () => {
   function makeReadFile(rootManifestYaml: string) {
     return (_root: string, relativePath: string): string => {
-      if (relativePath !== ".gittensory.yml") throw new Error(`unexpected read: ${relativePath}`);
+      if (relativePath !== ".loopover.yml") throw new Error(`unexpected read: ${relativePath}`);
       return rootManifestYaml;
     };
   }
@@ -50,7 +50,7 @@ describe("check-manifest-drift script", () => {
     });
 
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]).toContain(".gittensory.yml");
+    expect(result.failures[0]).toContain(".loopover.yml");
     expect(result.failures[0]).toContain("GITTENSORY_REPO_FOCUS_MANIFEST_YAML");
     expect(result.failures[0]).toContain("linkedIssuePolicy");
   });
@@ -69,11 +69,11 @@ describe("check-manifest-drift script", () => {
     expect(result.failures[0]).toContain("advisory");
   });
 
-  // Most important regression test in this file: proves the REAL current repo state (root .gittensory.yml
+  // Most important regression test in this file: proves the REAL current repo state (root .loopover.yml
   // vs. the real bundled GITTENSORY_REPO_FOCUS_MANIFEST_YAML constant) agrees, using the real filesystem
   // reader against the real repo root. If this fails, the two have genuinely drifted apart -- either way,
   // the check must not be weakened to make this test pass.
-  it("the real repo's root .gittensory.yml and the bundled fallback agree (regression guard)", () => {
+  it("the real repo's root .loopover.yml and the bundled fallback agree (regression guard)", () => {
     const result = checkManifestDrift({ root: process.cwd() });
 
     expect(result.failures).toEqual([]);
@@ -90,6 +90,6 @@ describe("check-manifest-drift script", () => {
   it("prints a clean summary and exits 0 for the real repo state when run as a subprocess", () => {
     const output = execFileSync(TSX_BIN, ["scripts/check-manifest-drift.mjs"], { encoding: "utf8" });
 
-    expect(output).toMatch(/Manifest-drift check ok: \.gittensory\.yml and GITTENSORY_REPO_FOCUS_MANIFEST_YAML agree\./);
+    expect(output).toMatch(/Manifest-drift check ok: \.loopover\.yml and GITTENSORY_REPO_FOCUS_MANIFEST_YAML agree\./);
   });
 });

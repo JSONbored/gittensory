@@ -651,8 +651,7 @@ type FocusManifestResponse = { manifest: unknown };
 
 /**
  * Edit the repo's focus manifest as JSON. The manifest is repo-public config-as-code (it mirrors
- * `.loopover.yml`, or the legacy `.gittensory.yml`, #4773); this surface lets a maintainer edit the
- * API-record copy without committing a file.
+ * `.loopover.yml`); this surface lets a maintainer edit the API-record copy without committing a file.
  */
 function FocusManifestEditor({ base }: { base: string | null }) {
   const [text, setText] = useState("");

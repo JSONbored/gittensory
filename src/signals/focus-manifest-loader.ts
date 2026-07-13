@@ -11,26 +11,16 @@ export const REPO_FOCUS_MANIFEST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const REPO_FOCUS_MANIFEST_MAX_CONCURRENT_LOADS = 4;
 
 /**
- * Public-repo manifest candidate paths, tried in order via {@link fetchRepoFocusManifestFile}. New-brand
- * (`loopover`) candidates are listed FIRST and legacy (`gittensory`) candidates LAST — this is the dual-read
- * precedence rule (#4773): the loader returns the first candidate that responds `200 OK`, so a repo that publishes
- * BOTH `.loopover.yml` and `.gittensory.yml` at its root gets the new-brand file, and a repo with only the legacy
- * file (the common case today, and forever if an operator never migrates) is completely unaffected — it is still
- * the first (and only) 200. Mirrors the existing `.gittensory.yml`-before-`.github/gittensory.yml`-before-`.json`
- * ordering used within each brand: `.yml` anywhere beats `.json` anywhere, and root beats `.github/` within the
- * same extension. Deliberately does NOT add a `.loopover.yaml` variant here — the legacy brand never had a public
- * `.yaml` candidate either (only the self-host loader in `../selfhost/private-config.ts` accepts `.yaml`), so this
- * stays a like-for-like widening rather than a scope increase.
+ * Public-repo manifest candidate paths, tried in order via {@link fetchRepoFocusManifestFile}. The loader returns
+ * the first candidate that responds `200 OK`: root beats `.github/` within the same extension, and `.yml` beats
+ * `.json`. Deliberately does NOT add a `.loopover.yaml` variant here — only the self-host loader in
+ * `../selfhost/private-config.ts` accepts `.yaml`.
  */
 export const MANIFEST_FILE_CANDIDATES = [
   ".loopover.yml",
   ".github/loopover.yml",
   ".loopover.json",
   ".github/loopover.json",
-  ".gittensory.yml", // legacy — dual-read indefinitely (#4773)
-  ".github/gittensory.yml",
-  ".gittensory.json",
-  ".github/gittensory.json",
 ] as const;
 
 /**
@@ -42,7 +32,7 @@ export type RepoFocusManifestFetcher = (repoFullName: string) => Promise<string 
 
 /**
  * Optional container-private per-repo config reader (self-host GITTENSORY_REPO_CONFIG_DIR). When registered it
- * takes priority over — and fully REPLACES — the public `.loopover.yml` / `.gittensory.yml` for the normal
+ * takes priority over — and fully REPLACES — the public `.loopover.yml` for the normal
  * (non-preview) load, so a self-host operator sets review policy privately and contributors can't read or game it. Registered once at boot
  * by the Node entry (server.ts); the filesystem access lives inside that injected closure, keeping THIS module
  * Workers-safe. Unset (cloud, or a self-host without the dir) ⇒ behavior is byte-identical to the public fetch.
@@ -108,9 +98,8 @@ export async function fetchRepoFocusManifestFile(repoFullName: string): Promise<
 /**
  * Load the repo-owned focus manifest for a single repo. Reads a fresh persisted snapshot first
  * (the "API-backed repo settings record" path); on a miss or stale snapshot, fetches the
- * `.loopover.json` (or legacy `.gittensory.json`, #4773) file from the repo's default branch and
- * caches the result. Missing or malformed manifests degrade to a safe empty manifest with warnings
- * rather than throwing.
+ * `.loopover.json` file from the repo's default branch and caches the result. Missing or malformed
+ * manifests degrade to a safe empty manifest with warnings rather than throwing.
  */
 export async function loadRepoFocusManifest(
   env: Env,
@@ -139,7 +128,7 @@ async function loadRepoFocusManifestWithCachePolicy(
   options: { fetcher?: RepoFocusManifestFetcher; maxAgeMs?: number; refresh?: boolean } = {},
   cachePolicy: { publicOnly?: boolean } = {},
 ): Promise<FocusManifest> {
-  // Container-private per-repo config (self-host) takes priority over the public `.loopover.yml` / `.gittensory.yml`:
+  // Container-private per-repo config (self-host) takes priority over the public `.loopover.yml`:
   // read fresh from local fs each call (cheap, no network) so operator edits apply immediately. NEVER consulted on the publicOnly
   // (contributor-preview) path, and never persisted — so private policy can't leak into previews or the cache.
   if (!cachePolicy.publicOnly && localManifestReader) {
@@ -180,7 +169,7 @@ async function loadRepoFocusManifestWithCachePolicy(
     await persistRepoFocusManifest(env, repoFullName, manifest, REPO_PUBLIC_FOCUS_MANIFEST_SIGNAL);
   } else {
     // Persist even an ABSENT manifest (negative cache): effective settings are resolved from
-    // `.loopover.yml` / `.gittensory.yml` on every webhook, so a repo without one must not re-fetch the raw file each time.
+    // `.loopover.yml` on every webhook, so a repo without one must not re-fetch the raw file each time.
     // The TTL still refreshes it, so a newly-added manifest is picked up on the next window.
     await persistRepoFocusManifest(env, repoFullName, manifest);
   }

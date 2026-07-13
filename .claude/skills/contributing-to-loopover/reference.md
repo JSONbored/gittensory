@@ -114,7 +114,7 @@ Implications for you:
 - Owner / automation-bot PRs are exempt from auto-close, and crucial guarded-path PRs are held — but
   **assume you are a contributor** and that adverse = close.
 
-`.gittensory.yml` (the public config you can predict against) sets the gate *modes* (`linkedIssue:
+`.loopover.yml` (the public config you can predict against) sets the gate *modes* (`linkedIssue:
 advisory`, `duplicates: block`, `readiness: advisory/60`, AI review off) and the focus manifest
 (`wantedPaths`: `src/ packages/ test/ migrations/ scripts/ review-enrichment/ .github/workflows/
 wrangler.jsonc apps/gittensory-ui/`; `blockedPaths`: `site/ CNAME **/lovable/**`; `linkedIssuePolicy: preferred`;
@@ -260,9 +260,9 @@ absence of forbidden terms.
 Wire it in **every** site in the **same** PR, or review fails:
 1. DB migration (`migrations/NNNN_*.sql`) for the new column/table.
 2. Drizzle schema + types (`src/db/schema.ts`, `src/types.ts`).
-3. The settings resolver / focus-manifest loader (so `.gittensory.yml` > DB > defaults still holds).
+3. The settings resolver / focus-manifest loader (so `.loopover.yml` > DB > defaults still holds).
 4. OpenAPI (`npm run ui:openapi`) for any new request/response field.
-5. The `.gittensory.yml` schema + docs so contributors can set it.
+5. The `.loopover.yml` schema + docs so contributors can set it.
 6. Tests covering the new field's resolution precedence + the gate behavior it drives.
 
 ---

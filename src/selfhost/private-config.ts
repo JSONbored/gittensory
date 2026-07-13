@@ -1,8 +1,8 @@
 // Container-private per-repo config (self-host). A self-host operator mounts a directory at
 // GITTENSORY_REPO_CONFIG_DIR and configures each repo's review policy there; the focus-manifest loader reads it
-// INSTEAD of fetching the public `.gittensory.yml`/`.loopover.yml`, so policy (gate, autonomy, labels, model/effort)
-// is configured PRIVATELY and never exposed to contributors who could read and game the public file. Node-only — it
-// is registered into the Workers-safe loader via setLocalManifestReader at boot (server.ts), so this module's fs
+// INSTEAD of fetching the public `.loopover.yml`, so policy (gate, autonomy, labels, model/effort) is configured
+// PRIVATELY and never exposed to contributors who could read and game the public file. Node-only — it is
+// registered into the Workers-safe loader via setLocalManifestReader at boot (server.ts), so this module's fs
 // import never reaches the Cloudflare bundle.
 //
 // Layout (CodeRabbit-style: per-repo override, layered over a global default, layered over a cross-repo shared
@@ -13,29 +13,22 @@
 //   4. `.loopover.yml`                          — GLOBAL default at the dir root, shared by every repo.
 //   5. `_shared/.loopover.yml`                  — SHARED BASE (#1959), the lowest-priority layer: one house policy
 //      an operator running many repos writes once instead of copy-pasting into every repo's private config.
-// `.yaml` / `.json` are accepted everywhere `.yml` is, and `.gittensory.*` (the pre-rebrand name) is accepted
-// everywhere `.loopover.*` is (#4773 — dual-read, additive only, indefinitely: an existing self-hoster's committed
-// `.gittensory.*` file keeps working with zero changes on their part). CONFIG_BASENAMES below lists every accepted
-// basename with the new-brand `.loopover.*` entries FIRST and the legacy `.gittensory.*` entries LAST; `readFirstExisting`
-// (and its `WithPath` sibling) return the first candidate that exists, in list order, so within any single location
-// (a given folder, or the dir root) a `.loopover.*` file present there is read and an old `.gittensory.*` file
-// sitting alongside it is ignored (not merged) — see CONFIG_BASENAMES for why new-brand-first is the right
-// precedence. An operator who has done nothing keeps working unchanged: only `.gittensory.*` exists anywhere, so it
-// is still the first (and only) hit at every location. With only ONE of {a per-repo candidate, the global default,
-// the shared base} present, its raw text is returned unchanged — byte-identical to the original #1390 behavior
-// (and to the pre-#1959 2-layer behavior when no shared base is mounted, the common case). With more than one
-// present, they are DEEP-MERGED in ascending priority (shared base → global default → per-repo file): nested
-// mappings (`gate`, `settings`, `review`, `features`, `contentLane`, and their own nested blocks) merge key by key,
-// arrays replace wholesale (never concatenated), and an explicit YAML/JSON `null` at a key always overrides a
-// lower layer's value there — which clears a setting wherever the manifest parser already treats an explicit null
-// as "off"/"clear" (e.g. `settings.contributorOpenPrCap`, `settings.accountAgeThresholdDays`), and is otherwise
-// equivalent to omitting the key. A key that is simply absent from a higher layer leaves the lower layer's value at
-// that key untouched. If a layer fails to parse as a YAML/JSON mapping (or is oversized), it is dropped from the
-// fold and the remaining, still-valid layers merge as if it were never mounted — a broken layer never discards a
-// still-good sibling's policy, and never blocks a review. If NONE of the present layers parse, the highest-priority
-// present layer's raw text is returned (matching the original single-candidate priority), so a doubly/triply broken
-// set degrades exactly like a single malformed manifest always has. The slug is lowercased (GitHub repo full-names
-// are case-insensitive; #1390 already lowercased).
+// `.yaml` / `.json` are accepted everywhere `.yml` is (see CONFIG_BASENAMES). `readFirstExisting` (and its
+// `WithPath` sibling) return the first candidate that exists, in list order. With only ONE of {a per-repo
+// candidate, the global default, the shared base} present, its raw text is returned unchanged — byte-identical to
+// the original #1390 behavior (and to the pre-#1959 2-layer behavior when no shared base is mounted, the common
+// case). With more than one present, they are DEEP-MERGED in ascending priority (shared base → global default →
+// per-repo file): nested mappings (`gate`, `settings`, `review`, `features`, `contentLane`, and their own nested
+// blocks) merge key by key, arrays replace wholesale (never concatenated), and an explicit YAML/JSON `null` at a
+// key always overrides a lower layer's value there — which clears a setting wherever the manifest parser already
+// treats an explicit null as "off"/"clear" (e.g. `settings.contributorOpenPrCap`, `settings.accountAgeThresholdDays`),
+// and is otherwise equivalent to omitting the key. A key that is simply absent from a higher layer leaves the
+// lower layer's value at that key untouched. If a layer fails to parse as a YAML/JSON mapping (or is oversized),
+// it is dropped from the fold and the remaining, still-valid layers merge as if it were never mounted — a broken
+// layer never discards a still-good sibling's policy, and never blocks a review. If NONE of the present layers
+// parse, the highest-priority present layer's raw text is returned (matching the original single-candidate
+// priority), so a doubly/triply broken set degrades exactly like a single malformed manifest always has. The slug
+// is lowercased (GitHub repo full-names are case-insensitive; #1390 already lowercased).
 //
 // The reserved shared-base folder `_shared` is never treated as a bare repo-name config folder for a real GitHub
 // repo named `_shared`; use the owner-qualified or flat owner__repo candidates for that repository instead.
@@ -53,30 +46,14 @@ import type {
 } from "../signals/focus-manifest-loader";
 
 /** The bare config filenames tried inside a per-repo folder and at the dir root (global default), in priority
- *  order. New-brand (`.loopover.*`) candidates are listed FIRST and legacy (`.gittensory.*`) candidates LAST — this
- *  IS the precedence rule (#4773): every helper below (`GLOBAL_CONFIG_CANDIDATES`, `SHARED_BASE_CONFIG_CANDIDATES`,
- *  `localConfigCandidates`) derives its search order from this array's order, and `readFirstExisting` /
- *  `readFirstExistingWithPath` return the first candidate that EXISTS, so at any single location (a folder, or the
- *  dir root) a `.loopover.*` file wins over a `.gittensory.*` file sitting right next to it — they are never both
- *  read and merged as if they were two layers. Rationale: creating a `.loopover.*` file at all is clear, deliberate,
- *  recent migration intent, so a pre-existing `.gittensory.*` file alongside it is far more likely to be a stale
- *  leftover than something the operator means to keep authoritative; this mirrors the existing
- *  `review/AGENTS.md`-before-`review/CLAUDE.md` precedent below (new name tried first, legacy as pure fallback),
- *  not a new rule invented for this change. An operator with ONLY the legacy file present is completely unaffected
- *  — dual-read is additive, the legacy name is never removed, and there is no expiry planned. */
-const CONFIG_BASENAMES = [
-  ".loopover.yml", ".loopover.yaml", ".loopover.json",
-  ".gittensory.yml", ".gittensory.yaml", ".gittensory.json", // legacy — dual-read indefinitely (#4773)
-] as const;
+ *  order. Every helper below (`GLOBAL_CONFIG_CANDIDATES`, `SHARED_BASE_CONFIG_CANDIDATES`, `localConfigCandidates`)
+ *  derives its search order from this array's order, and `readFirstExisting` / `readFirstExistingWithPath` return
+ *  the first candidate that EXISTS. */
+const CONFIG_BASENAMES = [".loopover.yml", ".loopover.yaml", ".loopover.json"] as const;
 
-/** The extensions accepted by CONFIG_BASENAMES (derived positionally — `base.slice(base.lastIndexOf("."))` — never
- *  by slicing off a hardcoded brand-name length, which would silently corrupt this for any basename whose brand
- *  prefix isn't exactly 11 characters like `.gittensory` happens to be), deduped in first-seen order: `.yml`,
- *  `.yaml`, `.json`. Used only to build the flat `{owner}__{repo}.<ext>` candidate below (#1390 back-compat), which
- *  is brand-agnostic — it was never spelled with a brand name in it (`owner__repo.yml`, not
- *  `owner__repo.gittensory.yml`), so there is nothing to dual-read there beyond the plain extension. Mapping
- *  CONFIG_BASENAMES directly (one flat candidate per brand basename) would instead repeat the same 3 flat paths
- *  once per brand — redundant, not "more compatible". */
+/** The extensions accepted by CONFIG_BASENAMES, in first-seen order: `.yml`, `.yaml`, `.json`. Used only to build
+ *  the flat `{owner}__{repo}.<ext>` candidate below (#1390 back-compat), which carries no brand name in it
+ *  (`owner__repo.yml`, not `owner__repo.loopover.yml`). */
 const CONFIG_EXTENSIONS: string[] = [...new Set(CONFIG_BASENAMES.map((base) => base.slice(base.lastIndexOf("."))))];
 const GITHUB_OWNER_SEGMENT = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 const GITHUB_REPO_SEGMENT = /^[a-z0-9._-]+$/;
@@ -85,25 +62,21 @@ function isSafeRepoSegment(segment: string): boolean {
   return segment !== "." && segment !== ".." && GITHUB_REPO_SEGMENT.test(segment);
 }
 
-/** Global-default candidates (relative to GITTENSORY_REPO_CONFIG_DIR): the dir-root `.loopover.{yml,yaml,json}` /
- *  `.gittensory.{yml,yaml,json}` (new-brand first, see CONFIG_BASENAMES for the precedence rule, #4773),
+/** Global-default candidates (relative to GITTENSORY_REPO_CONFIG_DIR): the dir-root `.loopover.{yml,yaml,json}`,
  *  deep-merged under any per-repo file (or applied alone, when a repo has no per-repo file of its own). */
 export const GLOBAL_CONFIG_CANDIDATES: string[] = [...CONFIG_BASENAMES];
 
-/** Shared-base candidates (#1959, relative to GITTENSORY_REPO_CONFIG_DIR): `_shared/.loopover.{yml,yaml,json}` /
- *  `_shared/.gittensory.{yml,yaml,json}` (new-brand first, #4773), sibling to the per-repo folders inside the SAME
- *  container-private directory — no new env var. This is the lowest-priority layer: a cross-repo "house policy" an
- *  operator running many repos writes once, deep-merged UNDER both the global default and any per-repo file (or
- *  applied alone, when neither of those exists). */
+/** Shared-base candidates (#1959, relative to GITTENSORY_REPO_CONFIG_DIR): `_shared/.loopover.{yml,yaml,json}`,
+ *  sibling to the per-repo folders inside the SAME container-private directory — no new env var. This is the
+ *  lowest-priority layer: a cross-repo "house policy" an operator running many repos writes once, deep-merged
+ *  UNDER both the global default and any per-repo file (or applied alone, when neither of those exists). */
 export const SHARED_BASE_CONFIG_CANDIDATES: string[] = CONFIG_BASENAMES.map((base) => join("_shared", base));
 const SHARED_BASE_CONFIG_CANDIDATE_SET = new Set(SHARED_BASE_CONFIG_CANDIDATES);
 
 /** Per-repo private-config candidate paths (relative to GITTENSORY_REPO_CONFIG_DIR), in priority order:
  *  owner-qualified folder → bare repo-name folder → flat `owner__repo` file (the #1390 back-compat form). The slug
  *  is the lowercased GitHub `owner__repo` (double underscore because `/` is not filename-safe); the bare folder is
- *  the lowercased repo name. An invalid repo full name (no single interior slash) yields no candidates. The two
- *  folder forms carry the brand name (new-brand `.loopover.*` before legacy `.gittensory.*`, per CONFIG_BASENAMES,
- *  #4773); the flat form doesn't (see CONFIG_EXTENSIONS) and is unaffected by the rebrand. */
+ *  the lowercased repo name. An invalid repo full name (no single interior slash) yields no candidates. */
 export function localConfigCandidates(repoFullName: string): string[] {
   const slash = repoFullName.indexOf("/");
   if (slash <= 0 || slash === repoFullName.length - 1 || slash !== repoFullName.lastIndexOf("/")) return [];
@@ -112,9 +85,9 @@ export function localConfigCandidates(repoFullName: string): string[] {
   if (!GITHUB_OWNER_SEGMENT.test(owner) || !isSafeRepoSegment(repo)) return [];
   const slug = `${owner}__${repo}`;
   return [
-    // 1. owner-qualified folder — `{owner}__{repo}/.loopover.{yml,yaml,json}` then `/.gittensory.{yml,yaml,json}`
+    // 1. owner-qualified folder — `{owner}__{repo}/.loopover.{yml,yaml,json}`
     ...CONFIG_BASENAMES.map((base) => join(slug, base)),
-    // 2. bare repo-name folder — `{repo}/.loopover.{yml,yaml,json}` then `/.gittensory.{yml,yaml,json}`
+    // 2. bare repo-name folder — `{repo}/.loopover.{yml,yaml,json}`
     ...CONFIG_BASENAMES.map((base) => join(repo, base)).filter(
       (candidate) => !SHARED_BASE_CONFIG_CANDIDATE_SET.has(candidate),
     ),
@@ -196,7 +169,7 @@ function parseConfigMapping(text: string): Record<string, unknown> | null {
  *  non-mapping override value (including an explicit `null`) REPLACES the base value at that key wholesale — never
  *  concatenated or blended. A key `override` never mentions leaves `base`'s value at that key completely untouched.
  *  Exported for direct unit testing; deliberately ignorant of any manifest field name (`gate`, `settings`,
- *  `wantedPaths`, etc.) so it composes correctly with the whole `.gittensory.yml` schema, present and future, with
+ *  `wantedPaths`, etc.) so it composes correctly with the whole `.loopover.yml` schema, present and future, with
  *  zero repo- or field-specific code. */
 export function mergeConfigOverlay(base: unknown, override: unknown): unknown {
   if (override === null) return null;
@@ -258,7 +231,7 @@ function combineConfigLayersWithMeta(
 }
 
 /** Build the container-local manifest reader over GITTENSORY_REPO_CONFIG_DIR, or null when the dir is unset/blank
- *  (⇒ the loader keeps fetching the public `.gittensory.yml`). Looks up the first existing per-repo candidate, the
+ *  (⇒ the loader keeps fetching the public `.loopover.yml`). Looks up the first existing per-repo candidate, the
  *  global-default candidate, and the shared-base candidate (#1959) independently and folds whichever are present
  *  in ascending priority (shared → global → per-repo) via {@link combineConfigLayers}: with only one present, its
  *  raw text is returned unchanged; with two or more, they are deep-merged (see the module header) and returned as

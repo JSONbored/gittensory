@@ -32,8 +32,8 @@ describe("resolveGittensorySelfRepoFullName", () => {
 });
 
 describe("Gittensory repo focus manifest", () => {
-  it("keeps bundled YAML aligned with the committed .gittensory.yml file", () => {
-    const onDisk = readFileSync(resolve(process.cwd(), ".gittensory.yml"), "utf8").trim();
+  it("keeps bundled YAML aligned with the committed .loopover.yml file", () => {
+    const onDisk = readFileSync(resolve(process.cwd(), ".loopover.yml"), "utf8").trim();
     expect(GITTENSORY_REPO_FOCUS_MANIFEST_YAML.trim()).toBe(onDisk);
   });
 
@@ -128,11 +128,9 @@ describe("Gittensory repo focus manifest", () => {
     }
   });
 
-  it("prefers YAML manifest file candidates before JSON, and new-brand candidates before legacy ones (#4773)", () => {
+  it("prefers YAML manifest file candidates before JSON", () => {
     expect(MANIFEST_FILE_CANDIDATES[0]).toBe(".loopover.yml");
     expect(MANIFEST_FILE_CANDIDATES).toContain(".loopover.json");
-    expect(MANIFEST_FILE_CANDIDATES).toContain(".gittensory.yml"); // legacy — dual-read indefinitely
-    expect(MANIFEST_FILE_CANDIDATES).toContain(".gittensory.json");
-    expect(MANIFEST_FILE_CANDIDATES.indexOf(".loopover.yml")).toBeLessThan(MANIFEST_FILE_CANDIDATES.indexOf(".gittensory.yml"));
+    expect(MANIFEST_FILE_CANDIDATES.indexOf(".loopover.yml")).toBeLessThan(MANIFEST_FILE_CANDIDATES.indexOf(".loopover.json"));
   });
 });

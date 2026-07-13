@@ -2,8 +2,8 @@
 # Self-host PRIVATE per-repo override — GENERIC EXAMPLE, safe to publish
 # ============================================================================
 #
-# Copy this file to `${GITTENSORY_REPO_CONFIG_DIR}/{owner}__{repo}/.gittensory.yml` (or the bare
-# `{repo}/.gittensory.yml` folder, or the flat `{owner}__{repo}.yml` file — see ../README.md) and
+# Copy this file to `${GITTENSORY_REPO_CONFIG_DIR}/{owner}__{repo}/.loopover.yml` (or the bare
+# `{repo}/.loopover.yml` folder, or the flat `{owner}__{repo}.yml` file — see ../README.md) and
 # edit your copy for a SPECIFIC repo. It is deep-merged OVER global.gittensory.yml: any key it
 # doesn't mention is inherited from the global default unchanged.
 #
@@ -21,7 +21,7 @@ gate:
   # protection required-status-checks before relying on this, or GitHub will show it pending forever.
   checkMode: disabled
   # This repo's own CI job/check names to trust as required when its branch protection is
-  # unreadable (a common self-host case — see ../../.gittensory.yml.example). Each repo's CI
+  # unreadable (a common self-host case — see ../../.loopover.yml.example). Each repo's CI
   # naming differs, so this is a per-repo override rather than a global default.
   expectedCiContexts:
     - build

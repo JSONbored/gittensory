@@ -202,7 +202,7 @@ review_context_fetch_failed   # REES/RAG/grounding context failure`}
           {
             title: "Gate activation (DB or private config)",
             description:
-              "Turns on the LoopOver check-run and deterministic gate rules for a repo. One-click via the control panel or POST /v1/repos/:owner/:repo/activation; or set gate.checkMode / gate.enabled in a mounted private .loopover.yml (legacy .gittensory.yml also still works, #4773).",
+              "Turns on the LoopOver check-run and deterministic gate rules for a repo. One-click via the control panel or POST /v1/repos/:owner/:repo/activation; or set gate.checkMode / gate.enabled in a mounted private .loopover.yml.",
           },
           {
             title: "is_registered (Gittensor registry)",
@@ -229,7 +229,6 @@ SELFHOST_DEPLOYMENT_MODE=dry-run   # keep shadowing until you trust output`}
         lang="bash"
         code={`mkdir -p gittensory-config
 cp config/examples/global.gittensory.yml gittensory-config/.loopover.yml
-# legacy: gittensory-config/.gittensory.yml also still works with zero changes (#4773)
 # optional per-repo override:
 mkdir -p gittensory-config/owner__my-repo
 cp config/examples/global.gittensory.yml gittensory-config/owner__my-repo/.loopover.yml`}

@@ -1510,7 +1510,7 @@ describe("queue processors", () => {
     expect(patchBodies[0]?.status).toBe("completed");
   });
 
-  it("disables the gate from .gittensory.yml (gate.enabled: false) even when repo settings enable it", async () => {
+  it("disables the gate from .loopover.yml (gate.enabled: false) even when repo settings enable it", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
       env,
@@ -1552,7 +1552,7 @@ describe("queue processors", () => {
       },
     });
 
-    // gate.enabled: false in .gittensory.yml disables the gate entirely — no Gate check is posted.
+    // gate.enabled: false in .loopover.yml disables the gate entirely — no Gate check is posted.
     expect(calls.gateChecks).toBe(0);
   });
 
@@ -2840,7 +2840,7 @@ describe("queue processors", () => {
       // #review-audit (#4220): the comment reads the LIVE `dirty` merge-state (not the stale stored one), so it must
       // NOT headline "safe to merge" while the disposition would auto-close the base-conflicting PR.
       expect(postedBody).not.toMatch(/safe to merge/i);
-      // #1955: no `.gittensory.yml` was fetched here (the raw-content URL isn't stubbed, so it 404s and the
+      // #1955: no `.loopover.yml` was fetched here (the raw-content URL isn't stubbed, so it 404s and the
       // manifest resolves to null) — review.effort_score is absent/default OFF, so the effort chip must NOT render.
       expect(postedBody).not.toMatch(/review effort:/);
     } finally {
@@ -3468,7 +3468,7 @@ describe("queue processors", () => {
   // #4083: review.visual.enabled: false (config-as-code, VPS-only in practice) overrides the coarser
   // GITTENSORY_REVIEW_SCREENSHOTS + GITTENSORY_REVIEW_REPOS env-var gate above — same fixture as the sibling
   // test above (same webhook, same visual-file touch, same env flag ON), the ONLY difference being the
-  // .gittensory.yml content, so this isolates the new enabled:false branch in processors.ts.
+  // .loopover.yml content, so this isolates the new enabled:false branch in processors.ts.
   it("skips the capture pipeline entirely when review.visual.enabled is false, even though the env-var gate allows it (#4083)", async () => {
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -3509,7 +3509,7 @@ describe("queue processors", () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       const method = init?.method ?? "GET";
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  visual:\n    enabled: false\n");
       }
       if (url === "https://api.gittensor.io/miners") {
@@ -3610,11 +3610,11 @@ describe("queue processors", () => {
     }
   });
 
-  // #1957: with the unified comment on AND `.gittensory.yml` opting into `review.changed_files_summary`, the
+  // #1957: with the unified comment on AND `.loopover.yml` opting into `review.changed_files_summary`, the
   // rendered comment gains the deterministic "Changed files" collapsible built from the SAME PR-files fetch the
   // unified branch already does for the readiness chip — no separate call, no AI. Mirrors the base unified-comment
   // test above but adds the manifest opt-in and asserts the new section's presence + content.
-  it("renders the Changed files summary when review.changed_files_summary is on in .gittensory.yml", async () => {
+  it("renders the Changed files summary when review.changed_files_summary is on in .loopover.yml", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
     await persistRegistrySnapshot(
       env,
@@ -3698,8 +3698,8 @@ describe("queue processors", () => {
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
-      // .gittensory.yml opts into the deterministic changed-files summary — no AI involved.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      // .loopover.yml opts into the deterministic changed-files summary — no AI involved.
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  changed_files_summary: true\n");
       }
       if (url.includes("/access_tokens")) {
@@ -3782,11 +3782,11 @@ describe("queue processors", () => {
     }
   });
 
-  // #1955: with the unified comment on AND `.gittensory.yml` opting into `review.effort_score`, the rendered
+  // #1955: with the unified comment on AND `.loopover.yml` opting into `review.effort_score`, the rendered
   // comment gains the deterministic, no-AI "review effort: N/5 (~M min)" chip — computed by estimateReviewEffort
   // from the SAME PR-files fetch the unified branch already does (no separate call). Mirrors the
   // changed_files_summary test above but asserts the effort chip's presence + exact value instead.
-  it("renders the review effort chip when review.effort_score is on in .gittensory.yml", async () => {
+  it("renders the review effort chip when review.effort_score is on in .loopover.yml", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
     await persistRegistrySnapshot(
       env,
@@ -3870,8 +3870,8 @@ describe("queue processors", () => {
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
-      // .gittensory.yml opts into the deterministic effort score — no AI involved.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      // .loopover.yml opts into the deterministic effort score — no AI involved.
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  effort_score: true\n");
       }
       if (url.includes("/access_tokens")) {
@@ -3962,12 +3962,12 @@ describe("queue processors", () => {
     }
   });
 
-  // #2051/#4147: with the unified comment on AND `.gittensory.yml` opting into `review.auto_merge_summary`,
+  // #2051/#4147: with the unified comment on AND `.loopover.yml` opting into `review.auto_merge_summary`,
   // the rendered comment gains the deterministic, no-AI "Auto-merge readiness" collapsible — computed from the
   // SAME live CI state, gate conclusion, mergeable_state, and linked-issue facts this pass already resolves
   // for the readiness chip and gate verdict, no extra fetch. Mirrors the effort_score test above but asserts
   // the auto-merge-readiness table's presence + condition marks instead.
-  it("renders the Auto-merge readiness collapsible when review.auto_merge_summary is on in .gittensory.yml", async () => {
+  it("renders the Auto-merge readiness collapsible when review.auto_merge_summary is on in .loopover.yml", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
     await persistRegistrySnapshot(
       env,
@@ -4051,8 +4051,8 @@ describe("queue processors", () => {
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
-      // .gittensory.yml opts into the deterministic auto-merge summary — no AI involved.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      // .loopover.yml opts into the deterministic auto-merge summary — no AI involved.
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  auto_merge_summary: true\n");
       }
       if (url.includes("/access_tokens")) {
@@ -4135,13 +4135,13 @@ describe("queue processors", () => {
     }
   });
 
-  // #2044: `.gittensory.yml` `review.tone` is folded into the AI reviewer's system prompt by
+  // #2044: `.loopover.yml` `review.tone` is folded into the AI reviewer's system prompt by
   // composeManifestReviewInstructions (src/signals/focus-manifest.ts), consumed by
   // src/queue/processors.ts's aiReviewCacheReadDecideAndRun. That composition is unit-tested in isolation
   // (focus-manifest.test.ts), but nothing previously drove the full webhook -> processJob -> runGittensoryAiReview
   // pipeline to confirm the resolved tone text actually reaches env.AI.run's system message. Mirrors the
   // changed_files_summary/effort_score tests above but captures the AI system prompt instead of the posted body.
-  it("threads review.tone from .gittensory.yml into the AI reviewer's system prompt (#2044)", async () => {
+  it("threads review.tone from .loopover.yml into the AI reviewer's system prompt (#2044)", async () => {
     let capturedSystem = "";
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -4187,11 +4187,10 @@ describe("queue processors", () => {
       if (url.includes("/issues/7/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
       if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
       // The repo's own review.tone opt-in (#2044) -- a maintainer voice brief, distinct from review.instructions.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  tone: Keep findings terse and skip pleasantries\n");
       }
-      // Real GitHub raw-content 404s for every other manifest candidate (incl. the new-brand `.loopover.*`
-      // candidates tried first, #4773) -- without this, Response.json({}) below would 200 the first candidate
+      // Real GitHub raw-content 404s for every other manifest candidate -- without this, Response.json({}) below would 200 the first candidate
       // tried and mask the review.tone config crafted above.
       if (url.startsWith("https://raw.githubusercontent.com/")) return new Response("not found", { status: 404 });
       return Response.json({});
@@ -4279,11 +4278,10 @@ describe("queue processors", () => {
       if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
       // The repo's own review.exclude_paths opt-in -- a NON-EMPTY glob (#review-exclude-paths), unlike every
       // existing fingerprint-only assertion of this field elsewhere in this file.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response('review:\n  exclude_paths:\n    - "**/*.generated.ts"\n');
       }
-      // Real GitHub raw-content 404s for every other manifest candidate (incl. the new-brand `.loopover.*`
-      // candidates tried first, #4773) -- without this, the generic Response.json({}) catch-all below would
+      // Real GitHub raw-content 404s for every other manifest candidate -- without this, the generic Response.json({}) catch-all below would
       // otherwise 200 the FIRST candidate tried and mask the exclude_paths config crafted above.
       if (url.startsWith("https://raw.githubusercontent.com/")) return new Response("not found", { status: 404 });
       return Response.json({});
@@ -4309,10 +4307,10 @@ describe("queue processors", () => {
     expect(capturedUser).not.toContain("generatedMarker");
   });
 
-  // #2049: with the unified comment on AND `.gittensory.yml` setting `review.max_findings`, the processor wires
+  // #2049: with the unified comment on AND `.loopover.yml` setting `review.max_findings`, the processor wires
   // manifest caps into `buildUnifiedCommentBody` and the renderer truncates blocker/nit lists with a "+N more"
   // footer. Mirrors the effort_score test above but asserts display-only truncation instead.
-  it("truncates unified-comment blockers when review.max_findings is set in .gittensory.yml (#2049)", async () => {
+  it("truncates unified-comment blockers when review.max_findings is set in .loopover.yml (#2049)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
     await persistRegistrySnapshot(
       env,
@@ -4397,7 +4395,7 @@ describe("queue processors", () => {
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  max_findings:\n    blockers: 0\n");
       }
       if (url.includes("/access_tokens")) {
@@ -4475,7 +4473,7 @@ describe("queue processors", () => {
   // `readiness_score_below_threshold` ADVISORY (never a blocker — readiness stays advisory-only, see
   // rules.test.ts) warning finding on every pass, giving a stable target to record a suppression signal against
   // and verify it is (or is not) suppressed from the rendered unified comment. The manifest is seeded DIRECTLY
-  // via upsertRepoFocusManifest (bypassing the 6h .gittensory.yml fetch cache) so each test's `.gittensory.yml`
+  // via upsertRepoFocusManifest (bypassing the 6h .loopover.yml fetch cache) so each test's `.loopover.yml`
   // fetch response is never actually needed on the hot path — it only serves as an inert 404 fallback.
   async function runReadinessWarningPass(env: Env, opts: { deliveryId: string; headSha: string; reviewMemoryManifest: boolean }) {
     await persistRegistrySnapshot(
@@ -4561,7 +4559,7 @@ describe("queue processors", () => {
       if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("not found", { status: 404 });
       }
       if (url.includes("/access_tokens")) {
@@ -4630,7 +4628,7 @@ describe("queue processors", () => {
     return postedBody;
   }
 
-  it("FLAG-OFF (default): review.memory in .gittensory.yml alone never suppresses the readiness warning (operator kill-switch required)", async () => {
+  it("FLAG-OFF (default): review.memory in .loopover.yml alone never suppresses the readiness warning (operator kill-switch required)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), GITTENSORY_REVIEW_UNIFIED_COMMENT: "1" });
     // review.memory: true in the manifest, but NO GITTENSORY_REVIEW_MEMORY env flag on this env -- byte-identical.
     const postedBody = await runReadinessWarningPass(env, {
@@ -4784,7 +4782,7 @@ describe("queue processors", () => {
     }
   });
 
-  // #1958: with inline comments AND finding categories both on in .gittensory.yml (finding_categories rides on
+  // #1958: with inline comments AND finding categories both on in .loopover.yml (finding_categories rides on
   // inline_comments, exactly like suggestions did for #1956), the model is asked to self-categorize each
   // inlineFindings item, and BOTH surfaces render it — the posted inline review comment label AND the unified
   // comment's new "Finding categories" collapsible.
@@ -4829,12 +4827,11 @@ describe("queue processors", () => {
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      // .gittensory.yml opts into inline comments AND finding categories together.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      // .loopover.yml opts into inline comments AND finding categories together.
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  inline_comments: true\n  finding_categories: true\n");
       }
-      // Real GitHub raw-content 404s for every other manifest candidate (incl. the new-brand `.loopover.*`
-      // candidates tried first, #4773) -- without this, Response.json({}) below would 200 the first candidate
+      // Real GitHub raw-content 404s for every other manifest candidate -- without this, Response.json({}) below would 200 the first candidate
       // tried and mask the inline_comments/finding_categories config crafted above.
       if (url.startsWith("https://raw.githubusercontent.com/")) return new Response("not found", { status: 404 });
       if (url.includes("/pulls/8/files"))
@@ -4958,12 +4955,11 @@ describe("queue processors", () => {
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         // NOTE: the manifest key is camelCase `fixHandoff` (unlike snake-case `finding_categories`) — see focus-manifest parse.
         return new Response("review:\n  inline_comments: true\n  fixHandoff: true\n");
       }
-      // Real GitHub raw-content 404s for every other manifest candidate (incl. the new-brand `.loopover.*`
-      // candidates tried first, #4773) -- without this, Response.json({}) below would 200 the first candidate
+      // Real GitHub raw-content 404s for every other manifest candidate -- without this, Response.json({}) below would 200 the first candidate
       // tried and mask the inline_comments/fixHandoff config crafted above.
       if (url.startsWith("https://raw.githubusercontent.com/")) return new Response("not found", { status: 404 });
       if (url.includes("/pulls/9/files"))

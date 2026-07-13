@@ -20,23 +20,17 @@ async function readLocalManifestLoad(reader: RepoFocusManifestFetcher, repo: str
 }
 
 describe("localConfigCandidates (container-private config paths)", () => {
-  it("builds owner-folder → repo-folder → flat candidates (lowercased), new-brand before legacy, each in .yml/.yaml/.json order (#4773)", () => {
+  it("builds owner-folder → repo-folder → flat candidates (lowercased), each in .yml/.yaml/.json order", () => {
     expect(localConfigCandidates("JSONbored/metagraphed")).toEqual([
-      // 1. owner-qualified folder — new-brand (.loopover.*) before legacy (.gittensory.*)
+      // 1. owner-qualified folder
       join("jsonbored__metagraphed", ".loopover.yml"),
       join("jsonbored__metagraphed", ".loopover.yaml"),
       join("jsonbored__metagraphed", ".loopover.json"),
-      join("jsonbored__metagraphed", ".gittensory.yml"),
-      join("jsonbored__metagraphed", ".gittensory.yaml"),
-      join("jsonbored__metagraphed", ".gittensory.json"),
-      // 2. bare repo-name folder — same new-brand-before-legacy order
+      // 2. bare repo-name folder
       join("metagraphed", ".loopover.yml"),
       join("metagraphed", ".loopover.yaml"),
       join("metagraphed", ".loopover.json"),
-      join("metagraphed", ".gittensory.yml"),
-      join("metagraphed", ".gittensory.yaml"),
-      join("metagraphed", ".gittensory.json"),
-      // 3. flat owner__repo file (#1390 back-compat) — brand-agnostic, so only 3 (not 6) candidates
+      // 3. flat owner__repo file (#1390 back-compat)
       "jsonbored__metagraphed.yml",
       "jsonbored__metagraphed.yaml",
       "jsonbored__metagraphed.json",
@@ -53,20 +47,14 @@ describe("localConfigCandidates (container-private config paths)", () => {
     expect(localConfigCandidates("bad_owner/repo")).toEqual([]);
     expect(localConfigCandidates("-owner/repo")).toEqual([]);
   });
-  it("exposes the dir-root global-fallback candidates, new-brand before legacy (#4773)", () => {
-    expect(GLOBAL_CONFIG_CANDIDATES).toEqual([
-      ".loopover.yml", ".loopover.yaml", ".loopover.json",
-      ".gittensory.yml", ".gittensory.yaml", ".gittensory.json",
-    ]);
+  it("exposes the dir-root global-fallback candidates", () => {
+    expect(GLOBAL_CONFIG_CANDIDATES).toEqual([".loopover.yml", ".loopover.yaml", ".loopover.json"]);
   });
-  it("exposes the shared-base candidates, sibling to the per-repo folders, new-brand before legacy (#1959, #4773)", () => {
+  it("exposes the shared-base candidates, sibling to the per-repo folders (#1959)", () => {
     expect(SHARED_BASE_CONFIG_CANDIDATES).toEqual([
       join("_shared", ".loopover.yml"),
       join("_shared", ".loopover.yaml"),
       join("_shared", ".loopover.json"),
-      join("_shared", ".gittensory.yml"),
-      join("_shared", ".gittensory.yaml"),
-      join("_shared", ".gittensory.json"),
     ]);
   });
 
@@ -75,9 +63,6 @@ describe("localConfigCandidates (container-private config paths)", () => {
       join("owner___shared", ".loopover.yml"),
       join("owner___shared", ".loopover.yaml"),
       join("owner___shared", ".loopover.json"),
-      join("owner___shared", ".gittensory.yml"),
-      join("owner___shared", ".gittensory.yaml"),
-      join("owner___shared", ".gittensory.json"),
       "owner___shared.yml",
       "owner___shared.yaml",
       "owner___shared.json",
@@ -128,7 +113,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
   it("reads the owner-qualified folder file first (highest-priority per-repo candidate)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "jsonbored__metagraphed"));
-    writeFileSync(join(dir, "jsonbored__metagraphed", ".gittensory.yml"), "gate:\n  enabled: false\n");
+    writeFileSync(join(dir, "jsonbored__metagraphed", ".loopover.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
     expect(reader).not.toBeNull();
     expect(await readLocalManifestContent(reader!,"JSONbored/metagraphed")).toBe("gate:\n  enabled: false\n");
@@ -137,7 +122,7 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
   it("falls back to the bare repo-name folder when no owner-qualified folder exists", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "metagraphed"));
-    writeFileSync(join(dir, "metagraphed", ".gittensory.yaml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "metagraphed", ".loopover.yaml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"JSONbored/metagraphed")).toBe("gate:\n  enabled: true\n");
   });
@@ -149,18 +134,18 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe('{"gate":{"enabled":true}}');
   });
 
-  it("falls back to the dir-root global .gittensory.yml for a repo with no per-repo file", async () => {
+  it("falls back to the dir-root global .loopover.yml for a repo with no per-repo file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n");
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/unconfigured")).toBe("gate:\n  enabled: false\n");
   });
 
   it("deep-merges a per-repo file over the global default: per-repo wins on shared keys, global fills the rest", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n  duplicates: block\n"); // global
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: false\n  duplicates: block\n"); // global
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n"); // per-repo overrides only `enabled`
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n"); // per-repo overrides only `enabled`
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // per-repo wins on the shared key
@@ -169,9 +154,9 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
 
   it("replaces an array wholesale instead of concatenating it with the global default's", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "wantedPaths:\n  - src/**\n  - test/**\n");
+    writeFileSync(join(dir, ".loopover.yml"), "wantedPaths:\n  - src/**\n  - test/**\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "wantedPaths:\n  - docs/**\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "wantedPaths:\n  - docs/**\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.wantedPaths).toEqual(["docs/**"]);
@@ -179,9 +164,9 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
 
   it("lets an explicit per-repo null clear a global-configured contributorOpenPrCap", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "settings:\n  contributorOpenPrCap: 5\n");
+    writeFileSync(join(dir, ".loopover.yml"), "settings:\n  contributorOpenPrCap: 5\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "settings:\n  contributorOpenPrCap: null\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "settings:\n  contributorOpenPrCap: null\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // explicit null clears the global 5, not "unset"
@@ -189,9 +174,9 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
 
   it("lets an explicit per-repo null clear a global-configured accountAgeThresholdDays", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "settings:\n  accountAgeThresholdDays: 14\n");
+    writeFileSync(join(dir, ".loopover.yml"), "settings:\n  accountAgeThresholdDays: 14\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "settings:\n  accountAgeThresholdDays: null\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "settings:\n  accountAgeThresholdDays: null\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.settings.accountAgeThresholdDays).toBeNull();
@@ -200,36 +185,36 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
   it("treats a config file over the manifest size cap as unmergeable and falls back to the other file alone", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     const oversized = `# ${"x".repeat(MAX_FOCUS_MANIFEST_BYTES + 10)}\ngate:\n  enabled: false\n`;
-    writeFileSync(join(dir, ".gittensory.yml"), oversized); // global, too large to attempt a merge against
+    writeFileSync(join(dir, ".loopover.yml"), oversized); // global, too large to attempt a merge against
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // oversized global dropped; per-repo raw text unchanged
   });
 
   it("falls back to the per-repo file alone when the global default fails to parse", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "{ not valid json"); // starts with `{` → JSON.parse throws
+    writeFileSync(join(dir, ".loopover.yml"), "{ not valid json"); // starts with `{` → JSON.parse throws
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n");
   });
 
   it("falls back to the global default alone when the per-repo file parses but isn't a mapping", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n");
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: false\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "[1, 2, 3]"); // valid JSON, but an array, not a mapping
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "[1, 2, 3]"); // valid JSON, but an array, not a mapping
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: false\n");
   });
 
   it("returns the per-repo raw text (today's legacy priority) when BOTH files fail to parse as mappings", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "{ also broken");
+    writeFileSync(join(dir, ".loopover.yml"), "{ also broken");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "{ broken json");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "{ broken json");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("{ broken json"); // flows downstream, which warns + ignores it, same as today
   });
@@ -242,99 +227,16 @@ describe("makeLocalManifestReader (GITTENSORY_REPO_CONFIG_DIR)", () => {
 
   it("does NOT serve the global fallback to an invalid repo full name (no per-repo candidates)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n"); // global present
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: false\n"); // global present
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"no-slash")).toBeNull(); // perRepo.length === 0 early return
   });
 
   it("rejects traversal repo names instead of reading outside the private config directory", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dirname(dir), ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dirname(dir), ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/..")).toBeNull();
-  });
-});
-
-describe("makeLocalManifestReader — dual-brand filename support (#4773)", () => {
-  it("(a) keeps working with ONLY the legacy .gittensory.yml present in the per-repo folder — zero changes required", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/repo")).toBe("gate:\n  enabled: true\n");
-  });
-
-  it("(a) keeps working with ONLY the legacy .gittensory.yml present as the dir-root global default", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n");
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/unconfigured")).toBe("gate:\n  enabled: false\n");
-  });
-
-  it("(b) reads the new-brand .loopover.yml when no legacy file is present, in the per-repo folder", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/repo")).toBe("gate:\n  enabled: true\n");
-  });
-
-  it("(b) reads the new-brand .loopover.yml when no legacy file is present, as the dir-root global default", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: false\n");
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/unconfigured")).toBe("gate:\n  enabled: false\n");
-  });
-
-  it("(b) reads new-brand .loopover.yaml / .loopover.json too, same as the legacy extensions", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    mkdirSync(join(dir, "yaml-repo"));
-    writeFileSync(join(dir, "yaml-repo", ".loopover.yaml"), "gate:\n  enabled: true\n");
-    mkdirSync(join(dir, "json-repo"));
-    writeFileSync(join(dir, "json-repo", ".loopover.json"), '{"gate":{"enabled":false}}');
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/yaml-repo")).toBe("gate:\n  enabled: true\n");
-    expect(await readLocalManifestContent(reader!, "owner/json-repo")).toBe('{"gate":{"enabled":false}}');
-  });
-
-  it("(c) prefers new-brand .loopover.yml over a legacy .gittensory.yml sitting in the SAME per-repo folder — not merged", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: false\n  duplicates: block\n");
-    const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!, "owner/repo"));
-    expect(manifest.gate.enabled).toBe(true); // new-brand file wins outright
-    expect(manifest.gate.duplicates).toBeNull(); // legacy file's content is NOT merged in, only the winner is read
-  });
-
-  it("(c) prefers new-brand .loopover.yml over a legacy .gittensory.yml at the SAME dir-root global default", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: true\n");
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n");
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/unconfigured")).toBe("gate:\n  enabled: true\n");
-  });
-
-  it("(c) prefers new-brand .loopover.json over a legacy .gittensory.yml, even though .yml normally beats .json within a brand", async () => {
-    // Brand is the OUTERMOST sort key: every .loopover.* extension is tried before any .gittensory.* extension.
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".loopover.json"), '{"gate":{"enabled":true}}');
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: false\n");
-    const reader = makeLocalManifestReader(dir);
-    expect(await readLocalManifestContent(reader!, "owner/repo")).toBe('{"gate":{"enabled":true}}');
-  });
-
-  it("(c) a per-repo new-brand file still wins over a legacy global default (per-repo priority is unaffected by brand)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\n  duplicates: block\n"); // legacy global
-    mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n"); // new-brand per-repo
-    const reader = makeLocalManifestReader(dir);
-    const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!, "owner/repo"));
-    expect(manifest.gate.enabled).toBe(true); // per-repo (new-brand) still outranks the global layer
-    expect(manifest.gate.duplicates).toBe("block"); // deep-merge across LAYERS still applies once each layer's winner is picked
   });
 });
 
@@ -342,7 +244,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("falls back to the shared base alone when neither a per-repo file nor a global default exists", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: false\n"); // byte-identical raw text, no merge attempted
   });
@@ -350,7 +252,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("byte-identical to pre-#1959 behavior when no shared base file is mounted at all (repo-only)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // no _shared/ present → same as the existing repo-only test
   });
@@ -358,9 +260,9 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("deep-merges a per-repo file over a shared base with no global default present: per-repo wins, shared fills the rest", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n  duplicates: block\n"); // shared house policy
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "gate:\n  enabled: false\n  duplicates: block\n"); // shared house policy
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n"); // repo overrides only `enabled`
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n"); // repo overrides only `enabled`
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // per-repo wins on the shared key
@@ -370,10 +272,10 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("folds all three layers: per-repo wins over global, which wins over the shared base, per-field", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n  duplicates: block\n  linkedIssue: advisory\n"); // shared house policy
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  duplicates: off\n"); // global overrides duplicates only
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "gate:\n  enabled: false\n  duplicates: block\n  linkedIssue: advisory\n"); // shared house policy
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  duplicates: off\n"); // global overrides duplicates only
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n"); // per-repo overrides enabled only
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n"); // per-repo overrides enabled only
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // from per-repo (highest priority)
@@ -384,10 +286,10 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("replaces an array wholesale across the 3-layer fold instead of concatenating", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "wantedPaths:\n  - shared/**\n");
-    writeFileSync(join(dir, ".gittensory.yml"), "wantedPaths:\n  - src/**\n  - test/**\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "wantedPaths:\n  - shared/**\n");
+    writeFileSync(join(dir, ".loopover.yml"), "wantedPaths:\n  - src/**\n  - test/**\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "wantedPaths:\n  - docs/**\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "wantedPaths:\n  - docs/**\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.wantedPaths).toEqual(["docs/**"]); // per-repo array wins wholesale, shared/global arrays discarded
@@ -396,10 +298,10 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("lets an explicit per-repo null clear a shared-base-configured value even when global doesn't mention the key", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "settings:\n  contributorOpenPrCap: 5\n");
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: true\n"); // global present, but silent on contributorOpenPrCap
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "settings:\n  contributorOpenPrCap: 5\n");
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: true\n"); // global present, but silent on contributorOpenPrCap
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "settings:\n  contributorOpenPrCap: null\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "settings:\n  contributorOpenPrCap: null\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // explicit null clears the shared 5, not "unset"
@@ -408,10 +310,10 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("fails safe to repo+global (as if unmounted) when the shared base is malformed, and never blocks a review", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "{ not valid json"); // starts with `{` → JSON.parse throws
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  duplicates: block\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "{ not valid json"); // starts with `{` → JSON.parse throws
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  duplicates: block\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/repo"));
     expect(manifest.gate.enabled).toBe(true); // still merged from the two still-valid layers
@@ -422,9 +324,9 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
     const oversized = `# ${"x".repeat(MAX_FOCUS_MANIFEST_BYTES + 10)}\ngate:\n  enabled: false\n`;
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), oversized); // too large to attempt a merge against
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), oversized); // too large to attempt a merge against
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // oversized shared base dropped; per-repo raw text unchanged
   });
@@ -432,19 +334,19 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("falls back to the highest-priority present layer's raw text when ALL THREE fail to parse as mappings", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "{ shared also broken");
-    writeFileSync(join(dir, ".gittensory.yml"), "{ global also broken");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "{ shared also broken");
+    writeFileSync(join(dir, ".loopover.yml"), "{ global also broken");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "{ broken json");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "{ broken json");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("{ broken json"); // per-repo (highest priority) raw text, same downstream "malformed" handling
   });
 
-  it("tries _shared/.gittensory.yml before .yaml before .json", async () => {
+  it("tries _shared/.loopover.yml before .yaml before .json", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yaml"), "gate:\n  enabled: true\n");
-    writeFileSync(join(dir, "_shared", ".gittensory.json"), '{"gate":{"enabled":false}}');
+    writeFileSync(join(dir, "_shared", ".loopover.yaml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "_shared", ".loopover.json"), '{"gate":{"enabled":false}}');
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"owner/repo")).toBe("gate:\n  enabled: true\n"); // .yaml found before .json is tried
   });
@@ -452,8 +354,8 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("keeps global precedence over the shared base for a repo named _shared", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: true\nwantedPaths:\n  - '**/*'\n");
-    writeFileSync(join(dir, ".gittensory.yml"), "gate:\n  enabled: false\nwantedPaths:\n  - src/safe/**\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "gate:\n  enabled: true\nwantedPaths:\n  - '**/*'\n");
+    writeFileSync(join(dir, ".loopover.yml"), "gate:\n  enabled: false\nwantedPaths:\n  - src/safe/**\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/_shared"));
     expect(manifest.gate.enabled).toBe(false); // global still overlays the reserved shared-base folder
@@ -463,9 +365,9 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("still supports owner-qualified config for a repo named _shared", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "gate:\n  enabled: false\n");
     mkdirSync(join(dir, "owner___shared"));
-    writeFileSync(join(dir, "owner___shared", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "owner___shared", ".loopover.yml"), "gate:\n  enabled: true\n");
     const reader = makeLocalManifestReader(dir);
     const manifest = parseFocusManifestContent(await readLocalManifestContent(reader!,"owner/_shared"));
     expect(manifest.gate.enabled).toBe(true); // explicit owner-qualified per-repo file remains highest priority
@@ -474,7 +376,7 @@ describe("makeLocalManifestReader — shared base layer (#1959)", () => {
   it("does NOT serve the shared base to an invalid repo full name (no per-repo candidates)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "gate:\n  enabled: false\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "gate:\n  enabled: false\n");
     const reader = makeLocalManifestReader(dir);
     expect(await readLocalManifestContent(reader!,"no-slash")).toBeNull(); // perRepo.length === 0 early return, before the shared base is even read
   });
@@ -484,11 +386,11 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("records sharedConfigSource when the shared base contributes a review block", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  tone: shared-tone\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "review:\n  tone: shared-tone\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  profile: assertive\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "review:\n  profile: assertive\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
-    expect(loaded?.sharedConfigSource).toBe(join("_shared", ".gittensory.yml"));
+    expect(loaded?.sharedConfigSource).toBe(join("_shared", ".loopover.yml"));
     const manifest = parseFocusManifestContent(loaded!.content!);
     expect(manifest.review.tone).toBe("shared-tone");
     expect(manifest.review.profile).toBe("assertive");
@@ -497,7 +399,7 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("is byte-identical when the shared base is absent", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  tone: repo-only\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "review:\n  tone: repo-only\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
     expect(loaded?.sharedConfigSource).toBeNull();
     expect(loaded?.warnings).toEqual([]);
@@ -507,9 +409,9 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("warns and ignores a malformed shared base while still serving higher layers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "{ broken shared");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "{ broken shared");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  tone: repo-tone\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "review:\n  tone: repo-tone\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
     expect(loaded?.sharedConfigSource).toBeNull();
     expect(loaded?.warnings.some((w) => w.includes("review.shared_config"))).toBe(true);
@@ -519,9 +421,9 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("fills review fields from the shared base when the per-repo file is silent on them", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  tone: house-tone\n  security_focus: true\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "review:\n  tone: house-tone\n  security_focus: true\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "gate:\n  enabled: true\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "gate:\n  enabled: true\n");
     const manifest = parseFocusManifestContent((await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo"))!.content!);
     expect(manifest.review.tone).toBe("house-tone");
     expect(manifest.review.securityFocus).toBe(true);
@@ -530,9 +432,9 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("lets a higher-priority review null clear an inherited shared review block", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  footer:\n    text: shared footer\n  tone: house-tone\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "review:\n  footer:\n    text: shared footer\n  tone: house-tone\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review: null\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "review: null\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
     const manifest = parseFocusManifestContent(loaded!.content!);
     expect(manifest.review.present).toBe(false);
@@ -543,9 +445,9 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("lets a higher-priority non-mapping review value replace an inherited shared review block", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  footer:\n    text: shared footer\n  tone: house-tone\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "review:\n  footer:\n    text: shared footer\n  tone: house-tone\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review: false\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "review: false\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
     const manifest = parseFocusManifestContent(loaded!.content!);
     expect(manifest.review.present).toBe(false);
@@ -557,18 +459,18 @@ describe("makeLocalManifestReader — review.shared_config overlay (#2046)", () 
   it("sets sharedConfigSource when only the shared base is present for a repo", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review:\n  tone: only-shared\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "review:\n  tone: only-shared\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
-    expect(loaded?.sharedConfigSource).toBe(join("_shared", ".gittensory.yml"));
+    expect(loaded?.sharedConfigSource).toBe(join("_shared", ".loopover.yml"));
     expect(parseFocusManifestContent(loaded!.content!).review.tone).toBe("only-shared");
   });
 
   it("ignores a non-mapping shared review block without blocking higher layers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-repo-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), "review: [1, 2, 3]\n");
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), "review: [1, 2, 3]\n");
     mkdirSync(join(dir, "repo"));
-    writeFileSync(join(dir, "repo", ".gittensory.yml"), "review:\n  tone: repo-tone\n");
+    writeFileSync(join(dir, "repo", ".loopover.yml"), "review:\n  tone: repo-tone\n");
     const loaded = await readLocalManifestLoad(makeLocalManifestReader(dir)!, "owner/repo");
     expect(parseFocusManifestContent(loaded!.content!).review.tone).toBe("repo-tone");
   });

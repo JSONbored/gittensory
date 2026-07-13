@@ -464,7 +464,7 @@ const STDIO_TOOL_DESCRIPTORS = [
   },
   {
     name: "loopover_validate_config",
-    description: "Parse and validate a .gittensory.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
+    description: "Parse and validate a .loopover.yml manifest string using the same focus-manifest parser as the server. Returns normalized config fields, parse warnings, and an ok/warn/error status. Metadata-only, no GitHub writes.",
   },
   {
     name: "loopover_check_slop_risk",
@@ -2061,7 +2061,7 @@ function printValidateConfigHelp() {
     [
       "Usage: gittensory-mcp validate-config --file <path> [--source repo_file|api_record|none] [--json]",
       "",
-      "Validate a .gittensory.yml manifest before pushing.",
+      "Validate a .loopover.yml manifest before pushing.",
       "Mirrors the gittensory_validate_config MCP tool and POST /v1/validate/focus-manifest. No source upload.",
       "",
       "Pass --json for machine-readable output.",

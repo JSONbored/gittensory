@@ -56,7 +56,7 @@ describe("buildPredictedGateVerdict", () => {
     expect(result.basis).toBe("public_config");
     expect(result.conclusion).toBe("success");
     expect(result.blockers).toHaveLength(0);
-    expect(result.note).toContain("public .gittensory.yml");
+    expect(result.note).toContain("public .loopover.yml");
   });
 
   it("threads gate.aiReview.closeConfidence into the policy without disturbing the public-config verdict (#7)", () => {
@@ -249,7 +249,7 @@ describe("buildPredictedGateVerdict", () => {
   });
 
   it("predicts a BLOCK for an enforced path-INDEPENDENT pre-merge check the title fails (#11/#18)", () => {
-    // The repo's public .gittensory.yml enforces a conventional-style title; the PR title lacks "[FEAT]".
+    // The repo's public .loopover.yml enforces a conventional-style title; the PR title lacks "[FEAT]".
     const result = verdict({
       gate: {},
       review: { pre_merge_checks: [{ name: "Conventional title", title_contains: "[FEAT]", enforce: true }] },

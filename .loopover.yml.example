@@ -1,5 +1,5 @@
 # ============================================================================
-# .gittensory.yml — per-repo configuration for gittensory CI & gittensory review
+# .loopover.yml — per-repo configuration for gittensory CI & gittensory review
 # ============================================================================
 #
 # Drop this file at the root of any repo gittensory watches to tune how the
@@ -10,10 +10,10 @@
 #   config/examples/gittensory.minimal.yml — smallest safe starter (gate off, observe-only autonomy)
 #   config/examples/gittensory.full.yml    — exhaustive reference (body synced with this file)
 #   .gittensory.minimal.yml                — same minimal starter at repo root
-#   .gittensory.yml.example                — this file
+#   .loopover.yml.example                  — this file
 #
 # WHERE IT LIVES (first match wins):
-#   .gittensory.yml  →  .github/gittensory.yml  →  .gittensory.json  →  .github/gittensory.json
+#   .loopover.yml  →  .github/loopover.yml  →  .loopover.json  →  .github/loopover.json
 #
 # PRECEDENCE (most specific wins):
 #   this file  >  per-repo dashboard/API settings  >  built-in safe defaults
@@ -404,7 +404,7 @@ gate:
 # defaults.
 #
 # SELF-HOST ONLY (`review.shared_config`, #2046): when `GITTENSORY_REPO_CONFIG_DIR` is mounted,
-# place a shared review base at `${GITTENSORY_REPO_CONFIG_DIR}/_shared/.gittensory.yml` (see
+# place a shared review base at `${GITTENSORY_REPO_CONFIG_DIR}/_shared/.loopover.yml` (see
 # `config/examples/shared.gittensory.yml`). Per-repo `review:` keys overlay it field-by-field —
 # repo value wins when set, shared fills gaps, defaults stay byte-identical. Absent shared base is
 # the common case and changes nothing. A malformed shared base warns and is ignored (never blocks a
@@ -635,7 +635,7 @@ settings:
   # rarely formally assigned to a specific contributor), the reward label needs this flag to ever reach them.
   # Disabled by default (no mappings) -- a self-hoster opts in per repo. If your labels carry reward or
   # moderation weight, configure this in PRIVATE per-repo/global config (see `config/examples/README.md`)
-  # rather than the public `.gittensory.yml`, so contributors cannot see the exact mapping rules. A per-repo
+  # rather than the public `.loopover.yml`, so contributors cannot see the exact mapping rules. A per-repo
   # `mappings` override in the private-config layer REPLACES the global default list wholesale -- it does
   # not merge with it.
   # linkedIssueLabelPropagation:
@@ -918,7 +918,7 @@ settings:
   #   chatQaFrontierFallback: false  # Opt-in only: falls back to the frontier env.AI chain if env.AI_ADVISORY is unconfigured, instead of declining. Meaningless unless chatQa is also true. Default: false.
   #   intentRouting: false # Closed-set intent classifier for unrecognized @gittensory mentions -> existing Q&A commands only. Ollama-ONLY, same as chatQa (never uses chatQaFrontierFallback). Co-requisite: commandRateLimitPolicy: hold. Default: false.
 
-# Maintainer AI review tuning (`.gittensory.yml` top-level `review:` block). These knobs shape the advisory AI
+# Maintainer AI review tuning (`.loopover.yml` top-level `review:` block). These knobs shape the advisory AI
 # review prompt and file selection only — gate/slop/secret-scan are unaffected.
 # review:
 #   # Globs whose matching files are dropped from the AI review (lockfiles, generated output, etc.).
@@ -1073,7 +1073,7 @@ settings:
 #     # Config-as-code enable/disable for this repo, layered ON TOP OF (never a replacement for) the
 #     # GITTENSORY_REVIEW_SCREENSHOTS + per-repo cutover-allowlist env-var gate above (#4083). Bool or null.
 #     # Default: null (unset) ⇒ defers entirely to that env-var gate's own decision -- byte-identical to today.
-#     # Explicit `false` (set once at the global-default `.gittensory.yml`, or overridden per-repo here) forces
+#     # Explicit `false` (set once at the global-default `.loopover.yml`, or overridden per-repo here) forces
 #     # capture off for this repo even when the env-var gate would otherwise allow it. Explicit `true` opts this
 #     # repo back in at a layer where a broader default disabled it -- it does NOT bypass the env-var gate
 #     # itself, so the env vars remain the outer infra-availability switch.

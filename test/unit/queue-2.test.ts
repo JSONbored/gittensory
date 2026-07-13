@@ -687,7 +687,7 @@ describe("queue processors", () => {
       AI_PUBLIC_COMMENTS_ENABLED: "true",
       AI_DAILY_NEURON_BUDGET: "100000",
       // Both gates on: the global capability switch, and — unlike grounding/enrichment/RAG/reputation, which are
-      // env-only — the per-repo `.gittensory.yml` opt-in mocked below, so `dynamicReviewFeatures.cultureProfile`
+      // env-only — the per-repo `.loopover.yml` opt-in mocked below, so `dynamicReviewFeatures.cultureProfile`
       // (src/queue/processors.ts) actually evaluates its `&&` right-hand side true, not just short-circuits.
       GITTENSORY_REVIEW_CULTURE_PROFILE: "true",
     });
@@ -723,7 +723,7 @@ describe("queue processors", () => {
       if (url.includes("/issues/7/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
       if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
       // The repo's own review.culture_profile opt-in.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  culture_profile: true\n");
       }
       return Response.json({});
@@ -761,7 +761,7 @@ describe("queue processors", () => {
       AI_PUBLIC_COMMENTS_ENABLED: "true",
       AI_DAILY_NEURON_BUDGET: "100000",
       // Both gates on: the global capability switch, and (like culture-profile above, unlike
-      // grounding/enrichment/RAG/reputation which are env-only) the per-repo `.gittensory.yml` opt-in mocked
+      // grounding/enrichment/RAG/reputation which are env-only) the per-repo `.loopover.yml` opt-in mocked
       // below, so `dynamicReviewFeatures.impactMap` (src/queue/processors.ts) actually evaluates
       // shouldComputeImpactMap's `&&` right-hand side true, not just short-circuits.
       GITTENSORY_REVIEW_IMPACT_MAP: "true",
@@ -798,12 +798,12 @@ describe("queue processors", () => {
       if (url.includes("/issues/7/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
       if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
       // The repo's own review.impact_map opt-in.
-      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.gittensory.yml") {
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
         return new Response("review:\n  impact_map: true\n");
       }
-      // Real GitHub raw-content 404s for every other manifest candidate (incl. the new-brand `.loopover.*`
-      // candidates tried first, #4773) -- without this, Response.json({}) below would 200 the first candidate
-      // tried and mask the review.impact_map config crafted above.
+      // Real GitHub raw-content 404s for every other manifest candidate -- without this,
+      // Response.json({}) below would 200 the first candidate tried and mask the
+      // review.impact_map config crafted above.
       if (url.startsWith("https://raw.githubusercontent.com/")) return new Response("not found", { status: 404 });
       return Response.json({});
     });
@@ -2824,7 +2824,7 @@ describe("queue processors", () => {
       if (url.includes("/commits/a7/check-suites")) return Response.json({ check_suites: [] });
       if (url.includes("/issues/1")) return Response.json({ number: 1, title: "Issue", state: "open", labels: [], user: { login: "reporter" } });
       if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
-      if (url.includes(".gittensory.yml")) return new Response("Not Found", { status: 404 });
+      if (url.includes(".loopover.yml")) return new Response("Not Found", { status: 404 });
       if (url.endsWith("/check-runs") && init?.method === "POST") return Response.json({ id: 1 });
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
       if (url.endsWith("/graphql")) return Response.json({ data: {} });
@@ -3381,7 +3381,7 @@ describe("queue processors", () => {
       return new Response("not found", { status: 404 });
     });
 
-    // .gittensory.yml authoritatively sets the linked-issue blocker to "block" (config-as-code).
+    // .loopover.yml authoritatively sets the linked-issue blocker to "block" (config-as-code).
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     await processJob(env, {
       type: "github-webhook",
@@ -3435,7 +3435,7 @@ describe("queue processors", () => {
       linkedIssueGateMode: "block",
       requireLinkedIssue: true,
     });
-    // .gittensory.yml authoritatively sets the linked-issue blocker to "block" (config-as-code) — mirrors the
+    // .loopover.yml authoritatively sets the linked-issue blocker to "block" (config-as-code) — mirrors the
     // existing "publishes an opt-in gate..." test above, which needs the same manifest override for the raw
     // DB setting to take effect as a live hard block.
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
@@ -4782,7 +4782,7 @@ describe("queue processors", () => {
       agentDryRun: true, // dry-run → the actions are recorded but make no GitHub mutation
     });
     await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: queueMinerSnapshot("contributor") }, 60_000);
-    // .gittensory.yml authoritatively sets the linked-issue blocker to "block" (config-as-code, as in the gate tests above).
+    // .loopover.yml authoritatively sets the linked-issue blocker to "block" (config-as-code, as in the gate tests above).
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();

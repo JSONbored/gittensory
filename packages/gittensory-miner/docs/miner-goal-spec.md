@@ -11,14 +11,14 @@ Discovery order (first match wins):
 
 Every field is optional. Unknown keys are ignored; a malformed field falls back to its documented default with a warning — a broken file never hard-fails the miner.
 
-## Relationship to `.gittensory.yml`
+## Relationship to `.loopover.yml`
 
 | File | Actor | Purpose |
 |------|-------|---------|
-| `.loopover.yml` (or legacy `.gittensory.yml`, dual-read indefinitely — #4773) | Review stack | How a maintainer's repo **reviews** incoming PRs (focus manifest, gate, scoring knobs). |
+| `.loopover.yml` | Review stack | How a maintainer's repo **reviews** incoming PRs (focus manifest, gate, scoring knobs). |
 | `.gittensory-miner.yml` | Miner runtime | How a miner **searches for and prioritizes** work in a target repo. Unrelated naming concern — not affected by the review-config rebrand above. |
 
-They are read by different components and do not conflict. A miner should still treat a target repo's public `.loopover.yml`/`.gittensory.yml` `wantedPaths` / `blockedPaths` as a hard floor when both files exist.
+They are read by different components and do not conflict. A miner should still treat a target repo's public `.loopover.yml` `wantedPaths` / `blockedPaths` as a hard floor when both files exist.
 
 ## Fields
 
@@ -32,7 +32,7 @@ Work areas the maintainer wants a miner to focus on. Glob list. Empty means no p
 
 ### `blockedPaths` (string list, default: `[]`)
 
-Paths off-limits to a miner; candidates touching one should be skipped. Glob list. Mirrors `.gittensory.yml` `blockedPaths` semantics.
+Paths off-limits to a miner; candidates touching one should be skipped. Glob list. Mirrors `.loopover.yml` `blockedPaths` semantics.
 
 ### `preferredLabels` (string list, default: `[]`)
 

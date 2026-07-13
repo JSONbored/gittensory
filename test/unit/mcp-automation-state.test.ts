@@ -117,7 +117,7 @@ describe("MCP gittensory_get_automation_state (#784)", () => {
     expect(data.pendingActionCount).toBe(201);
   });
 
-  it("REGRESSION (#2912): honors a .gittensory.yml-only agentPaused: true override (DB row left at its false default)", async () => {
+  it("REGRESSION (#2912): honors a .loopover.yml-only agentPaused: true override (DB row left at its false default)", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: { merge: "auto" } });
@@ -125,7 +125,7 @@ describe("MCP gittensory_get_automation_state (#784)", () => {
     // so this only passes if the resolver (not the raw DB accessor) is consulted.
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
-      if (url.endsWith("/.gittensory.yml")) return new Response("settings:\n  agentPaused: true\n", { status: 200 });
+      if (url.endsWith("/.loopover.yml")) return new Response("settings:\n  agentPaused: true\n", { status: 200 });
       return new Response("Not Found", { status: 404 });
     });
 

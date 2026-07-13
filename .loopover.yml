@@ -29,7 +29,7 @@ testExpectations:
 issueDiscoveryPolicy: discouraged
 
 # Authoritative gate config, config-as-code (layered OVER dashboard repository settings:
-# .gittensory.yml > DB settings > safe defaults). ONLY confirmed Gittensor contributors are ever
+# .loopover.yml > DB settings > safe defaults). ONLY confirmed Gittensor contributors are ever
 # hard-blocked (see PR #644); these fields only choose what the gate does, not who it applies to.
 gate:
   # enabled: false             # set false to disable the gate from config (turning it on is a dashboard setting)

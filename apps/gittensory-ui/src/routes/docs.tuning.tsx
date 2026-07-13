@@ -10,13 +10,13 @@ export const Route = createFileRoute("/docs/tuning")({
       {
         name: "description",
         content:
-          "Configure LoopOver CI and LoopOver review: gate modes, score thresholds, guardrails, and feature flags via .loopover.yml (or legacy .gittensory.yml) and repo settings.",
+          "Configure LoopOver CI and LoopOver review: gate modes, score thresholds, guardrails, and feature flags via .loopover.yml and repo settings.",
       },
       { property: "og:title", content: "Tuning your reviews — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Configure LoopOver CI and LoopOver review: gate modes, score thresholds, guardrails, and feature flags via .loopover.yml (or legacy .gittensory.yml) and repo settings.",
+          "Configure LoopOver CI and LoopOver review: gate modes, score thresholds, guardrails, and feature flags via .loopover.yml and repo settings.",
       },
       { property: "og:url", content: "/docs/tuning" },
     ],
@@ -30,7 +30,7 @@ function Tuning() {
     <DocsPage
       eyebrow="Operating"
       title="Tuning your reviews"
-      description="How to configure LoopOver CI and LoopOver review — gate modes, score thresholds, guardrails, and feature flags — through .loopover.yml (or legacy .gittensory.yml) and your repo settings."
+      description="How to configure LoopOver CI and LoopOver review — gate modes, score thresholds, guardrails, and feature flags — through .loopover.yml and your repo settings."
     >
       <h2>How configuration fits together</h2>
       <p>
@@ -42,8 +42,7 @@ function Tuning() {
         <li>
           <strong>Per-repo settings</strong> — gate modes, score thresholds, guardrails, and which
           surfaces are enabled. Set them in the dashboard, or declare them as config-as-code in a{" "}
-          <code>.loopover.yml</code> file in the repo (legacy <code>.gittensory.yml</code> also
-          still works, indefinitely — #4773).
+          <code>.loopover.yml</code> file in the repo.
         </li>
         <li>
           <strong>Feature flags</strong> — the <code>GITTENSORY_REVIEW_*</code> family of
@@ -69,19 +68,18 @@ function Tuning() {
 
       <Callout variant="safety" title="Defaults are safe and conservative">
         Every feature flag ships <strong>OFF</strong>. A repo with no settings and no{" "}
-        <code>.loopover.yml</code> (or legacy <code>.gittensory.yml</code>) falls back to a quiet,
-        non-blocking profile: the gate is <code>off</code>, AI review is <code>off</code>, slop
-        scoring is <code>off</code>, comments go only to detected contributors, and no check-run is
-        published. Turning anything on is always an explicit opt-in — you roll capabilities forward,
-        and back, one flag and one repo at a time.
+        <code>.loopover.yml</code> falls back to a quiet, non-blocking profile: the gate is{" "}
+        <code>off</code>, AI review is <code>off</code>, slop scoring is <code>off</code>, comments
+        go only to detected contributors, and no check-run is published. Turning anything on is
+        always an explicit opt-in — you roll capabilities forward, and back, one flag and one repo
+        at a time.
       </Callout>
 
       <h2>Precedence</h2>
       <p>Most specific wins:</p>
       <ul>
         <li>
-          <code>.loopover.yml</code> in the repo (or legacy <code>.gittensory.yml</code>, #4773),
-          then
+          <code>.loopover.yml</code> in the repo, then
         </li>
         <li>per-repo database settings, then</li>
         <li>built-in safe defaults.</li>
@@ -97,9 +95,7 @@ function Tuning() {
         gate-related fields and wins over the generic <code>settings:</code> block for those same
         fields. LoopOver looks for the manifest at the first match of <code>.loopover.yml</code> →{" "}
         <code>.github/loopover.yml</code> → <code>.loopover.json</code> →{" "}
-        <code>.github/loopover.json</code> → (legacy, #4773) <code>.gittensory.yml</code> →{" "}
-        <code>.github/gittensory.yml</code> → <code>.gittensory.json</code> →{" "}
-        <code>.github/gittensory.json</code>.
+        <code>.github/loopover.json</code>.
       </p>
 
       <h2>Feature flags (GITTENSORY_REVIEW_*)</h2>
@@ -530,8 +526,7 @@ function Tuning() {
       <h2>Example .loopover.yml</h2>
       <p>
         A worked manifest: focus and validation up top, a refined gate, BYOK AI review, and a few
-        dashboard-equivalent overrides. Same schema, same effect, if you name the file{" "}
-        <code>.gittensory.yml</code> instead (legacy name, still fully supported — #4773).
+        dashboard-equivalent overrides.
       </p>
       <CodeBlock
         filename=".loopover.yml"
@@ -588,7 +583,7 @@ settings:
         trust flow, see <a href="/docs/maintainer-install-trust">Install &amp; trust</a>. If you're
         self-hosting, see <Link to="/docs/self-hosting-configuration">Self-host configuration</Link>{" "}
         for the environment layer these settings sit on top of, plus the config-precedence rules and
-        a link to the fully-commented <code>.gittensory.yml.example</code>.
+        a link to the fully-commented <code>.loopover.yml.example</code>.
       </p>
     </DocsPage>
   );

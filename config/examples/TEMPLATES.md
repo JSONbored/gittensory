@@ -4,14 +4,10 @@ Copy-paste templates for the per-repo review manifest. Every file in this direct
 **same schema** whether it lives in a public repo root or a self-host private mount
 (`GITTENSORY_REPO_CONFIG_DIR`).
 
-> **Filename note (#4773):** the canonical manifest filename is now **`.loopover.yml`** (LoopOver's
-> new brand). The pre-rebrand name, **`.gittensory.yml`**, is still read everywhere `.loopover.yml`
-> is — indefinitely, additively, with no expiry — so an existing self-hoster's committed
-> `.gittensory.yml` keeps working with zero changes required. When both names are present at the
-> same location, the new-brand `.loopover.yml` wins. New setups should name their own file
-> `.loopover.yml`; the *template* filenames catalogued below (e.g. `gittensory.minimal.yml`) are a
-> separate, unrelated naming concern and are left as-is — see the "Quick start" section for the
-> destination filename you actually create.
+> **Filename note:** the canonical manifest filename is **`.loopover.yml`**. The *template*
+> filenames catalogued below (e.g. `gittensory.minimal.yml`) are a separate, unrelated naming
+> concern and are left as-is — see the "Quick start" section for the destination filename you
+> actually create.
 
 ## Template catalog
 
@@ -25,13 +21,10 @@ Copy-paste templates for the per-repo review manifest. Every file in this direct
 
 Canonical copies of the minimal and full templates also live at the repo root as
 [`.gittensory.minimal.yml`](../../.gittensory.minimal.yml) and
-[`.gittensory.yml.example`](../../.gittensory.yml.example). CI keeps the `config/examples/` copies
+[`.loopover.yml.example`](../../.loopover.yml.example). CI keeps the `config/examples/` copies
 in sync with those files.
 
 ## Public repo root vs private self-host mount
-
-Paths below show the new-brand `.loopover.yml` name; `.gittensory.yml` (and `.github/gittensory.yml`
-for the public row) still works everywhere, indefinitely (#4773) — see the filename note above.
 
 | Layer | Path | Who can read it | Typical contents |
 |-------|------|-----------------|------------------|
@@ -55,7 +48,6 @@ contributors to read) into a public repository. Copy `global.gittensory.yml` int
 ```bash
 cp config/examples/gittensory.minimal.yml .loopover.yml
 # edit wantedPaths / gate when ready
-# (an existing .gittensory.yml at repo root also still works -- #4773 -- no need to rename it)
 ```
 
 ### Self-host private mount (operator-only policy)
@@ -79,9 +71,8 @@ into public git** — use the private mount for anything marked *private* below.
 
 ### `JSONbored/gittensory` (dogfooding)
 
-- **Public** `.gittensory.yml` in the repo (the legacy name this repo's own committed config still
-  uses, per #4773's dual-read — a new repo would name this `.loopover.yml` instead): work-area
-  guardrails, test expectations, gate dimensions contributors should understand.
+- **Public** `.loopover.yml` in the repo: work-area guardrails, test expectations, gate dimensions
+  contributors should understand.
 - **Private** `gittensory-config/` (gitignored locally, operator mount in production): fleet
   autonomy, anti-abuse caps, maintainer exemption lists — the same split described in
   [`global.gittensory.yml`](./global.gittensory.yml).
@@ -107,8 +98,8 @@ into public git** — use the private mount for anything marked *private* below.
 
 Every template in this directory is parsed in CI (`test/unit/config-templates.test.ts` and
 `test/unit/selfhost-config-examples.test.ts`). The exhaustive template body is kept identical to
-`.gittensory.yml.example` from `# WHERE IT LIVES` onward. Lint a local file before deploy:
+`.loopover.yml.example` from `# WHERE IT LIVES` onward. Lint a local file before deploy:
 
 ```bash
-npx tsx scripts/gittensory-config-lint.ts path/to/.loopover.yml   # or path/to/.gittensory.yml (legacy, #4773)
+npx tsx scripts/gittensory-config-lint.ts path/to/.loopover.yml
 ```

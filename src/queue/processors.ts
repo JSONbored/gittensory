@@ -11117,7 +11117,7 @@ async function postGenerateTestsNotEnabledComment(env: Env, installationId: numb
       "",
       "> [!NOTE]",
       "> **E2E test generation is not enabled for this repository**",
-      "> Ask a maintainer to enable `features.e2eTests` in `.gittensory.yml` (the operator's global flag must also be on).",
+      "> Ask a maintainer to enable `features.e2eTests` in `.loopover.yml` (the operator's global flag must also be on).",
       "",
       "---",
       gittensoryFooter(env),

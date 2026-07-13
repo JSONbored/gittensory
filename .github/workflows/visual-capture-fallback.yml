@@ -32,7 +32,7 @@ name: LoopOver Visual Capture Fallback
 # preview-deploy pipeline): copy this file, unmodified, into the target repo's `.github/workflows/` at this
 # EXACT path and name (`visual-capture-fallback.yml` / "LoopOver Visual Capture Fallback") -- gittensory's
 # dispatch call and workflow_run listener both key off this fixed name. Then set `review.visual.actions_fallback:
-# true` in that repo's `.gittensory.yml` (see .gittensory.yml.example) to opt in; it activates ONLY when the
+# true` in that repo's `.loopover.yml` (see .loopover.yml.example) to opt in; it activates ONLY when the
 # existing discovery chain finds no preview at all, so a repo with its own CI-produced preview is unaffected.
 
 on:

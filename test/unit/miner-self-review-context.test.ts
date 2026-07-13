@@ -310,10 +310,10 @@ describe("fetchSelfReviewContext (#5145)", () => {
 
     const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
     expect(requestedPaths).toEqual([
-      "https://raw.githubusercontent.com/acme/widgets/HEAD/.gittensory.yml",
-      "https://raw.githubusercontent.com/acme/widgets/HEAD/.github/gittensory.yml",
-      "https://raw.githubusercontent.com/acme/widgets/HEAD/.gittensory.json",
-      "https://raw.githubusercontent.com/acme/widgets/HEAD/.github/gittensory.json",
+      "https://raw.githubusercontent.com/acme/widgets/HEAD/.loopover.yml",
+      "https://raw.githubusercontent.com/acme/widgets/HEAD/.github/loopover.yml",
+      "https://raw.githubusercontent.com/acme/widgets/HEAD/.loopover.json",
+      "https://raw.githubusercontent.com/acme/widgets/HEAD/.github/loopover.json",
     ]);
     expect(result.manifest.gate).toBeDefined();
   });

@@ -31,7 +31,7 @@ describe("docs owner onboarding checklist page", () => {
     expect(source).toMatch(/\/v1\/repos\/:owner\/:repo\/gittensor-config-recommendation/);
     expect(source).toMatch(/\/v1\/repos\/:owner\/:repo\/settings-preview/);
     expect(source).toMatch(/repo-owner-intake/);
-    expect(source).toMatch(/\.gittensory\.yml/);
+    expect(source).toMatch(/\.loopover\.yml/);
   });
 
   it("uses the real contribution-lane taxonomy from the engine", () => {

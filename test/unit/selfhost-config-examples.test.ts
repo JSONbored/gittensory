@@ -60,9 +60,9 @@ describe("config/examples/repo-override.gittensory.yml", () => {
 describe("the two examples together demonstrate the documented overlay behavior", () => {
   it("merges exactly as config/examples/README.md describes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-example-config-"));
-    writeFileSync(join(dir, ".gittensory.yml"), readExample("global.gittensory.yml"));
+    writeFileSync(join(dir, ".loopover.yml"), readExample("global.gittensory.yml"));
     mkdirSync(join(dir, "owner__repo"));
-    writeFileSync(join(dir, "owner__repo", ".gittensory.yml"), readExample("repo-override.gittensory.yml"));
+    writeFileSync(join(dir, "owner__repo", ".loopover.yml"), readExample("repo-override.gittensory.yml"));
     const reader = makeLocalManifestReader(dir)!;
     const result = await reader("owner/repo");
     const content = typeof result === "string" ? result : result!.content!;
@@ -82,10 +82,10 @@ describe("all three examples together demonstrate the documented shared-base ove
   it("merges shared → global → per-repo exactly as config/examples/README.md describes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-example-config-"));
     mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".gittensory.yml"), readExample("shared.gittensory.yml"));
-    writeFileSync(join(dir, ".gittensory.yml"), readExample("global.gittensory.yml"));
+    writeFileSync(join(dir, "_shared", ".loopover.yml"), readExample("shared.gittensory.yml"));
+    writeFileSync(join(dir, ".loopover.yml"), readExample("global.gittensory.yml"));
     mkdirSync(join(dir, "owner__repo"));
-    writeFileSync(join(dir, "owner__repo", ".gittensory.yml"), readExample("repo-override.gittensory.yml"));
+    writeFileSync(join(dir, "owner__repo", ".loopover.yml"), readExample("repo-override.gittensory.yml"));
     const reader = makeLocalManifestReader(dir)!;
     const result = await reader("owner/repo");
     const content = typeof result === "string" ? result : result!.content!;
@@ -96,27 +96,5 @@ describe("all three examples together demonstrate the documented shared-base ove
     expect(manifest.gate.enabled).toBe(true); // set by both global and repo-override, shared base is silent on it
     expect(manifest.wantedPaths).toEqual(["src/**"]); // repo-override's array wins wholesale over shared's AND global's
     expect(manifest.settings.contributorOpenPrCap).toBeNull(); // repo-override's explicit null still clears global's 3
-  });
-});
-
-describe("the same shipped examples parse and merge identically under the new-brand .loopover.yml filename (#4773)", () => {
-  it("merges shared → global → per-repo the same way when every layer is saved as .loopover.yml instead of .gittensory.yml", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "gt-example-config-"));
-    mkdirSync(join(dir, "_shared"));
-    writeFileSync(join(dir, "_shared", ".loopover.yml"), readExample("shared.gittensory.yml"));
-    writeFileSync(join(dir, ".loopover.yml"), readExample("global.gittensory.yml"));
-    mkdirSync(join(dir, "owner__repo"));
-    writeFileSync(join(dir, "owner__repo", ".loopover.yml"), readExample("repo-override.gittensory.yml"));
-    const reader = makeLocalManifestReader(dir)!;
-    const result = await reader("owner/repo");
-    const content = typeof result === "string" ? result : result!.content!;
-    const manifest = parseFocusManifestContent(content);
-
-    // Identical assertions to the .gittensory.yml-named version above — only the on-disk filename changed.
-    expect(manifest.review.tone).toBe("friendly-terse");
-    expect(manifest.gate.duplicates).toBe("block");
-    expect(manifest.gate.enabled).toBe(true);
-    expect(manifest.wantedPaths).toEqual(["src/**"]);
-    expect(manifest.settings.contributorOpenPrCap).toBeNull();
   });
 });

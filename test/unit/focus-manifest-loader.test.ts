@@ -290,7 +290,7 @@ describe("focus-manifest loader", () => {
     expect(await fetchRepoFocusManifestFile("trailing/")).toBeNull();
   });
 
-  it("returns raw text from the first 200 OK candidate path (new-brand .loopover.yml, tried before legacy)", async () => {
+  it("returns raw text from the first 200 OK candidate path", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       const stringUrl = String(url);
       if (stringUrl.endsWith("/.loopover.yml")) return new Response("wantedPaths:\n  - src/\n", { status: 200 });
@@ -299,18 +299,6 @@ describe("focus-manifest loader", () => {
     const text = await fetchRepoFocusManifestFile("owner/repo");
     expect(text).toBe("wantedPaths:\n  - src/\n");
     expect(fetchSpy).toHaveBeenCalledTimes(1); // first candidate in MANIFEST_FILE_CANDIDATES is a 200, no fallback needed
-  });
-
-  it("falls back to the legacy .gittensory.yml when none of the new-brand candidates respond (#4773 — dual-read)", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-      const stringUrl = String(url);
-      if (stringUrl.endsWith("/.gittensory.yml")) return new Response("wantedPaths:\n  - src/\n", { status: 200 });
-      return new Response("not found", { status: 404 });
-    });
-    const text = await fetchRepoFocusManifestFile("owner/repo");
-    expect(text).toBe("wantedPaths:\n  - src/\n");
-    // all 4 new-brand candidates 404 first, then legacy `.gittensory.yml` (5th in MANIFEST_FILE_CANDIDATES) hits.
-    expect(fetchSpy).toHaveBeenCalledTimes(MANIFEST_FILE_CANDIDATES.indexOf(".gittensory.yml") + 1);
   });
 
   it("does not read public manifest responses when Content-Length is too large", async () => {
@@ -325,21 +313,11 @@ describe("focus-manifest loader", () => {
           headers: { "content-length": String(MAX_FOCUS_MANIFEST_BYTES + 1) },
         });
       }
-      if (stringUrl.endsWith("/.github/loopover.json")) return new Response("not found", { status: 404 });
-      if (stringUrl.endsWith("/.gittensory.yml") || stringUrl.endsWith("/.github/gittensory.yml")) {
-        return new Response("not found", { status: 404 });
-      }
-      if (stringUrl.endsWith("/.gittensory.json")) {
-        return new Response('{"wantedPaths":["too-large/"]}', {
-          status: 200,
-          headers: { "content-length": String(MAX_FOCUS_MANIFEST_BYTES + 1) },
-        });
-      }
       return new Response('{"wantedPaths":["src/"]}', { status: 200 });
     });
     const text = await fetchRepoFocusManifestFile("owner/repo");
     expect(text).toBe('{"wantedPaths":["src/"]}');
-    expect(fetchSpy).toHaveBeenCalledTimes(MANIFEST_FILE_CANDIDATES.length); // every candidate (both brands) tried; last one wins
+    expect(fetchSpy).toHaveBeenCalledTimes(MANIFEST_FILE_CANDIDATES.length); // every candidate tried; last one wins
   });
 
   it("aborts public manifest streams that grow beyond the byte cap", async () => {
@@ -378,61 +356,6 @@ describe("focus-manifest loader", () => {
     });
     const text = await fetchRepoFocusManifestFile("owner/repo");
     expect(text).toBe('{"wantedPaths":["src/"]}');
-  });
-
-  describe("public manifest dual-brand filename support (#4773)", () => {
-    it("(a) keeps working with ONLY the legacy .gittensory.yml candidates present — zero changes required", async () => {
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        const stringUrl = String(url);
-        if (stringUrl.endsWith("/.gittensory.yml")) return new Response("wantedPaths:\n  - src/\n", { status: 200 });
-        return new Response("not found", { status: 404 });
-      });
-      expect(await fetchRepoFocusManifestFile("owner/repo")).toBe("wantedPaths:\n  - src/\n");
-    });
-
-    it("(b) reads the new-brand .loopover.yml when no legacy candidate is published", async () => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        const stringUrl = String(url);
-        if (stringUrl.endsWith("/.loopover.yml")) return new Response("wantedPaths:\n  - src/\n", { status: 200 });
-        return new Response("not found", { status: 404 });
-      });
-      expect(await fetchRepoFocusManifestFile("owner/repo")).toBe("wantedPaths:\n  - src/\n");
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("(b) reads the new-brand .loopover.json (root) and .github/loopover.yml the same as their legacy equivalents", async () => {
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        const stringUrl = String(url);
-        if (stringUrl.endsWith("/.loopover.json")) return new Response('{"wantedPaths":["src/"]}', { status: 200 });
-        return new Response("not found", { status: 404 });
-      });
-      expect(await fetchRepoFocusManifestFile("owner/repo")).toBe('{"wantedPaths":["src/"]}');
-    });
-
-    it("(c) prefers the new-brand .loopover.yml over a legacy .gittensory.yml published at the SAME repo", async () => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        const stringUrl = String(url);
-        if (stringUrl.endsWith("/.loopover.yml")) return new Response("wantedPaths:\n  - new-brand/\n", { status: 200 });
-        if (stringUrl.endsWith("/.gittensory.yml")) return new Response("wantedPaths:\n  - legacy/\n", { status: 200 });
-        return new Response("not found", { status: 404 });
-      });
-      expect(await fetchRepoFocusManifestFile("owner/repo")).toBe("wantedPaths:\n  - new-brand/\n");
-      expect(fetchSpy).toHaveBeenCalledTimes(1); // the new-brand root candidate is tried (and hits) first
-    });
-
-    it("(c) prefers a new-brand .github/loopover.json over a legacy root .gittensory.yml — brand is the outer sort key", async () => {
-      // MANIFEST_FILE_CANDIDATES orders new-brand root .yml/.github .yml/root .json/.github .json before ANY
-      // legacy candidate, so a legacy root .yml never even gets a chance once any new-brand candidate 200s.
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        const stringUrl = String(url);
-        if (stringUrl.endsWith("/.github/loopover.json")) {
-          return new Response('{"wantedPaths":["new-brand/"]}', { status: 200 });
-        }
-        if (stringUrl.endsWith("/.gittensory.yml")) return new Response("wantedPaths:\n  - legacy/\n", { status: 200 });
-        return new Response("not found", { status: 404 });
-      });
-      expect(await fetchRepoFocusManifestFile("owner/repo")).toBe('{"wantedPaths":["new-brand/"]}');
-    });
   });
 
   it("exposes a reasonable default max-age", () => {
@@ -547,7 +470,7 @@ describe("focus-manifest loader — container-private config (self-host)", () =>
     });
     expect(manifest.source).toBe("api_record");
     expect(manifest.wantedPaths).toEqual(["private/"]);
-    expect(fetched).toBe(0); // the public `.gittensory.yml` was never fetched
+    expect(fetched).toBe(0); // the public `.loopover.yml` was never fetched
   });
 
   it("falls through to the public fetcher when the local reader has no file for the repo", async () => {
@@ -584,12 +507,12 @@ describe("focus-manifest loader — container-private config (self-host)", () =>
     const env = createTestEnv();
     setLocalManifestReader(async () => ({
       content: JSON.stringify({ review: { profile: "assertive" } }),
-      sharedConfigSource: "_shared/.gittensory.yml",
+      sharedConfigSource: "_shared/.loopover.yml",
       warnings: [],
     }));
     const manifest = await loadRepoFocusManifest(env, "owner/private");
     expect(manifest.review.profile).toBe("assertive");
-    expect(manifest.review.sharedConfigSource).toBe("_shared/.gittensory.yml");
+    expect(manifest.review.sharedConfigSource).toBe("_shared/.loopover.yml");
   });
 
   it("appends private-config warnings without sharedConfigSource (#2046)", async () => {

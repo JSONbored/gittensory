@@ -32,9 +32,9 @@ function bodyFromMarker(content: string, marker: string): string {
 }
 
 describe("config/examples review templates (#1682)", () => {
-  it("gittensory.full.yml body matches .gittensory.yml.example from WHERE IT LIVES onward", () => {
+  it("gittensory.full.yml body matches .loopover.yml.example from WHERE IT LIVES onward", () => {
     const full = readConfigExample("gittensory.full.yml");
-    const example = readRoot(".gittensory.yml.example");
+    const example = readRoot(".loopover.yml.example");
     expect(bodyFromMarker(full, CANONICAL_BODY_MARKER)).toBe(bodyFromMarker(example, CANONICAL_BODY_MARKER));
   });
 
@@ -250,8 +250,8 @@ describe("config/examples review templates (#1682)", () => {
     expect(resolveAutonomy(on.settings.autonomy, "merge")).toBe("auto");
     expect(resolveAutonomy(on.settings.autonomy, "close")).toBe("observe"); // unset action ⇒ default
   });
-  it("imports an existing .gittensory.yml's field values across sections into the parsed manifest (#2212)", () => {
-    // The config-generator's "import existing .gittensory.yml into the form" reads an operator's file back
+  it("imports an existing .loopover.yml's field values across sections into the parsed manifest (#2212)", () => {
+    // The config-generator's "import existing .loopover.yml into the form" reads an operator's file back
     // through the same parser; lock in that a multi-section config's values round-trip faithfully (not just
     // that it parses without warnings).
     const yml = [

@@ -89,7 +89,7 @@ describe("MCP gittensory_refresh_repo_docs (#3003)", () => {
     const client = await connect(env);
     const result = await client.callTool({ name: "gittensory_refresh_repo_docs", arguments: { owner: "owner", repo: "widgets" } });
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.gittensory.yml repoDocGeneration.enabled)" });
+    expect(result.structuredContent).toEqual({ opened: false, reason: "repo-doc generation is not enabled for this repository (.loopover.yml repoDocGeneration.enabled)" });
   });
 
   it("denies a static MCP-token caller when the repo is not in MCP_ACTUATION_REPO_ALLOWLIST", async () => {
