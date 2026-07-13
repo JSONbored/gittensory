@@ -152,6 +152,8 @@ function readinessFixture(overrides: Partial<RegistrationReadinessReport> = {}):
           draftPullRequests: 0,
           maintainerAuthoredPullRequests: 0,
           collisionClusters: 0,
+          slopFlaggedPullRequests: 0,
+          duplicateFlaggedPullRequests: 0,
           ageBuckets: { under7Days: 2, days7To30: 3, over30Days: 1 },
           likelyReviewablePullRequests: 0,
         },

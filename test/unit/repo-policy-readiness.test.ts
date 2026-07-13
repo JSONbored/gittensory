@@ -73,6 +73,8 @@ function queue(overrides: Partial<QueueHealth> = {}): QueueHealth {
       draftPullRequests: 0,
       maintainerAuthoredPullRequests: 0,
       collisionClusters: 0,
+      slopFlaggedPullRequests: 0,
+      duplicateFlaggedPullRequests: 0,
       ageBuckets: { under7Days: 1, days7To30: 0, over30Days: 0 },
       likelyReviewablePullRequests: 1,
     },

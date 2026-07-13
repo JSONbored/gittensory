@@ -2530,6 +2530,8 @@ function queueHealthFixture(repoFullName: string, level: QueueHealth["level"]): 
       draftPullRequests: 0,
       maintainerAuthoredPullRequests: 0,
       collisionClusters: 0,
+      slopFlaggedPullRequests: 0,
+      duplicateFlaggedPullRequests: 0,
       ageBuckets: { under7Days: 0, days7To30: 0, over30Days: 0 },
       likelyReviewablePullRequests: level === "low" ? 1 : level === "medium" ? 3 : level === "high" ? 6 : 10,
     },

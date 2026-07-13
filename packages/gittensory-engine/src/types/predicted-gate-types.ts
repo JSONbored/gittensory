@@ -197,6 +197,10 @@ export type QueueHealth = {
     draftPullRequests: number;
     maintainerAuthoredPullRequests: number;
     collisionClusters: number;
+    /** Open PRs with slop band elevated or high (public-safe flag count for trend snapshots). */
+    slopFlaggedPullRequests: number;
+    /** Open PRs in a high-risk duplicate cluster with 2+ pull requests (public-safe flag count). */
+    duplicateFlaggedPullRequests: number;
     ageBuckets: {
       under7Days: number;
       days7To30: number;
