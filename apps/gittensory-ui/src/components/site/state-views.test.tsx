@@ -31,7 +31,9 @@ describe("ErrorState network-vs-API distinction (#793)", () => {
   });
 
   it("lets an explicit title/description override the errorKind-derived copy", () => {
-    render(<ErrorState errorKind="network" title="Custom title" description="Custom description" />);
+    render(
+      <ErrorState errorKind="network" title="Custom title" description="Custom description" />,
+    );
     expect(screen.getByText("Custom title")).toBeTruthy();
     expect(screen.getByText("Custom description")).toBeTruthy();
     expect(screen.queryByText("Can't reach the server")).toBeNull();

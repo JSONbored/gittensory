@@ -52,14 +52,24 @@ describe("useApiResource errorKind/errorStatus (#793)", () => {
   });
 
   it("carries a network failure kind with no status", async () => {
-    apiFetch.mockResolvedValue({ ok: false, kind: "network", message: "fetch failed", durationMs: 5 });
+    apiFetch.mockResolvedValue({
+      ok: false,
+      kind: "network",
+      message: "fetch failed",
+      durationMs: 5,
+    });
     const { result } = renderHook(() => useApiResource("/v1/thing", "Thing"));
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current).toMatchObject({ errorKind: "network", errorStatus: undefined });
   });
 
   it("carries a timeout failure kind", async () => {
-    apiFetch.mockResolvedValue({ ok: false, kind: "timeout", message: "Request timed out", durationMs: 5 });
+    apiFetch.mockResolvedValue({
+      ok: false,
+      kind: "timeout",
+      message: "Request timed out",
+      durationMs: 5,
+    });
     const { result } = renderHook(() => useApiResource("/v1/thing", "Thing"));
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current).toMatchObject({ errorKind: "timeout" });
