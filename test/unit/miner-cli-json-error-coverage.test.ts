@@ -114,6 +114,16 @@ describe("miner CLI --json error coverage (#4836)", () => {
     );
     expectJsonError(() => runQueueRelease(["only-one", "--json"]), /queue release/);
     expectJsonError(() => runQueueRequeue(["only-one", "--json"]), /queue requeue/);
+    expectJsonError(() => runQueueDone(["only-one", "--json"]), /queue done/);
+    expectJsonError(() => runQueueNext(["--bogus", "--json"]), /Unknown option/);
+    expectJsonError(
+      () =>
+        runQueueRelease(["acme/widgets", "issue:1", "--json"], {
+          initPortfolioQueue: () =>
+            ({ reclaimStuckItem: () => { throw "raw_release_fault"; }, close: () => {} }) as never,
+        }),
+      "raw_release_fault",
+    );
   });
 
   it("plan list/show failures", () => {
@@ -153,9 +163,20 @@ describe("miner CLI --json error coverage (#4836)", () => {
       throw new Error("ledger_broken");
     };
     expectJsonError(() => runClaimClaim(["--json"]), /Usage: gittensory-miner claim claim/);
+    expectJsonError(() => runClaimRelease(["acme/widgets", "--json"]), /Usage: gittensory-miner claim release/);
+    expectJsonError(() => runClaimList(["--status", "bogus", "--json"]), /status must be one of/);
     expectJsonError(
       () => runClaimClaim(["acme/widgets", "1", "--json"], { openClaimLedger: broken }),
       "ledger_broken",
+    );
+    expectJsonError(
+      () =>
+        runClaimClaim(["acme/widgets", "2", "--json"], {
+          openClaimLedger: () => {
+            throw "raw_claim_fault";
+          },
+        }),
+      "raw_claim_fault",
     );
     expectJsonError(
       () => runClaimRelease(["acme/widgets", "1", "--json"], { openClaimLedger: broken }),
