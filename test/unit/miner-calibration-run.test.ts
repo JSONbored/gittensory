@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // The runner imports `computePhase7CalibrationLoop` from the engine PACKAGE; resolve it to the in-repo source so the
 // default (non-injected) combine branch runs against the real engine, exactly like miner-feasibility-cli.test.ts.
-vi.mock("@jsonbored/gittensory-engine", async () => import("../../packages/gittensory-engine/src/index"));
+vi.mock("@loopover/engine", async () => import("../../packages/gittensory-engine/src/index"));
 
 import {
   MINER_CALIBRATION_SNAPSHOT_EVENT,

@@ -1,15 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { Badge } from "@jsonbored/gittensory-ui-kit/components/badge";
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@jsonbored/gittensory-ui-kit/components/table";
+import { Badge } from "@loopover/ui-kit/components/badge";
+import { Card, CardContent, CardHeader } from "@loopover/ui-kit/components/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@loopover/ui-kit/components/table";
 
 import { DEFAULT_POLL_INTERVAL_MS, usePolledFetch } from "../lib/use-polled-fetch";
 import { fetchRunStates, type RunHistoryResult, type RunStateRow } from "../lib/run-history";

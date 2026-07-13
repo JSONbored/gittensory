@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/context-menu";
+export * from "@loopover/ui-kit/components/context-menu";

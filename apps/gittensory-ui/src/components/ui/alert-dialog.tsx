@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/alert-dialog";
+export * from "@loopover/ui-kit/components/alert-dialog";

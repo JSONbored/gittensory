@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
- * @param {import("@jsonbored/gittensory-engine").LocalWriteActionSpec} spec
+ * @param {import("@loopover/engine").LocalWriteActionSpec} spec
  * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, timeoutMs?: number }} [options]
  * @returns {Promise<{ action: string, stdout: string, stderr: string, code: number | null, timedOut: boolean }>}
  */

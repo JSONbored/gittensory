@@ -1,3 +1,3 @@
-import type { SlopAssessment, SlopAssessmentInput } from "@jsonbored/gittensory-engine";
+import type { SlopAssessment, SlopAssessmentInput } from "@loopover/engine";
 
 export function runSlopAssessment(input: SlopAssessmentInput): SlopAssessment;

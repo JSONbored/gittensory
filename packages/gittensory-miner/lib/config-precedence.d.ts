@@ -1,5 +1,5 @@
-import type { MinerActionMode, MinerKillSwitchScope } from "@jsonbored/gittensory-engine";
-import type { CodingAgentExecutionMode } from "@jsonbored/gittensory-engine";
+import type { MinerActionMode, MinerKillSwitchScope } from "@loopover/engine";
+import type { CodingAgentExecutionMode } from "@loopover/engine";
 import type { ForgeConfig } from "./forge-config.js";
 
 export function resolveDocumentedKillSwitchScope(

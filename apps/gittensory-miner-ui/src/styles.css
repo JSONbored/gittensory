@@ -2,11 +2,11 @@
 @source "../src";
 @source "../../../packages/gittensory-ui-kit/src";
 @import "tw-animate-css";
-@import "@jsonbored/gittensory-ui-kit/theme.css";
+@import "@loopover/ui-kit/theme.css";
 
 /*
  * gittensory-miner-ui renders from the same shared design system as
- * gittensory-ui (imported above from @jsonbored/gittensory-ui-kit) — no
+ * gittensory-ui (imported above from @loopover/ui-kit) — no
  * local tokens, colors, or fonts. Dark-only for now (the `.dark` class is
  * hardcoded on <html> in index.html), matching gittensory-ui's current
  * dark-only deployment — the light tokens ship in the shared theme so a

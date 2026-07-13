@@ -1,4 +1,4 @@
-# @jsonbored/gittensory-miner
+# @loopover/miner
 
 Foundation CLI for the local Gittensory miner runtime.
 
@@ -62,7 +62,7 @@ is separate, later-wave scope. (#4851)
 
 The package also includes a local soft-claim ledger: `openClaimLedger` / `claimIssue` / `releaseClaim` /
 `listActiveClaims` persist which issues this miner instance has claimed on this machine. The table is local
-bookkeeping only — duplicate winners are adjudicated elsewhere via `@jsonbored/gittensory-engine`. (#2291)
+bookkeeping only — duplicate winners are adjudicated elsewhere via `@loopover/engine`. (#2291)
 
 The package also includes an append-only event ledger: `initEventLedger` / `appendEvent` / `readEvents` persist
 immutable miner-loop events in local SQLite for contributor audit. Insert-only — rows are never updated or
@@ -163,7 +163,7 @@ See [`docs/operations-runbook.md`](docs/operations-runbook.md) for SQLite concur
 Zero-infra local install — no Docker, Redis, or Postgres required:
 
 ```sh
-npm install -g @jsonbored/gittensory-miner
+npm install -g @loopover/miner
 gittensory-miner init
 gittensory-miner doctor
 gittensory-miner status
@@ -175,8 +175,8 @@ From a local checkout:
 
 ```sh
 npm install
-npm --workspace @jsonbored/gittensory-miner run build
-npm link --workspace @jsonbored/gittensory-miner
+npm --workspace @loopover/miner run build
+npm link --workspace @loopover/miner
 ```
 
 ### Coding-agent driver configuration
@@ -245,7 +245,7 @@ This completes the read-only AMS MCP tool surface (status, portfolio, claims, ev
 
 ### Client config
 
-`gittensory-mcp` (ORB's hosted contributor-workflow tools) and `gittensory-miner-mcp` (AMS's own local state-visibility tools above) can run as two separate stdio servers in the same MCP client session — useful for a dual-role operator running both ORB and AMS on the same box. Generate ORB's half with `gittensory-mcp init-client --print claude` (see the [`@jsonbored/gittensory-mcp` README](../gittensory-mcp/README.md#client-config)); `gittensory-miner-mcp` takes no flags, so its entry is just the bin name. Combined, a Claude Desktop / Claude Code style config looks like:
+`gittensory-mcp` (ORB's hosted contributor-workflow tools) and `gittensory-miner-mcp` (AMS's own local state-visibility tools above) can run as two separate stdio servers in the same MCP client session — useful for a dual-role operator running both ORB and AMS on the same box. Generate ORB's half with `gittensory-mcp init-client --print claude` (see the [`@loopover/mcp` README](../gittensory-mcp/README.md#client-config)); `gittensory-miner-mcp` takes no flags, so its entry is just the bin name. Combined, a Claude Desktop / Claude Code style config looks like:
 
 ```json
 {
@@ -266,4 +266,4 @@ This completes the read-only AMS MCP tool surface (status, portfolio, claims, ev
 
 ## Version check
 
-On every invocation the CLI starts an async npm registry lookup (5s timeout). When the installed package is behind `@jsonbored/gittensory-miner@latest`, it prints a one-line upgrade command to stderr without blocking or failing the requested command. Set `GITTENSORY_NPM_REGISTRY_URL` to point at a mirror, same as `@jsonbored/gittensory-mcp`.
+On every invocation the CLI starts an async npm registry lookup (5s timeout). When the installed package is behind `@loopover/miner@latest`, it prints a one-line upgrade command to stderr without blocking or failing the requested command. Set `GITTENSORY_NPM_REGISTRY_URL` to point at a mirror, same as `@loopover/mcp`.

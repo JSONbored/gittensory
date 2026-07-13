@@ -23,7 +23,7 @@ describe("MCP server telemetry", () => {
       headers: {
         authorization: `Bearer ${env.GITTENSORY_MCP_TOKEN}`,
         "content-type": "application/json",
-        "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+        "x-gittensory-mcp-package": "@loopover/mcp",
         "x-gittensory-mcp-version": "0.5.0",
         "x-gittensory-mcp-client": "gittensory-mcp-cli",
       },

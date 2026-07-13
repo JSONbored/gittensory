@@ -5,7 +5,7 @@ import type {
   Phase7CalibrationManifest,
   PrOutcomeCalibrationInput,
   ReplayHarnessStatus,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 
 import type { AppendEventInput, LedgerEntry } from "./event-ledger.js";
 import type {

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
+import { Card, CardContent, CardHeader } from "@loopover/ui-kit/components/card";
 
 import { fetchLedgers, type LedgersResult } from "../lib/ledgers";
 import { fetchPortfolioQueue, type PortfolioQueueResult } from "../lib/portfolio-queue";

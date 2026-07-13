@@ -1,4 +1,4 @@
-import type { AgentSdkHooks, AgentSdkQueryFn, CliSubprocessSpawnFn, CodingAgentDriver } from "@jsonbored/gittensory-engine";
+import type { AgentSdkHooks, AgentSdkQueryFn, CliSubprocessSpawnFn, CodingAgentDriver } from "@loopover/engine";
 
 export function createRealCliSubprocessSpawn(): CliSubprocessSpawnFn;
 

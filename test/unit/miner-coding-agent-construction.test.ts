@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@loopover/engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 

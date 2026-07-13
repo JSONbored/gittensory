@@ -6,7 +6,7 @@ import enginePkg from "../../packages/gittensory-engine/package.json";
 // package contract so the skeleton stays correct and installable as extraction lands.
 describe("gittensory-engine package scaffold", () => {
   it("declares the published package identity", () => {
-    expect(enginePkg.name).toBe("@jsonbored/gittensory-engine");
+    expect(enginePkg.name).toBe("@loopover/engine");
     expect(enginePkg.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(enginePkg.type).toBe("module");
     expect(enginePkg.license).toBe("AGPL-3.0-only");

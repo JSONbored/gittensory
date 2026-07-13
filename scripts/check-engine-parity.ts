@@ -2,7 +2,7 @@
 // Mechanical drift tripwire for hand-duplicated src/ <-> gittensory-engine file pairs (#4260). Most src/{review,
 // settings,signals} modules are thin re-export shims over the engine, but ~15 twin files are still maintained in
 // parallel — this script discovers those pairs, normalizes known-harmless import-path aliases, and fails CI when
-// the normalized bodies diverge. Also compares the workspace-installed @jsonbored/gittensory-engine semver against
+// the normalized bodies diverge. Also compares the workspace-installed @loopover/engine semver against
 // the monorepo engine package's declared version (version-skew tripwire; no live-gate round-trip).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -150,7 +150,7 @@ const ENGINE_SRC_ROOT = "packages/gittensory-engine/src";
 const HOST_SRC_ROOT = "src";
 const ENGINE_PACKAGE_JSON = "packages/gittensory-engine/package.json";
 const MINER_ENGINE_PIN_FILE = "packages/gittensory-miner/expected-engine.version";
-const ENGINE_PACKAGE_NAME = "@jsonbored/gittensory-engine";
+const ENGINE_PACKAGE_NAME = "@loopover/engine";
 
 export type EngineParityPair = {
   area: string;
@@ -546,7 +546,7 @@ export type EngineVersionSkewResult = {
 };
 
 /**
- * Version-skew tripwire: installed @jsonbored/gittensory-engine must be >= the monorepo engine package version.
+ * Version-skew tripwire: installed @loopover/engine must be >= the monorepo engine package version.
  * Returns `{ failures, installed, expected, skew }`.
  */
 export function checkEngineVersionSkew({

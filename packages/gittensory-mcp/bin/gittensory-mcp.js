@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { buildFeasibilityVerdict } from "@jsonbored/gittensory-engine";
+import { buildFeasibilityVerdict } from "@loopover/engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -213,7 +213,7 @@ const feasibilityGateShape = {
  * (#5157), so `gittensory_feasibility_gate` isn't purely trusting a caller-supplied `claimStatus` string.
  * Returns `null` (fall back to the caller-supplied value unchanged) only when there is genuinely nothing to
  * look up: no repo/issue supplied, no local install detected (the ledger DB file doesn't exist -- checked
- * via `existsSync` BEFORE opening anything), or the sibling `@jsonbored/gittensory-miner` package isn't
+ * via `existsSync` BEFORE opening anything), or the sibling `@loopover/miner` package isn't
  * resolvable at all (a standalone gittensory-mcp install with no miner alongside it). When the ledger DB
  * file DOES exist (a real local install IS present) but reading it fails -- corrupt, locked, permission
  * denied -- this returns `"unknown"` rather than silently falling back to a caller-supplied string that
@@ -231,7 +231,7 @@ async function resolveLedgerClaimStatus(repoFullName, issueNumber) {
   if (!repoFullName || !issueNumber) return null;
   let claimLedgerModule;
   try {
-    claimLedgerModule = await import("@jsonbored/gittensory-miner/lib/claim-ledger.js");
+    claimLedgerModule = await import("@loopover/miner/lib/claim-ledger.js");
   } catch {
     /* v8 ignore next -- gittensory-miner genuinely unresolvable (not installed alongside gittensory-mcp); not
        reproducible in this monorepo's workspace-hoisted test environment, where the sibling package always
@@ -4023,7 +4023,7 @@ async function fetchLatestPackageVersion() {
   if (/^(1|true|yes)$/i.test(process.env.GITTENSORY_SKIP_NPM_VERSION_CHECK ?? "false")) return { status: "skipped" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
-  const response = await fetch(`${npmRegistryUrl}/@jsonbored%2fgittensory-mcp/latest`, {
+  const response = await fetch(`${npmRegistryUrl}/@loopover%2fmcp/latest`, {
     signal: controller.signal,
     headers: { accept: "application/json" },
   }).finally(() => clearTimeout(timeout));

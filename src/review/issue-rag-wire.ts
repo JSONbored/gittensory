@@ -1,5 +1,5 @@
 /**
- * Issue-centric RAG query composition (#2320), extracted to `@jsonbored/gittensory-engine` (#4254) so the
+ * Issue-centric RAG query composition (#2320), extracted to `@loopover/engine` (#4254) so the
  * miner analyze phase can compose the identical retrieval query from an issue's title/body/labels without
  * importing the review stack. Retrieval wiring for the miner MCP tool lives in `./issue-rag-retrieval.ts`
  * and `src/mcp/issue-rag.ts` (#4293); the Vectorize/D1 backend itself stays in `./rag`.

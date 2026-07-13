@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { resolveAiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import { resolveAiPolicyVerdict } from "@loopover/engine";
 import { resolveForgeConfig } from "./forge-config.js";
 import {
   DEFAULT_RATE_LIMIT_HIGH_WATER_MARK,

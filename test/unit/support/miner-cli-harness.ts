@@ -109,7 +109,7 @@ export async function startRegistryFixture(
   server = createServer((request, response) => {
     const respond = () => {
       response.setHeader("content-type", "application/json");
-      if (request.url && request.url.includes("gittensory-miner/latest")) {
+      if (request.url && request.url.includes("loopover%2Fminer/latest")) {
         if (options.npmStatus && options.npmStatus >= 400) {
           response.statusCode = options.npmStatus;
           response.end(JSON.stringify({ error: "registry_error" }));

@@ -9,7 +9,7 @@ import { syncUnmodeledScoringConstantDrift } from "../upstream/unmodeled-scoring
 import type { JsonValue, ScoringModelSnapshotRecord } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 
-// Deterministic constants/classifiers, extracted to `@jsonbored/gittensory-engine` (#2282) so the miner can
+// Deterministic constants/classifiers, extracted to `@loopover/engine` (#2282) so the miner can
 // run the same scoring-constant logic locally. Re-exported here (via relative source path — see
 // src/scoring/preview.ts's shim comment for why) so every existing import of this module keeps working
 // unchanged. The upstream-fetching, D1-persisting logic below is Cloudflare/D1-bound and cannot move into

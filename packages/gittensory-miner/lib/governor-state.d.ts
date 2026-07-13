@@ -1,4 +1,4 @@
-import type { GovernorCapUsage, OwnSubmissionRecord, RepoOutcomeHistory, WriteRateLimitBackoffStore, WriteRateLimitBucketStore } from "@jsonbored/gittensory-engine";
+import type { GovernorCapUsage, OwnSubmissionRecord, RepoOutcomeHistory, WriteRateLimitBackoffStore, WriteRateLimitBucketStore } from "@loopover/engine";
 
 export type GovernorRateLimitState = {
   buckets: WriteRateLimitBucketStore;

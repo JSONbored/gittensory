@@ -1,5 +1,5 @@
 {
-  "name": "@jsonbored/gittensory-miner-ui",
+  "name": "@loopover/ui-miner",
   "version": "0.0.0",
   "private": true,
   "description": "Local read-only dashboard shell for the Gittensory miner.",
@@ -15,7 +15,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
-    "@jsonbored/gittensory-ui-kit": "^0.1.0",
+    "@loopover/ui-kit": "^0.1.0",
     "@tailwindcss/vite": "^4.3.2",
     "@tanstack/react-router": "^1.170.17",
     "react": "^19.2.7",

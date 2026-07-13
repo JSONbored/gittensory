@@ -1,6 +1,6 @@
 import { runGovernorPause, runGovernorResume, runGovernorStatus } from "./governor-pause-cli.js";
 
-/** Must match `GOVERNOR_LEDGER_EVENT_TYPES` in `@jsonbored/gittensory-engine`. */
+/** Must match `GOVERNOR_LEDGER_EVENT_TYPES` in `@loopover/engine`. */
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const GOVERNOR_LEDGER_EVENT_TYPES = Object.freeze([

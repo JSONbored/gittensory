@@ -107,7 +107,7 @@ jobs:
             # subprocess via StdioClientTransport -- none of the 6 ever load root src/ in-process. This mirrors
             # the `mcp` filter's own established trust boundary above (a self-contained package build). They are
             # NOT self-contained w.r.t. packages/gittensory-engine/**, though: gittensory-mcp now has a real
-            # dependency on @jsonbored/gittensory-engine (isTestFile/isCodeFile), which the bin subprocess and
+            # dependency on @loopover/engine (isTestFile/isCodeFile), which the bin subprocess and
             # local-branch.js load at runtime -- hence that path below, alongside the mcp package's own.
             # test/unit/mcp-output-schemas.test.ts is DELIBERATELY NOT in this filter: unlike the other 6, it
             # imports src/mcp/server.ts in-process, and server.ts alone directly imports ~40 other src/ modules
@@ -276,7 +276,7 @@ jobs:
         run: node scripts/validate-observability-configs.mjs
       # Runs ahead of Typecheck AND "Test with coverage" (#ci-engine-build-order): src/mcp/find-opportunities.ts
       # (root backend, since #2281/#3985) imports packages/gittensory-miner/lib/opportunity-fanout.js --
-      # committed, pre-built JS -- which itself imports @jsonbored/gittensory-engine. That package's dist/ is
+      # committed, pre-built JS -- which itself imports @loopover/engine. That package's dist/ is
       # gitignored and only exists after this build step, so ANY backend typecheck or test run needs it built
       # first, not just a PR that touches packages/gittensory-engine/** directly (this step's original, too-
       # narrow trigger). Originally ran after coverage (broke test:coverage on PRs that didn't touch the
@@ -285,7 +285,7 @@ jobs:
       # of both.
       - name: Build engine package
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.ui == 'true' }}
-        run: npm run build --workspace @jsonbored/gittensory-engine
+        run: npm run build --workspace @loopover/engine
       # .tsbuildinfo mutates every run (tsc's own incremental state), unlike node_modules above which is
       # immutable per lockfile -- so this needs the run_id-suffixed-key + restore-keys-prefix pattern (always
       # creates a new cache entry to save into, restore falls back to the most recent matching prefix) rather
@@ -312,7 +312,7 @@ jobs:
       - name: Worker runtime tests
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run test:workers
-      # gittensory-mcp now depends on @jsonbored/gittensory-engine for real (isTestFile/isCodeFile), so a
+      # gittensory-mcp now depends on @loopover/engine for real (isTestFile/isCodeFile), so a
       # PR that only touches packages/gittensory-engine/** must also rebuild + pack-check the mcp package,
       # not just the mcp filter's own (deliberately narrower) path list.
       - name: Build MCP
@@ -397,7 +397,7 @@ jobs:
       # steps directly instead of the aggregate script, skipping that redundant regen.
       - name: UI build
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
-        run: npm run extension:build && npm run miner-extension:build && npm --workspace @jsonbored/gittensory-ui run build
+        run: npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build
 
   # The full-suite coverage run, sharded (#ci-shard-coverage). This alone was ~9-10 of the ~11 minutes a
   # typical backend PR spent in validate-code, because vitest schedules whole test FILES atomically to
@@ -471,7 +471,7 @@ jobs:
       # Any backend test run needs the engine package's dist/ built first -- see the identical step's
       # comment in validate-code (#ci-engine-build-order) for why.
       - name: Build engine package
-        run: npm run build --workspace @jsonbored/gittensory-engine
+        run: npm run build --workspace @loopover/engine
       - name: Prepare test reports dir
         run: mkdir -p reports/junit
       - name: Test with coverage (shard ${{ matrix.shard }}/6)

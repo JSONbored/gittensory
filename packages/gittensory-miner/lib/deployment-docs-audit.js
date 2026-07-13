@@ -7,7 +7,7 @@
 /** The miner's own env-var namespace: GITTENSORY_MINER_* and the shorter MINER_* aliases it reads. */
 const ENV_VAR_PATTERN = /\b(?:GITTENSORY_MINER|MINER)_[A-Z0-9_]+\b/g;
 
-/** `gittensory-miner <subcommand>` CLI invocations, excluding the `@jsonbored/gittensory-miner` package spelling. */
+/** `gittensory-miner <subcommand>` CLI invocations, excluding the `@loopover/miner` package spelling. */
 const SUBCOMMAND_PATTERN = /(?<![\w./@-])gittensory-miner\s+([a-z][a-z0-9-]*)/g;
 
 /** Markdown inline-link targets: the `target` in `](target)`. */

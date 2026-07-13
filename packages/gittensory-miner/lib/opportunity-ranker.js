@@ -2,7 +2,7 @@ import {
   DEFAULT_MINER_GOAL_SPEC,
   parseMinerGoalSpecContent,
   rankMetadataOpportunities,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 
 function finiteEpochMs(value) {
   return Number.isFinite(value) ? value : Date.now();

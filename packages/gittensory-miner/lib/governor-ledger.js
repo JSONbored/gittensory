@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { normalizeGovernorLedgerEvent } from "@jsonbored/gittensory-engine";
+import { normalizeGovernorLedgerEvent } from "@loopover/engine";
 import { applySchemaMigrations } from "./schema-version.js";
 import {
   GOVERNOR_LEDGER_PURGE_SPEC,

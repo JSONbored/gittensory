@@ -4,7 +4,7 @@ import type {
   PortfolioConvergenceInput,
   PortfolioConvergenceThresholds,
   RunLoopHaltVerdict,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 import type { AppendGovernorEventInput, GovernorLedgerEntry } from "./governor-ledger.js";
 import type { QueueEntry } from "./portfolio-queue.js";
 

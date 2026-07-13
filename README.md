@@ -4,7 +4,7 @@ _Formerly Gittensory._
 
 <p align="center">
   <a href="https://github.com/JSONbored/gittensory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JSONbored/gittensory/actions/workflows/ci.yml/badge.svg" /></a>
-  <a href="https://www.npmjs.com/package/@jsonbored/gittensory-mcp"><img alt="MCP package" src="https://img.shields.io/npm/v/@jsonbored/gittensory-mcp?label=mcp" /></a>
+  <a href="https://www.npmjs.com/package/@loopover/mcp"><img alt="MCP package" src="https://img.shields.io/npm/v/@loopover/mcp?label=mcp" /></a>
   <a href="https://github.com/JSONbored/gittensory/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/JSONbored/gittensory" /></a>
   <a href="https://gittensory.aethereal.dev/docs"><img alt="Docs" src="https://img.shields.io/badge/docs-gittensory.aethereal.dev-0b6bcb" /></a>
   <a href="https://gittensor.io/miners/repository?name=JSONbored/gittensory"><img alt="Gittensor impact" src="https://api.gittensor.io/repos/JSONbored%2Fgittensory/badge.svg" /></a>
@@ -63,9 +63,9 @@ See [Tuning your reviews](https://gittensory.aethereal.dev/docs/tuning) for the 
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Website           | [gittensory.aethereal.dev](https://gittensory.aethereal.dev/)                                                                      |
 | Docs              | [gittensory.aethereal.dev/docs](https://gittensory.aethereal.dev/docs)                                                             |
-| MCP package       | [@jsonbored/gittensory-mcp](https://www.npmjs.com/package/@jsonbored/gittensory-mcp)                                               |
-| Engine package    | [`@jsonbored/gittensory-engine`](packages/gittensory-engine/README.md) — shared deterministic logic for the review stack and miner |
-| Miner package     | [`@jsonbored/gittensory-miner`](packages/gittensory-miner/README.md) — local foundation CLI for the autonomous miner runtime        |
+| MCP package       | [@loopover/mcp](https://www.npmjs.com/package/@loopover/mcp)                                               |
+| Engine package    | [`@loopover/engine`](packages/gittensory-engine/README.md) — shared deterministic logic for the review stack and miner |
+| Miner package     | [`@loopover/miner`](packages/gittensory-miner/README.md) — local foundation CLI for the autonomous miner runtime        |
 | API               | [API browser](https://gittensory.aethereal.dev/api) and [OpenAPI JSON](https://gittensory-api.aethereal.dev/openapi.json)          |
 | GitHub App        | [Setup docs](https://gittensory.aethereal.dev/docs/github-app) — self-hosting is the only currently available path |
 | Browser extension | [Extension page](https://gittensory.aethereal.dev/extension)                                                                       |
@@ -73,7 +73,7 @@ See [Tuning your reviews](https://gittensory.aethereal.dev/docs/tuning) for the 
 ## MCP Install
 
 ```sh
-npm install -g @jsonbored/gittensory-mcp@latest
+npm install -g @loopover/mcp@latest
 gittensory-mcp login
 gittensory-mcp doctor
 gittensory-mcp --stdio

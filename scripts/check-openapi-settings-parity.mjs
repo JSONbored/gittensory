@@ -3,7 +3,7 @@
 // schemas -- ui:openapi:check only verifies the generated openapi.json matches THEM, never that they match
 // the actual RepositorySettings TS type the API handler serializes. A field added to the TS type (and
 // actually returned by GET /v1/repos/:owner/:repo/settings) can silently miss the Zod schema forever, with
-// no CI signal -- breaking generated API clients (including @jsonbored/gittensory-mcp) that have no way to
+// no CI signal -- breaking generated API clients (including @loopover/mcp) that have no way to
 // know about a field the spec doesn't mention. This is a structural key-set diff, not a value/type check.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

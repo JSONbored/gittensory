@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/checkbox";
+export * from "@loopover/ui-kit/components/checkbox";

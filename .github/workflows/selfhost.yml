@@ -75,13 +75,13 @@ jobs:
         run: npm ci --ignore-scripts
 
       # Same #ci-engine-build-order fix as ci.yml (see its "Build engine package" step): the Postgres
-      # integration test's import graph now reaches @jsonbored/gittensory-engine transitively (#5117 moved
+      # integration test's import graph now reaches @loopover/engine transitively (#5117 moved
       # local-write action specs there; src/mcp/local-write-tools.ts re-exports them). That package's
       # dist/ is gitignored and only exists after this build step, so the test fails to resolve the
       # package's exports without it -- this workflow never needed the engine package built before, so it
       # never had this step; it does now.
       - name: Build engine package
-        run: npm run build --workspace @jsonbored/gittensory-engine
+        run: npm run build --workspace @loopover/engine
 
       - name: Postgres integration test (real PG)
         run: PG_TEST_URL=postgres://postgres:devpw@localhost:5432/gittensory npx vitest run test/integration/selfhost-pg.test.ts

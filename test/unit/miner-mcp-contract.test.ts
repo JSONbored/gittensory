@@ -111,8 +111,8 @@ const READ_ONLY_TOOLS: ToolContract[] = [
     args: {},
     valid: {
       collectStatus: () => ({
-        package: { name: "@jsonbored/gittensory-miner", version: "0.1.0" },
-        engine: { name: "@jsonbored/gittensory-engine", version: "1.0.0" },
+        package: { name: "@loopover/miner", version: "0.1.0" },
+        engine: { name: "@loopover/engine", version: "1.0.0" },
         node: "v22.13.0",
         stateDir: "/home/miner/.config/gittensory-miner",
         configFile: null,

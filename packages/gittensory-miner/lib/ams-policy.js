@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { DEFAULT_AMS_POLICY_SPEC, parseAmsPolicySpecContent } from "@jsonbored/gittensory-engine";
+import { DEFAULT_AMS_POLICY_SPEC, parseAmsPolicySpecContent } from "@loopover/engine";
 import { resolveLocalStoreDbPath } from "./local-store.js";
 
 // Resolver for the operator-local `.gittensory-ams.yml` (#5132, Wave 3.5 follow-up). AmsPolicySpec
@@ -52,7 +52,7 @@ function readLocalAmsPolicyContent(resolved) {
  *   readFileSync?: (path: string, encoding: "utf8") => string, existsSync?: (path: string) => boolean,
  *   env?: Record<string, string | undefined>,
  * }} [options]
- * @returns {Promise<{ spec: import("@jsonbored/gittensory-engine").AmsPolicySpec, source: "local"|"default", warnings: string[] }>}
+ * @returns {Promise<{ spec: import("@loopover/engine").AmsPolicySpec, source: "local"|"default", warnings: string[] }>}
  */
 export async function resolveAmsPolicy(repoFullName, options = {}) {
   void repoFullName;

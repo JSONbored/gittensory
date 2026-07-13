@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCodeFile, isTestPath as isTestFile } from "@jsonbored/gittensory-engine/signals/test-evidence";
+import { isCodeFile, isTestPath as isTestFile } from "@loopover/engine/signals/test-evidence";
 
 export { isCodeFile, isTestFile };
 
@@ -208,7 +208,7 @@ export function referenceScorePreviewCommand(kind = "metadata") {
 export function referenceScorePreviewExample(kind = "metadata") {
   const script = kind === "gittensor" ? "gittensor-score-preview.py" : "gittensor-score-preview.mjs";
   const interpreter = kind === "gittensor" ? "python3" : "node";
-  return `${interpreter} ./node_modules/@jsonbored/gittensory-mcp/scripts/${script}`;
+  return `${interpreter} ./node_modules/@loopover/mcp/scripts/${script}`;
 }
 
 export function redactLocalPath(value) {

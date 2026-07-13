@@ -1,13 +1,13 @@
 # Gittensory miner deployment
 
-Two form factors for running `@jsonbored/gittensory-miner`: **laptop mode** (single machine, zero Docker) and **fleet mode** (containerized workers with a shared data volume). Both are 100% client-side for core operation — the miner never uploads source and never requires a hosted Gittensory callback to boot. Credentials (GitHub tokens, etc.) stay on the operator's machine or in their own secret store; nothing is baked into images.
+Two form factors for running `@loopover/miner`: **laptop mode** (single machine, zero Docker) and **fleet mode** (containerized workers with a shared data volume). Both are 100% client-side for core operation — the miner never uploads source and never requires a hosted Gittensory callback to boot. Credentials (GitHub tokens, etc.) stay on the operator's machine or in their own secret store; nothing is baked into images.
 
 |                  | Laptop mode                                                                                    | Fleet mode                                                                        |
 | ---------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | **Best for**     | One contributor machine, local experimentation                                                 | Many parallel miner attempts on a host or small cluster                           |
 | **Dependencies** | Node.js `>=22.13.0` only                                                                       | Docker (or compatible runtime) + Node image or custom image                       |
 | **State**        | SQLite files under `~/.config/gittensory-miner/` (override with `GITTENSORY_MINER_CONFIG_DIR`) | Same SQLite layout on a mounted `/data` (or `GITTENSORY_MINER_CONFIG_DIR`) volume |
-| **Setup**        | `npm install -g @jsonbored/gittensory-miner` or workspace build                                | `docker build` + `docker run` with env + volume (see below)                       |
+| **Setup**        | `npm install -g @loopover/miner` or workspace build                                | `docker build` + `docker run` with env + volume (see below)                       |
 | **Footprint**    | One Node process, local disk for ledgers/queues                                                | One container per worker; scale horizontally by adding containers                 |
 
 ## Coding-agent provider configuration
@@ -21,9 +21,9 @@ For provider selection and the CLI-specific model/timeout overrides, see
 1. Install Node.js 22.13+ and the package:
 
    ```sh
-   npm install -g @jsonbored/gittensory-miner@latest
+   npm install -g @loopover/miner@latest
    # or from a checkout:
-   npm install && npm --workspace @jsonbored/gittensory-miner run build
+   npm install && npm --workspace @loopover/miner run build
    ```
 
 2. Inspect what is installed and where local state will live. `status` and `doctor` stay offline; `init --verify-token` is optional and makes one authenticated GitHub call up front:
@@ -60,7 +60,7 @@ For provider selection and the CLI-specific model/timeout overrides, see
    the first time its subsystem actually runs (an attempt, a discovery pass, a replay, an Orb export, …), so a
    fresh install that has only run `status`/`doctor` will show a subset. All sixteen default into this one
    directory. Override the directory for every store at once with `GITTENSORY_MINER_CONFIG_DIR` or
-   `XDG_CONFIG_HOME` (same resolution chain as `@jsonbored/gittensory-mcp`); every store except `laptop-state.sqlite3`
+   `XDG_CONFIG_HOME` (same resolution chain as `@loopover/mcp`); every store except `laptop-state.sqlite3`
    (directory only) also honors its own `GITTENSORY_MINER_<NAME>_DB` path override — e.g.
    `GITTENSORY_MINER_PORTFOLIO_QUEUE_DB` — to relocate an individual file. `doctor`'s `store-integrity:*` checks
    report the persistent stores, so it is the quickest way to confirm what exists and is readable on disk.
@@ -132,7 +132,7 @@ docker compose -f docker-compose.miner.yml up -d --build
 To run the miner continuously on a plain Linux host without Docker, supervise `gittensory-miner loop` — the autonomous discover → attempt → manage daemon (#5135) — with systemd. [`systemd/gittensory-miner.service.example`](../../systemd/gittensory-miner.service.example) is a ready-to-adapt persistent unit; its header carries the full install steps:
 
 ```sh
-npm install -g @jsonbored/gittensory-miner
+npm install -g @loopover/miner
 gittensory-miner init --verify-token   # optional: validate GITHUB_TOKEN before discovery/attempt runs
 sudo cp systemd/gittensory-miner.service.example /etc/systemd/system/gittensory-miner.service
 sudo $EDITOR /etc/systemd/system/gittensory-miner.service   # set User / WorkingDirectory / ExecStart / secrets

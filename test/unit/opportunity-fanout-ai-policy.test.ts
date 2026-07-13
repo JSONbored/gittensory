@@ -3,9 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Route the miner's bare "@jsonbored/gittensory-engine" import at the engine source (mirrors
+// Route the miner's bare "@loopover/engine" import at the engine source (mirrors
 // miner-opportunity-fanout.test.ts) so the fan-out uses the real resolveAiPolicyVerdict.
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@loopover/engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 

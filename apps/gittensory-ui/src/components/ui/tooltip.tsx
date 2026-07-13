@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/tooltip";
+export * from "@loopover/ui-kit/components/tooltip";

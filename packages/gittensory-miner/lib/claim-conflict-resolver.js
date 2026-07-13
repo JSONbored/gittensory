@@ -23,7 +23,7 @@
 // invisible to this one-shot check -- there is no retry/backoff here, which would be its own separate scope.
 
 import { adjudicateSoftClaim } from "./claim-adjudication.js";
-import { buildClosePrSpec } from "@jsonbored/gittensory-engine";
+import { buildClosePrSpec } from "@loopover/engine";
 
 /**
  * Assemble the real competing-claims set from a fetched LiveIssueSnapshot: every OTHER open PR referencing
@@ -56,7 +56,7 @@ export function assembleCompetingClaims(snapshot, selfPrNumber, minerLogin) {
  * @param {{ repoFullName: string, issueNumber: number, selfPrNumber: number, selfClaimedAt: string | null, minerLogin: string }} input
  * @param {{
  *   fetchLiveIssueSnapshot: (repoFullName: string, issueNumber: number) => Promise<import("./submission-freshness-check.js").LiveIssueSnapshot | null>,
- *   executeLocalWrite: (spec: import("@jsonbored/gittensory-engine").LocalWriteActionSpec) => Promise<unknown>,
+ *   executeLocalWrite: (spec: import("@loopover/engine").LocalWriteActionSpec) => Promise<unknown>,
  * }} deps
  * @returns {Promise<{
  *   checked: boolean,

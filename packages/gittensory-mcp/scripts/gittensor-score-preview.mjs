@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCodeFile, isTestPath as isTestFile } from "@jsonbored/gittensory-engine/signals/test-evidence";
+import { isCodeFile, isTestPath as isTestFile } from "@loopover/engine/signals/test-evidence";
 
 function lineCount(file) {
   const additions = Number(file.additions ?? 0);

@@ -105,7 +105,7 @@ describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
 
   it("extracts documented CLI subcommands, not the npm package spelling", () => {
     expect(claims.subcommands).toEqual(expect.arrayContaining(["status", "doctor", "init", "loop"]));
-    // `@jsonbored/gittensory-miner run build` must not be mistaken for a `run` subcommand.
+    // `@loopover/miner run build` must not be mistaken for a `run` subcommand.
     expect(claims.subcommands).not.toContain("run");
   });
 

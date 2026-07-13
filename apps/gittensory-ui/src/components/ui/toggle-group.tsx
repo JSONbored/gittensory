@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/toggle-group";
+export * from "@loopover/ui-kit/components/toggle-group";

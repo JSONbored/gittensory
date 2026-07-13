@@ -39,7 +39,7 @@ Hosted and stdio MCP surfaces expose the composed shortlist via `gittensory_find
 | [#2306](https://github.com/JSONbored/gittensory/issues/2306) | AI-policy fixture corpus + integration test |
 | [#2307](https://github.com/JSONbored/gittensory/issues/2307) | Cross-repo GitHub search/listing fan-out (metadata-only) |
 | [#2308](https://github.com/JSONbored/gittensory/issues/2308) | Hosted `gittensory_find_opportunities` MCP tool |
-| [#2309](https://github.com/JSONbored/gittensory/issues/2309) | Stdio `gittensory_find_opportunities` in `@jsonbored/gittensory-mcp` |
+| [#2309](https://github.com/JSONbored/gittensory/issues/2309) | Stdio `gittensory_find_opportunities` in `@loopover/mcp` |
 | [#2310](https://github.com/JSONbored/gittensory/issues/2310) | Miner package `test:miner-pack` / `build:miner` parity checks |
 | [#2311](https://github.com/JSONbored/gittensory/issues/2311) | End-to-end Phase 1 discovery pipeline fixture test |
 

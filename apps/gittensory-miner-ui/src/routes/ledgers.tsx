@@ -1,15 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@jsonbored/gittensory-ui-kit/components/table";
+import { Card, CardContent, CardHeader } from "@loopover/ui-kit/components/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@loopover/ui-kit/components/table";
 
 import { CLAIM_STATUSES, fetchLedgers, type ClaimStatus, type LedgersResult } from "../lib/ledgers";
 

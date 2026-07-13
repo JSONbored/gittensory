@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { addWorktree, removeWorktree, shouldRetainWorktree } from "@jsonbored/gittensory-engine";
+import { addWorktree, removeWorktree, shouldRetainWorktree } from "@loopover/engine";
 import { ensureRepoCloned } from "./repo-clone.js";
 
 // Real attempt-worktree preparation (#5132, Wave 3.5 follow-up). Composes ensureRepoCloned (repo-clone.js,
-// the missing base-clone-management step) with @jsonbored/gittensory-engine's already-built, already-tested
+// the missing base-clone-management step) with @loopover/engine's already-built, already-tested
 // addWorktree/removeWorktree primitives -- which existed but were never called from this package, so
 // `workingDirectory` handed to runIterateLoop was always just an empty directory with no real git repo in
 // it. This is the caller that finally exercises them for real.
@@ -16,7 +16,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
  * failed `git worktree add`'s stderr is the diagnosable signal, not something to lose to an unhandled
  * rejection.
  *
- * @returns {import("@jsonbored/gittensory-engine").WorktreeExecFn}
+ * @returns {import("@loopover/engine").WorktreeExecFn}
  */
 export function createRealWorktreeExec(timeoutMs = DEFAULT_TIMEOUT_MS) {
   return (cmd, args, opts) =>
@@ -54,7 +54,7 @@ export function createRealWorktreeExec(timeoutMs = DEFAULT_TIMEOUT_MS) {
  * @param {string} attemptId
  * @param {{
  *   baseBranch?: string, cloneBaseDir?: string, env?: Record<string, string | undefined>,
- *   exec?: import("@jsonbored/gittensory-engine").WorktreeExecFn, timeoutMs?: number,
+ *   exec?: import("@loopover/engine").WorktreeExecFn, timeoutMs?: number,
  *   remoteUrl?: string, runGit?: import("./repo-clone.js").RunGitFn,
  * }} [options]
  * @returns {Promise<{ ok: boolean, worktreePath?: string, branchName?: string, repoPath?: string, error?: string }>}
@@ -85,7 +85,7 @@ export async function prepareAttemptWorktree(repoFullName, attemptId, options = 
  * @param {string} repoPath
  * @param {string} worktreePath
  * @param {boolean} attemptOk
- * @param {{ exec?: import("@jsonbored/gittensory-engine").WorktreeExecFn, timeoutMs?: number }} [options]
+ * @param {{ exec?: import("@loopover/engine").WorktreeExecFn, timeoutMs?: number }} [options]
  * @returns {Promise<{ ok: boolean, removed: boolean, error?: string }>}
  */
 export async function cleanupAttemptWorktree(repoPath, worktreePath, attemptOk, options = {}) {

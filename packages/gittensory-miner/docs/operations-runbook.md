@@ -163,7 +163,7 @@ Stores use the lightweight **`schema-version.js`** convention ([#4832](https://g
 
 **Operator checklist**
 
-1. **Before upgrading** the `@jsonbored/gittensory-miner` package (npm, image tag, or git pull):
+1. **Before upgrading** the `@loopover/miner` package (npm, image tag, or git pull):
 
    ```sh
    gittensory-miner doctor --json > /tmp/miner-pre-upgrade-doctor.json
@@ -173,7 +173,7 @@ Stores use the lightweight **`schema-version.js`** convention ([#4832](https://g
 
 2. **Stop** supervised loops (`systemctl stop gittensory-miner.service`, `docker compose stop miner`, etc.).
 
-3. **Install** the new version (`npm install -g @jsonbored/gittensory-miner@latest`, rebuild image, …). The CLI prints a one-line npm upgrade nudge when behind registry latest — informational only.
+3. **Install** the new version (`npm install -g @loopover/miner@latest`, rebuild image, …). The CLI prints a one-line npm upgrade nudge when behind registry latest — informational only.
 
 4. **Migrate**, before starting any miner process, so every existing store is brought up to date in one
    deliberate pass instead of relying on whichever command happens to open a given store first:

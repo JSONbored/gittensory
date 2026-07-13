@@ -7,7 +7,7 @@ import {
   type OpportunityRankInput,
 } from "./opportunity-ranker.js";
 
-/** Metadata-only candidate issue shape produced by `@jsonbored/gittensory-miner` fan-out helpers. */
+/** Metadata-only candidate issue shape produced by `@loopover/miner` fan-out helpers. */
 export type MetadataCandidateIssue = {
   repoFullName: string;
   issueNumber: number;

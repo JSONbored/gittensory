@@ -1,4 +1,4 @@
-import type { MinerActionMode, MinerKillSwitchScope } from "@jsonbored/gittensory-engine";
+import type { MinerActionMode, MinerKillSwitchScope } from "@loopover/engine";
 import type { AppendGovernorEventInput, GovernorLedgerEntry } from "./governor-ledger.js";
 
 export type ResolveMinerActionModeGateInput = {

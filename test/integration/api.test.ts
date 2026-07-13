@@ -120,7 +120,7 @@ describe("api routes", () => {
       service: "loopover-api",
       apiVersion: "0.1.0",
       mcp: {
-        packageName: "@jsonbored/gittensory-mcp",
+        packageName: "@loopover/mcp",
         minimumSupportedVersion: "0.5.0",
         latestRecommendedVersion: mcpPackageJson.version,
         latestPackageVersion: mcpPackageJson.version,
@@ -3591,7 +3591,7 @@ describe("api routes", () => {
         method: "POST",
         headers: {
           ...apiHeaders(env),
-          "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+          "x-gittensory-mcp-package": "@loopover/mcp",
           "x-gittensory-mcp-version": "0.4.0",
           "x-gittensory-mcp-client": "gittensory-mcp-cli",
         },
@@ -6670,7 +6670,7 @@ function mcpHeaders(env: Env, sessionId?: string): Record<string, string> {
     accept: "application/json, text/event-stream",
     "content-type": "application/json",
     "mcp-protocol-version": "2025-03-26",
-    "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+    "x-gittensory-mcp-package": "@loopover/mcp",
     "x-gittensory-mcp-version": "0.4.0",
     "x-gittensory-mcp-client": "gittensory-mcp-cli",
     ...(sessionId ? { "mcp-session-id": sessionId } : {}),

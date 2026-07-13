@@ -14,7 +14,7 @@
 // (see docs/miner-selfimprove-calibration.md's maintainer-only boundary). The engine owns the deterministic
 // combine/freshness/threshold/hold-reason logic; this module owns scheduling the score and persisting the row.
 
-import { computePhase7CalibrationLoop } from "@jsonbored/gittensory-engine";
+import { computePhase7CalibrationLoop } from "@loopover/engine";
 import { computeObjectiveAnchor } from "./replay-objective-anchor.js";
 
 /** Event-ledger vocabulary for a persisted Phase 7 calibration snapshot (mirrors MINER_PR_OUTCOME_EVENT). */

@@ -59,12 +59,12 @@ these for a normal PR:**
 | Local command | Why it's not in the table above |
 |---|---|
 | `npm run test:engine-parity`, `npm run test:live-gate-parity`, `npm run test:driver-parity` | Plain `test/contract/*.test.ts` files — no dedicated CI job, but they DO run in CI as part of whichever `test (1/2)` shard happens to contain them (sharded `vitest run`). |
-| `npm run test --workspace @jsonbored/gittensory-engine` | The engine package's own `node --test` suite. **Not run by `ci.yml` on a PR at all** — only by `.github/workflows/publish-engine.yml` at release time. A regression here is invisible to Codecov and to every PR-gating CI check; `test:ci` locally is the only pre-merge signal. |
+| `npm run test --workspace @loopover/engine` | The engine package's own `node --test` suite. **Not run by `ci.yml` on a PR at all** — only by `.github/workflows/publish-engine.yml` at release time. A regression here is invisible to Codecov and to every PR-gating CI check; `test:ci` locally is the only pre-merge signal. |
 | `npm run manifest:drift-check`, `npm run engine-parity:drift-check` | Appear in `test:ci` only — not in `ci.yml` under any job. |
 
 This is a real, previously-hit gap, not a hypothetical: a past PR shipped a genuine, undetected
 `codecov/patch`-adjacent regression in the engine package specifically because `test --workspace
-@jsonbored/gittensory-engine` isn't part of `ci.yml`. If your change touches
+@loopover/engine` isn't part of `ci.yml`. If your change touches
 `packages/gittensory-engine/**`, running `npm run test:ci` locally (not just watching the PR's CI
 checks go green) is the only way to know you didn't break it.
 
@@ -138,12 +138,12 @@ PR-side signals that raise slop risk (band: clean 0 / low 1–24 / elevated 25�
 
 ---
 
-## 5. MCP pre-submit tools (`@jsonbored/gittensory-mcp`)
+## 5. MCP pre-submit tools (`@loopover/mcp`)
 
 Install + configure (let the CLI print the right config for your tool — **Codex is TOML, not JSON**):
 
 ```sh
-npm install -g @jsonbored/gittensory-mcp@latest
+npm install -g @loopover/mcp@latest
 gittensory-mcp login                        # GitHub device flow
 gittensory-mcp init-client --print codex    # → ~/.codex/config.toml  ([mcp_servers.gittensory])
 gittensory-mcp init-client --print claude   # or --print cursor  (→ mcpServers JSON)
@@ -243,7 +243,7 @@ absence of forbidden terms.
 ## 7. Style, lint, naming
 
 - **Prettier (UI):** printWidth 100, double quotes, semicolons, `trailingComma: all`. Fix:
-  `npm --workspace @jsonbored/gittensory-ui run format`. (`routeTree.gen.ts` and lockfiles are ignored.)
+  `npm --workspace @loopover/ui run format`. (`routeTree.gen.ts` and lockfiles are ignored.)
 - **ESLint (UI):** `react-hooks/recommended`; `react-refresh/only-export-components` (non-component
   exports must move to a `*-model.ts`); **design-token** `no-restricted-syntax` in
   `src/components/site/**` + `src/routes/**` (use `text-token-*`, `leading-token-*`, `rounded-token`,

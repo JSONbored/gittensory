@@ -120,7 +120,7 @@ export async function startFixtureServer(
   server = createServer(async (request, response) => {
     options.onApiRequest?.(request);
     response.setHeader("content-type", "application/json");
-    if (request.url && request.url.includes("gittensory-mcp/latest")) {
+    if (request.url && request.url.includes("loopover%2Fmcp/latest")) {
       if (options.npmStatus && options.npmStatus >= 400) {
         response.statusCode = options.npmStatus;
         response.end(JSON.stringify({ error: "registry_error" }));
@@ -143,13 +143,13 @@ export async function startFixtureServer(
           service: "loopover-api",
           apiVersion: "0.1.0",
           mcp: {
-            packageName: "@jsonbored/gittensory-mcp",
+            packageName: "@loopover/mcp",
             minimumSupportedVersion,
             latestRecommendedVersion,
             latestPackageVersion: latestRecommendedVersion,
             supportedVersionRange: `>=${minimumSupportedVersion}`,
-            upgradeCommand: "npm install -g @jsonbored/gittensory-mcp@latest",
-            npxFallbackCommand: "npx @jsonbored/gittensory-mcp@latest <command>",
+            upgradeCommand: "npm install -g @loopover/mcp@latest",
+            npxFallbackCommand: "npx @loopover/mcp@latest <command>",
           },
           compatibilityWarnings: [],
           breakingChanges: [],

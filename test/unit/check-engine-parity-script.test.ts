@@ -465,7 +465,7 @@ describe("check-engine-parity script", () => {
           throw new Error("unreadable");
         })).toBeNull();
 
-        const engineDir = join(emptyRoot, "node_modules", "@jsonbored", "gittensory-engine");
+        const engineDir = join(emptyRoot, "node_modules", "@loopover", "engine");
         mkdirSync(engineDir, { recursive: true });
         writeFileSync(join(engineDir, "package.json"), "not-json");
         expect(defaultResolveInstalledEngineVersion(emptyRoot)).toBeNull();

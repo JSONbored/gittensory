@@ -53,9 +53,9 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     const root = tempRoot();
     writeFileSync(join(root, ".gittensory-miner.yml"), "minerEnabled: true\n");
     const status = collectStatus({ GITTENSORY_MINER_CONFIG_DIR: join(root, "state") }, root);
-    expect(status.package.name).toBe("@jsonbored/gittensory-miner");
+    expect(status.package.name).toBe("@loopover/miner");
     expect(typeof status.package.version).toBe("string");
-    expect(status.engine.name).toBe("@jsonbored/gittensory-engine");
+    expect(status.engine.name).toBe("@loopover/engine");
     expect(status.stateDir).toBe(join(root, "state"));
     expect(status.configFile).toBe(join(root, ".gittensory-miner.yml")); // discovered
   });
@@ -92,7 +92,7 @@ describe("gittensory-miner status/doctor (#2288)", () => {
   it("runStatus prints human-readable text (0) and machine JSON with --json", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(runStatus([], { GITTENSORY_MINER_CONFIG_DIR: "/s" }, tempRoot())).toBe(0);
-    expect(String(log.mock.calls[0]?.[0])).toContain("@jsonbored/gittensory-miner");
+    expect(String(log.mock.calls[0]?.[0])).toContain("@loopover/miner");
     log.mockClear();
     expect(runStatus(["--json"], { GITTENSORY_MINER_CONFIG_DIR: "/s" }, tempRoot())).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).stateDir).toBe("/s");

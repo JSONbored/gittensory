@@ -9,7 +9,7 @@
 # .timer.) See DEPLOYMENT.md's "Bare-host (systemd, no Docker)" section.
 #
 # Install (adjust the placeholders below to your host):
-#   npm install -g @jsonbored/gittensory-miner        # puts the `gittensory-miner` bin on PATH
+#   npm install -g @loopover/miner        # puts the `gittensory-miner` bin on PATH
 #   gittensory-miner init                              # one-time local state-dir setup
 #   gittensory-miner doctor                            # confirm Node/state-dir/SQLite readiness
 #   sudo cp systemd/gittensory-miner.service.example /etc/systemd/system/gittensory-miner.service

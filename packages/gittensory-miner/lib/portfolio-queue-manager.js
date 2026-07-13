@@ -2,7 +2,7 @@
 // (portfolio-queue.js, #2292) with the pure engine selector (nextEligibleItems, queue.ts, #2326) so batch
 // claiming respects global/per-repo WIP caps and cross-repo diversification instead of a naive priority-only
 // single-row dequeue. Caps are plain constructor arguments — not wired to .gittensory-miner.yml here.
-import { nextEligibleItems } from "@jsonbored/gittensory-engine";
+import { nextEligibleItems } from "@loopover/engine";
 import { DEFAULT_FORGE_CONFIG } from "./forge-config.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { DEFAULT_MAX_LEASE_MS, sweepStuckItems } from "./portfolio-queue-expiry.js";
@@ -113,7 +113,7 @@ export function initPortfolioQueueManager(options = {}) {
     reclaimStuckItems(maxLeaseMs = staleLeaseMs) {
       return sweepStuckItems(store, Date.now(), maxLeaseMs);
     },
-    // The engine primitive itself (@jsonbored/gittensory-engine's nextEligibleItems) has no apiBaseUrl concept --
+    // The engine primitive itself (@loopover/engine's nextEligibleItems) has no apiBaseUrl concept --
     // it only ever sees the opaque `id` string. queueItemId/parseQueueItemId (#5563) smuggle the host through
     // that id round-trip, so selectFn's output below correctly carries each selected item's OWN apiBaseUrl into
     // batchClaim, instead of every claim defaulting to github.com regardless of which host's row was selected.

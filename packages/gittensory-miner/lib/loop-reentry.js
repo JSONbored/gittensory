@@ -1,10 +1,10 @@
-import { shouldReenter } from "@jsonbored/gittensory-engine";
+import { shouldReenter } from "@loopover/engine";
 
 import { readPrOutcomes } from "./pr-outcome.js";
 
 // Closed-loop discovery re-entry orchestrator (#2338): the real-IO half of "on a resolved outcome (merged, or
 // rejected-and-disengaged), automatically re-invoke discovery to select the next candidate." The DECISION
-// itself (shouldReenter, @jsonbored/gittensory-engine) is pure; this module owns everything that decision
+// itself (shouldReenter, @loopover/engine) is pure; this module owns everything that decision
 // needs real state for -- reading the repo's own pr_outcome history to compute the per-repo consecutive-
 // disengagement tally, reading recent re-entry events for the hourly/session rate cap, and (only when allowed)
 // actually dequeuing the next candidate and transitioning run-state.

@@ -2,7 +2,7 @@ import type {
   OwnSubmissionRecord,
   SelfPlagiarismCandidate,
   SelfPlagiarismVerdict,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 import type { AppendGovernorEventInput, GovernorLedgerEntry } from "./governor-ledger.js";
 
 export type EvaluateOpenPrSelfPlagiarismInput = {

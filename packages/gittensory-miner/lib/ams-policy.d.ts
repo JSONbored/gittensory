@@ -1,4 +1,4 @@
-import type { AmsPolicySpec } from "@jsonbored/gittensory-engine";
+import type { AmsPolicySpec } from "@loopover/engine";
 export function resolveAmsPolicyConfigPath(env?: Record<string, string | undefined>): string;
 
 export type AmsPolicySource = "local" | "default";

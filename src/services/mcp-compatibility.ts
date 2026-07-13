@@ -6,7 +6,7 @@
 import gittensoryMcpPackageJson from "../../packages/gittensory-mcp/package.json";
 
 export const GITTENSORY_API_VERSION = "0.1.0";
-export const GITTENSORY_MCP_PACKAGE_NAME = "@jsonbored/gittensory-mcp";
+export const GITTENSORY_MCP_PACKAGE_NAME = "@loopover/mcp";
 export const MINIMUM_SUPPORTED_MCP_VERSION = "0.5.0";
 export const LATEST_RECOMMENDED_MCP_VERSION: string = gittensoryMcpPackageJson.version;
 

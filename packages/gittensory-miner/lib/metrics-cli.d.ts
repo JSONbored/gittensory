@@ -1,4 +1,4 @@
-import type { MinerPredictionMetricRow } from "@jsonbored/gittensory-engine";
+import type { MinerPredictionMetricRow } from "@loopover/engine";
 import type { PredictionLedger } from "./prediction-ledger.js";
 
 export function collectPredictionMetricRows(ledger: PredictionLedger): MinerPredictionMetricRow[];

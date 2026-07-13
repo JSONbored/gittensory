@@ -11,7 +11,7 @@ surviving only as the default). Audit-and-document only — no code changes here
 The miner's discovery/claim/scoring code is **already largely repo-agnostic**. Discovery queries are
 caller-supplied, label preferences are generic per-tenant config (`.gittensory-miner.yml` uses plain
 `bug`/`enhancement`, not `gittensor:*`), ranking/feasibility are delegated to
-`@jsonbored/gittensory-engine` with config-overridable inputs, and runtime knobs live in
+`@loopover/engine` with config-overridable inputs, and runtime knobs live in
 `.gittensory-ams.yml`. The remaining assumptions fall into three buckets:
 
 1. **GitHub as the only forge** — the fan-out hardcodes GitHub's REST paths, headers, API version, and
@@ -19,7 +19,7 @@ caller-supplied, label preferences are generic per-tenant config (`.gittensory-m
 2. **An existing forge-host override that isn't reachable from the CLI** — `opportunity-fanout` already
    accepts `apiBaseUrl` (GitHub Enterprise), but `discover-cli` never parses or threads it.
 3. **Engine-delegated gittensory *defaults*** — label taxonomy and the miner goal spec default to
-   gittensory's conventions in `@jsonbored/gittensory-engine`; they are overridable, but the miner uses
+   gittensory's conventions in `@loopover/engine`; they are overridable, but the miner uses
    the gittensory defaults out of the box unless a per-tenant config is supplied.
 
 Everything else audited is already parameterized (see the last section) and needs no #4784 work.
@@ -52,7 +52,7 @@ whatever label strings the forge returns, with no `gittensor:*` filter. No chang
 
 | Line | Assumption | Category | Should become |
 | --- | --- | --- | --- |
-| 1–5 | imports `DEFAULT_MINER_GOAL_SPEC`, `parseMinerGoalSpecContent`, `rankMetadataOpportunities` from `@jsonbored/gittensory-engine` | (3) scoring rubric | Ranking is engine-delegated and config-driven via `parseMinerGoalSpecContent`, but falls back to `DEFAULT_MINER_GOAL_SPEC` (gittensory's rubric) when no per-tenant goal spec is provided. #4784 should ensure a tenant goal spec is surfaced/required rather than silently defaulting. |
+| 1–5 | imports `DEFAULT_MINER_GOAL_SPEC`, `parseMinerGoalSpecContent`, `rankMetadataOpportunities` from `@loopover/engine` | (3) scoring rubric | Ranking is engine-delegated and config-driven via `parseMinerGoalSpecContent`, but falls back to `DEFAULT_MINER_GOAL_SPEC` (gittensory's rubric) when no per-tenant goal spec is provided. #4784 should ensure a tenant goal spec is surfaced/required rather than silently defaulting. |
 
 ### `lib/feasibility-cli.js` — feasibility verdict (delegated)
 
@@ -60,7 +60,7 @@ whatever label strings the forge returns, with no `gittensor:*` filter. No chang
 | --- | --- | --- | --- |
 | 4 | delegates to engine `buildFeasibilityVerdict` | (3) scoring rubric | The status vocabularies (`CLAIM_STATUSES`, `DUPLICATE_CLUSTER_RISKS`, `ISSUE_STATUSES`) are generic; the *verdict logic* lives in the engine. No miner-side hardcode, but the engine rubric is a shared dependency to confirm is tenant-neutral. |
 
-### `@jsonbored/gittensory-engine` (shared dependency the miner scores through)
+### `@loopover/engine` (shared dependency the miner scores through)
 
 | Location | Assumption | Category | Should become |
 | --- | --- | --- | --- |

@@ -1,4 +1,4 @@
-# @jsonbored/gittensory-mcp
+# @loopover/mcp
 
 Local stdio MCP wrapper for the Gittensory base-agent layer.
 
@@ -13,7 +13,7 @@ The package is public. Gittensory keeps sensitive score, trust, wallet, and main
 Public npm:
 
 ```sh
-npm install -g @jsonbored/gittensory-mcp@latest
+npm install -g @loopover/mcp@latest
 gittensory-mcp login
 ```
 
@@ -21,7 +21,7 @@ From a local checkout:
 
 ```sh
 npm install
-npm link --workspace @jsonbored/gittensory-mcp
+npm link --workspace @loopover/mcp
 ```
 
 ## Commands
@@ -74,14 +74,14 @@ gittensory-mcp --stdio
 `gittensory-mcp version` (aliases `--version` and `-v`) prints the installed package version, the targeted API version, and the Node.js runtime version:
 
 ```text
-@jsonbored/gittensory-mcp/0.5.0 (api 0.1.0, node v22.12.0)
+@loopover/mcp/0.5.0 (api 0.1.0, node v22.12.0)
 ```
 
 Add `--json` for machine-readable output:
 
 ```json
 {
-  "name": "@jsonbored/gittensory-mcp",
+  "name": "@loopover/mcp",
   "version": "0.5.0",
   "apiVersion": "0.1.0",
   "node": "v22.12.0"
@@ -236,14 +236,14 @@ Metadata-only fallback is used when the command is missing or fails. Run `gitten
 Reference wrappers ship with the package:
 
 ```sh
-export GITTENSOR_SCORE_PREVIEW_CMD="node $(npm root -g)/@jsonbored/gittensory-mcp/scripts/gittensor-score-preview.mjs"
+export GITTENSOR_SCORE_PREVIEW_CMD="node $(npm root -g)/@loopover/mcp/scripts/gittensor-score-preview.mjs"
 ```
 
 For tree-sitter scoring with a local [entrius/gittensor](https://github.com/entrius/gittensor) checkout:
 
 ```sh
 export GITTENSOR_ROOT=/path/to/gittensor
-export GITTENSOR_SCORE_PREVIEW_CMD="python3 $(npm root -g)/@jsonbored/gittensory-mcp/scripts/gittensor-score-preview.py"
+export GITTENSOR_SCORE_PREVIEW_CMD="python3 $(npm root -g)/@loopover/mcp/scripts/gittensor-score-preview.py"
 ```
 
 Expected stdout shape:

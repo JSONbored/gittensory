@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@loopover/engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 

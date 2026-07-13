@@ -1,14 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { Card, CardContent, CardHeader } from "@jsonbored/gittensory-ui-kit/components/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@jsonbored/gittensory-ui-kit/components/table";
+import { Card, CardContent, CardHeader } from "@loopover/ui-kit/components/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@loopover/ui-kit/components/table";
 
 import { DEFAULT_POLL_INTERVAL_MS, usePolledFetch } from "../lib/use-polled-fetch";
 import { fetchPortfolioQueue, type PortfolioQueueResult, type QueueStatus } from "../lib/portfolio-queue";

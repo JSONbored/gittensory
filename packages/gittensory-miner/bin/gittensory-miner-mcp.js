@@ -17,7 +17,7 @@ import { PLAN_STATUSES, openPlanStore } from "../lib/plan-store.js";
 import { initGovernorLedger } from "../lib/governor-ledger.js";
 import { collectStatus, runDoctorChecks } from "../lib/status.js";
 
-// MCP stdio server for @jsonbored/gittensory-miner (scaffold #5153). Mirrors the packages/gittensory-mcp
+// MCP stdio server for @loopover/miner (scaffold #5153). Mirrors the packages/gittensory-mcp
 // harness (MCP SDK server + stdio transport). Tools:
 //   - gittensory_miner_ping (#5153): trivial static health check, reads no AMS state.
 //   - gittensory_miner_get_portfolio_dashboard (#5155): read-only per-repo backlog dashboard, wrapping the

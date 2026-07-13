@@ -35,4 +35,4 @@ process evolves — edits to those files improve both Claude Code and Codex.
    are also capped at **2 open PRs at a time** — close or wait for one to resolve before opening a third.
 
 The full procedure, the gate disposition matrix, test patterns, the MCP pre-submit predictors
-(`@jsonbored/gittensory-mcp`), and the PR template are all in the skill files above — use them.
+(`@loopover/mcp`), and the PR template are all in the skill files above — use them.

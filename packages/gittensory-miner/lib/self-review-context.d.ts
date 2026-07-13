@@ -1,4 +1,4 @@
-import type { SelfReviewContext } from "@jsonbored/gittensory-engine";
+import type { SelfReviewContext } from "@loopover/engine";
 
 // bounties/issueQuality are always omitted (see this file's own header comment for why), so the result is
 // SelfReviewContext minus those two optional fields rather than the full type.

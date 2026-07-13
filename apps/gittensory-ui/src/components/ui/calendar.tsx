@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/calendar";
+export * from "@loopover/ui-kit/components/calendar";

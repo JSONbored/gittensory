@@ -45,7 +45,7 @@ describe("gittensory-miner true CLI end-to-end flows (#4869)", () => {
     expect(status.status).toBe(0);
     const statusPayload = JSON.parse(status.stdout);
     expect(statusPayload.stateDir).toBe(configDir);
-    expect(statusPayload.package.name).toBe("@jsonbored/gittensory-miner");
+    expect(statusPayload.package.name).toBe("@loopover/miner");
 
     const doctor = await runAsync(["doctor", "--json"], env);
     expect(doctor.status).toBe(0);

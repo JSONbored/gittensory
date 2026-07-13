@@ -1,6 +1,6 @@
 # Miner config precedence
 
-AMS does **not** have a single `config.js` resolver. Configuration is layered by concern across several modules under `packages/gittensory-miner/lib/` and `@jsonbored/gittensory-engine`. This document states the order each layer **actually implements today** — not an idealized or corrected order.
+AMS does **not** have a single `config.js` resolver. Configuration is layered by concern across several modules under `packages/gittensory-miner/lib/` and `@loopover/engine`. This document states the order each layer **actually implements today** — not an idealized or corrected order.
 
 ## Configuration layers
 

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Resolve the engine PACKAGE import inside calibration-run.js to the in-repo source, so the runner's default
 // (non-injected) combine runs the real computePhase7CalibrationLoop rather than a stub.
-vi.mock("@jsonbored/gittensory-engine", async () => import("../../packages/gittensory-engine/src/index"));
+vi.mock("@loopover/engine", async () => import("../../packages/gittensory-engine/src/index"));
 
 import {
   MINER_CALIBRATION_SNAPSHOT_EVENT,

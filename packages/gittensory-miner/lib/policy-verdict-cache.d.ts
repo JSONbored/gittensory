@@ -1,4 +1,4 @@
-import type { AiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import type { AiPolicyVerdict } from "@loopover/engine";
 
 export type PolicyVerdictDecisiveDoc = "AI-USAGE.md" | "CONTRIBUTING.md";
 

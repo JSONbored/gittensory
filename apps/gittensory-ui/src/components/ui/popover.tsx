@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/popover";
+export * from "@loopover/ui-kit/components/popover";

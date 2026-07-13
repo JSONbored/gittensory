@@ -1,4 +1,4 @@
-import { formatAttemptLogJsonl, normalizeAttemptLogEvent } from "@jsonbored/gittensory-engine";
+import { formatAttemptLogJsonl, normalizeAttemptLogEvent } from "@loopover/engine";
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 
 // Append-only driver attempt log (#4294): a structured, attempt-scoped event trace for every CodingAgentDriver run

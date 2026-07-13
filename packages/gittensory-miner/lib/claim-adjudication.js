@@ -1,12 +1,12 @@
 // Soft-claim adjudication (#4291). Decides which of several miners claiming the same issue proceeds, by REUSING the
-// maintainer-side duplicate-cluster election (`isDuplicateClusterWinnerByClaim` from @jsonbored/gittensory-engine)
+// maintainer-side duplicate-cluster election (`isDuplicateClusterWinnerByClaim` from @loopover/engine)
 // rather than reimplementing it — so the miner and the maintainer gate agree on exactly one winner by construction.
 //
 // The local claim ledger is 100% client-side and cannot see other miners' claims, so the competing-claim signal
 // must come from something publicly observable: the OPEN PRs that link the same issue (an issue with several open
 // PRs linking it IS the public signal of a contested claim). The caller assembles that set — exactly like the
 // maintainer-side callers in src/ do — and passes it here.
-import { isDuplicateClusterWinnerByClaim, resolveDuplicateClusterWinnerNumber } from "@jsonbored/gittensory-engine";
+import { isDuplicateClusterWinnerByClaim, resolveDuplicateClusterWinnerNumber } from "@loopover/engine";
 
 /**
  * Map an observed claim record to the engine's `DuplicateClaimMember`. The field names deliberately DIFFER — the

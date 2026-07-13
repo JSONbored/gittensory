@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/scroll-area";
+export * from "@loopover/ui-kit/components/scroll-area";

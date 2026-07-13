@@ -1,4 +1,4 @@
-import { isGlobalMinerKillSwitch, isGlobalMinerLiveModeOptIn } from "@jsonbored/gittensory-engine";
+import { isGlobalMinerKillSwitch, isGlobalMinerLiveModeOptIn } from "@loopover/engine";
 
 // Pure composers for runMinerAttempt's real input (#5132, Wave 3.5 -- the final assembly). Everything here is
 // a plain in/out transform over already-fetched/already-computed real data (coding-task-spec, #5239;
@@ -27,7 +27,7 @@ import { isGlobalMinerKillSwitch, isGlobalMinerLiveModeOptIn } from "@jsonbored/
  * caller already resolved through; passing nothing keeps the prior fails-open-on-that-axis-only behavior.
  *
  * @param {Record<string, string | undefined>} env
- * @param {import("@jsonbored/gittensory-engine").AmsPolicySpec} amsPolicySpec
+ * @param {import("@loopover/engine").AmsPolicySpec} amsPolicySpec
  * @param {boolean} [repoPaused]
  * @returns {import("./attempt-runner.js").AttemptGovernorContext}
  */
@@ -47,17 +47,17 @@ export function buildAttemptGovernorContext(env, amsPolicySpec, repoPaused) {
  *
  * @param {{
  *   codingTaskSpec: Extract<import("./coding-task-spec.js").CodingTaskSpecResult, { ready: true }>,
- *   reviewContext: import("@jsonbored/gittensory-engine").SelfReviewContext,
+ *   reviewContext: import("@loopover/engine").SelfReviewContext,
  *   worktreePath: string,
  *   attemptId: string,
- *   mode: import("@jsonbored/gittensory-engine").CodingAgentExecutionMode,
+ *   mode: import("@loopover/engine").CodingAgentExecutionMode,
  *   repoFullName: string,
  *   minerLogin: string,
  *   rejectionSignaled: boolean,
- *   amsPolicySpec: import("@jsonbored/gittensory-engine").AmsPolicySpec,
+ *   amsPolicySpec: import("@loopover/engine").AmsPolicySpec,
  *   branchRef?: string,
  * }} input
- * @returns {import("@jsonbored/gittensory-engine").IterateLoopInput}
+ * @returns {import("@loopover/engine").IterateLoopInput}
  */
 export function buildAttemptLoopInput(input) {
   return {

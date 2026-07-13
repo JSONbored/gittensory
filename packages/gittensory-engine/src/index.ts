@@ -1,4 +1,4 @@
-// Barrel export for @jsonbored/gittensory-engine.
+// Barrel export for @loopover/engine.
 //
 // This package houses the deterministic, side-effect-free logic shared by the Gittensory review-stack
 // backend and the gittensory-miner (scoring preview/model, predicted-gate types, reward-risk, slop signals,

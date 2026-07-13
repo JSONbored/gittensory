@@ -123,7 +123,7 @@ if (cliArgs[0] === "purge") {
   process.exit(runPurge(cliArgs.slice(1)));
 }
 
-const packageName = "@jsonbored/gittensory-miner";
+const packageName = "@loopover/miner";
 const packageVersion = resolveMinerVersion(process.env);
 const upgradeCommand = resolveUpgradeCommand(packageName);
 

@@ -4,12 +4,12 @@
     "packages/gittensory-mcp": {
       "release-type": "node",
       "component": "mcp",
-      "package-name": "@jsonbored/gittensory-mcp"
+      "package-name": "@loopover/mcp"
     },
     "packages/gittensory-engine": {
       "release-type": "node",
       "component": "engine",
-      "package-name": "@jsonbored/gittensory-engine"
+      "package-name": "@loopover/engine"
     }
   },
   "include-component-in-tag": true,

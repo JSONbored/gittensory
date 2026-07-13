@@ -11,13 +11,13 @@ export const Route = createFileRoute("/docs/miner-quickstart")({
       {
         name: "description",
         content:
-          "Pick a contribution lane, install @jsonbored/gittensory-mcp, sign in, and run plan → preflight → packet. Lane-by-lane commands with JSON output and redaction notes.",
+          "Pick a contribution lane, install @loopover/mcp, sign in, and run plan → preflight → packet. Lane-by-lane commands with JSON output and redaction notes.",
       },
       { property: "og:title", content: "Miner quickstart by lane — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Pick a contribution lane, install @jsonbored/gittensory-mcp, sign in, and run plan → preflight → packet. Lane-by-lane commands with JSON output and redaction notes.",
+          "Pick a contribution lane, install @loopover/mcp, sign in, and run plan → preflight → packet. Lane-by-lane commands with JSON output and redaction notes.",
       },
       { property: "og:url", content: "/docs/miner-quickstart" },
     ],
@@ -49,14 +49,14 @@ function MinerQuickstart() {
 
       <h2>0. Install and sign in (every lane)</h2>
       <p>
-        The MCP is published as <code>@jsonbored/gittensory-mcp</code>. Run it with <code>npx</code>{" "}
-        or install it globally, then authenticate with GitHub Device Flow — LoopOver never asks for
-        a Personal Access Token.
+        The MCP is published as <code>@loopover/mcp</code>. Run it with <code>npx</code> or install
+        it globally, then authenticate with GitHub Device Flow — LoopOver never asks for a Personal
+        Access Token.
       </p>
       <CodeBlock
         code={`# install (one-off, or global)
-npx -y @jsonbored/gittensory-mcp@latest --help
-npm i -g @jsonbored/gittensory-mcp@latest
+npx -y @loopover/mcp@latest --help
+npm i -g @loopover/mcp@latest
 
 # sign in, confirm identity, check the session
 gittensory-mcp login

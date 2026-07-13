@@ -49,18 +49,18 @@ describe("gittensory-miner CLI helpers", () => {
   it("prints the package version with the node runtime", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     printVersion({
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
     });
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("@jsonbored/gittensory-miner/0.1.0"),
+      expect.stringContaining("@loopover/miner/0.1.0"),
     );
     expect(log).toHaveBeenCalledWith(expect.stringContaining(process.version));
   });
 
   it("prints help text with the supported commands", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    printHelp({ packageName: "@jsonbored/gittensory-miner" });
+    printHelp({ packageName: "@loopover/miner" });
     const text = log.mock.calls[0]?.[0];
     expect(text).toContain("gittensory-miner --help");
     expect(text).toContain("gittensory-miner version");
@@ -75,10 +75,10 @@ describe("gittensory-miner CLI helpers", () => {
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
     expect(
-      runCli(["mystery"], { packageName: "@jsonbored/gittensory-miner" }),
+      runCli(["mystery"], { packageName: "@loopover/miner" }),
     ).toBe(1);
     expect(error).toHaveBeenCalledWith(
-      "Unknown command: mystery. Run @jsonbored/gittensory-miner --help.",
+      "Unknown command: mystery. Run @loopover/miner --help.",
     );
   });
 
@@ -86,11 +86,11 @@ describe("gittensory-miner CLI helpers", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(
-      runCli(["mystery", "--json"], { packageName: "@jsonbored/gittensory-miner" }),
+      runCli(["mystery", "--json"], { packageName: "@loopover/miner" }),
     ).toBe(1);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
       ok: false,
-      error: "Unknown command: mystery. Run @jsonbored/gittensory-miner --help.",
+      error: "Unknown command: mystery. Run @loopover/miner --help.",
     });
     expect(error).not.toHaveBeenCalled();
   });
@@ -112,8 +112,8 @@ describe("gittensory-miner startup update check (#2331)", () => {
         GITTENSORY_NPM_REGISTRY_URL: "https://registry.example.com/",
       }),
     ).toBe("https://registry.example.com");
-    expect(resolveUpgradeCommand("@jsonbored/gittensory-miner")).toBe(
-      "npm install -g @jsonbored/gittensory-miner@latest",
+    expect(resolveUpgradeCommand("@loopover/miner")).toBe(
+      "npm install -g @loopover/miner@latest",
     );
   });
 
@@ -194,13 +194,13 @@ describe("gittensory-miner startup update check (#2331)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     await maybePrintUpdateNudge({
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
       npmRegistryUrl: registryUrl,
-      upgradeCommand: "npm install -g @jsonbored/gittensory-miner@latest",
+      upgradeCommand: "npm install -g @loopover/miner@latest",
     });
     expect(stderr).toHaveBeenCalledWith(
-      "npm install -g @jsonbored/gittensory-miner@latest\n",
+      "npm install -g @loopover/miner@latest\n",
     );
   });
 
@@ -210,10 +210,10 @@ describe("gittensory-miner startup update check (#2331)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     await maybePrintUpdateNudge({
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
       npmRegistryUrl: registryUrl,
-      upgradeCommand: "npm install -g @jsonbored/gittensory-miner@latest",
+      upgradeCommand: "npm install -g @loopover/miner@latest",
     });
     expect(stderr).not.toHaveBeenCalled();
   });
@@ -222,10 +222,10 @@ describe("gittensory-miner startup update check (#2331)", () => {
     const registryUrl = await startRegistryFixture({ npmStatus: 500 });
     await expect(
       maybePrintUpdateNudge({
-        packageName: "@jsonbored/gittensory-miner",
+        packageName: "@loopover/miner",
         packageVersion: "0.1.0",
         npmRegistryUrl: registryUrl,
-        upgradeCommand: "npm install -g @jsonbored/gittensory-miner@latest",
+        upgradeCommand: "npm install -g @loopover/miner@latest",
       }),
     ).resolves.toBeUndefined();
   });
@@ -234,7 +234,7 @@ describe("gittensory-miner startup update check (#2331)", () => {
     const registryUrl = await startRegistryFixture({ npmStatus: 503 });
     await expect(
       fetchLatestPackageVersion({
-        packageName: "@jsonbored/gittensory-miner",
+        packageName: "@loopover/miner",
         npmRegistryUrl: registryUrl,
       }),
     ).rejects.toThrow("npm_latest_version_unavailable");
@@ -243,7 +243,7 @@ describe("gittensory-miner startup update check (#2331)", () => {
   it("startUpdateCheck resolves immediately when opted out", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     await startUpdateCheck(["--no-update-check"], {
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
     });
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -255,12 +255,12 @@ describe("gittensory-miner startup update check (#2331)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     await startUpdateCheck(["--version"], {
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
       env: { GITTENSORY_NPM_REGISTRY_URL: registryUrl },
     });
     expect(stderr).toHaveBeenCalledWith(
-      "npm install -g @jsonbored/gittensory-miner@latest\n",
+      "npm install -g @loopover/miner@latest\n",
     );
   });
 
@@ -270,7 +270,7 @@ describe("gittensory-miner startup update check (#2331)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     await startUpdateCheck(["--version"], {
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
       env: { GITTENSORY_NPM_REGISTRY_URL: registryUrl },
     });
@@ -281,7 +281,7 @@ describe("gittensory-miner startup update check (#2331)", () => {
     const registryUrl = await startRegistryFixture({ npmStatus: 500 });
     await expect(
       startUpdateCheck(["--version"], {
-        packageName: "@jsonbored/gittensory-miner",
+        packageName: "@loopover/miner",
         packageVersion: "0.1.0",
         env: { GITTENSORY_NPM_REGISTRY_URL: registryUrl },
       }),
@@ -307,19 +307,19 @@ describe("gittensory-miner startup update check (#2331)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     const updateCheck = startUpdateCheck(["mystery"], {
-      packageName: "@jsonbored/gittensory-miner",
+      packageName: "@loopover/miner",
       packageVersion: "0.1.0",
       env: { GITTENSORY_NPM_REGISTRY_URL: registryUrl },
     });
     await awaitOpportunisticUpdateCheck(updateCheck);
     expect(stderr).toHaveBeenCalledWith(
-      "npm install -g @jsonbored/gittensory-miner@latest\n",
+      "npm install -g @loopover/miner@latest\n",
     );
   });
 
   it("serves --version without blocking when update checks are disabled", () => {
     const output = runCapture(["--version", "--no-update-check"]);
-    expect(output).toContain("@jsonbored/gittensory-miner/0.1.0");
+    expect(output).toContain("@loopover/miner/0.1.0");
   });
 
   it("serves --help immediately without waiting for a slow registry check", async () => {
@@ -334,7 +334,7 @@ describe("gittensory-miner startup update check (#2331)", () => {
     expect(Date.now() - startedAt).toBeLessThan(2000);
     expect(output).toContain("gittensory-miner --help");
     expect(output).not.toContain(
-      "npm install -g @jsonbored/gittensory-miner@latest",
+      "npm install -g @loopover/miner@latest",
     );
   });
 

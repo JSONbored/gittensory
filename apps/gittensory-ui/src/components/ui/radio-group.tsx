@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/radio-group";
+export * from "@loopover/ui-kit/components/radio-group";

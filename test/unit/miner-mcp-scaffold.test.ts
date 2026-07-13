@@ -342,8 +342,8 @@ describe("gittensory_miner_list_plans / get_plan (#5161)", () => {
 });
 
 const FAKE_STATUS = {
-  package: { name: "@jsonbored/gittensory-miner", version: "0.1.0" },
-  engine: { name: "@jsonbored/gittensory-engine", version: "1.0.0" },
+  package: { name: "@loopover/miner", version: "0.1.0" },
+  engine: { name: "@loopover/engine", version: "1.0.0" },
   node: "v22.13.0",
   stateDir: "/home/miner/.config/gittensory-miner",
   configFile: null,

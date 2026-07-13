@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AiPolicyVerdict } from "@jsonbored/gittensory-engine";
+import type { AiPolicyVerdict } from "@loopover/engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initPolicyVerdictCacheStore,

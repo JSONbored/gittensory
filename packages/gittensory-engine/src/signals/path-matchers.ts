@@ -1,7 +1,7 @@
 import { isCodeFile, isTestPath } from "./test-evidence.js";
 
 // Pure, deterministic path matchers for slop classification (#561), extracted to
-// `@jsonbored/gittensory-engine` (#4252) so the published gittensory-mcp/gittensory-miner CLIs can depend on
+// `@loopover/engine` (#4252) so the published gittensory-mcp/gittensory-miner CLIs can depend on
 // the same source instead of hand-porting it. Siblings to `isTestFile` / `isTestPath`: they identify changed
 // files that are NOT genuine hand-authored effort — machine-generated output, vendored/imported third-party
 // code, minified bundles, dependency lockfiles, and docs — so slop signals can tell a padded diff from real

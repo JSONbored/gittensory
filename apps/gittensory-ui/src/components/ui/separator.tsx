@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/separator";
+export * from "@loopover/ui-kit/components/separator";

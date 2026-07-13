@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@jsonbored/gittensory-engine", async () => {
+vi.mock("@loopover/engine", async () => {
   return import("../../packages/gittensory-engine/src/index");
 });
 
 import { buildHouseRulesAgentSdkHooks, runHouseRulesEnforcedCodingAgentAttempt } from "../../packages/gittensory-miner/lib/coding-agent-house-rules.js";
-// Typed from source, not the "@jsonbored/gittensory-engine" package specifier: that resolves via the
+// Typed from source, not the "@loopover/engine" package specifier: that resolves via the
 // workspace package's dist/ (git-ignored, only built by CI's later "Build engine package" step -- #ci-engine-
 // build-order), which runs AFTER Typecheck, so a real (non-vi.mock) `import type` from the package specifier
 // fails TS2307 in CI even though it resolves fine locally with a stale/leftover dist/ already on disk. The

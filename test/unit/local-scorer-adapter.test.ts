@@ -128,7 +128,7 @@ describe("local scorer adapter", () => {
 
     const guidance = setupGuidanceForLocalScorer({ ok: false, code: "missing_scorer_command" }).join("\n");
     expect(guidance).not.toMatch(/\/secret\/home\/user/);
-    expect(guidance).toMatch(/node_modules\/@jsonbored\/gittensory-mcp\/scripts\//);
+    expect(guidance).toMatch(/node_modules\/@loopover\/mcp\/scripts\//);
 
     const probe = probeLocalScorer(process.env.GITTENSOR_SCORE_PREVIEW_CMD);
     expect(JSON.stringify(probe)).not.toMatch(/\/secret\/home\/user/);

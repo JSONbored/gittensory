@@ -148,9 +148,9 @@ describe("gittensory-mcp CLI — doctor", () => {
       state: "stale",
       latestVersion: "9.9.9",
       updateAvailable: true,
-      upgradeCommand: "npm install -g @jsonbored/gittensory-mcp@latest",
+      upgradeCommand: "npm install -g @loopover/mcp@latest",
     });
-    expect(payload.package.npxFallback).toContain("npx @jsonbored/gittensory-mcp@latest");
+    expect(payload.package.npxFallback).toContain("npx @loopover/mcp@latest");
   });
 
   it("reports a current install without upgrade guidance", async () => {
@@ -247,8 +247,8 @@ describe("gittensory-mcp CLI — doctor", () => {
     ) as { checks: Array<{ name: string; status: string; remediation?: string }> };
     const version = payload.checks.find((check) => check.name === "version");
     expect(version).toMatchObject({ status: "warn" });
-    expect(version?.remediation).toContain("npm install -g @jsonbored/gittensory-mcp@latest");
-    expect(version?.remediation).toContain("npx @jsonbored/gittensory-mcp@latest");
+    expect(version?.remediation).toContain("npm install -g @loopover/mcp@latest");
+    expect(version?.remediation).toContain("npx @loopover/mcp@latest");
   });
 
   it("reports API compatibility as unavailable when the API does not advertise a minimum version", async () => {
@@ -304,7 +304,7 @@ describe("gittensory-mcp CLI — doctor", () => {
       state: "stale",
       latestStatus: "api",
       latestVersion: oneMinorAboveLocal,
-      upgradeCommand: "npm install -g @jsonbored/gittensory-mcp@latest",
+      upgradeCommand: "npm install -g @loopover/mcp@latest",
     });
   });
 
@@ -321,7 +321,7 @@ describe("gittensory-mcp CLI — doctor", () => {
     expect(status.apiCompatibility).toMatchObject({
       status: "incompatible",
       minVersion: "9.0.0",
-      upgradeCommand: "npm install -g @jsonbored/gittensory-mcp@latest",
+      upgradeCommand: "npm install -g @loopover/mcp@latest",
     });
 
     const doctor = JSON.parse(await runAsync(["doctor", "--cwd", tempDir, "--repo", "JSONbored/gittensory", "--json"], env)) as {
@@ -334,13 +334,13 @@ describe("gittensory-mcp CLI — doctor", () => {
         expect.objectContaining({
           name: "api_compatibility",
           status: "fail",
-          remediation: "npm install -g @jsonbored/gittensory-mcp@latest",
+          remediation: "npm install -g @loopover/mcp@latest",
         }),
       ]),
     );
     expect(doctor.checklist).toEqual(expect.arrayContaining([expect.objectContaining({ id: "api_compatibility", status: "fail" })]));
     expect(doctor.nextCommand).toMatchObject({
-      command: "npm install -g @jsonbored/gittensory-mcp@latest",
+      command: "npm install -g @loopover/mcp@latest",
       reason: expect.stringContaining("Upgrade"),
     });
   });
@@ -417,7 +417,7 @@ describe("gittensory-mcp CLI — doctor", () => {
     }
     expect(statusOutput).not.toContain("session-token");
     // Sanity: upgrade guidance still surfaces in human-readable output.
-    expect(statusOutput).toContain("npm install -g @jsonbored/gittensory-mcp@latest");
+    expect(statusOutput).toContain("npm install -g @loopover/mcp@latest");
   });
 
   it("keeps doctor exit code 0 by default even when a check fails", async () => {

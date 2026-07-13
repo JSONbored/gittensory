@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/hover-card";
+export * from "@loopover/ui-kit/components/hover-card";

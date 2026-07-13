@@ -1,4 +1,4 @@
-import { buildSlopAssessment } from "@jsonbored/gittensory-engine";
+import { buildSlopAssessment } from "@loopover/engine";
 
 // Production runSlopAssessment binding (#5133, Wave 3.5 follow-up to #2334). `attempt-runner.js`'s
 // `deps.runSlopAssessment` (via #2333's iterate-loop -> self-review-adapter's `SelfReviewAdapterDeps`) had
@@ -12,8 +12,8 @@ import { buildSlopAssessment } from "@jsonbored/gittensory-engine";
 // `packages/gittensory-engine/src/signals/slop.ts`, byte-parity-verified against the live gate's own copy).
 
 /**
- * @param {import("@jsonbored/gittensory-engine").SlopAssessmentInput} input
- * @returns {import("@jsonbored/gittensory-engine").SlopAssessment}
+ * @param {import("@loopover/engine").SlopAssessmentInput} input
+ * @returns {import("@loopover/engine").SlopAssessment}
  */
 export function runSlopAssessment(input) {
   return buildSlopAssessment(input);

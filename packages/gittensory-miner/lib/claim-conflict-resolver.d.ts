@@ -1,6 +1,6 @@
 import type { LiveIssueSnapshot } from "./submission-freshness-check.js";
 import type { ObservedClaim } from "./claim-adjudication.js";
-import type { LocalWriteActionSpec } from "@jsonbored/gittensory-engine";
+import type { LocalWriteActionSpec } from "@loopover/engine";
 
 export function assembleCompetingClaims(
   snapshot: LiveIssueSnapshot | null | undefined,

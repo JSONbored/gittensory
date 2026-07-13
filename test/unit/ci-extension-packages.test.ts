@@ -31,7 +31,7 @@ describe("browser extension workspace packages (#4866)", () => {
     expect(workflow).toContain("npm run extension:lint && npm run miner-extension:lint");
     expect(workflow).toContain("npm run extension:typecheck && npm run miner-extension:typecheck");
     expect(workflow).toContain(
-      "npm run extension:build && npm run miner-extension:build && npm --workspace @jsonbored/gittensory-ui run build",
+      "npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build",
     );
   });
 });

@@ -27,7 +27,7 @@ describe("miner deployment guide (#2330)", () => {
     const dockerignore = readFileSync(join(process.cwd(), ".dockerignore"), "utf8");
     expect(dockerfile).toContain("COPY . .");
     expect(dockerfile).toContain("npm prune --omit=dev --ignore-scripts");
-    expect(dockerfile).toContain("@jsonbored/gittensory-engine");
+    expect(dockerfile).toContain("@loopover/engine");
     expect(dockerfile).toContain("USER node");
     expect(dockerfile).toContain("GITTENSORY_MINER_CONFIG_DIR=/data/miner");
     expect(dockerfile).toContain("VOLUME");

@@ -6,7 +6,7 @@ import {
   resolveCodingAgentExecutionMode,
   resolveMinerActionMode,
   resolveMinerKillSwitch,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 import { resolveForgeConfig } from "./forge-config.js";
 
 /** Kill-switch scope from operator env + parsed goal-spec `killSwitch.paused`. */

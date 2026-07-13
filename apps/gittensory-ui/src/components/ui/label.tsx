@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/label";
+export * from "@loopover/ui-kit/components/label";

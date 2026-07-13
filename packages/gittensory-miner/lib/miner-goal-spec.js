@@ -1,6 +1,6 @@
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { discoverMinerGoalSpecPath, parseMinerGoalSpecContent } from "@jsonbored/gittensory-engine";
+import { discoverMinerGoalSpecPath, parseMinerGoalSpecContent } from "@loopover/engine";
 
 const MAX_MINER_GOAL_SPEC_BYTES = 32_768;
 
@@ -50,7 +50,7 @@ function readRegularUtf8File(path, options) {
  *
  * @param {string} repoPath
  * @param {{ existsSync?: (path: string) => boolean, openSync?: (path: string, flags: number) => number, fstatSync?: (fd: number) => import("node:fs").Stats, readSync?: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => number, closeSync?: (fd: number) => void }} [options]
- * @returns {import("@jsonbored/gittensory-engine").ParsedMinerGoalSpec}
+ * @returns {import("@loopover/engine").ParsedMinerGoalSpec}
  */
 export function resolveMinerGoalSpec(repoPath, options = {}) {
   const existsImpl = options.existsSync ?? existsSync;

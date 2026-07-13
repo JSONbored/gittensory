@@ -10,13 +10,13 @@ export const Route = createFileRoute("/docs/quickstart")({
       {
         name: "description",
         content:
-          "Install @jsonbored/gittensory-mcp, sign in with GitHub Device Flow, and analyze your branch in two commands.",
+          "Install @loopover/mcp, sign in with GitHub Device Flow, and analyze your branch in two commands.",
       },
       { property: "og:title", content: "Quickstart — LoopOver docs" },
       {
         property: "og:description",
         content:
-          "Install @jsonbored/gittensory-mcp, sign in with GitHub Device Flow, and analyze your branch in two commands.",
+          "Install @loopover/mcp, sign in with GitHub Device Flow, and analyze your branch in two commands.",
       },
       { property: "og:url", content: "/docs/quickstart" },
     ],
@@ -34,15 +34,15 @@ function Quickstart() {
     >
       <h2>1. Install</h2>
       <p>
-        The MCP is published as <code>@jsonbored/gittensory-mcp</code>. You can run it with{" "}
-        <code>npx</code>, or install it globally.
+        The MCP is published as <code>@loopover/mcp</code>. You can run it with <code>npx</code>, or
+        install it globally.
       </p>
       <CodeBlock
         code={`# one-off
-npx -y @jsonbored/gittensory-mcp@latest --help
+npx -y @loopover/mcp@latest --help
 
 # install
-npm i -g @jsonbored/gittensory-mcp@latest`}
+npm i -g @loopover/mcp@latest`}
       />
 
       <h2>2. Sign in (GitHub Device Flow)</h2>

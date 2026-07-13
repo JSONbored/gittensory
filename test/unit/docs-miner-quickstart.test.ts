@@ -12,7 +12,7 @@ describe("docs miner quickstart page", () => {
   const normalizedSource = source.replace(/\s+/g, " ");
 
   it("documents the full miner loop: install, auth, doctor, plan, preflight, packet", () => {
-    expect(source).toMatch(/@jsonbored\/gittensory-mcp/);
+    expect(source).toMatch(/@loopover\/mcp/);
     expect(source).toMatch(/gittensory-mcp login/);
     expect(source).toMatch(/gittensory-mcp whoami/);
     expect(source).toMatch(/gittensory-mcp status/);

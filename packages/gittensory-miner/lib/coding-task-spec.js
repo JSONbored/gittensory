@@ -9,7 +9,7 @@ import {
   feasibilityInputFromPreStartCheck,
   serializeAcceptanceCriteria,
   shouldWriteAcceptanceCriteria,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 
 // Coding-task-spec builder (#5132, Wave 3.5 follow-up). The second gap discovered alongside #5132's CLI
 // wiring: `IterateLoopInput.title`/`instructions`/`acceptanceCriteriaPath` had no builder anywhere in this
@@ -21,7 +21,7 @@ import {
 //
 // issueStatus is intentionally left undefined when computing feasibility: buildIssueQualityReport (the only
 // thing that could supply it) lives only in root src/signals/engine.ts and has never been extracted into
-// @jsonbored/gittensory-engine (same gap #5145's own header documents for `issueQuality`). This is not a
+// @loopover/engine (same gap #5145's own header documents for `issueQuality`). This is not a
 // fabrication -- feasibilityInputFromPreStartCheck's OWN documented default for a missing
 // issueQualityStatus/lifecycle is "ready", the same honest-default precedent already established.
 
@@ -49,7 +49,7 @@ function resolveClaimStatus(claimLedger, repoFullName, issueNumber) {
 }
 
 // The target issue's own raw cluster risk from buildCollisionReport (newly exported from
-// @jsonbored/gittensory-engine's public barrel) -- "none" when the issue isn't part of any cluster at all.
+// @loopover/engine's public barrel) -- "none" when the issue isn't part of any cluster at all.
 // DELIBERATELY does NOT apply #5145's ">= 2 pull_request items" threshold: that gate exists specifically to
 // stop inDuplicateCluster (self-review, "does MY OWN just-created submission look redundant") from firing on
 // the ordinary case of one existing PR already legitimately closing the issue. Feasibility asks a different
@@ -72,7 +72,7 @@ function resolveDuplicateClusterRisk(repoFullName, issues, pullRequests, issueNu
  * @param {{ number: number }} issue
  * @param {{ issues: Array<{ number: number }>, pullRequests: unknown[] }} context
  * @param {{ listClaims: (filter: { repoFullName: string, status: string }) => Array<{ issueNumber: number }> }} claimLedger
- * @returns {import("@jsonbored/gittensory-engine").FeasibilityGateResult}
+ * @returns {import("@loopover/engine").FeasibilityGateResult}
  */
 export function buildCodingTaskFeasibility(repoFullName, issue, context, claimLedger) {
   const found = context.issues.some((candidate) => candidate.number === issue.number);
@@ -86,8 +86,8 @@ export function buildCodingTaskFeasibility(repoFullName, issue, context, claimLe
  * Compose the immutable AcceptanceCriteria document for one target issue + its feasibility verdict.
  *
  * @param {{ title: string, body?: string | null, labels?: string[] }} issue
- * @param {import("@jsonbored/gittensory-engine").FeasibilityGateResult} feasibility
- * @returns {import("@jsonbored/gittensory-engine").AcceptanceCriteria}
+ * @param {import("@loopover/engine").FeasibilityGateResult} feasibility
+ * @returns {import("@loopover/engine").AcceptanceCriteria}
  */
 export function buildCodingTaskAcceptanceCriteria(issue, feasibility) {
   const promptPacket = buildPromptPacket({
@@ -105,7 +105,7 @@ export function buildCodingTaskAcceptanceCriteria(issue, feasibility) {
  * expected to abandon the attempt rather than start it, per acceptance-criteria.ts's own documented design.
  *
  * @param {string} workingDirectory
- * @param {import("@jsonbored/gittensory-engine").AcceptanceCriteria} acceptanceCriteria
+ * @param {import("@loopover/engine").AcceptanceCriteria} acceptanceCriteria
  * @returns {{ written: boolean, path: string | null }}
  */
 function assertContainedPath(root, path) {

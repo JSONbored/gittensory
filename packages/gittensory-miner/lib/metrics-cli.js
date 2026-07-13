@@ -1,4 +1,4 @@
-import { renderMinerPredictionMetrics } from "@jsonbored/gittensory-engine";
+import { renderMinerPredictionMetrics } from "@loopover/engine";
 import { initPredictionLedger } from "./prediction-ledger.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 

@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/accordion";
+export * from "@loopover/ui-kit/components/accordion";

@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/resizable";
+export * from "@loopover/ui-kit/components/resizable";

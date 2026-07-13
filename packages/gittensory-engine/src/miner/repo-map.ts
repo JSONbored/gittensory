@@ -22,7 +22,7 @@ import { createRequire } from "node:module";
 import Parser from "web-tree-sitter";
 
 // Lazy, not module-scope: this file is reachable from the Cloudflare Workers bundle (barrel-exported via
-// `@jsonbored/gittensory-engine`) even though nothing there ever calls `buildRepoMap`. `import.meta.url` is
+// `@loopover/engine`) even though nothing there ever calls `buildRepoMap`. `import.meta.url` is
 // undefined in that bundle's startup-validation context, so an eager `createRequire(import.meta.url)` at
 // module scope would crash the Worker's deploy before any request is served. Deferring construction to
 // first real use keeps this module import-safe everywhere while still working for its actual CLI callers.

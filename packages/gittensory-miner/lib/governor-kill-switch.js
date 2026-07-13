@@ -8,7 +8,7 @@ import {
   isGlobalMinerKillSwitch,
   isMinerKillSwitchActive,
   resolveMinerKillSwitch,
-} from "@jsonbored/gittensory-engine";
+} from "@loopover/engine";
 import { appendGovernorEvent } from "./governor-ledger.js";
 
 /**
@@ -18,7 +18,7 @@ import { appendGovernorEvent } from "./governor-ledger.js";
  * @param {object} [input]
  * @param {boolean} [input.repoPaused]
  * @param {Record<string, string | undefined>} [input.env]
- * @returns {{ scope: import("@jsonbored/gittensory-engine").MinerKillSwitchScope, active: boolean }}
+ * @returns {{ scope: import("@loopover/engine").MinerKillSwitchScope, active: boolean }}
  */
 export function checkMinerKillSwitch(input = {}) {
   const env = input.env ?? process.env;
@@ -35,8 +35,8 @@ export function checkMinerKillSwitch(input = {}) {
  * @param {object} input
  * @param {string} [input.repoFullName]
  * @param {string} input.actionClass
- * @param {import("@jsonbored/gittensory-engine").MinerKillSwitchScope} input.previousScope
- * @param {import("@jsonbored/gittensory-engine").MinerKillSwitchScope} input.scope
+ * @param {import("@loopover/engine").MinerKillSwitchScope} input.previousScope
+ * @param {import("@loopover/engine").MinerKillSwitchScope} input.scope
  * @param {{ append?: typeof appendGovernorEvent }} [options]
  */
 export function recordMinerKillSwitchTransition(input, options = {}) {

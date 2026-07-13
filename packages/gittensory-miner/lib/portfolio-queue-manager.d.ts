@@ -1,4 +1,4 @@
-import type { PortfolioCaps } from "@jsonbored/gittensory-engine";
+import type { PortfolioCaps } from "@loopover/engine";
 import type { EnqueueItem, PortfolioQueueStore, QueueEntry } from "./portfolio-queue.js";
 
 export type PortfolioQueueClaimTarget = {

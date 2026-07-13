@@ -1,5 +1,5 @@
 {
-  "name": "@jsonbored/gittensory-mcp",
+  "name": "@loopover/mcp",
   "version": "0.7.1",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -38,7 +38,7 @@
     "build": "node --check bin/gittensory-mcp.js && node --check lib/local-branch.js && node --check lib/format-table.js && node --check scripts/gittensor-score-preview.mjs"
   },
   "dependencies": {
-    "@jsonbored/gittensory-engine": "^1.0.0",
+    "@loopover/engine": "^1.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "^4.4.3"
   },

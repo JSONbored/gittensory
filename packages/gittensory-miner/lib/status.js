@@ -2,7 +2,7 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, wri
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CODING_AGENT_DRIVER_CONFIG_ENV, parseMinerGoalSpecContent, resolveFirstConfiguredCodingAgentDriverName } from "@jsonbored/gittensory-engine";
+import { CODING_AGENT_DRIVER_CONFIG_ENV, parseMinerGoalSpecContent, resolveFirstConfiguredCodingAgentDriverName } from "@loopover/engine";
 import {
   checkClaudeCliPresent,
   checkCodexCliPresent,
@@ -38,8 +38,8 @@ function moduleDir() {
   return (cachedModuleDir ??= import.meta.dirname);
 }
 
-const PACKAGE_NAME = "@jsonbored/gittensory-miner";
-const ENGINE_PACKAGE = "@jsonbored/gittensory-engine";
+const PACKAGE_NAME = "@loopover/miner";
+const ENGINE_PACKAGE = "@loopover/engine";
 // Config-file discovery order (mirrors the `.gittensory-miner.yml` precedence the goal-spec parser documents).
 const CONFIG_FILE_CANDIDATES = Object.freeze([
   ".gittensory-miner.yml",
@@ -62,7 +62,7 @@ export function resolveMinerStateDir(env = process.env) {
 }
 
 /**
- * The REAL installed @jsonbored/gittensory-engine version, for `status`'s own display. Prefers `readInstalled`
+ * The REAL installed @loopover/engine version, for `status`'s own display. Prefers `readInstalled`
  * (the actually-resolved semver from node_modules/the monorepo workspace, the same real resolution `doctor`'s
  * engine-version-skew check already relies on) -- a self-hoster asking "what's installed" wants the real
  * answer, not the declared dependency RANGE ("*" in this monorepo, which tells them nothing). Falls back to
@@ -112,7 +112,7 @@ export function readInstalledEnginePackageVersionFromPaths(
   return null;
 }
 
-/** Installed @jsonbored/gittensory-engine semver from node_modules (not the declared dependency range). */
+/** Installed @loopover/engine semver from node_modules (not the declared dependency range). */
 export function readInstalledEnginePackageVersion() {
   try {
     return readInstalledEnginePackageVersionFromPaths(

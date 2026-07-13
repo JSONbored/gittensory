@@ -1,4 +1,4 @@
-import type { GovernorChokepointInput } from "@jsonbored/gittensory-engine";
+import type { GovernorChokepointInput } from "@loopover/engine";
 import type { AppendGovernorEventInput, GovernorLedgerEntry } from "./governor-ledger.js";
 import type { EvaluateGovernorChokepointGateResult } from "./governor-chokepoint.js";
 import type { GovernorState } from "./governor-state.js";

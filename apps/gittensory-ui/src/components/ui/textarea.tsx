@@ -1,1 +1,1 @@
-export * from "@jsonbored/gittensory-ui-kit/components/textarea";
+export * from "@loopover/ui-kit/components/textarea";

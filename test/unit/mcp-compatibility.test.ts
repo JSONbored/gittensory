@@ -48,7 +48,7 @@ describe("MCP compatibility telemetry", () => {
   it("builds bounded telemetry from allowlisted MCP headers", () => {
     const telemetry = buildMcpClientTelemetry(
       new Headers({
-        "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+        "x-gittensory-mcp-package": "@loopover/mcp",
         "x-gittensory-mcp-version": "0.2.1",
         "x-gittensory-mcp-client": "gittensory-mcp-cli",
         "mcp-protocol-version": "2025-03-26",
@@ -60,7 +60,7 @@ describe("MCP compatibility telemetry", () => {
       clientName: "gittensory-mcp-cli",
       clientVersion: "0.2.1",
       metadata: {
-        packageName: "@jsonbored/gittensory-mcp",
+        packageName: "@loopover/mcp",
         packageVersion: "0.2.1",
         protocolVersion: "2025-03-26",
         compatibilityStatus: "incompatible",
@@ -90,7 +90,7 @@ describe("MCP compatibility telemetry", () => {
   it("uses the canonical package and default MCP client fallbacks without storing unsafe header data", () => {
     const canonical = buildMcpClientTelemetry(
       new Headers({
-        "x-gittensory-mcp-package": "@jsonbored/gittensory-mcp",
+        "x-gittensory-mcp-package": "@loopover/mcp",
         "x-gittensory-mcp-version": "0.4.0",
       }),
       { requireGittensoryHeader: true },

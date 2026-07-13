@@ -1,4 +1,4 @@
-// #782 deterministic local scorer — extracted to `@jsonbored/gittensory-engine` (#4253) so the published
+// #782 deterministic local scorer — extracted to `@loopover/engine` (#4253) so the published
 // gittensory-mcp / gittensory-miner CLIs and the hosted Worker import the identical, versioned scoring logic
 // instead of drifting. The Vectorize/Node-coupled local-branch.ts is intentionally NOT moved; this shim only
 // re-exports the pure scorer. packages/gittensory-engine/src/local-scorer.ts (imported via relative source

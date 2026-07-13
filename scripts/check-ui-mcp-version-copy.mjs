@@ -4,8 +4,8 @@ import { join, relative } from "node:path";
 import { get } from "node:https";
 
 const root = process.cwd();
-const packageName = "@jsonbored/gittensory-mcp";
-const registryUrl = "https://registry.npmjs.org/@jsonbored%2fgittensory-mcp";
+const packageName = "@loopover/mcp";
+const registryUrl = "https://registry.npmjs.org/@loopover%2fmcp";
 const sourceLatestPath = join(root, "apps/gittensory-ui/src/lib/mcp-package.ts");
 const targets = [
   "README.md",
@@ -54,13 +54,13 @@ for (const file of targets.flatMap(collectSourceFiles)) {
     if (/\b0\.2\.0\b/.test(line) && !isMinimumSupportedContext(line)) {
       failures.push(`${label}:${lineNumber}: 0.2.0 is only allowed as an explicit minimum-supported compatibility floor`);
     }
-    if (/@jsonbored\/gittensory-mcp(?:\s+|@)v?\d+\.\d+\.\d+/.test(line)) {
+    if (/@loopover\/mcp(?:\s+|@)v?\d+\.\d+\.\d+/.test(line)) {
       failures.push(`${label}:${lineNumber}: hardcoded ${packageName} display version`);
     }
-    if (/(?:npm (?:i|install) -g|npx -y)\s+@jsonbored\/gittensory-mcp(?!@)/.test(line)) {
+    if (/(?:npm (?:i|install) -g|npx -y)\s+@loopover\/mcp(?!@)/.test(line)) {
       failures.push(`${label}:${lineNumber}: install command must use ${packageName}@latest or resolved npm latest`);
     }
-    if (/args\s*=\s*\[.*"@jsonbored\/gittensory-mcp"/.test(line) || /"args":\s*\[.*"@jsonbored\/gittensory-mcp"/.test(line)) {
+    if (/args\s*=\s*\[.*"@loopover\/mcp"/.test(line) || /"args":\s*\[.*"@loopover\/mcp"/.test(line)) {
       failures.push(`${label}:${lineNumber}: MCP client args must use ${packageName}@latest or resolved npm latest`);
     }
   });

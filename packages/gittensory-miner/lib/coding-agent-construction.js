@@ -8,7 +8,7 @@
 // default via `buildHouseRulesAgentSdkHooks` -- a caller never has to remember to attach it by hand.
 
 import { spawn as nodeSpawn } from "node:child_process";
-import { createCodingAgentDriver, resolveFirstConfiguredCodingAgentDriverName } from "@jsonbored/gittensory-engine";
+import { createCodingAgentDriver, resolveFirstConfiguredCodingAgentDriverName } from "@loopover/engine";
 import { buildHouseRulesAgentSdkHooks } from "./coding-agent-house-rules.js";
 
 /**
@@ -18,7 +18,7 @@ import { buildHouseRulesAgentSdkHooks } from "./coding-agent-house-rules.js";
  * resolve-not-reject rationale (a killed/errored subprocess's partial output may hold the real diagnosable
  * error, e.g. an auth failure line on stderr).
  *
- * @returns {import("@jsonbored/gittensory-engine").CliSubprocessSpawnFn}
+ * @returns {import("@loopover/engine").CliSubprocessSpawnFn}
  */
 export function createRealCliSubprocessSpawn() {
   return (cmd, args, opts) =>
@@ -73,14 +73,14 @@ export function createRealCliSubprocessSpawn() {
  *
  * @param {Record<string, string | undefined>} env
  * @param {{
- *   spawn?: import("@jsonbored/gittensory-engine").CliSubprocessSpawnFn,
- *   query?: import("@jsonbored/gittensory-engine").AgentSdkQueryFn,
- *   hooks?: import("@jsonbored/gittensory-engine").AgentSdkHooks,
+ *   spawn?: import("@loopover/engine").CliSubprocessSpawnFn,
+ *   query?: import("@loopover/engine").AgentSdkQueryFn,
+ *   hooks?: import("@loopover/engine").AgentSdkHooks,
  *   listChangedFiles?: (cwd: string) => Promise<string[]>,
  *   houseRulesConfig?: unknown,
  *   houseRulesOptions?: unknown,
  * }} [options]
- * @returns {import("@jsonbored/gittensory-engine").CodingAgentDriver}
+ * @returns {import("@loopover/engine").CodingAgentDriver}
  */
 export function constructProductionCodingAgentDriver(env, options = {}) {
   const providerName = resolveFirstConfiguredCodingAgentDriverName(env);

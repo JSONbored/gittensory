@@ -43,7 +43,7 @@ import { recordPrOutcomeSnapshot } from "./pr-outcome.js";
 import { buildLoopClosureSummary } from "./loop-closure.js";
 import { attemptLoopReentry } from "./loop-reentry.js";
 import { parsePrNumberFromExecResult } from "./pr-number-parse.js";
-import { DEFAULT_AMS_POLICY_SPEC } from "@jsonbored/gittensory-engine";
+import { DEFAULT_AMS_POLICY_SPEC } from "@loopover/engine";
 
 const LOOP_USAGE =
   "Usage: gittensory-miner loop <owner/repo> [<owner/repo>...] | --search <query> --miner-login <login> [--base <branch>] [--live] [--dry-run] [--max-cycles <n>] [--cycle-delay-ms <ms>] [--json]";

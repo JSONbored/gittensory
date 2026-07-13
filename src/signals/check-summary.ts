@@ -1,4 +1,4 @@
-// Check-summary classifiers, extracted to `@jsonbored/gittensory-engine` (#4256) so reward-risk and the
+// Check-summary classifiers, extracted to `@loopover/engine` (#4256) so reward-risk and the
 // published gittensory-mcp/gittensory-miner CLIs can depend on the same source instead of reaching into
 // `local-branch.ts` (which pulls in the whole review-scoring/Gittensor-API subsystem). This file is a thin
 // re-export shim; the implementation lives at packages/gittensory-engine/src/signals/check-summary.ts
