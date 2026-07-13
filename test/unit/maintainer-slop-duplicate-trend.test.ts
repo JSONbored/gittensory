@@ -243,6 +243,77 @@ describe("buildMaintainerSlopDuplicateTrend", () => {
     const week = trend.weeks.find((entry) => entry.slopFlagRatePct === 40);
     expect(week?.duplicateFlagRatePct).toBe(30);
   });
+
+  it("keeps the newest snapshot per repo when an older point is seen later in the week", () => {
+    const trend = buildMaintainerSlopDuplicateTrend({
+      generatedAt: "2026-06-14T12:00:00.000Z",
+      nowMs: Date.parse("2026-06-14T12:00:00.000Z"),
+      repos: [
+        {
+          repoFullName: "octo/demo",
+          queueHealthSnapshots: [
+            queueHealthSnapshot("2026-06-09T12:00:00.000Z", {
+              openPullRequests: 10,
+              slopFlaggedPullRequests: 5,
+              duplicateFlaggedPullRequests: 2,
+            }),
+            queueHealthSnapshot("2026-06-09T06:00:00.000Z", {
+              openPullRequests: 2,
+              slopFlaggedPullRequests: 0,
+              duplicateFlaggedPullRequests: 0,
+            }),
+          ],
+        },
+      ],
+    });
+    const week = trend.weeks.find((entry) => entry.slopFlagRatePct === 50);
+    expect(week?.duplicateFlagRatePct).toBe(20);
+  });
+
+  it("drops snapshots whose payload lacks a parseable signals object", () => {
+    const trend = buildMaintainerSlopDuplicateTrend({
+      generatedAt: "2026-06-14T12:00:00.000Z",
+      nowMs: Date.parse("2026-06-14T12:00:00.000Z"),
+      repos: [
+        {
+          repoFullName: "octo/demo",
+          queueHealthSnapshots: [
+            {
+              id: "missing-signals",
+              signalType: "queue-health",
+              targetKey: "octo/demo",
+              repoFullName: "octo/demo",
+              payload: {},
+              generatedAt: "2026-06-09T00:00:00.000Z",
+            },
+            {
+              id: "array-signals",
+              signalType: "queue-health",
+              targetKey: "octo/demo",
+              repoFullName: "octo/demo",
+              payload: { signals: [1, 2, 3] },
+              generatedAt: "2026-06-09T00:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    });
+    expect(trend.weeks.every((week) => week.slopFlagRatePct === null && week.duplicateFlagRatePct === null)).toBe(
+      true,
+    );
+    expect(trend.summary).toContain("No queue-health snapshot history");
+  });
+
+  it("honours explicit stale and custom week windows", () => {
+    const trend = buildMaintainerSlopDuplicateTrend({
+      generatedAt: "2026-06-14T12:00:00.000Z",
+      stale: true,
+      weeks: 4,
+      repos: [{ repoFullName: "octo/demo", queueHealthSnapshots: [] }],
+    });
+    expect(trend.stale).toBe(true);
+    expect(trend.weeks).toHaveLength(4);
+  });
 });
 
 describe("slopBandLabelFromRate", () => {
