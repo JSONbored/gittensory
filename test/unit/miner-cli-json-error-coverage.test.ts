@@ -83,8 +83,9 @@ describe("miner CLI --json error coverage (#4836)", () => {
     expectJsonError(
       () =>
         runQueueNext(["--json"], {
-          initPortfolioQueue: () =>
-            ({ dequeueNext: () => { throw new Error("next_db"); }, close: () => {} }) as never,
+          initPortfolioQueue: () => ({ close: () => {} }) as never,
+          initPortfolioQueueManager: () =>
+            ({ claimNext: () => { throw new Error("next_db"); } }) as never,
         }),
       "next_db",
     );

@@ -45,7 +45,15 @@ export function runQueueList(
 
 export function runQueueNext(
   args: string[],
-  options?: { initPortfolioQueue?: () => PortfolioQueueStore },
+  options?: {
+    initPortfolioQueue?: () => PortfolioQueueStore;
+    initPortfolioQueueManager?: (init: {
+      store?: PortfolioQueueStore;
+      caps?: { globalWipCap: number; perRepoWipCap: number };
+    }) => PortfolioQueueManager;
+    resolveMinerGoalSpec?: (repoPath: string) => { spec: { maxConcurrentClaims: number } };
+    cwd?: string;
+  },
 ): number;
 
 export function runQueueDone(

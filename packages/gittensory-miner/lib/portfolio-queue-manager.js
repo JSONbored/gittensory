@@ -111,6 +111,24 @@ export function initPortfolioQueueManager(options = {}) {
       sweepStuckItems(store, Date.now(), staleLeaseMs);
       return store.batchClaim((entries) => selectEligibleBatch(entries, caps));
     },
+    /**
+     * Claim the single highest-priority item for the `queue next` CLI path (#4850), enforcing the GLOBAL WIP cap.
+     * Reclaims orphaned leases first (like `claimNextBatch`), then — only while fewer than `globalWipCap` items are
+     * in flight — dequeues one via the STORE's `dequeueNext()`. Returns the item, or `null` when the queue is empty
+     * OR the cap is already reached, so repeated calls stop claiming once the cap's worth of items are in flight.
+     *
+     * It deliberately does NOT route through `selectEligibleBatch`: that engine selection
+     * (`queueItemId`/`parseQueueItemId`) carries only `repoFullName`/`identifier` — no forge dimension (see the
+     * `claimNextBatch` note above) — so it would drop `apiBaseUrl` and skip a non-default-host row entirely (#5596).
+     * `dequeueNext()` preserves the item's host identity while this cap check supplies the WIP ceiling.
+     */
+    claimNext() {
+      sweepStuckItems(store, Date.now(), staleLeaseMs);
+      if (caps.globalWipCap > 0 && store.listInProgress().length < caps.globalWipCap) {
+        return store.dequeueNext();
+      }
+      return null;
+    },
     close() {
       store.close();
     },
