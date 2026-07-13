@@ -22,10 +22,15 @@ const PACKAGE_FILES = [
   "options.js",
   "styles.css",
   "toolbar-badge.js",
+  "icons/icon-16.png",
+  "icons/icon-32.png",
+  "icons/icon-48.png",
+  "icons/icon-128.png",
 ];
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
+mkdirSync(resolve(outDir, "icons"), { recursive: true });
 
 for (const file of PACKAGE_FILES) {
   cpSync(resolve(source, file), resolve(outDir, file));

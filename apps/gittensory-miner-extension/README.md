@@ -28,6 +28,13 @@ The extension does not request the `unlimitedStorage` permission, so a paste is 
 being parsed or saved once it exceeds a conservative size bound well under `chrome.storage.local`'s default 10 MiB
 quota, instead of silently failing to save or leaving storage partially written.
 
+## Icons
+
+`icons/` holds the standard MV3 icon set (16/32/48/128) referenced from `manifest.json`'s top-level
+`icons` and `action.default_icon`. Regenerate with `node icons/generate-icons.mjs` after the underlying
+brand asset changes — it resizes `apps/gittensory-ui/public/favicon-512.png` via `sharp`, so the
+extension's icon is always the same mark as the main site's favicon rather than a separately drawn asset.
+
 ## Host permissions
 
 `manifest.json` grants `https://github.com/*` (for the issue-page content script) plus loopback host permissions —
