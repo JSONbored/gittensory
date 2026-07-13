@@ -50,4 +50,36 @@ export function verifyGithubToken(options?: {
   timeoutMs?: number;
 }): Promise<GithubTokenVerification>;
 
-export function runInit(args?: string[], env?: Record<string, string | undefined>): Promise<number>;
+/** The minimal input-stream surface `init --interactive`'s prompts actually use — deliberately narrower than
+ *  `NodeJS.ReadableStream` so an injected test double doesn't have to implement the full stream contract
+ *  (`pipe`/`read`/`unpipe`/etc.) it never calls. `setEncoding`/`setRawMode` are optional: real TTY stdin has
+ *  both, a piped/injected stream may have neither. */
+export type InteractiveInitInputStream = {
+  on: (event: "data", listener: (chunk: string) => void) => unknown;
+  removeListener: (event: "data", listener: (chunk: string) => void) => unknown;
+  resume: () => unknown;
+  pause: () => unknown;
+  setEncoding?: (encoding: string) => unknown;
+  setRawMode?: (mode: boolean) => unknown;
+};
+
+export type InteractiveInitOutputStream = {
+  write: (chunk: string) => unknown;
+};
+
+export type InteractiveInitStreams = {
+  input?: InteractiveInitInputStream;
+  output?: InteractiveInitOutputStream;
+};
+
+export type InteractiveInitWizardResult =
+  | { ok: true; values: Record<string, string> }
+  | { ok: false; error: string };
+
+export function runInteractiveInitWizard(streams?: InteractiveInitStreams): Promise<InteractiveInitWizardResult>;
+
+export function runInit(
+  args?: string[],
+  env?: Record<string, string | undefined>,
+  streams?: InteractiveInitStreams,
+): Promise<number>;

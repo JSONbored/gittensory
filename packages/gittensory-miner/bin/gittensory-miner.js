@@ -58,7 +58,15 @@ configureLogger({ ...logOptions, env: process.env });
 // Dispatch the local commands BEFORE the opportunistic npm-registry update check is even started, so they can
 // never reach that network path (the update check runs for the remaining commands below).
 if (cliArgs[0] === "init") {
-  process.exit(await runInit(cliArgs.slice(1)));
+  const initArgs = cliArgs.slice(1);
+  const initExitCode = await runInit(initArgs);
+  // #5176: init --interactive mutates process.env in place with the just-collected values (see runInit), so a
+  // doctor rerun right here sees the fresh config -- giving the operator the same "does this pass" readout doctor
+  // always provides, without duplicating its check list or output formatting here.
+  if (initExitCode === 0 && initArgs.includes("--interactive")) {
+    process.exit(runDoctor(initArgs.filter((flag) => flag !== "--interactive")));
+  }
+  process.exit(initExitCode);
 }
 
 if (cliArgs[0] === "status") {

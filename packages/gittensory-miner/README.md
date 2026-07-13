@@ -174,6 +174,8 @@ gittensory-miner status
 
 `init` creates `~/.config/gittensory-miner/` (or `GITTENSORY_MINER_CONFIG_DIR` / `XDG_CONFIG_HOME` overrides) and a local `laptop-state.sqlite3` bootstrap file. Re-running `init` is idempotent. Pass `--verify-token` to make one authenticated GitHub API call up front and fail fast if `GITHUB_TOKEN` is invalid or missing repository access scopes. `doctor` reports Node, the state directory, SQLite readiness, and whether Docker is installed (informational only). Every local store already applies its own pending schema migrations automatically the moment some other command first opens it, but `migrate` lets an operator proactively bring every EXISTING store file up to date in one pass (e.g. right after upgrading) instead of relying on whichever command happens to touch a given store first; a store file that hasn't been created yet is reported as skipped, not created.
 
+First-time setup without hand-reading this README: `gittensory-miner init --interactive` prompts for a masked `GITHUB_TOKEN` and a coding-agent provider (`claude-cli` / `codex-cli` / `agent-sdk` / `noop`), plus that provider's optional model/timeout overrides, writes a starter `.env` to the state dir (not auto-loaded — source it into your shell, or point a service's env-file setting at it), and automatically reruns `doctor` so you immediately see whether the new config passes. It never prints the token back, makes no network calls beyond what `doctor` already makes (none), and plain `init` with no flag is unaffected.
+
 From a local checkout:
 
 ```sh
