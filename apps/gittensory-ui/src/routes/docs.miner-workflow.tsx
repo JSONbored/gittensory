@@ -134,7 +134,7 @@ export function MinerWorkflow() {
 
       <Callout variant="safety">
         <strong>Cleanup first.</strong> When the preflight reports queue pressure or unsquashed
-        commits, prefer cleaning open work over opening more —         risk-adjusted priority is part of the
+        commits, prefer cleaning open work over opening more — risk-adjusted priority is part of the
         score model.
       </Callout>
       <AmsObservabilityCallout />
