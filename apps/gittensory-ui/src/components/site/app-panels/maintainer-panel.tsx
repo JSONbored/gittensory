@@ -34,6 +34,7 @@ import { MaintainerSettings } from "@/components/site/app-panels/maintainer-sett
 import { OnboardingPreviewCard } from "@/components/site/app-panels/onboarding-preview-card";
 import { CheckRunReadinessTable } from "@/components/site/check-run-readiness-table";
 import type { CheckRunReadinessTableData } from "@/components/site/check-run-readiness-model";
+import { TableScroll } from "@/components/site/data-table";
 import { StatCard } from "@/components/site/primitives";
 import { RefreshMeta } from "@/components/site/refresh-meta";
 import { EmptyState, LoadingState, StateBoundary } from "@/components/site/state-views";
@@ -340,52 +341,71 @@ function MaintainerDashboardView({
                 private
               </span>
             </div>
-            <table className="mt-4 w-full text-left text-token-sm">
-              <thead>
-                <tr className="border-b-hairline font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-                  <th className="py-2 pr-3 font-normal">PR</th>
-                  <th className="py-2 pr-3 font-normal">Title</th>
-                  <th className="py-2 pr-3 font-normal">Author</th>
-                  <th className="py-2 pr-3 font-normal">Bucket</th>
-                  <th className="py-2 pr-3 font-normal">Slop</th>
-                  <th className="py-2 font-normal">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.reviewability.map((row) => (
-                  <tr
-                    key={row.pr}
-                    className="border-b-hairline last:border-b-0 transition-colors hover:bg-muted/40"
-                  >
-                    <td className="py-2 pr-3 font-mono text-token-xs text-foreground/90">
-                      {row.pr}
-                    </td>
-                    <td className="py-2 pr-3">{row.title}</td>
-                    <td className="py-2 pr-3 text-token-xs text-muted-foreground">{row.author}</td>
-                    <td className="py-2 pr-3">
-                      <StatusPill status={BUCKET_TONE[row.bucket] ?? "info"}>
-                        {row.bucket}
-                      </StatusPill>
-                    </td>
-                    <td className="py-2 pr-3">
-                      {row.slop ? (
-                        <StatusPill status={SLOP_BAND_TONE[row.slop.band] ?? "info"}>
-                          {row.slop.band} {row.slop.risk}
-                        </StatusPill>
-                      ) : (
-                        <span
-                          className="text-token-xs text-muted-foreground"
-                          title="Slop detection is off for this repo, or this PR has not been assessed yet."
-                        >
-                          —
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 text-token-xs text-muted-foreground">{row.reason}</td>
+            <TableScroll className="mt-4" label="Reviewability queue">
+              <table className="w-full text-left text-token-sm">
+                <caption className="sr-only">
+                  Reviewable pull requests with bucket, slop band, and reason.
+                </caption>
+                <thead>
+                  <tr className="border-b-hairline font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      PR
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Title
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Author
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Bucket
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Slop
+                    </th>
+                    <th scope="col" className="py-2 font-normal">
+                      Reason
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.reviewability.map((row) => (
+                    <tr
+                      key={row.pr}
+                      className="border-b-hairline last:border-b-0 transition-colors hover:bg-muted/40"
+                    >
+                      <td className="py-2 pr-3 font-mono text-token-xs text-foreground/90">
+                        {row.pr}
+                      </td>
+                      <td className="py-2 pr-3">{row.title}</td>
+                      <td className="py-2 pr-3 text-token-xs text-muted-foreground">
+                        {row.author}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <StatusPill status={BUCKET_TONE[row.bucket] ?? "info"}>
+                          {row.bucket}
+                        </StatusPill>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {row.slop ? (
+                          <StatusPill status={SLOP_BAND_TONE[row.slop.band] ?? "info"}>
+                            {row.slop.band} {row.slop.risk}
+                          </StatusPill>
+                        ) : (
+                          <span
+                            className="text-token-xs text-muted-foreground"
+                            title="Slop detection is off for this repo, or this PR has not been assessed yet."
+                          >
+                            —
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 text-token-xs text-muted-foreground">{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           </section>
 
           <GateOutcomeCard breakdown={data.qualityDashboard.gateOutcomeBreakdown} />
@@ -717,24 +737,35 @@ export function PreviewResult({
 
       {preview.installation?.permissionRemediation.length ? (
         <div className="overflow-hidden rounded-token border-hairline">
-          <table className="w-full text-left text-token-xs">
-            <thead className="border-b-hairline font-mono uppercase tracking-wider text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-normal">Permission</th>
-                <th className="px-3 py-2 font-normal">Current</th>
-                <th className="px-3 py-2 font-normal">Required</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.installation.permissionRemediation.map((row) => (
-                <tr key={row.permission} className="border-b-hairline last:border-b-0">
-                  <td className="px-3 py-2 text-foreground">{row.permission}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{row.currentAccess}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{row.requiredAccess}</td>
+          <TableScroll label="Permission remediation">
+            <table className="w-full text-left text-token-xs">
+              <caption className="sr-only">
+                GitHub App permission remediation: current versus required access per permission.
+              </caption>
+              <thead className="border-b-hairline font-mono uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th scope="col" className="px-3 py-2 font-normal">
+                    Permission
+                  </th>
+                  <th scope="col" className="px-3 py-2 font-normal">
+                    Current
+                  </th>
+                  <th scope="col" className="px-3 py-2 font-normal">
+                    Required
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {preview.installation.permissionRemediation.map((row) => (
+                  <tr key={row.permission} className="border-b-hairline last:border-b-0">
+                    <td className="px-3 py-2 text-foreground">{row.permission}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{row.currentAccess}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{row.requiredAccess}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         </div>
       ) : null}
 

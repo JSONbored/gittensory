@@ -1,4 +1,5 @@
 import { BoundaryBadge, StatusPill } from "@/components/site/control-primitives";
+import { TableScroll } from "@/components/site/data-table";
 import { EmptyState } from "@/components/site/state-views";
 import {
   QUALITY_BAND_TONE,
@@ -30,13 +31,22 @@ export function ContributorQualityTable({
           description="Quality bands appear once this maintainer's repos have cached open pull requests to shape."
         />
       ) : (
-        <div className="mt-4 overflow-x-auto">
+        <TableScroll className="mt-4" label="Top contributors by quality band">
           <table className="w-full min-w-[420px] text-left text-token-sm">
+            <caption className="sr-only">
+              Contributors with their quality band and open pull request count.
+            </caption>
             <thead>
               <tr className="border-b-hairline font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-                <th className="py-2 pr-3 font-normal">Contributor</th>
-                <th className="py-2 pr-3 font-normal">Band</th>
-                <th className="py-2 font-normal">Open PRs</th>
+                <th scope="col" className="py-2 pr-3 font-normal">
+                  Contributor
+                </th>
+                <th scope="col" className="py-2 pr-3 font-normal">
+                  Band
+                </th>
+                <th scope="col" className="py-2 font-normal">
+                  Open PRs
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -58,7 +68,7 @@ export function ContributorQualityTable({
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScroll>
       )}
     </section>
   );
