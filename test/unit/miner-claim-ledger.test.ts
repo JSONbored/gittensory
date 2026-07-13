@@ -316,6 +316,41 @@ describe("gittensory-miner claim ledger (#2314)", () => {
       expect(ledger.listClaims({ repoFullName: "acme/widgets" })).toHaveLength(2);
       expect(geClaim.apiBaseUrl).toBe("https://ghe.example.com/api/v3");
     });
+
+    it("REGRESSION: a legacy row violating the rebuilt table's status CHECK constraint is dropped, not a migration-aborting crash", () => {
+      const root = tempRoot();
+      const dbPath = join(root, "legacy-corrupt.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      // No CHECK on status here, simulating a hand-edited or otherwise corrupted legacy file -- the real
+      // baseline schema always enforces the CHECK, so this can only arise from external tampering.
+      legacy.exec(`
+        CREATE TABLE miner_claims (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo_full_name TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          claimed_at TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          note TEXT,
+          UNIQUE (repo_full_name, issue_number)
+        )
+      `);
+      legacy.exec(
+        "INSERT INTO miner_claims (repo_full_name, issue_number, claimed_at, status, note) VALUES ('acme/corrupt', 1, '2026-01-01T00:00:00.000Z', 'bogus', NULL)",
+      );
+      legacy.exec(
+        "INSERT INTO miner_claims (repo_full_name, issue_number, claimed_at, status, note) VALUES ('acme/widgets', 5, '2026-01-01T00:00:00.000Z', 'active', 'ok')",
+      );
+      legacy.close();
+
+      let opened: ReturnType<typeof openClaimLedger> | undefined;
+      expect(() => {
+        opened = openClaimLedger(dbPath);
+      }).not.toThrow();
+      const ledger = opened!;
+      ledgers.push(ledger);
+      // The corrupt row was dropped, not migrated -- only the valid row survived the rebuild.
+      expect(ledger.listClaims().map((claim) => claim.repoFullName)).toEqual(["acme/widgets"]);
+    });
   });
 
   describe("purgeByRepo (#5564)", () => {

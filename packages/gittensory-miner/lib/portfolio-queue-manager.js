@@ -3,26 +3,37 @@
 // claiming respects global/per-repo WIP caps and cross-repo diversification instead of a naive priority-only
 // single-row dequeue. Caps are plain constructor arguments — not wired to .gittensory-miner.yml here.
 import { nextEligibleItems } from "@jsonbored/gittensory-engine";
+import { DEFAULT_FORGE_CONFIG } from "./forge-config.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { DEFAULT_MAX_LEASE_MS, sweepStuckItems } from "./portfolio-queue-expiry.js";
 
 const ITEM_ID_SEPARATOR = "::";
 
-/** Stable composite id for projecting SQLite rows into the engine's PortfolioQueueItem shape. */
-export function queueItemId(repoFullName, identifier) {
-  return `${repoFullName}${ITEM_ID_SEPARATOR}${identifier}`;
+/**
+ * Stable composite id for projecting SQLite rows into the engine's PortfolioQueueItem shape. Encodes apiBaseUrl
+ * too (#5563) — the engine's own selection logic has no forge dimension, but two hosts can now enqueue an item
+ * under the same repoFullName+identifier (post-#5563 scoping), and the id is the ONLY thing selectEligibleBatch's
+ * output threads back to batchClaim; without the host baked in here, a selected item's host would be lost and
+ * batchClaim would default to github.com, potentially claiming a DIFFERENT row than the one the engine selected.
+ */
+export function queueItemId(apiBaseUrl, repoFullName, identifier) {
+  return `${apiBaseUrl}${ITEM_ID_SEPARATOR}${repoFullName}${ITEM_ID_SEPARATOR}${identifier}`;
 }
 
 /** Reverse {@link queueItemId} after engine selection so claims can target SQLite primary keys. */
 export function parseQueueItemId(id) {
   if (typeof id !== "string") throw new Error("invalid_queue_item_id");
-  const separatorIndex = id.indexOf(ITEM_ID_SEPARATOR);
-  if (separatorIndex <= 0 || separatorIndex === id.length - ITEM_ID_SEPARATOR.length) {
+  const firstSeparatorIndex = id.indexOf(ITEM_ID_SEPARATOR);
+  if (firstSeparatorIndex <= 0) throw new Error("invalid_queue_item_id");
+  const rest = id.slice(firstSeparatorIndex + ITEM_ID_SEPARATOR.length);
+  const secondSeparatorIndex = rest.indexOf(ITEM_ID_SEPARATOR);
+  if (secondSeparatorIndex <= 0 || secondSeparatorIndex === rest.length - ITEM_ID_SEPARATOR.length) {
     throw new Error("invalid_queue_item_id");
   }
   return {
-    repoFullName: id.slice(0, separatorIndex),
-    identifier: id.slice(separatorIndex + ITEM_ID_SEPARATOR.length),
+    apiBaseUrl: id.slice(0, firstSeparatorIndex),
+    repoFullName: rest.slice(0, secondSeparatorIndex),
+    identifier: rest.slice(secondSeparatorIndex + ITEM_ID_SEPARATOR.length),
   };
 }
 
@@ -42,13 +53,16 @@ export function entriesToPortfolioQueue(entries) {
     const repoFullName = typeof entry.repoFullName === "string" ? entry.repoFullName.trim() : "";
     const identifier = typeof entry.identifier === "string" ? entry.identifier.trim() : "";
     if (!repoFullName || !identifier) continue;
+    // Falls back to the github.com default (matching every store's own normalizeApiBaseUrl) so a row from
+    // before #5563 threaded apiBaseUrl through this fold still gets a valid, host-scoped id.
+    const apiBaseUrl = typeof entry.apiBaseUrl === "string" && entry.apiBaseUrl.trim() ? entry.apiBaseUrl.trim() : DEFAULT_FORGE_CONFIG.apiBaseUrl;
     const repoKey = repoFullName.toLowerCase();
     if (!bucketsByRepo.has(repoKey)) {
       bucketsByRepo.set(repoKey, []);
       bucketOrder.push(repoKey);
     }
     bucketsByRepo.get(repoKey).push({
-      id: queueItemId(repoFullName, identifier),
+      id: queueItemId(apiBaseUrl, repoFullName, identifier),
       repoFullName,
       state: entry.status === "in_progress" ? "in_progress" : "queued",
     });
@@ -99,12 +113,10 @@ export function initPortfolioQueueManager(options = {}) {
     reclaimStuckItems(maxLeaseMs = staleLeaseMs) {
       return sweepStuckItems(store, Date.now(), maxLeaseMs);
     },
-    // NOTE (#5563): claimNextBatch's engine-driven selection (queueItemId/parseQueueItemId, entriesToPortfolioQueue)
-    // has no apiBaseUrl dimension -- @jsonbored/gittensory-engine's PortfolioQueueItem shape predates multi-forge
-    // support. selectFn below therefore never supplies target.apiBaseUrl, so batchClaim falls back to the
-    // github.com default for every claim; a non-default-host item enqueued under a different apiBaseUrl safely
-    // fails to match (no row, no claim, no corruption) rather than being claimed under the wrong host. Retrofitting
-    // the engine primitive itself with a forge dimension is out of this store-level fix's scope.
+    // The engine primitive itself (@jsonbored/gittensory-engine's nextEligibleItems) has no apiBaseUrl concept --
+    // it only ever sees the opaque `id` string. queueItemId/parseQueueItemId (#5563) smuggle the host through
+    // that id round-trip, so selectFn's output below correctly carries each selected item's OWN apiBaseUrl into
+    // batchClaim, instead of every claim defaulting to github.com regardless of which host's row was selected.
     claimNextBatch() {
       // Reclaim orphaned leases first, so an item stranded 'in_progress' by a dead process becomes eligible again
       // instead of permanently consuming a WIP slot and starving the queue.

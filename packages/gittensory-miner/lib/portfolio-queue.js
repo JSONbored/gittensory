@@ -132,9 +132,13 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
       `);
       // ORDER BY rowid preserves the old table's FIFO insertion order in the new table's freshly-assigned rowids
       // (the composite PRIMARY KEY above is not itself the rowid), so this rebuild doesn't reshuffle queue order.
+      // OR IGNORE: a row this store's own read path already treats as unusable garbage (an unrecognized
+      // `status`, e.g. from a hand-edited or otherwise corrupted file) would violate the CHECK constraint above
+      // and abort the whole migration. Skipping it here is consistent with that same fail-closed posture, rather
+      // than turning one bad row into a permanently unmigratable file.
       migrationDb
         .prepare(
-          `INSERT INTO miner_portfolio_queue_v3
+          `INSERT OR IGNORE INTO miner_portfolio_queue_v3
              (api_base_url, repo_full_name, identifier, priority, status, enqueued_at, leased_at)
            SELECT ?, repo_full_name, identifier, priority, status, enqueued_at, leased_at
            FROM miner_portfolio_queue ORDER BY rowid`,

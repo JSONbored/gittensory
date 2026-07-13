@@ -81,8 +81,12 @@ function addApiBaseUrlScope(db) {
       UNIQUE (api_base_url, repo_full_name, issue_number)
     )
   `);
+  // OR IGNORE: a row this store's own read path already treats as unusable garbage (an unrecognized `status`,
+  // e.g. from a hand-edited or otherwise corrupted file) would violate the CHECK constraint above and abort the
+  // whole migration. Skipping it here is consistent with that same fail-closed posture, rather than turning one
+  // bad row into a permanently unmigratable file.
   db.prepare(
-    `INSERT INTO miner_claims_v2 (id, api_base_url, repo_full_name, issue_number, claimed_at, status, note)
+    `INSERT OR IGNORE INTO miner_claims_v2 (id, api_base_url, repo_full_name, issue_number, claimed_at, status, note)
      SELECT id, ?, repo_full_name, issue_number, claimed_at, status, note FROM miner_claims`,
   ).run(DEFAULT_FORGE_CONFIG.apiBaseUrl);
   db.exec("DROP TABLE miner_claims");

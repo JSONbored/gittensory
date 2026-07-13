@@ -2,11 +2,12 @@ import type { PortfolioCaps } from "@jsonbored/gittensory-engine";
 import type { EnqueueItem, PortfolioQueueStore, QueueEntry } from "./portfolio-queue.js";
 
 export type PortfolioQueueClaimTarget = {
+  apiBaseUrl: string;
   repoFullName: string;
   identifier: string;
 };
 
-export function queueItemId(repoFullName: string, identifier: string): string;
+export function queueItemId(apiBaseUrl: string, repoFullName: string, identifier: string): string;
 
 export function parseQueueItemId(id: string): PortfolioQueueClaimTarget;
 
