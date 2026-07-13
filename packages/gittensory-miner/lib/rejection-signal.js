@@ -1,4 +1,6 @@
 import { resolveAiPolicyVerdict } from "@loopover/engine";
+import { listRecentOwnSubmissions } from "./governor-state.js";
+import { resolveRejection } from "./rejection-state-machine.js";
 
 // Real rejectionSignaled resolver (#5132, Wave 3.5 follow-up). iterate-policy.ts's own doc comment: "True
 // when the target repo (or this contributor's history with it) has signaled it does not want automated/
@@ -18,6 +20,11 @@ import { resolveAiPolicyVerdict } from "@loopover/engine";
 
 const DEFAULT_RAW_CONTENT_BASE_URL = "https://raw.githubusercontent.com";
 const MAX_POLICY_DOC_BYTES = 128 * 1024;
+const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
+// Bound the per-attempt fan-out of PR-status fetches: only the N most recent own-submissions on this repo are
+// checked, so a miner with a long history on one repo can't trigger an unbounded burst of GitHub API calls on
+// every single attempt (#5655 req 2).
+const DEFAULT_MAX_OWN_SUBMISSIONS = 10;
 
 function parseRepoFullName(repoFullName) {
   if (typeof repoFullName !== "string") return null;
@@ -80,12 +87,84 @@ async function fetchPolicyDoc(target, path, resolved) {
 }
 
 /**
- * Resolve whether the target repo has an explicit, live AI-usage-policy ban -- the first of
- * `rejectionSignaled`'s two documented triggers. Returns `false` (never throws) on any fetch/parse failure,
- * matching resolveAiPolicyVerdict's own fail-open default for an absent/unreadable policy doc.
+ * Resolve `rejectionSignaled`'s SECOND documented trigger: whether a prior submission from THIS miner on this
+ * exact repo was closed WITHOUT a merge. Reads this miner's own recorded submissions
+ * (governor-state.js's `listRecentOwnSubmissions`), fetches each one's live `GET /pulls/{n}` state, and
+ * classifies it via rejection-state-machine.js's `resolveRejection`. Returns true if ANY is a rejection.
+ *
+ * Fail-open, never fabricated: an individual unreachable/unparseable PR is skipped so it can't block the
+ * others, and a wholesale failure to even list submissions resolves to `false` — a DEGRADED check surfaced via
+ * a warning, never silently asserted as "definitely no rejection". `githubToken`/`apiBaseUrl`/`maxSubmissions`/
+ * `fetchImpl`/`listRecentOwnSubmissions` are injectable purely for testability; every real caller uses the
+ * defaults (`process.env.GITHUB_TOKEN`, the public API, `node:fetch`, the real governor-state reader).
  *
  * @param {string} repoFullName
- * @param {{ rawContentBaseUrl?: string, fetchImpl?: import("./self-review-context.js").SelfReviewContextFetch }} [options]
+ * @param {{ githubToken?: string, apiBaseUrl?: string, maxSubmissions?: number,
+ *   fetchImpl?: import("./self-review-context.js").SelfReviewContextFetch,
+ *   listRecentOwnSubmissions?: typeof listRecentOwnSubmissions }} [options]
+ * @returns {Promise<boolean>}
+ */
+export async function resolveOwnRejectionHistory(repoFullName, options = {}) {
+  const target = parseRepoFullName(repoFullName);
+  if (!target) return false;
+
+  const listSubmissions = options.listRecentOwnSubmissions ?? listRecentOwnSubmissions;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const githubToken = (typeof options.githubToken === "string" ? options.githubToken : process.env.GITHUB_TOKEN ?? "").trim();
+  const apiBaseUrl =
+    typeof options.apiBaseUrl === "string" && options.apiBaseUrl.trim() ? options.apiBaseUrl.trim() : DEFAULT_GITHUB_API_BASE_URL;
+  const maxSubmissions =
+    Number.isInteger(options.maxSubmissions) && options.maxSubmissions > 0 ? options.maxSubmissions : DEFAULT_MAX_OWN_SUBMISSIONS;
+
+  let submissions;
+  try {
+    submissions = listSubmissions({ repoFullName, limit: maxSubmissions });
+  } catch (error) {
+    // Wholesale failure: surface the degraded check, resolve false (never fabricated as a rejection).
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "own_rejection_history_unavailable",
+        repoFullName,
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return false;
+  }
+
+  const prNumbers = (Array.isArray(submissions) ? submissions : [])
+    .map((submission) => submission?.pullRequestNumber)
+    .filter((prNumber) => Number.isInteger(prNumber) && prNumber > 0)
+    .slice(0, maxSubmissions);
+
+  const headers = { accept: "application/vnd.github+json", "user-agent": "loopover-miner" };
+  if (githubToken) headers.authorization = `Bearer ${githubToken}`;
+
+  for (const prNumber of prNumbers) {
+    try {
+      const url = `${apiBaseUrl}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/pulls/${prNumber}`;
+      const response = await fetchImpl(url, { method: "GET", headers });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      // No gate/duplicate signal here (unavailable and unneeded) — just "was it closed without merge".
+      if (resolveRejection(payload, undefined, { repoFullName, prNumber }) !== null) return true;
+    } catch {
+      // Fail-open per PR: one unreachable/unparseable submission must never block the others.
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve `rejectionSignaled` from BOTH of its documented triggers (matching iterate-policy.ts's own doc
+ * comment for the first time): `true` when EITHER the target repo has an explicit, live AI-usage-policy ban,
+ * OR a prior submission from this same miner on this exact repo was closed without merge. Returns `false`
+ * (never throws) on any fetch/parse failure, matching each underlying resolver's fail-open default.
+ *
+ * @param {string} repoFullName
+ * @param {{ rawContentBaseUrl?: string, githubToken?: string, apiBaseUrl?: string, maxSubmissions?: number,
+ *   fetchImpl?: import("./self-review-context.js").SelfReviewContextFetch,
+ *   listRecentOwnSubmissions?: typeof listRecentOwnSubmissions }} [options]
  * @returns {Promise<boolean>}
  */
 export async function resolveRejectionSignaled(repoFullName, options = {}) {
@@ -93,9 +172,13 @@ export async function resolveRejectionSignaled(repoFullName, options = {}) {
   if (!target) return false;
   const resolved = normalizeOptions(options);
 
+  // Trigger 1: an explicit, live AI-usage-policy ban.
   const aiUsage = await fetchPolicyDoc(target, "AI-USAGE.md", resolved);
   const contributing = aiUsage && aiUsage.trim() ? null : await fetchPolicyDoc(target, "CONTRIBUTING.md", resolved);
-
   const verdict = resolveAiPolicyVerdict({ aiUsage, contributing });
-  return !verdict.allowed;
+  if (!verdict.allowed) return true;
+
+  // Trigger 2: a prior submission from this same miner on this exact repo was closed without merge. Only checked
+  // when trigger 1 is clear, so a repo that already bans AI contributions costs zero extra PR-status fetches.
+  return resolveOwnRejectionHistory(repoFullName, options);
 }
