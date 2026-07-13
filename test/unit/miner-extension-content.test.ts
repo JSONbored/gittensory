@@ -46,6 +46,26 @@ describe("miner extension opportunity badge", () => {
     expect(manifest.content_scripts[0].css).toEqual(["styles.css"]);
   });
 
+  it("declares a standard icon set on both the extension and the toolbar action, and each file is a real PNG of that size (#4862)", () => {
+    const expected = {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png",
+    };
+    expect(manifest.icons).toEqual(expected);
+    expect(manifest.action.default_icon).toEqual(expected);
+
+    for (const [size, relativePath] of Object.entries(expected)) {
+      const bytes = readFileSync(`apps/gittensory-miner-extension/${relativePath}`);
+      // PNG 8-byte signature.
+      expect([...bytes.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      // IHDR width/height (big-endian at byte 16/20) match the declared size, so the manifest key is truthful.
+      expect(bytes.readUInt32BE(16)).toBe(Number(size));
+      expect(bytes.readUInt32BE(20)).toBe(Number(size));
+    }
+  });
+
   it("detects GitHub issue routes without matching pull requests", () => {
     const internals = loadContentInternals();
     expect(internals.matchGitHubIssueTarget("/JSONbored/gittensory/issues/145")).toEqual({

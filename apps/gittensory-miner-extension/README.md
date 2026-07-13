@@ -10,6 +10,15 @@ context for maintainers.
 - `background.js` service worker + `content.js` message-passing
 - Read-only opportunity badge (score/tier + short why) for watched repositories
 - Options page for watched repos and a local ranked-candidate cache
+- A standard icon set (`icons/icon-{16,32,48,128}.png`) declared as both the extension `icons` and the toolbar
+  `action.default_icon`
+
+## Icons
+
+`icons/icon-{16,32,48,128}.png` are generated artifacts committed alongside their generator, not hand-drawn
+binaries. Regenerate them with `npm run miner:extension:icons` (see [`icons/generate-icons.mjs`](icons/generate-icons.mjs)) —
+a dependency-free Node renderer that draws the mint "loop" mark on a dark rounded tile, matching the badge palette
+in `styles.css`.
 
 The badge surfaces the same ranked signal as `packages/gittensory-miner/lib/opportunity-ranker.js` by reading
 pre-ranked candidates from browser local storage. It never writes to GitHub and omits itself when no ranked signal is
