@@ -61,9 +61,9 @@ describe("AMS observability cross-reference callout", () => {
   it("renders both cross-links to the exported doc/dashboard targets (success path)", () => {
     render(<AmsObservabilityCallout />);
 
-    expect(
-      screen.getByRole("link", { name: /Observing your miner/i }).getAttribute("href"),
-    ).toBe(AMS_OBSERVABILITY_DOC_URL);
+    expect(screen.getByRole("link", { name: /Observing your miner/i }).getAttribute("href")).toBe(
+      AMS_OBSERVABILITY_DOC_URL,
+    );
     expect(
       screen.getByRole("link", { name: /miner-usage\.json dashboard/i }).getAttribute("href"),
     ).toBe(MINER_USAGE_DASHBOARD_URL);
@@ -72,21 +72,18 @@ describe("AMS observability cross-reference callout", () => {
   it.each([
     ["AMS observability doc", AMS_OBSERVABILITY_DOC_URL],
     ["miner-usage dashboard", MINER_USAGE_DASHBOARD_URL],
-  ])(
-    "keeps the %s link a well-formed, non-empty absolute https URL (invariant)",
-    (_label, url) => {
-      expect(url.trim().length).toBeGreaterThan(0);
-      expect(() => new URL(url)).not.toThrow();
-      expect(new URL(url).protocol).toBe("https:");
-    },
-  );
+  ])("keeps the %s link a well-formed, non-empty absolute https URL (invariant)", (_label, url) => {
+    expect(url.trim().length).toBeGreaterThan(0);
+    expect(() => new URL(url)).not.toThrow();
+    expect(new URL(url).protocol).toBe("https:");
+  });
 
   it.each(ROUTES)("adds the AMS observability callout to the %s route", (_name, Component) => {
     render(<Component />);
 
-    expect(
-      screen.getByRole("link", { name: /Observing your miner/i }).getAttribute("href"),
-    ).toBe(AMS_OBSERVABILITY_DOC_URL);
+    expect(screen.getByRole("link", { name: /Observing your miner/i }).getAttribute("href")).toBe(
+      AMS_OBSERVABILITY_DOC_URL,
+    );
     expect(
       screen.getByRole("link", { name: /miner-usage\.json dashboard/i }).getAttribute("href"),
     ).toBe(MINER_USAGE_DASHBOARD_URL);
