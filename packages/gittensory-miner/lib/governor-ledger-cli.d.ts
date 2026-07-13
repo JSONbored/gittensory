@@ -1,4 +1,5 @@
 import type { GovernorLedger, GovernorLedgerEntry } from "./governor-ledger.js";
+import type { GovernorPauseCliOptions } from "./governor-pause-cli.js";
 
 export type GovernorLedgerEventType = "allowed" | "denied" | "throttled" | "kill_switch";
 
@@ -27,5 +28,5 @@ export function runGovernorList(
 export function runGovernorCli(
   subcommand: string | undefined,
   args: string[],
-  options?: { initGovernorLedger?: () => GovernorLedger },
+  options?: { initGovernorLedger?: () => GovernorLedger } & GovernorPauseCliOptions,
 ): Promise<number>;

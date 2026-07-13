@@ -3,8 +3,9 @@
 // evaluateRunLoopBoundaryGate, attemptLoopReentry, buildLoopClosureSummary, governor-state.js -- already
 // existed; this is the first caller that actually chains them into a real repeat-until-halted run.
 //
-// STRUCTURE (one cycle): kill-switch check -> real-per-repo-policy-aware run-loop boundary gate (before
-// claiming) -> real runAttempt -> real CI-status poll (ci-poller.js, #5394) + real PR-disposition poll
+// STRUCTURE (one cycle): kill-switch check -> pause-flag check (#4851, governor-state.js's persisted
+// paused/reason/pausedAt) -> real-per-repo-policy-aware run-loop boundary gate (before claiming) -> real
+// runAttempt -> real CI-status poll (ci-poller.js, #5394) + real PR-disposition poll
 // (pr-disposition-poller.js, on a submitted outcome) -> real loop-closure summary -> real attemptLoopReentry
 // decision. `attemptLoopReentry`'s own dequeue is the
 // AUTHORITATIVE claim for every cycle after the first (its own doc: "if allowed -- dequeues the next
@@ -296,11 +297,19 @@ export async function runLoop(args, options = {}) {
 
   try {
     // Checked BEFORE any work at all -- including the very first discovery call -- so an already-active kill
-    // switch halts the loop without ever touching GitHub or the queue.
+    // switch OR an already-active pause (#4851) halts the loop without ever touching GitHub or the queue. The
+    // pause flag is real, persisted, operator/governor-writable state on governorState (toggled via
+    // `gittensory-miner governor pause`/`resume`) -- unlike the kill switch, a paused run resumes simply by being
+    // re-invoked: every piece of per-cycle state this loop reads (portfolioQueue, runState, governorState's own
+    // cap usage) is already durable, so clearing the flag and restarting continues exactly where it left off.
     const initialKillSwitch = checkKillSwitchFn({ env });
+    const initialPauseState = governorState.loadPauseState();
     let claimed = null;
     if (initialKillSwitch.active) {
       haltReason = `kill_switch_${initialKillSwitch.scope}`;
+      cycles.push({ cycle: 1, outcome: "halted", reason: haltReason });
+    } else if (initialPauseState.paused) {
+      haltReason = "paused";
       cycles.push({ cycle: 1, outcome: "halted", reason: haltReason });
     } else {
       await runDiscoveryOnce();
@@ -314,6 +323,13 @@ export async function runLoop(args, options = {}) {
       const killSwitch = checkKillSwitchFn({ env });
       if (killSwitch.active) {
         haltReason = `kill_switch_${killSwitch.scope}`;
+        cycles.push({ cycle: cycleIndex, outcome: "halted", reason: haltReason });
+        break;
+      }
+
+      const pauseState = governorState.loadPauseState();
+      if (pauseState.paused) {
+        haltReason = "paused";
         cycles.push({ cycle: cycleIndex, outcome: "halted", reason: haltReason });
         break;
       }

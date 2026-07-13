@@ -49,6 +49,21 @@ function parseJsonColumn(value, fallback) {
   }
 }
 
+// Add the pause/resume columns (#4851) to an on-disk file created before they existed. `CREATE TABLE IF NOT
+// EXISTS` above is a no-op against an already-existing table, so a pre-#4851 file needs this explicit ALTER --
+// guarded by a column-presence check so it only ever runs once per file, same technique as
+// portfolio-queue.js's own post-creation column migration.
+function ensurePauseColumns(db) {
+  const hasPausedColumn = db
+    .prepare("PRAGMA table_info(governor_scalar_state)")
+    .all()
+    .some((column) => column.name === "paused");
+  if (hasPausedColumn) return;
+  db.exec("ALTER TABLE governor_scalar_state ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+  db.exec("ALTER TABLE governor_scalar_state ADD COLUMN pause_reason TEXT");
+  db.exec("ALTER TABLE governor_scalar_state ADD COLUMN paused_at TEXT");
+}
+
 /** Opens the local governor-state store, creating tables on first use. */
 export function openGovernorState(dbPath = resolveGovernorStateDbPath()) {
   const resolvedPath = normalizeDbPath(dbPath);
@@ -64,9 +79,13 @@ export function openGovernorState(dbPath = resolveGovernorStateDbPath()) {
       rate_limit_buckets_json TEXT NOT NULL,
       rate_limit_backoff_json TEXT NOT NULL,
       cap_usage_json TEXT NOT NULL,
+      paused INTEGER NOT NULL DEFAULT 0,
+      pause_reason TEXT,
+      paused_at TEXT,
       updated_at TEXT NOT NULL
     )
   `);
+  ensurePauseColumns(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS governor_reputation_history (
       repo_full_name TEXT PRIMARY KEY,
@@ -89,12 +108,16 @@ export function openGovernorState(dbPath = resolveGovernorStateDbPath()) {
 
   const getScalarStatement = db.prepare("SELECT * FROM governor_scalar_state WHERE id = 1");
   const upsertScalarStatement = db.prepare(`
-    INSERT INTO governor_scalar_state (id, rate_limit_buckets_json, rate_limit_backoff_json, cap_usage_json, updated_at)
-    VALUES (1, ?, ?, ?, ?)
+    INSERT INTO governor_scalar_state
+      (id, rate_limit_buckets_json, rate_limit_backoff_json, cap_usage_json, paused, pause_reason, paused_at, updated_at)
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       rate_limit_buckets_json = excluded.rate_limit_buckets_json,
       rate_limit_backoff_json = excluded.rate_limit_backoff_json,
       cap_usage_json = excluded.cap_usage_json,
+      paused = excluded.paused,
+      pause_reason = excluded.pause_reason,
+      paused_at = excluded.paused_at,
       updated_at = excluded.updated_at
   `);
   const getReputationStatement = db.prepare("SELECT * FROM governor_reputation_history WHERE repo_full_name = ?");
@@ -142,6 +165,9 @@ export function openGovernorState(dbPath = resolveGovernorStateDbPath()) {
         JSON.stringify(rateLimitState?.buckets ?? DEFAULT_RATE_LIMIT_BUCKETS),
         JSON.stringify(rateLimitState?.backoffAttempts ?? DEFAULT_RATE_LIMIT_BACKOFF),
         row ? row.cap_usage_json : JSON.stringify(DEFAULT_CAP_USAGE),
+        row ? row.paused : 0,
+        row ? row.pause_reason : null,
+        row ? row.paused_at : null,
         new Date().toISOString(),
       );
     },
@@ -155,8 +181,41 @@ export function openGovernorState(dbPath = resolveGovernorStateDbPath()) {
         row ? row.rate_limit_buckets_json : JSON.stringify(DEFAULT_RATE_LIMIT_BUCKETS),
         row ? row.rate_limit_backoff_json : JSON.stringify(DEFAULT_RATE_LIMIT_BACKOFF),
         JSON.stringify(capUsage ?? DEFAULT_CAP_USAGE),
+        row ? row.paused : 0,
+        row ? row.pause_reason : null,
+        row ? row.paused_at : null,
         new Date().toISOString(),
       );
+    },
+    // The governor pause/resume control surface (#4851): a real, persisted, operator/governor-writable flag the
+    // loop checks before each cycle -- distinct from governor-kill-switch.js (a read-only resolver over env/YAML
+    // inputs the miner does not itself write) and governor-run-halt.js (a one-way, run-scoped terminal breaker).
+    // `pausedAt` is stamped fresh on every transition INTO paused, and cleared on resume, so a status query can
+    // report how long a pause has been in effect without needing a separate history table.
+    loadPauseState() {
+      const row = getScalarStatement.get();
+      return {
+        paused: row ? Boolean(row.paused) : false,
+        reason: row?.pause_reason ?? null,
+        pausedAt: row?.paused_at ?? null,
+      };
+    },
+    savePauseState(pauseState) {
+      const row = getScalarStatement.get();
+      const paused = Boolean(pauseState?.paused);
+      const reason =
+        typeof pauseState?.reason === "string" && pauseState.reason.trim() ? pauseState.reason.trim() : null;
+      const pausedAt = paused ? new Date().toISOString() : null;
+      upsertScalarStatement.run(
+        row ? row.rate_limit_buckets_json : JSON.stringify(DEFAULT_RATE_LIMIT_BUCKETS),
+        row ? row.rate_limit_backoff_json : JSON.stringify(DEFAULT_RATE_LIMIT_BACKOFF),
+        row ? row.cap_usage_json : JSON.stringify(DEFAULT_CAP_USAGE),
+        paused ? 1 : 0,
+        reason,
+        pausedAt,
+        new Date().toISOString(),
+      );
+      return { paused, reason, pausedAt };
     },
     loadReputationHistory(repoFullName) {
       const normalized = normalizeRepoFullName(repoFullName);
@@ -216,6 +275,14 @@ export function loadCapUsage() {
 
 export function saveCapUsage(capUsage) {
   return getDefaultGovernorState().saveCapUsage(capUsage);
+}
+
+export function loadPauseState() {
+  return getDefaultGovernorState().loadPauseState();
+}
+
+export function savePauseState(pauseState) {
+  return getDefaultGovernorState().savePauseState(pauseState);
 }
 
 export function loadReputationHistory(repoFullName) {

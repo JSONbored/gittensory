@@ -50,6 +50,16 @@ The package also includes an append-only governor decision ledger: `initGovernor
 persist structured allow/deny/throttle/kill-switch outcomes in local SQLite for contributor audit. Insert-only —
 no enforcement wiring yet. (#2328)
 
+The package also includes a real, persisted governor pause/resume control surface: `gittensory-miner governor
+pause [--reason <text>]` / `governor resume` / `governor status` toggle a `paused`/`reason`/`pausedAt` flag on
+governor-state.js's existing scalar-state row, and `loop-cli.js`'s iteration loop checks it at the same two
+boundaries as the kill switch (before the first cycle and at the top of every subsequent one) — pausing mid-run
+stops the loop before its next cycle claims anything, and resuming (clear the flag, re-invoke `loop`) continues
+from the already-persisted queue/run state exactly where it left off. Distinct from the read-only kill switch
+(env/YAML inputs this package never writes) and the one-way run-halt breaker (no resume path at all) — this is
+the first genuinely operator/governor-writable stop/go control; the autonomous logic that decides *when* to pause
+is separate, later-wave scope. (#4851)
+
 The package also includes a local soft-claim ledger: `openClaimLedger` / `claimIssue` / `releaseClaim` /
 `listActiveClaims` persist which issues this miner instance has claimed on this machine. The table is local
 bookkeeping only — duplicate winners are adjudicated elsewhere via `@jsonbored/gittensory-engine`. (#2291)

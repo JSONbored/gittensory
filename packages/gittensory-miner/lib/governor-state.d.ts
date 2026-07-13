@@ -10,12 +10,25 @@ export type ListRecentOwnSubmissionsFilter = {
   limit?: number;
 };
 
+export type GovernorPauseState = {
+  paused: boolean;
+  reason: string | null;
+  pausedAt: string | null;
+};
+
+export type GovernorPauseInput = {
+  paused: boolean;
+  reason?: string | null;
+};
+
 export type GovernorState = {
   dbPath: string;
   loadRateLimitState(): GovernorRateLimitState;
   saveRateLimitState(rateLimitState: GovernorRateLimitState): void;
   loadCapUsage(): GovernorCapUsage;
   saveCapUsage(capUsage: GovernorCapUsage): void;
+  loadPauseState(): GovernorPauseState;
+  savePauseState(pauseState: GovernorPauseInput): GovernorPauseState;
   loadReputationHistory(repoFullName: string): RepoOutcomeHistory;
   saveReputationHistory(repoFullName: string, history: RepoOutcomeHistory): RepoOutcomeHistory;
   recordOwnSubmission(record: OwnSubmissionRecord): OwnSubmissionRecord;
@@ -34,6 +47,10 @@ export function saveRateLimitState(rateLimitState: GovernorRateLimitState): void
 export function loadCapUsage(): GovernorCapUsage;
 
 export function saveCapUsage(capUsage: GovernorCapUsage): void;
+
+export function loadPauseState(): GovernorPauseState;
+
+export function savePauseState(pauseState: GovernorPauseInput): GovernorPauseState;
 
 export function loadReputationHistory(repoFullName: string): RepoOutcomeHistory;
 

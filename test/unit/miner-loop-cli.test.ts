@@ -267,6 +267,106 @@ describe("runLoop (#5135)", () => {
     expect(printed.cycles).toEqual([{ cycle: 1, outcome: "halted", reason: "kill_switch_global" }]);
   });
 
+  it("halts immediately on an active pause, before running discovery or any attempt (#4851)", async () => {
+    const { eventLedger, governorLedger, portfolioQueue, runState, governorState } = tempStores();
+    governorState.savePauseState({ paused: true, reason: "operator requested" });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const runDiscoverSpy = vi.fn();
+    const runAttemptSpy = vi.fn();
+
+    const exitCode = await runLoop(["acme/widgets", "--miner-login", "alice", "--json"], {
+      openGovernorState: () => governorState,
+      initEventLedger: () => eventLedger,
+      initGovernorLedger: () => governorLedger,
+      initPortfolioQueue: () => portfolioQueue,
+      initRunStateStore: () => runState,
+      runDiscover: runDiscoverSpy,
+      runAttempt: runAttemptSpy,
+      ...readyLoopOptions(),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runDiscoverSpy).not.toHaveBeenCalled();
+    expect(runAttemptSpy).not.toHaveBeenCalled();
+    const printed = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(printed.haltReason).toBe("paused");
+    expect(printed.cycles).toEqual([{ cycle: 1, outcome: "halted", reason: "paused" }]);
+  });
+
+  it("checks the pause flag again at the top of the per-cycle loop, not just before the first cycle (#4851)", async () => {
+    const { eventLedger, governorLedger, portfolioQueue, runState, governorState } = tempStores();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Unpaused for the pre-loop check (so the initial discovery still runs), then paused for every check after --
+    // proving the SECOND checkpoint (inside the while loop) independently halts a run that started clean.
+    const loadPauseState = vi
+      .fn()
+      .mockReturnValueOnce({ paused: false, reason: null, pausedAt: null })
+      .mockReturnValue({ paused: true, reason: "stop mid-run", pausedAt: "2026-07-12T00:00:00.000Z" });
+    const pausableGovernorState = { ...governorState, loadPauseState };
+    const runDiscoverSpy = vi.fn(async () => 0);
+    const runAttemptSpy = vi.fn();
+
+    const exitCode = await runLoop(["acme/widgets", "--miner-login", "alice", "--json"], {
+      openGovernorState: () => pausableGovernorState,
+      initEventLedger: () => eventLedger,
+      initGovernorLedger: () => governorLedger,
+      initPortfolioQueue: () => portfolioQueue,
+      initRunStateStore: () => runState,
+      runDiscover: runDiscoverSpy,
+      runAttempt: runAttemptSpy,
+      ...readyLoopOptions(),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runDiscoverSpy).toHaveBeenCalledTimes(1);
+    expect(runAttemptSpy).not.toHaveBeenCalled();
+    const printed = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(printed.haltReason).toBe("paused");
+    expect(printed.cycles).toEqual([{ cycle: 1, outcome: "halted", reason: "paused" }]);
+  });
+
+  it("resuming (clearing the flag) lets a later invocation continue from the persisted queue state (#4851)", async () => {
+    const { eventLedger, governorLedger, portfolioQueue, runState, governorState, paths } = tempStores();
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:7" });
+    governorState.savePauseState({ paused: true, reason: "stop for review" });
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const runDiscoverSpy = vi.fn(async () => 0);
+    const runAttemptSpy = vi.fn();
+
+    const firstRun = await runLoop(["acme/widgets", "--miner-login", "alice", "--json"], {
+      openGovernorState: () => governorState,
+      initEventLedger: () => eventLedger,
+      initGovernorLedger: () => governorLedger,
+      initPortfolioQueue: () => portfolioQueue,
+      initRunStateStore: () => runState,
+      runDiscover: runDiscoverSpy,
+      runAttempt: runAttemptSpy,
+      ...readyLoopOptions(),
+    });
+    expect(firstRun).toBe(0);
+    expect(runDiscoverSpy).not.toHaveBeenCalled();
+
+    // Resume: clear the flag, then re-invoke against FRESH handles to the SAME on-disk files -- runLoop's own
+    // finally already closed the first-run handles above, so this mirrors the real cross-invocation resume path
+    // (a separate CLI call) rather than reusing a closed connection.
+    const resumedGovernorState = openGovernorState(paths.governorStatePath);
+    resumedGovernorState.savePauseState({ paused: false });
+    const secondRun = await runLoop(["acme/widgets", "--miner-login", "alice", "--json", "--max-cycles", "0"], {
+      openGovernorState: () => resumedGovernorState,
+      initEventLedger: () => initEventLedger(paths.eventLedgerPath),
+      initGovernorLedger: () => initGovernorLedger(paths.governorLedgerPath),
+      initPortfolioQueue: () => initPortfolioQueueStore(paths.portfolioQueuePath),
+      initRunStateStore: () => initRunStateStore(paths.runStatePath),
+      runDiscover: runDiscoverSpy,
+      runAttempt: runAttemptSpy,
+      ...readyLoopOptions(),
+    });
+
+    expect(secondRun).toBe(0);
+    // Now unblocked: the pre-loop discovery call ran, proving the run continued instead of halting again.
+    expect(runDiscoverSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("REGRESSION: runs a full cycle end to end -- claims, attempts, polls real PR disposition, records the outcome, and re-enters", async () => {
     const { eventLedger, governorLedger, portfolioQueue, runState, governorState, paths } = tempStores();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

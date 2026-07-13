@@ -1,3 +1,5 @@
+import { runGovernorPause, runGovernorResume, runGovernorStatus } from "./governor-pause-cli.js";
+
 /** Must match `GOVERNOR_LEDGER_EVENT_TYPES` in `@jsonbored/gittensory-engine`. */
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
@@ -10,6 +12,13 @@ const GOVERNOR_LEDGER_EVENT_TYPES = Object.freeze([
 
 const GOVERNOR_LIST_USAGE =
   "Usage: gittensory-miner governor list [--repo <owner/repo>] [--type allowed|denied|throttled|kill_switch] [--json]";
+
+const GOVERNOR_SUBCOMMAND_USAGE = [
+  GOVERNOR_LIST_USAGE,
+  "       gittensory-miner governor pause [--reason <text>] [--json]",
+  "       gittensory-miner governor resume [--json]",
+  "       gittensory-miner governor status [--json]",
+].join("\n");
 
 function parseRepoArg(value, usage) {
   if (!value) return { error: usage };
@@ -136,5 +145,11 @@ export async function runGovernorList(args, options = {}) {
 
 export async function runGovernorCli(subcommand, args, options = {}) {
   if (subcommand === "list") return runGovernorList(args, options);
-  return reportCliFailure(argsWantJson(args), `Unknown governor subcommand: ${subcommand ?? ""}. ${GOVERNOR_LIST_USAGE}`);
+  if (subcommand === "pause") return runGovernorPause(args, options);
+  if (subcommand === "resume") return runGovernorResume(args, options);
+  if (subcommand === "status") return runGovernorStatus(args, options);
+  return reportCliFailure(
+    argsWantJson(args),
+    `Unknown governor subcommand: ${subcommand ?? ""}.\n${GOVERNOR_SUBCOMMAND_USAGE}`,
+  );
 }

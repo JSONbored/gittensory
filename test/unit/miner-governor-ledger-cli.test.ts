@@ -141,6 +141,8 @@ describe("gittensory-miner governor ledger CLI (#2328)", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(await runGovernorCli("tail", [])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown governor subcommand");
+    expect(String(error.mock.calls[0]?.[0])).toContain("governor pause");
+
     error.mockClear();
     log.mockClear();
     expect(await runGovernorCli("tail", ["--json"])).toBe(2);
@@ -148,6 +150,31 @@ describe("gittensory-miner governor ledger CLI (#2328)", () => {
       ok: false,
       error: expect.stringContaining("Unknown governor subcommand"),
     });
+
+    error.mockClear();
+    expect(await runGovernorCli(undefined, [])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Unknown governor subcommand: .");
+  });
+
+  it("runGovernorCli dispatches pause, resume, and status to governor-pause-cli.js (#4851)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-ledger-cli-pause-"));
+    roots.push(root);
+    const { openGovernorState } = await import("../../packages/gittensory-miner/lib/governor-state.js");
+    const governorState = openGovernorState(join(root, "governor-state.sqlite3"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(await runGovernorCli("pause", ["--json"], { openGovernorState: () => governorState })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ paused: true });
+
+    log.mockClear();
+    expect(await runGovernorCli("status", ["--json"], { openGovernorState: () => governorState })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ paused: true });
+
+    log.mockClear();
+    expect(await runGovernorCli("resume", ["--json"], { openGovernorState: () => governorState })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ paused: false });
+
+    governorState.close();
   });
 
   it("rejects unknown options from argv parsing", async () => {
