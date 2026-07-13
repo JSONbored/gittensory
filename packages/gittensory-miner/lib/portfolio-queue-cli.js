@@ -4,7 +4,8 @@ import { runPortfolioDashboard } from "./portfolio-dashboard.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const QUEUE_LIST_USAGE = "Usage: gittensory-miner queue list [--repo <owner/repo>] [--json]";
-const QUEUE_NEXT_USAGE = "Usage: gittensory-miner queue next [--dry-run] [--json]";
+const QUEUE_NEXT_USAGE =
+  "Usage: gittensory-miner queue next [--global-wip <n>] [--per-repo-wip <n>] [--dry-run] [--json]";
 const QUEUE_DONE_USAGE =
   "Usage: gittensory-miner queue done <owner/repo> <identifier> [--api-base-url <url>] [--dry-run] [--json]";
 const QUEUE_RELEASE_USAGE =
@@ -81,13 +82,70 @@ export function parseQueueListArgs(args) {
   return options;
 }
 
+// #4850: --global-wip/--per-repo-wip are OMITTED (undefined) by default -- queue next stays uncapped, byte-
+// identical to its pre-#4850 behavior, unless an operator explicitly opts in. Mirrors queue claim-batch's own
+// flag names (portfolio-queue-manager.js's WIP-cap-aware claimer), but claim-batch's OWN default of 1/1 is not
+// reused here: claim-batch's whole purpose is cap enforcement, while queue next has always been a plain
+// highest-priority dequeue and must not silently start capping existing callers that never asked for it.
 export function parseQueueNextArgs(args) {
-  const parsed = parseJsonFlag(args);
-  if ("error" in parsed) return parsed;
-  if (parsed.positional.length > 0) {
+  const options = { json: false, dryRun: false, globalWipCap: undefined, perRepoWipCap: undefined };
+  const positional = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--json") {
+      options.json = true;
+      continue;
+    }
+    if (token === "--dry-run") {
+      options.dryRun = true;
+      continue;
+    }
+    if (token === "--global-wip" || token === "--per-repo-wip") {
+      const value = Number(args[index + 1]);
+      if (args[index + 1] === undefined || !Number.isFinite(value) || value < 0) {
+        return { error: QUEUE_NEXT_USAGE };
+      }
+      if (token === "--global-wip") options.globalWipCap = value;
+      else options.perRepoWipCap = value;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      return { error: `Unknown option: ${token}` };
+    }
+    positional.push(token);
+  }
+
+  if (positional.length > 0) {
     return { error: QUEUE_NEXT_USAGE };
   }
-  return { json: parsed.json, dryRun: parsed.dryRun };
+  return options;
+}
+
+/**
+ * Pick at most one atomically-claimable target from the store's already-priority-ordered active rows (queued
+ * AND in_progress interleaved, exactly `batchClaim`'s own `entries` shape). `caps` of `null` replicates the
+ * pre-#4850 behavior: the single highest-priority queued row, unconditionally. When caps are set, refuses to
+ * select anything once the global or the target row's own per-repo in-progress count has reached its cap --
+ * "stops claiming once the cap is reached" (#4850), not a diversifying batch selection (that remains
+ * claim-batch's job via the engine's own `nextEligibleItems`).
+ * @param {Array<{ repoFullName: string, identifier: string, apiBaseUrl: string, status: string }>} entries
+ * @param {{ globalWipCap: number, perRepoWipCap: number } | null} caps
+ */
+export function selectNextEligibleTarget(entries, caps) {
+  const topQueued = entries.find((entry) => entry.status === "queued");
+  if (!topQueued) return [];
+  if (!caps) {
+    return [{ repoFullName: topQueued.repoFullName, identifier: topQueued.identifier, apiBaseUrl: topQueued.apiBaseUrl }];
+  }
+  const globalActiveCount = entries.filter((entry) => entry.status === "in_progress").length;
+  if (globalActiveCount >= caps.globalWipCap) return [];
+  const repoActiveCount = entries.filter(
+    (entry) => entry.status === "in_progress" && entry.repoFullName === topQueued.repoFullName,
+  ).length;
+  if (repoActiveCount >= caps.perRepoWipCap) return [];
+  return [{ repoFullName: topQueued.repoFullName, identifier: topQueued.identifier, apiBaseUrl: topQueued.apiBaseUrl }];
 }
 
 /** Shared `<owner/repo> <identifier> [--api-base-url <url>] [--json]` parse for the item-targeting subcommands
@@ -220,10 +278,17 @@ export function runQueueNext(args, options = {}) {
     return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
+  const capsRequested = parsed.globalWipCap !== undefined || parsed.perRepoWipCap !== undefined;
   if (parsed.dryRun) {
-    const dryRunResult = { outcome: "dry_run" };
+    const dryRunResult = capsRequested
+      ? { outcome: "dry_run", globalWipCap: parsed.globalWipCap, perRepoWipCap: parsed.perRepoWipCap }
+      : { outcome: "dry_run" };
     if (parsed.json) {
       console.log(JSON.stringify(dryRunResult, null, 2));
+    } else if (capsRequested) {
+      console.log(
+        `DRY RUN: would dequeue the highest-priority queued item within WIP caps (global-wip: ${parsed.globalWipCap ?? "unset"}, per-repo-wip: ${parsed.perRepoWipCap ?? "unset"}). No portfolio-queue write was made.`,
+      );
     } else {
       console.log("DRY RUN: would dequeue the highest-priority queued item. No portfolio-queue write was made.");
     }
@@ -232,7 +297,18 @@ export function runQueueNext(args, options = {}) {
 
   try {
     return withPortfolioQueue(options, (portfolioQueue) => {
-      const entry = portfolioQueue.dequeueNext();
+      let entry;
+      if (capsRequested) {
+        // Unset dimensions stay genuinely uncapped (Infinity), not silently defaulted to 1 like claim-batch.
+        const caps = {
+          globalWipCap: parsed.globalWipCap ?? Number.POSITIVE_INFINITY,
+          perRepoWipCap: parsed.perRepoWipCap ?? Number.POSITIVE_INFINITY,
+        };
+        const claimed = portfolioQueue.batchClaim((entries) => selectNextEligibleTarget(entries, caps));
+        entry = claimed[0] ?? null;
+      } else {
+        entry = portfolioQueue.dequeueNext();
+      }
       if (parsed.json) {
         console.log(JSON.stringify({ entry }, null, 2));
       } else {

@@ -8,7 +8,16 @@ export type ParsedQueueListArgs =
     }
   | { error: string };
 
-export type ParsedQueueNextArgs = { json: boolean; dryRun: boolean } | { error: string };
+export type ParsedQueueNextArgs =
+  | { json: boolean; dryRun: boolean; globalWipCap: number | undefined; perRepoWipCap: number | undefined }
+  | { error: string };
+
+export type QueueClaimTarget = { repoFullName: string; identifier: string; apiBaseUrl: string };
+
+export function selectNextEligibleTarget(
+  entries: Array<{ repoFullName: string; identifier: string; apiBaseUrl: string; status: string }>,
+  caps: { globalWipCap: number; perRepoWipCap: number } | null,
+): QueueClaimTarget[];
 
 export type ParsedQueueDoneArgs =
   | {

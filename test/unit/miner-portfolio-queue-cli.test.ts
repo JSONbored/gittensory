@@ -19,6 +19,7 @@ import {
   runQueueNext,
   runQueueRelease,
   runQueueRequeue,
+  selectNextEligibleTarget,
 } from "../../packages/gittensory-miner/lib/portfolio-queue-cli.js";
 import type { QueueEntry } from "../../packages/gittensory-miner/lib/portfolio-queue.d.ts";
 
@@ -129,6 +130,164 @@ describe("gittensory-miner portfolio queue CLI (#2292)", () => {
       }),
     ).toBe(0);
     expect(log).toHaveBeenCalledWith("none");
+  });
+
+  describe("selectNextEligibleTarget() (#4850)", () => {
+    function entry(overrides: Record<string, unknown> = {}) {
+      return {
+        apiBaseUrl: "https://api.github.com",
+        repoFullName: "acme/widgets",
+        identifier: "issue:1",
+        status: "queued",
+        ...overrides,
+      };
+    }
+
+    it("null caps replicates the pre-#4850 unconditional highest-priority selection", () => {
+      const entries = [entry({ status: "in_progress", identifier: "in-flight" }), entry()];
+      expect(selectNextEligibleTarget(entries, null)).toEqual([
+        { apiBaseUrl: "https://api.github.com", repoFullName: "acme/widgets", identifier: "issue:1" },
+      ]);
+    });
+
+    it("returns nothing when there is no queued row, regardless of caps", () => {
+      expect(selectNextEligibleTarget([], null)).toEqual([]);
+      expect(selectNextEligibleTarget([entry({ status: "in_progress" })], { globalWipCap: 5, perRepoWipCap: 5 })).toEqual([]);
+    });
+
+    it("refuses to select once the global cap is already reached", () => {
+      const entries = [
+        entry({ status: "in_progress", identifier: "a", repoFullName: "acme/a" }),
+        entry({ status: "in_progress", identifier: "b", repoFullName: "acme/b" }),
+        entry({ status: "queued", identifier: "c", repoFullName: "acme/c" }),
+      ];
+      expect(selectNextEligibleTarget(entries, { globalWipCap: 2, perRepoWipCap: 5 })).toEqual([]);
+      expect(selectNextEligibleTarget(entries, { globalWipCap: 3, perRepoWipCap: 5 })).toEqual([
+        { apiBaseUrl: "https://api.github.com", repoFullName: "acme/c", identifier: "c" },
+      ]);
+    });
+
+    it("refuses to select once the top queued row's own repo has reached its per-repo cap", () => {
+      const entries = [
+        entry({ status: "in_progress", identifier: "a1" }),
+        entry({ status: "queued", identifier: "a2" }),
+      ];
+      expect(selectNextEligibleTarget(entries, { globalWipCap: 5, perRepoWipCap: 1 })).toEqual([]);
+      // A different repo's own cap isn't saturated, so a queued row there is still eligible.
+      const otherRepo = [
+        entry({ status: "in_progress", identifier: "a1" }),
+        entry({ status: "queued", identifier: "b1", repoFullName: "acme/other" }),
+      ];
+      expect(selectNextEligibleTarget(otherRepo, { globalWipCap: 5, perRepoWipCap: 1 })).toEqual([
+        { apiBaseUrl: "https://api.github.com", repoFullName: "acme/other", identifier: "b1" },
+      ]);
+    });
+  });
+
+  it("runQueueNext with --global-wip/--per-repo-wip claims only within the configured caps (#4850)", () => {
+    const portfolioQueue = tempQueueStore();
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1", priority: 1 });
+    portfolioQueue.dequeueNext(); // one already in-flight, uncapped
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:2", priority: 1 });
+
+    // global-wip 1 with one already in_progress -- refuses to claim a second.
+    expect(
+      runQueueNext(["--global-wip", "1", "--json"], { initPortfolioQueue: () => portfolioQueue }),
+    ).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({ entry: null });
+    expect(portfolioQueue.listQueue("acme/widgets").find((e) => e.identifier === "issue:2")?.status).toBe("queued");
+
+    // Raising the cap lets it claim.
+    log.mockClear();
+    expect(
+      runQueueNext(["--global-wip", "2", "--json"], { initPortfolioQueue: () => portfolioQueue }),
+    ).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      entry: expect.objectContaining({ identifier: "issue:2", status: "in_progress" }),
+    });
+  });
+
+  it("runQueueNext with only --per-repo-wip set leaves the global dimension genuinely uncapped (#4850)", () => {
+    const portfolioQueue = tempQueueStore();
+    portfolioQueue.enqueue({ repoFullName: "acme/alpha", identifier: "issue:1", priority: 1 });
+    portfolioQueue.dequeueNext(); // acme/alpha already at 1 in-flight
+    portfolioQueue.enqueue({ repoFullName: "acme/beta", identifier: "issue:2", priority: 1 });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Global left unset (uncapped): a different repo (acme/beta) is still claimable even though acme/alpha
+    // already has an in-flight item -- only the per-repo dimension is enforced here.
+    expect(
+      runQueueNext(["--per-repo-wip", "1", "--json"], { initPortfolioQueue: () => portfolioQueue }),
+    ).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      entry: expect.objectContaining({ identifier: "issue:2", repoFullName: "acme/beta", status: "in_progress" }),
+    });
+  });
+
+  it("runQueueNext without --global-wip/--per-repo-wip is unaffected by an already-saturated repo (#4850 backward compat)", () => {
+    const portfolioQueue = tempQueueStore();
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1", priority: 1 });
+    portfolioQueue.dequeueNext();
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:2", priority: 1 });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runQueueNext(["--json"], { initPortfolioQueue: () => portfolioQueue })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      entry: expect.objectContaining({ identifier: "issue:2", status: "in_progress" }),
+    });
+  });
+
+  it("parseQueueNextArgs accepts --global-wip/--per-repo-wip and rejects a malformed value (#4850)", () => {
+    expect(parseQueueNextArgs([])).toEqual({
+      json: false,
+      dryRun: false,
+      globalWipCap: undefined,
+      perRepoWipCap: undefined,
+    });
+    expect(parseQueueNextArgs(["--global-wip", "3", "--per-repo-wip", "2"])).toEqual({
+      json: false,
+      dryRun: false,
+      globalWipCap: 3,
+      perRepoWipCap: 2,
+    });
+    expect(parseQueueNextArgs(["--global-wip", "not-a-number"])).toEqual({
+      error: expect.stringContaining("Usage: gittensory-miner queue next"),
+    });
+    expect(parseQueueNextArgs(["--global-wip"])).toEqual({
+      error: expect.stringContaining("Usage: gittensory-miner queue next"),
+    });
+    expect(parseQueueNextArgs(["extra-positional"])).toEqual({
+      error: expect.stringContaining("Usage: gittensory-miner queue next"),
+    });
+    expect(parseQueueNextArgs(["--bogus"])).toEqual({ error: "Unknown option: --bogus" });
+  });
+
+  it("runQueueNext --dry-run reports the requested caps when set (#4850)", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const initPortfolioQueueSpy = vi.fn();
+
+    expect(
+      runQueueNext(["--dry-run", "--global-wip", "2", "--json"], { initPortfolioQueue: initPortfolioQueueSpy }),
+    ).toBe(0);
+    expect(initPortfolioQueueSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      outcome: "dry_run",
+      globalWipCap: 2,
+      perRepoWipCap: undefined,
+    });
+
+    log.mockClear();
+    expect(runQueueNext(["--dry-run", "--per-repo-wip", "1"], { initPortfolioQueue: initPortfolioQueueSpy })).toBe(0);
+    expect(String(log.mock.calls[0]?.[0])).toContain("DRY RUN: would dequeue the highest-priority queued item within WIP caps");
+    expect(String(log.mock.calls[0]?.[0])).toContain("global-wip: unset");
+    expect(String(log.mock.calls[0]?.[0])).toContain("per-repo-wip: 1");
+
+    log.mockClear();
+    expect(runQueueNext(["--dry-run", "--global-wip", "2"], { initPortfolioQueue: initPortfolioQueueSpy })).toBe(0);
+    expect(String(log.mock.calls[0]?.[0])).toContain("global-wip: 2");
+    expect(String(log.mock.calls[0]?.[0])).toContain("per-repo-wip: unset");
   });
 
   it("#4847: --dry-run reports what next/done would do and returns 0 without opening the portfolio queue", () => {
