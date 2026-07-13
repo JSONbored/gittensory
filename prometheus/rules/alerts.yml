@@ -4,7 +4,10 @@
 # via the `rule_files: ["/etc/prometheus/rules/*.yml"]` glob in prometheus.yml.
 #
 # Every rule below is grounded ONLY in metrics the loopover app actually exports at
-# GET /metrics, plus the synthetic `up` metric Prometheus emits per scrape target.
+# GET /metrics, plus the synthetic `up` metric Prometheus emits per scrape target. The
+# one exception is the final `gittensory-miner-prediction` group (#5188), which targets
+# the gittensory-miner's OWN separate scrape surface (see that group's own comment for why
+# it still ships here and stays dormant until a miner scrape target exists).
 #
 # Thresholds are sane defaults for a SMALL single-host self-host. Tune the numbers in
 # `expr` / `for` to your traffic — each is commented with what it means and how to adjust.
@@ -615,3 +618,48 @@ groups:
           summary: "the Cloudflare D1 size/row-count probe is failing"
           description: "{{ $value | printf \"%.0f\" }} D1 Management API probe failure(s) over the last 1h (sustained 15m, part={{ $labels.part }}). The size/row-count gauges below may be stale."
           runbook: "Check CLOUDFLARE_D1_MONITOR_API_TOKEN is still valid and CLOUDFLARE_D1_MONITOR_ACCOUNT_ID/DATABASE_ID are correct. Tail logs for level=error event=d1_size_probe_error."
+
+  # ── Miner prediction-calibration drift (#5188) ────────────────────────────
+  # UNLIKE every group above, this rule targets the gittensory-MINER's own scrape surface, not the
+  # loopover server's GET /metrics. The miner is a local CLI (not a daemon), so an operator renders
+  # renderMinerPredictionMetrics (packages/gittensory-engine/src/miner-prediction-metrics.ts, #4264, wired
+  # into a command in #4838 over the calibration-report join built in #4849) to a file/pushgateway their
+  # Prometheus scrapes. The rule is therefore DORMANT until such a target exists: an absent
+  # gittensory_miner_prediction_* series simply yields no result (and the `> 0` denominator guard also makes
+  # the 0/0 case undefined), so it loads cleanly via `selfhost:validate-observability` and never false-fires
+  # on an install that has no miner scrape configured yet -- exactly like loopover-d1-storage stays silent
+  # without the D1 probe.
+  - name: gittensory-miner-prediction
+    rules:
+      - alert: GittensoryMinerPredictionCalibrationDrift
+        # Calibration = how often the miner's predicted gate conclusion matched the realized outcome. This is
+        # the miner counterpart of loopover-jobs' LoopoverHighJobFailureRatio and uses the identical
+        # bad/(bad+good) shape: the fraction of RESOLVED predictions that came back INCORRECT over the window.
+        # gittensory_miner_prediction_{correct,incorrect}_total only move for rows carrying a resolved outcome
+        # (renderMinerPredictionMetrics), so still-unresolved predictions never dilute the ratio. The trailing
+        # `> 0` on the denominator guards the 0/0 = NaN case (no resolved predictions in the window -> the rule
+        # stays inactive rather than firing on garbage), which is also what makes it degrade to silent when the
+        # metric is absent/unset. A wide 6h rate window smooths the miner's naturally sparse, bursty resolution
+        # cadence.
+        #
+        # TUNABLE THRESHOLD: 0.5 = alert once more than half of recently resolved predictions were wrong
+        # (calibration has drifted badly). This is the one knob to tune -- lower it (e.g. 0.35) for a stricter
+        # accuracy bar, raise it if the miner legitimately runs against harder repos. This follows the file's
+        # inline-documented-threshold convention (there are no recording rules here to hang a named constant on).
+        expr: |
+          (
+            sum(rate(gittensory_miner_prediction_incorrect_total[6h]))
+            /
+            (
+              sum(rate(gittensory_miner_prediction_correct_total[6h]))
+              + sum(rate(gittensory_miner_prediction_incorrect_total[6h]))
+              > 0
+            )
+          ) > 0.5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gittensory miner prediction calibration has drifted"
+          description: "{{ $value | humanizePercentage }} of the miner's recently resolved gate predictions were incorrect over the last 6h (sustained 30m). Predicted-gate accuracy has drifted out of tolerance."
+          runbook: "Compare gittensory_miner_prediction_correct_total vs gittensory_miner_prediction_incorrect_total and review the miner's own calibration report (`gittensory-miner calibration`). Sustained drift usually means the predicted-gate heuristics need recalibration against the repo(s) the miner now targets, or a recent upstream gate-behavior change the predictor hasn't caught up to."
