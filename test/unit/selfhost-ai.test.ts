@@ -1871,6 +1871,25 @@ describe("subscription CLI helpers + fail-safe", () => {
     expect(metrics).not.toContain("loopover_ai_requests_total");
   });
 
+  // #4774 dual-read: LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER is a first-class alias of the legacy
+  // GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER opt-in, new name winning when both are set.
+  it("credential isolation opt-in accepts the NEW LOOPOVER_ name alone (legacy unset)", async () => {
+    const ok: StubSpawn = async () => ({ stdout: JSON.stringify({ type: "result", result: "ok" }), code: 0 });
+    await expect(createCodexAi({ LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, ok, noAuthCheck).run("gpt-5", { prompt: "x" })).resolves.toMatchObject({ response: "ok" });
+  });
+
+  it("credential isolation opt-in: the NEW LOOPOVER_ name wins when BOTH are set — a non-\"1\" new value still fails closed", async () => {
+    const shouldNotSpawn: StubSpawn = async () => {
+      throw new Error("spawned");
+    };
+    await expect(
+      createCodexAi(
+        { GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1", LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER: "0" },
+        shouldNotSpawn,
+      ).run("gpt-5", { prompt: "x" }),
+    ).rejects.toThrow(/codex_credential_isolation_required/);
+  });
+
   it("resolveCodexAuthPath: CODEX_HOME wins, else HOME/.codex, else ~/.codex", () => {
     expect(resolveCodexAuthPath({ CODEX_HOME: "/data/codex", HOME: "/home/node" })).toBe(
       "/data/codex/auth.json",

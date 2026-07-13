@@ -107,6 +107,7 @@ import {
 import { probeReesSecretAtStartup } from "./review/enrichment-wire";
 import { sampleRecentDeadLetters } from "./selfhost/dlq-recent";
 import type { JobMessage } from "./types";
+import { dualPrefixEnvString } from "./utils/env";
 
 
 interface Backend {
@@ -284,15 +285,14 @@ async function main(): Promise<void> {
   // manifest loader prefers a mounted `{owner}__{repo}.yml`, deep-merged over an optional root `.gittensory.yml`
   // global default, over the public `.gittensory.yml` (review policy stays private; see
   // config/examples/README.md). Unset dir ⇒ null reader ⇒ unchanged public-fetch behavior.
-  setLocalManifestReader(
-    makeLocalManifestReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
-  );
+  // #4774 dual-read: LOOPOVER_REPO_CONFIG_DIR wins over the legacy GITTENSORY_REPO_CONFIG_DIR when both are
+  // set; resolved once here so every reader below and the boot-time log line agree on the same value.
+  const repoConfigDir = dualPrefixEnvString(process.env, "REPO_CONFIG_DIR");
+  setLocalManifestReader(makeLocalManifestReader(repoConfigDir));
   // Per-repo review CONTEXT (#review-skills): the same config dir also holds `<repo>/review/AGENTS.md`
   // (or legacy `<repo>/review/CLAUDE.md`) + skills/*.md, injected into the reviewer prompt so reviews follow each
   // repo's conventions. Unset dir ⇒ null reader ⇒ no change.
-  setLocalReviewContextReader(
-    makeLocalReviewContextReader(process.env.GITTENSORY_REPO_CONFIG_DIR),
-  );
+  setLocalReviewContextReader(makeLocalReviewContextReader(repoConfigDir));
   // Boot-time visibility (config-drift guardrail): state which config dir is actually in effect, unconditionally
   // -- neither reader above logs anything, so an operator previously had no way to confirm from the logs alone
   // which directory (if any) was live, which is exactly the ambiguity that let a stale, no-longer-mounted config
@@ -301,8 +301,8 @@ async function main(): Promise<void> {
   console.log(
     JSON.stringify({
       event: "selfhost_config_dir",
-      configured: Boolean(process.env.GITTENSORY_REPO_CONFIG_DIR?.trim()),
-      dir: process.env.GITTENSORY_REPO_CONFIG_DIR?.trim() || null,
+      configured: Boolean(repoConfigDir),
+      dir: repoConfigDir ?? null,
     }),
   );
   // Error tracking (#1468): opt-in via SENTRY_DSN — a complete no-op when unset. When on, capture uncaught crashes

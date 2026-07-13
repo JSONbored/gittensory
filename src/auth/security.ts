@@ -7,6 +7,7 @@ import {
 } from "../db/repositories";
 import type { AuthSessionRecord, JsonValue } from "../types";
 import { nowIso } from "../utils/json";
+import { dualPrefixEnvString } from "../utils/env";
 
 export type AuthIdentity =
   | { kind: "static"; actor: "api" | "mcp" | "internal" }
@@ -102,8 +103,12 @@ export function createOpaqueToken(prefix = "gts"): string {
 
 export async function authenticatePrivateToken(env: Env, token: string | undefined): Promise<AuthIdentity | null> {
   if (!token) return null;
-  if (await timingSafeEqual(token, env.GITTENSORY_API_TOKEN)) return { kind: "static", actor: "api" };
-  if (await timingSafeEqual(token, env.GITTENSORY_MCP_TOKEN)) return { kind: "static", actor: "mcp" };
+  // #4774 dual-read: LOOPOVER_API_TOKEN / LOOPOVER_MCP_TOKEN win over their legacy GITTENSORY_ names when
+  // both are set -- this is the real auth gate, so it must change in lockstep with preflight.ts's strength
+  // check, or a self-hoster who only set the new name would pass preflight but fail every authenticated call.
+  const rawEnv = env as unknown as Record<string, string | undefined>;
+  if (await timingSafeEqual(token, dualPrefixEnvString(rawEnv, "API_TOKEN"))) return { kind: "static", actor: "api" };
+  if (await timingSafeEqual(token, dualPrefixEnvString(rawEnv, "MCP_TOKEN"))) return { kind: "static", actor: "mcp" };
   return authenticateSessionToken(env, token);
 }
 

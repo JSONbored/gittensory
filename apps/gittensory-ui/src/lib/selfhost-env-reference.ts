@@ -194,6 +194,10 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
     firstReference: "src/services/notify-pagerduty.ts",
   },
   {
+    name: "GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER",
+    firstReference: "src/selfhost/ai.ts",
+  },
+  {
     name: "GITTENSORY_REPO_CONFIG_DIR",
     firstReference: "src/server.ts",
   },
@@ -204,6 +208,22 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   {
     name: "HOME",
     firstReference: "src/selfhost/ai.ts",
+  },
+  {
+    name: "LOOPOVER_ENABLE_PAGERDUTY",
+    firstReference: "src/services/notify-pagerduty.ts",
+  },
+  {
+    name: "LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER",
+    firstReference: "src/selfhost/ai.ts",
+  },
+  {
+    name: "LOOPOVER_REPO_CONFIG_DIR",
+    firstReference: "src/server.ts",
+  },
+  {
+    name: "LOOPOVER_VERSION",
+    firstReference: "src/selfhost/otel.ts",
   },
   {
     name: "MAINTENANCE_ADMISSION_DEFER_MS",
@@ -529,9 +549,14 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `GITHUB_INSTALLATION_CONCURRENCY_ENABLED` | `src/selfhost/installation-concurrency-admission.ts` |",
   "| `GITHUB_INSTALLATION_CONCURRENCY_LIMIT` | `src/selfhost/installation-concurrency-admission.ts` |",
   "| `GITTENSORY_ENABLE_PAGERDUTY` | `src/services/notify-pagerduty.ts` |",
+  "| `GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER` | `src/selfhost/ai.ts` |",
   "| `GITTENSORY_REPO_CONFIG_DIR` | `src/server.ts` |",
   "| `GITTENSORY_VERSION` | `src/selfhost/otel.ts` |",
   "| `HOME` | `src/selfhost/ai.ts` |",
+  "| `LOOPOVER_ENABLE_PAGERDUTY` | `src/services/notify-pagerduty.ts` |",
+  "| `LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER` | `src/selfhost/ai.ts` |",
+  "| `LOOPOVER_REPO_CONFIG_DIR` | `src/server.ts` |",
+  "| `LOOPOVER_VERSION` | `src/selfhost/otel.ts` |",
   "| `MAINTENANCE_ADMISSION_DEFER_MS` | `src/selfhost/maintenance-admission.ts` |",
   "| `MAINTENANCE_ADMISSION_DRAIN_AGE_MS` | `src/selfhost/maintenance-admission.ts` |",
   "| `MAINTENANCE_ADMISSION_ENABLED` | `src/selfhost/maintenance-admission.ts` |",

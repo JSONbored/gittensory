@@ -1,5 +1,6 @@
 import { countRecentAuditEventsForActorAndTarget, recordAuditEvent } from "../db/repositories";
 import { errorMessage } from "../utils/json";
+import { dualPrefixEnvFlag } from "../utils/env";
 
 // PagerDuty Events API v2 (https://developer.pagerduty.com/docs/events-api-v2/overview/). Experimental,
 // default-OFF (GITTENSORY_ENABLE_PAGERDUTY) — a self-host operator opts in per #4937's paging epic.
@@ -26,9 +27,13 @@ const DEFAULT_MIN_SEVERITY: PagerDutySeverity = "error";
 const DEFAULT_COOLDOWN_MINUTES = 60;
 
 /** True when the experimental PagerDuty integration is enabled. Flag-OFF (default) → every export below is a
- *  no-op. Truthy follows the codebase convention (`/^(1|true|yes|on)$/i`, same as isOpsEnabled/isSafetyEnabled). */
-export function isPagerDutyEnabled(env: { GITTENSORY_ENABLE_PAGERDUTY?: string | undefined }): boolean {
-  return /^(1|true|yes|on)$/i.test(env.GITTENSORY_ENABLE_PAGERDUTY ?? "");
+ *  no-op. Truthy follows the codebase convention (`/^(1|true|yes|on)$/i`, same as isOpsEnabled/isSafetyEnabled).
+ *  #4774 dual-read: LOOPOVER_ENABLE_PAGERDUTY wins over the legacy GITTENSORY_ENABLE_PAGERDUTY when both are set. */
+export function isPagerDutyEnabled(env: {
+  GITTENSORY_ENABLE_PAGERDUTY?: string | undefined;
+  LOOPOVER_ENABLE_PAGERDUTY?: string | undefined;
+}): boolean {
+  return dualPrefixEnvFlag(env as unknown as Record<string, string | undefined>, "ENABLE_PAGERDUTY");
 }
 
 function envString(env: Env, name: string): string | undefined {
@@ -64,7 +69,11 @@ export type PagerDutyRoutingResolution =
 /** Resolve the PagerDuty routing key for `repoFullName`: per-repo map entry, else the global fallback, else
  *  disabled. Mirrors {@link resolveDiscordWebhook}'s exact precedence and shape. */
 export function resolvePagerDutyRoutingKey(env: Env, repoFullName: string): PagerDutyRoutingResolution {
-  if (!isPagerDutyEnabled(env as unknown as { GITTENSORY_ENABLE_PAGERDUTY?: string | undefined })) {
+  if (
+    !isPagerDutyEnabled(
+      env as unknown as { GITTENSORY_ENABLE_PAGERDUTY?: string | undefined; LOOPOVER_ENABLE_PAGERDUTY?: string | undefined },
+    )
+  ) {
     return { status: "disabled", reason: "flag_off" };
   }
   const repoKey = repoFullName.toLowerCase();

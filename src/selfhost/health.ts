@@ -2,6 +2,8 @@
 // the things a request actually depends on — the DB answers and the schema migrations have been applied.
 // Backend-agnostic: runs through the D1 surface, so it works on both the SQLite and Postgres adapters.
 
+import { dualPrefixEnvStrictFlag } from "../utils/env";
+
 export interface Readiness {
   ok: boolean;
   checks: Record<string, boolean>;
@@ -109,7 +111,9 @@ export function codexAuthReadinessProbe(
   checkAuthFile: (env: Record<string, string | undefined>) => Promise<boolean> = defaultCodexAuthFileCheck,
   cacheMs = 30_000,
 ): ReadinessProbe | null {
-  if (parentEnv.GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER !== "1") return null;
+  // #4774 dual-read: LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER wins over the legacy name when both are set; strict
+  // "1"-only, matching this flag's intentionally narrow (non-loose-truthy) opt-in convention.
+  if (!dualPrefixEnvStrictFlag(parentEnv, "ENABLE_UNSAFE_CODEX_REVIEWER")) return null;
   let cached: boolean | undefined;
   let cachedUntil = 0;
   let inFlight: Promise<boolean> | undefined;

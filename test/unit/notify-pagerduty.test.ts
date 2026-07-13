@@ -60,6 +60,25 @@ describe("isPagerDutyEnabled", () => {
   it("treats anything else (including unset) as disabled", () => {
     for (const value of [undefined, "", "0", "false", "nah"]) expect(isPagerDutyEnabled({ GITTENSORY_ENABLE_PAGERDUTY: value })).toBe(false);
   });
+
+  // #4774 dual-read: LOOPOVER_ENABLE_PAGERDUTY is a first-class alias of the legacy GITTENSORY_ENABLE_PAGERDUTY.
+  describe("#4774 GITTENSORY_ -> LOOPOVER_ dual-read", () => {
+    it("enables via the NEW LOOPOVER_ name alone (legacy name unset)", () => {
+      expect(isPagerDutyEnabled({ LOOPOVER_ENABLE_PAGERDUTY: "true" })).toBe(true);
+    });
+    it("still enables via the legacy GITTENSORY_ name alone — an untouched .env keeps working unchanged", () => {
+      expect(isPagerDutyEnabled({ GITTENSORY_ENABLE_PAGERDUTY: "true" })).toBe(true);
+    });
+    it("the NEW LOOPOVER_ name wins when BOTH are set", () => {
+      // legacy says on, new name says off -> effective result must be OFF (new wins).
+      expect(isPagerDutyEnabled({ GITTENSORY_ENABLE_PAGERDUTY: "true", LOOPOVER_ENABLE_PAGERDUTY: "false" })).toBe(false);
+      // legacy says off, new name says on -> effective result must be ON (new wins).
+      expect(isPagerDutyEnabled({ GITTENSORY_ENABLE_PAGERDUTY: "false", LOOPOVER_ENABLE_PAGERDUTY: "true" })).toBe(true);
+    });
+    it("blank LOOPOVER_ENABLE_PAGERDUTY falls through to the legacy name, not to disabled", () => {
+      expect(isPagerDutyEnabled({ GITTENSORY_ENABLE_PAGERDUTY: "true", LOOPOVER_ENABLE_PAGERDUTY: "   " })).toBe(true);
+    });
+  });
 });
 
 describe("resolvePagerDutyRoutingKey", () => {

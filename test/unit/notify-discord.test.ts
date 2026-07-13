@@ -67,6 +67,42 @@ describe("notify-discord resolveWebhook (modular self-host fallback)", () => {
     expect(calls).toEqual([HOOK]);
   });
 
+  // #4774 dual-read: LOOPOVER_DISCORD_WEBHOOK is a first-class alias of the legacy per-repo secret name
+  // GITTENSORY_DISCORD_WEBHOOK, new name winning when both are set.
+  describe("#4774 GITTENSORY_ -> LOOPOVER_ dual-read (per-repo legacy secret name)", () => {
+    const NEW_HOOK = "https://discord.com/api/webhooks/456/def";
+
+    it("resolves via the NEW LOOPOVER_DISCORD_WEBHOOK alone (legacy unset)", () => {
+      expect(resolveDiscordWebhook(withEnv({ LOOPOVER_DISCORD_WEBHOOK: NEW_HOOK }), "JSONbored/gittensory")).toEqual({
+        status: "configured",
+        url: NEW_HOOK,
+        source: "legacy_repo_secret",
+      });
+    });
+
+    it("still resolves via the legacy GITTENSORY_DISCORD_WEBHOOK alone — an untouched .env keeps working unchanged", () => {
+      expect(resolveDiscordWebhook(withEnv({ GITTENSORY_DISCORD_WEBHOOK: HOOK }), "JSONbored/gittensory")).toEqual({
+        status: "configured",
+        url: HOOK,
+        source: "legacy_repo_secret",
+      });
+    });
+
+    it("the NEW LOOPOVER_DISCORD_WEBHOOK wins when BOTH are set", async () => {
+      const calls = stubFetch();
+      await notify(withEnv({ GITTENSORY_DISCORD_WEBHOOK: HOOK, LOOPOVER_DISCORD_WEBHOOK: NEW_HOOK }), "JSONbored/gittensory");
+      expect(calls).toEqual([NEW_HOOK]);
+    });
+
+    it("does not add a LOOPOVER_ companion for a repo secret outside the GITTENSORY_ family (METAGRAPHED_/AWESOME_)", async () => {
+      const calls = stubFetch();
+      await notify(withEnv({ METAGRAPHED_DISCORD_WEBHOOK: HOOK, LOOPOVER_DISCORD_WEBHOOK: NEW_HOOK }), "JSONbored/metagraphed");
+      // METAGRAPHED_DISCORD_WEBHOOK has no LOOPOVER_ companion of its own; the unrelated LOOPOVER_DISCORD_WEBHOOK
+      // value must not leak into a different repo's channel.
+      expect(calls).toEqual([HOOK]);
+    });
+  });
+
   it("uses process.env as a self-host fallback when the runtime Env object does not carry the webhook", async () => {
     process.env.DISCORD_WEBHOOK_URL = FALLBACK;
     expect(resolveDiscordWebhook(createTestEnv(), "acme/widgets")).toEqual({ status: "configured", url: FALLBACK, source: "global" });

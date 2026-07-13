@@ -70,6 +70,34 @@ describe("codexAuthReadinessProbe (#GITTENSORY-C)", () => {
     ).toBeNull();
   });
 
+  // #4774 dual-read: LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER is a first-class alias of the legacy
+  // GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER, new name winning when both are set (strict "1"-only, matching
+  // this flag's intentionally narrow opt-in convention).
+  describe("#4774 GITTENSORY_ -> LOOPOVER_ dual-read", () => {
+    it("registers a probe via the NEW LOOPOVER_ name alone (legacy unset)", () => {
+      expect(codexAuthReadinessProbe({ LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, async () => ({ code: 0 }))).not.toBeNull();
+    });
+    it("still registers a probe via the legacy GITTENSORY_ name alone — an untouched .env keeps working unchanged", () => {
+      expect(codexAuthReadinessProbe({ GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" }, async () => ({ code: 0 }))).not.toBeNull();
+    });
+    it("the NEW LOOPOVER_ name wins when BOTH are set", () => {
+      // legacy says on ("1"), new name says off -> no probe (new wins).
+      expect(
+        codexAuthReadinessProbe(
+          { GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1", LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER: "0" },
+          async () => ({ code: 0 }),
+        ),
+      ).toBeNull();
+      // legacy says off, new name says on ("1") -> a probe registers (new wins).
+      expect(
+        codexAuthReadinessProbe(
+          { GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "0", LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER: "1" },
+          async () => ({ code: 0 }),
+        ),
+      ).not.toBeNull();
+    });
+  });
+
   it("reports healthy only when BOTH codex --version exits 0 AND the auth file check passes", async () => {
     const probe = codexAuthReadinessProbe(
       { GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" },

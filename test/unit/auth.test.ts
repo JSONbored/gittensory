@@ -33,6 +33,33 @@ describe("private-beta auth and rate limiting", () => {
     await expect(authenticatePrivateToken(env, malformed.token)).resolves.toBeNull();
   });
 
+  // #4774 dual-read: GITTENSORY_API_TOKEN/GITTENSORY_MCP_TOKEN get a LOOPOVER_ companion here at the REAL
+  // auth gate — this must change in lockstep with preflight.ts's strength check, or a self-hoster who only
+  // set the new name would pass preflight but fail every authenticated call.
+  it("authenticates static tokens supplied via the NEW LOOPOVER_ names alone (legacy names unset)", async () => {
+    const env = createTestEnv({ LOOPOVER_API_TOKEN: "new-api-token", LOOPOVER_MCP_TOKEN: "new-mcp-token" });
+    delete (env as Partial<Env>).GITTENSORY_API_TOKEN;
+    delete (env as Partial<Env>).GITTENSORY_MCP_TOKEN;
+    await expect(authenticatePrivateToken(env, "new-api-token")).resolves.toMatchObject({ kind: "static", actor: "api" });
+    await expect(authenticatePrivateToken(env, "new-mcp-token")).resolves.toMatchObject({ kind: "static", actor: "mcp" });
+    // The old (now-unset) names must no longer authenticate.
+    await expect(authenticatePrivateToken(env, "test-api-token")).resolves.toBeNull();
+  });
+
+  it("still authenticates static tokens supplied via the legacy GITTENSORY_ names alone — an untouched .env keeps working unchanged", async () => {
+    const env = createTestEnv();
+    await expect(authenticatePrivateToken(env, "test-api-token")).resolves.toMatchObject({ kind: "static", actor: "api" });
+    await expect(authenticatePrivateToken(env, "test-mcp-token")).resolves.toMatchObject({ kind: "static", actor: "mcp" });
+  });
+
+  it("the NEW LOOPOVER_API_TOKEN wins when BOTH the legacy and new names are set", async () => {
+    const env = createTestEnv({ LOOPOVER_API_TOKEN: "new-api-token" });
+    // The winning (new) value authenticates.
+    await expect(authenticatePrivateToken(env, "new-api-token")).resolves.toMatchObject({ kind: "static", actor: "api" });
+    // The shadowed legacy value must NOT authenticate once the new name is set.
+    await expect(authenticatePrivateToken(env, "test-api-token")).resolves.toBeNull();
+  });
+
   it("scopes MCP static-token actuation to an explicit repo allowlist, denying by default (#2253)", () => {
     // Unset/empty ⇒ deny (fail closed — the shared GITTENSORY_MCP_TOKEN must not implicitly actuate everywhere).
     expect(isMcpActuationRepoAllowed(undefined, "owner/repo")).toBe(false);

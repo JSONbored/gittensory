@@ -1,4 +1,5 @@
 import { createPrivateKey } from "node:crypto";
+import { dualPrefixEnvString } from "../utils/env";
 
 export type SelfHostPreflightProblem = {
   var: string;
@@ -114,13 +115,22 @@ function criticalSecretProblem(name: string, value: string): string | null {
   return null;
 }
 
+// #4774 dual-read: a CRITICAL_SECRET_VARS entry prefixed GITTENSORY_ (currently API_TOKEN, MCP_TOKEN) also
+// accepts its LOOPOVER_ companion, new name winning when both are set -- same precedence as every other
+// dual-read var. The reported problem is still keyed by the legacy name in CRITICAL_SECRET_VARS either way,
+// matching every existing preflight test/message; only the VALUE being judged changes.
+function resolvedCriticalSecretValue(name: (typeof CRITICAL_SECRET_VARS)[number], env: SelfHostPreflightEnv): string | undefined {
+  if (!name.startsWith("GITTENSORY_")) return nonBlank(env[name]);
+  return dualPrefixEnvString(env, name.slice("GITTENSORY_".length));
+}
+
 function checkCriticalSecrets(
   problems: SelfHostPreflightProblem[],
   env: SelfHostPreflightEnv,
 ): void {
   const seenValues = new Map<string, string>(); // value -> first var name that used it
   for (const name of CRITICAL_SECRET_VARS) {
-    const value = nonBlank(env[name]);
+    const value = resolvedCriticalSecretValue(name, env);
     if (!value) continue; // presence is each caller's own concern; this only judges strength when SET
     const problem = criticalSecretProblem(name, value);
     if (problem) {

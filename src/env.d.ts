@@ -215,8 +215,11 @@ declare global {
     /** Self-host container-private per-repo config dir. When set, the focus-manifest loader reads
      *  `{dir}/{owner}__{repo}.{yml,yaml,json}` INSTEAD of the public `.gittensory.yml`, so review policy (gate,
      *  autonomy, labels, model/effort) is set privately and contributors can't read or game it. Unset ⇒ public
-     *  fetch (cloud, or a self-host without the dir, is byte-identical to before). */
+     *  fetch (cloud, or a self-host without the dir, is byte-identical to before).
+     *  #4774 dual-read: LOOPOVER_REPO_CONFIG_DIR below wins over this legacy name when both are set. */
     GITTENSORY_REPO_CONFIG_DIR?: string;
+    /** #4774: LOOPOVER_ companion for GITTENSORY_REPO_CONFIG_DIR above — wins when both are set. */
+    LOOPOVER_REPO_CONFIG_DIR?: string;
     GITTENSORY_AUTO_FILE_DRIFT_ISSUES?: string;
     GITTENSORY_DRIFT_ISSUE_REPO?: string;
     GITTENSORY_DRIFT_ISSUE_TOKEN?: string;
@@ -236,8 +239,11 @@ declare global {
      *  (merged/closed/manual) for ANY repo. Sibling of DISCORD_WEBHOOK_URL; set either, both, or neither. */
     SLACK_WEBHOOK_URL?: string;
     /** Experimental (#4937/#5007): enables PagerDuty incident paging from src/services/notify-pagerduty.ts.
-     *  Default OFF — unset/false keeps every export there a no-op. Truthy: `/^(1|true|yes|on)$/i`. */
+     *  Default OFF — unset/false keeps every export there a no-op. Truthy: `/^(1|true|yes|on)$/i`.
+     *  #4774 dual-read: LOOPOVER_ENABLE_PAGERDUTY below wins over this legacy name when both are set. */
     GITTENSORY_ENABLE_PAGERDUTY?: string;
+    /** #4774: LOOPOVER_ companion for GITTENSORY_ENABLE_PAGERDUTY above — wins when both are set. */
+    LOOPOVER_ENABLE_PAGERDUTY?: string;
     /** Global fallback PagerDuty Events API v2 routing key (32 lowercase hex chars) for any repo not present in
      *  PAGERDUTY_REPO_ROUTING_KEYS (a JSON `{repoFullName: routingKey}` map, read directly off the env — same
      *  deliberately-untyped pattern as DISCORD_REPO_WEBHOOKS, since a free-form per-repo map isn't worth a
@@ -258,8 +264,17 @@ declare global {
     PAGERDUTY_COOLDOWN_MINUTES?: string;
     GITTENSORY_CONTRIBUTOR_ISSUE_TOKEN?: string;
     PRODUCT_USAGE_HASH_SALT?: string;
-    GITTENSORY_API_TOKEN: string;
-    GITTENSORY_MCP_TOKEN: string;
+    /** Server-to-server API bearer token — bypasses per-repo write checks (src/auth/security.ts).
+     *  #4774 dual-read: no longer always-present at the type level, since either this OR LOOPOVER_API_TOKEN
+     *  below may supply the effective value (LOOPOVER_ wins when both are set) — see dualPrefixEnvString. */
+    GITTENSORY_API_TOKEN?: string;
+    /** #4774: LOOPOVER_ companion for GITTENSORY_API_TOKEN above — wins when both are set. */
+    LOOPOVER_API_TOKEN?: string;
+    /** Shared MCP bearer token (src/auth/security.ts). #4774 dual-read: see GITTENSORY_API_TOKEN's note above —
+     *  either this OR LOOPOVER_MCP_TOKEN below may supply the effective value. */
+    GITTENSORY_MCP_TOKEN?: string;
+    /** #4774: LOOPOVER_ companion for GITTENSORY_MCP_TOKEN above — wins when both are set. */
+    LOOPOVER_MCP_TOKEN?: string;
     INTERNAL_JOB_TOKEN: string;
     /** Repos the shared GITTENSORY_MCP_TOKEN may propose/decide/manage actions on (comma/whitespace `owner/repo`
      *  list, or `*`/`all` for every repo). Unset ⇒ none — GITTENSORY_MCP_TOKEN is a shared, end-user-obtainable

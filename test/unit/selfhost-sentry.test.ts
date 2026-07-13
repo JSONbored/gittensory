@@ -522,6 +522,31 @@ describe("enabled when SENTRY_DSN is set", () => {
     ).toBe("custom@sha");
   });
 
+  // #4774 dual-read: LOOPOVER_VERSION is a first-class alias of the legacy GITTENSORY_VERSION for the
+  // image-baked release fallback, new name winning when both are set.
+  describe("#4774 GITTENSORY_ -> LOOPOVER_VERSION dual-read", () => {
+    it("falls back to the NEW LOOPOVER_VERSION alone (legacy unset)", () => {
+      expect(
+        resolveSentryRelease({ SENTRY_RELEASE: "", LOOPOVER_VERSION: "loopover-selfhost@0.2.0" } as unknown as NodeJS.ProcessEnv),
+      ).toBe("loopover-selfhost@0.2.0");
+    });
+
+    it("still falls back to the legacy GITTENSORY_VERSION alone — an untouched .env keeps working unchanged", () => {
+      expect(
+        resolveSentryRelease({ SENTRY_RELEASE: "", GITTENSORY_VERSION: "gittensory-selfhost@0.1.0" } as unknown as NodeJS.ProcessEnv),
+      ).toBe("gittensory-selfhost@0.1.0");
+    });
+
+    it("the NEW LOOPOVER_VERSION wins over the legacy GITTENSORY_VERSION when BOTH are set (SENTRY_RELEASE unset)", () => {
+      expect(
+        resolveSentryRelease({
+          GITTENSORY_VERSION: "gittensory-selfhost@0.1.0",
+          LOOPOVER_VERSION: "loopover-selfhost@0.2.0",
+        } as unknown as NodeJS.ProcessEnv),
+      ).toBe("loopover-selfhost@0.2.0");
+    });
+  });
+
   it("captureError sends with context, tags operational fields, and without context skips setContext", async () => {
     await initSentry({ SENTRY_DSN: "d" } as unknown as NodeJS.ProcessEnv);
     captureError(new Error("boom"), { kind: "job_dead" });

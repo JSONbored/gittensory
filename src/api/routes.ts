@@ -299,6 +299,7 @@ import type {
   RepositorySettings,
 } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
+import { dualPrefixEnvString } from "../utils/env";
 import {
   queueDeadLetterPageFromBinding,
   queueDeleteDeadLetterJobViaBinding,
@@ -2083,7 +2084,8 @@ export function createApp() {
       ...(installationHealth.some((health) => health.status !== "healthy") ? ["One or more GitHub App installations need attention."] : []),
     ];
     const upstreamLaunchBlocking = upstreamDrift.status === "unavailable" || upstreamDrift.highestSeverity === "high" || upstreamDrift.highestSeverity === "blocking";
-    const ready = Boolean(snapshot) && Boolean(c.env.INTERNAL_JOB_TOKEN) && Boolean(c.env.GITTENSORY_API_TOKEN);
+    // #4774 dual-read: LOOPOVER_API_TOKEN counts as configured too, same precedence as authenticatePrivateToken.
+    const ready = Boolean(snapshot) && Boolean(c.env.INTERNAL_JOB_TOKEN) && Boolean(dualPrefixEnvString(c.env as unknown as Record<string, string | undefined>, "API_TOKEN"));
     const readyForPublicReview = snapshot
       ? snapshot.repoCount > 0 &&
         ready &&
@@ -2148,8 +2150,9 @@ export function createApp() {
         githubAppPrivateKey: Boolean(c.env.GITHUB_APP_PRIVATE_KEY),
         githubWebhookSecret: Boolean(c.env.GITHUB_WEBHOOK_SECRET),
         githubPublicToken: Boolean(c.env.GITHUB_PUBLIC_TOKEN),
-        apiToken: Boolean(c.env.GITTENSORY_API_TOKEN),
-        mcpToken: Boolean(c.env.GITTENSORY_MCP_TOKEN),
+        // #4774 dual-read: reflects whichever of LOOPOVER_/GITTENSORY_ actually resolves (see dualPrefixEnvString).
+        apiToken: Boolean(dualPrefixEnvString(c.env as unknown as Record<string, string | undefined>, "API_TOKEN")),
+        mcpToken: Boolean(dualPrefixEnvString(c.env as unknown as Record<string, string | undefined>, "MCP_TOKEN")),
         internalJobToken: Boolean(c.env.INTERNAL_JOB_TOKEN),
       },
       warnings,
