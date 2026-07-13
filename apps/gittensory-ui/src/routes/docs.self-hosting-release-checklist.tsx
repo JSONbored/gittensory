@@ -233,7 +233,7 @@ git push origin orb-v0.1.0`}
                 <code>scripts/deploy-selfhost-prebuilt.sh</code>, run{" "}
                 <code>
                   scripts/deploy-selfhost-image.sh
-                  ghcr.io/&lt;owner&gt;/gittensory-selfhost:orb-v0.1.0
+                  ghcr.io/&lt;owner&gt;/loopover-selfhost:orb-v0.1.0
                 </code>
                 .
               </td>
@@ -570,8 +570,8 @@ docker rm -f gt-qdrant && docker network rm gt-rag-smoke`}
       </p>
       <CodeBlock
         lang="bash"
-        code={`docker pull ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0
-docker images ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0 --format '{{.Size}}'`}
+        code={`docker pull ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0
+docker images ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0 --format '{{.Size}}'`}
       />
       <Callout variant="note">
         This audit is Dockerfile-derived, not a runtime scan. If a future dependency bump adds a
@@ -635,7 +635,7 @@ docker images ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0 --format '{{.Size
         code={`Gittensory Orb container image:
 
 \`\`\`bash
-docker pull ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0
+docker pull ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0
 \`\`\`
 
 Multi-arch (linux/amd64 + linux/arm64). See https://gittensory.aethereal.dev/docs/maintainer-self-hosting for setup.

@@ -982,9 +982,8 @@ SENTRY_ORG_SLUG=<your-sentry-org-slug>
 GITTENSORY_IMAGE=ghcr.io/jsonbored/loopover-selfhost@sha256:... ./scripts/deploy-selfhost-image.sh`}
       />
       <p>
-        <code>ghcr.io/jsonbored/gittensory-selfhost</code> (the pre-rename name) remains a
-        deprecated alias of the identical image during the deprecation window — an existing pin to
-        it keeps resolving unmodified.
+        <code>ghcr.io/jsonbored/gittensory-selfhost</code> (the pre-rename name) is no longer
+        published to, but an existing pin to a specific tag or digest under it keeps resolving.
       </p>
       <p>
         The pull always runs with <code>--policy always</code>, so re-running the script against an

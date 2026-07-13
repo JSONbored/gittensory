@@ -56,10 +56,10 @@ function SelfHostingReleases() {
 docker pull ghcr.io/jsonbored/loopover-selfhost:latest`}
       />
       <Callout variant="note" title="Renamed from gittensory-selfhost">
-        <code>ghcr.io/jsonbored/loopover-selfhost</code> is the current name. The pre-rename{" "}
-        <code>ghcr.io/jsonbored/gittensory-selfhost</code> remains available as a deprecated alias
-        of the byte-identical image during the deprecation window — existing pins keep working
-        unmodified.
+        <code>ghcr.io/jsonbored/loopover-selfhost</code> is the only name new releases publish
+        under. The pre-rename <code>ghcr.io/jsonbored/gittensory-selfhost</code> is no longer
+        published to, but an existing pin to a specific tag or digest under that name keeps
+        resolving — pull it and switch to the new name at your convenience.
       </Callout>
 
       <h2>Prerelease (beta/rc) images</h2>

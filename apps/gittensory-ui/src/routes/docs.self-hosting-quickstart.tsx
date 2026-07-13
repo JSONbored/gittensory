@@ -120,9 +120,8 @@ curl http://localhost:8787/ready`}
 GITTENSORY_IMAGE=ghcr.io/jsonbored/loopover-selfhost@sha256:... ./scripts/deploy-selfhost-image.sh`}
       />
       <p>
-        <code>ghcr.io/jsonbored/gittensory-selfhost</code> (the pre-rename name) remains available
-        as a deprecated alias of the identical image during the deprecation window — existing pins
-        keep working unmodified.
+        <code>ghcr.io/jsonbored/gittensory-selfhost</code> (the pre-rename name) is no longer
+        published to, but an existing pin to a specific tag or digest under it keeps resolving.
       </p>
       <Callout variant="note" title="Building from source instead">
         Contributors and anyone customizing the Dockerfile can still build locally —{" "}

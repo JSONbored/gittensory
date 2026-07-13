@@ -138,10 +138,7 @@ describe('release-selfhost.yml "GitHub Release" step changelog generation', () =
     const r = harness.run();
     expect(r.status).toBe(0);
     expect(r.notesPassed).toContain("docker pull ghcr.io/jsonbored/loopover-selfhost:orb-v0.2.0");
-    // #4770: the notes must also tell an operator that the pre-rename image name still resolves to
-    // this identical build during the deprecation window, and point at #4777 for eventual removal.
-    expect(r.notesPassed).toContain("ghcr.io/jsonbored/gittensory-selfhost:orb-v0.2.0");
-    expect(r.notesPassed).toContain("#4777");
+    expect(r.notesPassed).not.toContain("gittensory-selfhost");
     expect(r.notesPassed).toContain("## What's Changed");
     expect(r.notesPassed).toContain("feat: something");
     // The tag being released must never be diffed against itself.

@@ -13,9 +13,10 @@ import { describe, expect, it } from "vitest";
 
 const scriptPath = resolve("scripts/deploy-selfhost-image.sh");
 const defaultImage = "ghcr.io/jsonbored/loopover-selfhost:latest";
-// #4770: the pre-rename name is a deprecated alias of the identical image during the deprecation
-// window -- an operator who pinned it explicitly (CLI arg, env var, or .env value) must keep
-// resolving to that exact string unmodified, even though DEFAULT_IMAGE above now points at the new name.
+// #4777: publishing under the pre-rename name has stopped, but GHCR has no server-side alias, so its
+// already-published tags/digests keep resolving forever -- an operator who pinned it explicitly (CLI
+// arg, env var, or .env value) must keep resolving to that exact string unmodified, even though
+// DEFAULT_IMAGE above now points at the new name.
 const legacyPinnedImage = "ghcr.io/jsonbored/gittensory-selfhost:orb-v0.1.0";
 
 interface RunOptions {
@@ -167,10 +168,11 @@ describe("self-host image deploy script", () => {
     }
   });
 
-  // REGRESSION (#4770): DEFAULT_IMAGE moved to the new "loopover-selfhost" name, but a self-hoster who
+  // REGRESSION (#4777): DEFAULT_IMAGE moved to the new "loopover-selfhost" name, but a self-hoster who
   // explicitly pinned the pre-rename "gittensory-selfhost" image (as a CLI argument, GITTENSORY_IMAGE env
-  // var, or .env value) must keep resolving to that exact string, unmodified -- the deprecation alias is
-  // guaranteed by the release workflow's dual-tag push, not by rewriting an operator's existing pin here.
+  // var, or .env value) must keep resolving to that exact string, unmodified -- GHCR keeps already-published
+  // tags/digests resolving forever with no server-side alias needed, and this script must not rewrite an
+  // operator's existing pin either way.
   it("passes an explicit pre-rename image reference through unchanged despite the new default", () => {
     const { harness, result } = runHarness({ args: [legacyPinnedImage] });
     try {
