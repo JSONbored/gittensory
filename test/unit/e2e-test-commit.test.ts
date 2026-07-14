@@ -28,7 +28,7 @@ const baseArgs = {
 
 describe("defaultE2eTestFilePath", () => {
   it("namespaces the generated file by PR number", () => {
-    expect(defaultE2eTestFilePath(42)).toBe("e2e/gittensory-pr-42.spec.ts");
+    expect(defaultE2eTestFilePath(42)).toBe("e2e/loopover-pr-42.spec.ts");
   });
 });
 
@@ -68,7 +68,7 @@ describe("commitE2eTestToPrBranch (#4197)", () => {
     expect(result).toEqual({ status: "committed", commitSha: "new-commit-sha", htmlUrl: `https://github.com/${REPO}/commit/new-commit-sha` });
 
     const treeCall = calls.find((c) => c.url.endsWith("/git/trees"));
-    expect(treeCall?.body).toMatchObject({ base_tree: "base-tree-sha", tree: [{ path: "e2e/gittensory-pr-42.spec.ts", mode: "100644", type: "blob", content: TEST_SOURCE }] });
+    expect(treeCall?.body).toMatchObject({ base_tree: "base-tree-sha", tree: [{ path: "e2e/loopover-pr-42.spec.ts", mode: "100644", type: "blob", content: TEST_SOURCE }] });
 
     const commitCall = calls.find((c) => c.url.endsWith("/git/commits") && c.method === "POST");
     expect(commitCall?.body).toMatchObject({ tree: "new-tree-sha", parents: ["head-commit-sha"] });
