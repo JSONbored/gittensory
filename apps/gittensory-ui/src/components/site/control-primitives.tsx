@@ -26,12 +26,12 @@ export function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-token-2xs uppercase tracking-wider",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
         STATUS_STYLES[status],
         className,
       )}
     >
-      <span className="size-1.5 shrink-0 rounded-full bg-current" />
+      <span className="size-1 shrink-0 rounded-full bg-current" />
       {children}
     </span>
   );
@@ -53,7 +53,7 @@ export function BoundaryBadge({ boundary, className }: { boundary: Boundary; cla
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-token border px-2 py-0.5 font-mono text-token-2xs uppercase tracking-wider",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-token border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
         tone,
         className,
       )}
