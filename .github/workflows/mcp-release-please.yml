@@ -64,7 +64,13 @@ jobs:
       # engine-v0.2.0 dry runs left it stale, breaking npm ci with "Missing: <pkg>@<version> from
       # lock file"). Patches it directly on whichever release branch(es) release-please just
       # created/updated, using the same branch naming convention its own commits already rely on.
-      - name: Sync package-lock.json on any release branch
+      #
+      # The engine branch also needs packages/loopover-miner/expected-engine.version bumped to match
+      # packages/loopover-engine/package.json's new version: release-please's engine component only
+      # ever touches files under packages/loopover-engine/**, so it can never update that cross-package
+      # pin itself -- scripts/check-engine-parity.ts's checkMinerEngineVersionPinSync would otherwise
+      # fail on every single engine release PR (confirmed live on the engine-v3.1.0 release PR, #5807).
+      - name: Sync package-lock.json and engine-version pin on any release branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -90,6 +96,17 @@ jobs:
               git add package-lock.json
               git commit -m "chore(release): sync package-lock.json"
               git push origin "HEAD:$branch"
+            fi
+            if [ "$component" = "engine" ]; then
+              engine_version="$(node -p "require('./packages/loopover-engine/package.json').version")"
+              printf '%s\n' "$engine_version" > packages/loopover-miner/expected-engine.version
+              if git diff --quiet packages/loopover-miner/expected-engine.version; then
+                echo "expected-engine.version already in sync on $branch."
+              else
+                git add packages/loopover-miner/expected-engine.version
+                git commit -m "chore(release): sync miner engine-version pin"
+                git push origin "HEAD:$branch"
+              fi
             fi
           done
 
