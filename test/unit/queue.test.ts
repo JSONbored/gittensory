@@ -678,9 +678,12 @@ describe("queue processors", () => {
           "we-promise/sure": { emission_share: 0.02, issue_discovery_share: 0, label_multipliers: {}, trusted_label_pipeline: false },
         },
         { kind: "raw-github", url: "fixture://registry" },
-        "2026-05-25T00:00:00.000Z",
+        "2026-05-23T00:00:00.000Z",
       ),
     );
+    // The cron fan-out now gates on isInstalled, not isRegistered (completes #5021's real cron-path fix).
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 9405);
+    await upsertRepositoryFromGitHub(env, { name: "sure", full_name: "we-promise/sure", private: true, owner: { login: "we-promise" } }, 9406);
 
     await processJob(env, { type: "backfill-registered-repos", requestedBy: "api", force: true, mode: "full" });
 
@@ -689,6 +692,30 @@ describe("queue processors", () => {
       { type: "backfill-registered-repos", requestedBy: "api", repoFullName: "we-promise/sure", force: true, mode: "full" },
     ]);
     expect(await listRepoSyncStates(env)).toEqual([]);
+  });
+
+  it("#cron-backfill-dispatch-isinstalled: cron fan-out includes an installed-but-not-registered repo and excludes a registered-but-not-installed one", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "acme/registered-only": { emission_share: 0.01, issue_discovery_share: 0, label_multipliers: {}, trusted_label_pipeline: false } },
+        { kind: "raw-github", url: "fixture://registry" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "installed-only", full_name: "acme/installed-only", private: false, owner: { login: "acme" } }, 9407);
+
+    await processJob(env, { type: "backfill-registered-repos", requestedBy: "api" });
+
+    expect(sent).toEqual([expect.objectContaining({ type: "backfill-registered-repos", repoFullName: "acme/installed-only" })]);
   });
 
   it("falls back to inline all-repo backfill when no registered repositories exist", async () => {

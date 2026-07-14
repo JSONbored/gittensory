@@ -75,8 +75,13 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "backfill-registered-repos":
       if (!message.repoFullName && message.requestedBy !== "test") {
+        // #5021 retargeted the two downstream entry points (backfillRegisteredRepositories,
+        // enqueueRepositoryOpenDataBackfill) from isRegistered to isInstalled, but this cron-scheduled
+        // fan-out is the actual candidate-selection step for the periodic sweep, and was left on
+        // isRegistered -- an installed-but-not-subnet-registered repo never got a per-repo job dispatched
+        // for it in the first place, so #5021's fix never took effect on the real 30-min cron path.
         const repositories = (await listRepositories(env)).filter(
-          (repo) => repo.isRegistered,
+          (repo) => repo.isInstalled,
         );
         if (repositories.length > 0) {
           const delayStepSeconds =

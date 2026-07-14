@@ -3131,11 +3131,15 @@ describe("queue processors", () => {
           "we-promise/sure": { emission_share: 0.02, issue_discovery_share: 0, label_multipliers: {}, trusted_label_pipeline: false },
         },
         { kind: "raw-github", url: "fixture://registry" },
-        "2026-05-25T00:00:00.000Z",
+        "2026-05-23T00:00:00.000Z",
       ),
     );
+    // The cron fan-out now gates on isInstalled, not isRegistered.
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 9408);
+    await upsertRepositoryFromGitHub(env, { name: "sure", full_name: "we-promise/sure", private: true, owner: { login: "we-promise" } }, 9409);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url === "https://api.github.com/graphql") {
         return Response.json({
           data: {
