@@ -67,6 +67,16 @@ describe("loopover-mcp CLI — basics", () => {
     expect(plain).toMatch(/do not.*publish public output/i);
   });
 
+  // #5825 - the skipped-PR audit tool belongs on the maintainer-triage profile: it's the "did the bot
+  // actually look at this PR" complement to the queue-triage/review-prep tools already recommended there.
+  it("recommends the skipped-PR audit tool on the maintainer-triage profile", () => {
+    const payload = JSON.parse(run(["init-client", "--print", "codex", "--agent-profile", "maintainer-triage", "--json"])) as {
+      agentProfile: { id: string; recommendedTools: string[] };
+    };
+    expect(payload.agentProfile.id).toBe("maintainer-triage");
+    expect(payload.agentProfile.recommendedTools).toEqual(expect.arrayContaining(["loopover_get_skipped_pr_audit"]));
+  });
+
   it("supports all documented agent profiles without changing MCP server config", () => {
     for (const profile of ["miner-planner", "maintainer-triage", "repo-owner-intake"]) {
       const payload = JSON.parse(run(["init-client", "--print", "mcp", "--agent-profile", profile, "--json"])) as {

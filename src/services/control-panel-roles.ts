@@ -1,4 +1,4 @@
-import { isAuthorizedGitHubSessionLogin } from "../auth/security";
+import { isAuthorizedGitHubSessionLogin, type AuthIdentity } from "../auth/security";
 import { getFreshOfficialMinerDetection, getRepository, listAllPullRequests, listInstallations, listRepositories } from "../db/repositories";
 import type { ControlPanelRoleCard, ControlPanelRoleName, ControlPanelRoleSummary, InstallationRecord, PullRequestRecord, RepositoryRecord } from "../types";
 import { nowIso } from "../utils/json";
@@ -51,6 +51,15 @@ export async function canWatchRepo(env: Env, login: string, fullName: string): P
   if (!repo) return false;
   if (!repo.isPrivate) return true;
   return canLoginAccessRepo(env, login, fullName);
+}
+
+/** Resolve a role summary for any authenticated identity: a session gets its real per-login roles, a static
+ *  (api/internal/mcp) identity gets the trusted-service-credential summary. Shared by the HTTP maintainer
+ *  routes and MCP tools that gate on role (e.g. #5825's skipped-PR audit) so both surfaces agree on who
+ *  counts as maintainer/owner/operator. */
+export async function getRoleSummaryForIdentity(env: Env, identity: AuthIdentity): Promise<ControlPanelRoleSummary> {
+  if (identity.kind === "session") return loadControlPanelRoleSummary(env, identity.actor);
+  return buildStaticControlPanelRoleSummary(identity.actor);
 }
 
 export async function loadControlPanelRoleSummary(env: Env, login: string): Promise<ControlPanelRoleSummary> {

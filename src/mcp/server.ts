@@ -29,7 +29,17 @@ import {
   isMcpReadUnscoped,
   type AuthIdentity,
 } from "../auth/security";
-import { canLoginAccessRepo, canWatchRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
+import {
+  canLoginAccessRepo,
+  canWatchRepo,
+  getRoleSummaryForIdentity,
+  loadControlPanelAccessScope,
+  loadControlPanelRoleSummary,
+  type ControlPanelAccessScope,
+} from "../services/control-panel-roles";
+import { PR_VISIBILITY_SKIP_REASONS, resolveSkippedPrAuditRepoScope, skippedPrAuditRemediation, toIsoQueryDate } from "../services/skipped-pr-audit";
+import type { PublicSurfaceSkipReason } from "../signals/settings-preview";
+import type { ControlPanelRoleSummary } from "../types";
 import {
   countOpenIssues,
   countPendingAgentActions,
@@ -59,6 +69,7 @@ import {
   listNotificationDeliveriesForRecipient,
   upsertIssueWatchSubscription,
   listOpenPullRequests,
+  listPrVisibilitySkipAuditEvents,
   listPullRequests,
   listRecentMergedPullRequests,
   listRepoSyncSegments,
@@ -187,6 +198,16 @@ function decisionPackSummary(login: string, freshness: string, rebuildEnqueued: 
 const ownerRepoShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
+};
+
+// Unlike ownerRepoShape's mandatory single-repo tools, the skipped-PR audit mirrors GET /v1/app/skipped-pr-audit's
+// own optional query params: repoFullName narrows to one repo, omitting it returns every repo the caller's role
+// covers (#5825).
+const skippedPrAuditShape = {
+  repoFullName: z.string().min(1).optional(),
+  reason: z.enum(PR_VISIBILITY_SKIP_REASONS).optional(),
+  since: z.string().min(1).optional(),
+  limit: z.number().int().optional(),
 };
 
 const ownerRepoWindowShape = {
@@ -813,6 +834,14 @@ const gatePrecisionOutputSchema = {
   perGateType: z.array(z.unknown()).optional(),
   overall: z.unknown().optional(),
   signals: z.array(z.string()).optional(),
+};
+
+// #5825 - skipped-PR audit trail surfaced over MCP; items mirror GET /v1/app/skipped-pr-audit's response shape.
+const skippedPrAuditOutputSchema = {
+  limit: z.number().optional(),
+  hasMore: z.boolean().optional(),
+  filters: z.unknown().optional(),
+  items: z.array(z.unknown()).optional(),
 };
 
 const contributorProfileOutputSchema = {
@@ -1677,6 +1706,17 @@ export class LoopoverMcp {
         outputSchema: gatePrecisionOutputSchema,
       },
       async (input) => this.toolResult(await this.getGatePrecision(input)),
+    );
+
+    server.registerTool(
+      "loopover_get_skipped_pr_audit",
+      {
+        description:
+          "Return the audit trail of pull requests the automated reviewer decided NOT to visibly review/comment on, with a reason code per skip. Maintainer-authenticated; read-only measurement — not a moderation or override action.",
+        inputSchema: skippedPrAuditShape,
+        outputSchema: skippedPrAuditOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getSkippedPrAudit(input)),
     );
 
     server.registerTool(
@@ -2972,6 +3012,62 @@ export class LoopoverMcp {
     return {
       summary: `LoopOver gate precision for ${fullName}: ${report.overall.blocked} gate blocks, overall false-positive rate ${report.overall.falsePositiveRate ?? "n/a (below sample threshold)"}.`,
       data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  // #5825 - gate for loopover_get_skipped_pr_audit: maintainer/owner/operator role, same check as
+  // GET /v1/app/skipped-pr-audit. Unlike that route's api/internal static tokens, the shared `mcp` static
+  // identity is NOT implicitly trusted with this role — LOOPOVER_MCP_TOKEN is an ordinary end-user CLI
+  // credential. A repoFullName-scoped call needs that repo in MCP_READ_REPO_ALLOWLIST (mirrors canAccessRepo);
+  // an unscoped (every-repo) call needs the full wildcard opt-in (mirrors requireDiscoveryAccess) since there
+  // is no single repo to check a scoped allowlist entry against.
+  private async requireSkippedPrAuditAccess(repoFullName: string | undefined): Promise<ControlPanelRoleSummary> {
+    if (this.identity.kind === "static" && this.identity.actor === "mcp") {
+      const allowed = repoFullName ? isMcpReadRepoAllowed(this.env.MCP_READ_REPO_ALLOWLIST, repoFullName) : isMcpReadUnscoped(this.env.MCP_READ_REPO_ALLOWLIST);
+      if (!allowed) throw new Error("Forbidden: this MCP token is not authorized for the skipped-PR audit.");
+    }
+    const roleSummary = await getRoleSummaryForIdentity(this.env, this.identity);
+    if (!roleSummary.roles.some((role) => role === "maintainer" || role === "owner" || role === "operator")) {
+      throw new Error("Forbidden: maintainer, owner, or operator role is required for the skipped-PR audit.");
+    }
+    return roleSummary;
+  }
+
+  private async getSkippedPrAudit(input: {
+    repoFullName?: string | undefined;
+    reason?: PublicSurfaceSkipReason | undefined;
+    since?: string | undefined;
+    limit?: number | undefined;
+  }): Promise<ToolPayload> {
+    const roleSummary = await this.requireSkippedPrAuditAccess(input.repoFullName);
+    const sinceIso = input.since ? toIsoQueryDate(input.since) : undefined;
+    if (input.since && !sinceIso) throw new Error("Invalid since date.");
+    const scope = await resolveSkippedPrAuditRepoScope(this.env, this.identity, roleSummary.roles, input.repoFullName);
+    if (!scope.ok) throw new Error("Forbidden: cannot access the skipped-PR audit for the requested repository.");
+    const page = await listPrVisibilitySkipAuditEvents(this.env, {
+      limit: input.limit,
+      repoFullNames: scope.repoFullNames,
+      reason: input.reason,
+      sinceIso,
+    });
+    return {
+      summary: `LoopOver skipped-PR audit${input.repoFullName ? ` for ${input.repoFullName}` : ""}: ${page.items.length} event(s)${page.hasMore ? " (more available)" : ""}.`,
+      data: {
+        limit: page.limit,
+        hasMore: page.hasMore,
+        filters: {
+          repoFullName: input.repoFullName ?? null,
+          reason: input.reason ?? null,
+          since: sinceIso ?? null,
+        },
+        items: page.items.map((item) => ({
+          repoFullName: item.repoFullName,
+          pullNumber: item.pullNumber,
+          reason: item.reason,
+          timestamp: item.createdAt,
+          remediation: skippedPrAuditRemediation(item.reason),
+        })),
+      },
     };
   }
 

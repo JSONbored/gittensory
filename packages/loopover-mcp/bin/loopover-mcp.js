@@ -123,7 +123,7 @@ const AGENT_PROFILES = {
     audience: "maintainers preparing low-noise queue and PR review context",
     purpose: "Summarize queue risk, prepare review notes, and draft public guidance for human review.",
     recommendedPrompts: ["loopover_maintainer_queue_triage", "loopover_maintainer_review_prep", "loopover_maintainer_public_guidance"],
-    recommendedTools: ["loopover_get_repo_context", "loopover_get_burden_forecast", "loopover_preflight_pr"],
+    recommendedTools: ["loopover_get_repo_context", "loopover_get_burden_forecast", "loopover_preflight_pr", "loopover_get_skipped_pr_audit"],
     boundaries: [
       "Human-approved only: prepare summaries and draft guidance; do not post comments, label, close, merge, or edit contributor work.",
       "Keep private review context, raw trust context, and authenticated-only evidence out of public snippets.",
