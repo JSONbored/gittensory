@@ -4715,9 +4715,13 @@ export async function buildBurdenForecasts(
   env: Env,
   repoFullName?: string,
 ): Promise<void> {
+  // Burden forecasting is generic repo-health forecasting, unrelated to subnet economics -- it should
+  // cover every repo this instance operates on (isInstalled), not just gittensor-subnet-registered ones
+  // (isRegistered), so a self-host operator's installed-but-unregistered repos aren't left with zero
+  // coverage (#5022, part of the isRegistered->isInstalled untangling epic #5016).
   const repositories = (await listRepositories(env)).filter(
     (repo) =>
-      repo.isRegistered && (!repoFullName || repo.fullName === repoFullName),
+      repo.isInstalled && (!repoFullName || repo.fullName === repoFullName),
   );
   for (const repo of repositories) {
     const [issues, pullRequests, recentMergedPullRequests, queueCounts] =

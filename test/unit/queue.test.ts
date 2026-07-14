@@ -59,7 +59,7 @@ import {
   listReviewSuppressions,
   setGlobalAgentFrozen,
 } from "../../src/db/repositories";
-import { agentMaintenanceHeadMatchesGate, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, enrichOpenPullRequestsWithChangedFiles, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock, reviewDurationMsSince, SWEEP_FANOUT_RESOLUTION_CONCURRENCY } from "../../src/queue/processors";
+import { agentMaintenanceHeadMatchesGate, buildBurdenForecasts, changedPathsForGuardrail, claimAiReviewLock, claimPrActuationLock, contributorEvidenceBatchSize, enrichOpenPullRequestsWithChangedFiles, processJob, reconcileLiveDuplicateSiblings, releaseAiReviewLock, releasePrActuationLock, reviewDurationMsSince, SWEEP_FANOUT_RESOLUTION_CONCURRENCY } from "../../src/queue/processors";
 import type { PullRequestRecord } from "../../src/types";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { fingerprint as reviewMemoryFingerprint } from "../../src/review/review-memory-match";
@@ -398,6 +398,9 @@ describe("queue processors", () => {
     await processJob(env, { type: "refresh-contributor-activity", requestedBy: "test", login: "oktofeesh1", repoFullName: "JSONbored/gittensory" });
     await processJob(env, { type: "build-contributor-evidence", requestedBy: "test" });
     await processJob(env, { type: "build-contributor-decision-packs", requestedBy: "test" });
+    // buildBurdenForecasts fans out on isInstalled, not isRegistered (#5022) -- mark the repo installed
+    // (refresh-registry above only sets isRegistered) so this generic repo-health forecast still runs.
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 555);
     await processJob(env, { type: "build-burden-forecasts", requestedBy: "test", repoFullName: "JSONbored/gittensory" });
     await processJob(env, { type: "refresh-contributor-activity", requestedBy: "test", login: "oktofeesh1" });
     await processJob(env, {
@@ -456,6 +459,25 @@ describe("queue processors", () => {
         expect.objectContaining({ eventName: "github_installation_created", repoFullName: "<redacted-actor>/gittensory", metadata: expect.objectContaining({ action: "created" }) }),
       ]),
     );
+  });
+
+  it("fans out burden forecasts by isInstalled, not isRegistered (#5022 regression)", async () => {
+    const env = createTestEnv();
+    vi.spyOn(repositoriesModule, "listRepositories").mockResolvedValue([
+      // Installed but not gittensor-subnet-registered: burden forecasting is generic repo-health
+      // tracking unrelated to subnet economics, so this repo MUST still be covered.
+      { fullName: "acme/installed-not-registered", owner: "acme", name: "installed-not-registered", isInstalled: true, isRegistered: false, isPrivate: false },
+      // Subnet-registered but not installed on this instance: this repo must NOT be covered -- it is
+      // not one this instance operates on.
+      { fullName: "acme/registered-not-installed", owner: "acme", name: "registered-not-installed", isInstalled: false, isRegistered: true, isPrivate: false },
+    ]);
+
+    await buildBurdenForecasts(env);
+
+    await expect(getBurdenForecast(env, "acme/installed-not-registered")).resolves.toMatchObject({
+      repoFullName: "acme/installed-not-registered",
+    });
+    await expect(getBurdenForecast(env, "acme/registered-not-installed")).resolves.toBeNull();
   });
 
   it("runs queued agent jobs through the queue processor", async () => {
