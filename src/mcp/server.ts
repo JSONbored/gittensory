@@ -29,7 +29,8 @@ import {
   isMcpReadUnscoped,
   type AuthIdentity,
 } from "../auth/security";
-import { canLoginAccessRepo, canWatchRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
+import { buildStaticControlPanelRoleSummary, canLoginAccessRepo, canWatchRepo, loadControlPanelAccessScope, loadControlPanelRoleSummary, type ControlPanelAccessScope } from "../services/control-panel-roles";
+import { PR_VISIBILITY_SKIP_REASONS, skippedPrAuditRemediation, skippedPrAuditRepoScope, toIsoQueryDate } from "../services/skipped-pr-audit";
 import {
   countOpenIssues,
   countPendingAgentActions,
@@ -61,6 +62,7 @@ import {
   listOpenPullRequests,
   listPullRequests,
   listRecentMergedPullRequests,
+  listPrVisibilitySkipAuditEvents,
   listRepoSyncSegments,
   listRepoSyncStates,
   listRepositories,
@@ -170,6 +172,7 @@ import { buildFindingTaxonomyDocument, FINDING_TAXONOMY_URI } from "../review/fi
 import { buildEnrichmentAnalyzersTaxonomyDocument, ENRICHMENT_ANALYZERS_URI } from "../review/enrichment-analyzers-taxonomy";
 import { recordPredictedGateCall } from "../review/predicted-gate-calls";
 import { computeContributorCalibration } from "../review/predicted-gate-calibration-ledger";
+import { nowIso } from "../utils/json";
 
 type AppContext = Context<{ Bindings: Env }>;
 type ToolPayload = {
@@ -193,6 +196,13 @@ const ownerRepoWindowShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
   windowDays: z.number().int().positive().optional(),
+};
+
+const skippedPrAuditShape = {
+  repoFullName: z.string().trim().min(3).max(200).optional(),
+  reason: z.enum(PR_VISIBILITY_SKIP_REASONS).optional(),
+  since: z.string().trim().min(1).max(64).optional(),
+  limit: z.number().int().optional(),
 };
 
 const windowOnlyShape = {
@@ -813,6 +823,30 @@ const gatePrecisionOutputSchema = {
   perGateType: z.array(z.unknown()).optional(),
   overall: z.unknown().optional(),
   signals: z.array(z.string()).optional(),
+};
+
+const skippedPrAuditOutputSchema = {
+  generatedAt: z.string().optional(),
+  limit: z.number().optional(),
+  hasMore: z.boolean().optional(),
+  filters: z
+    .object({
+      repoFullName: z.string().nullable().optional(),
+      reason: z.string().nullable().optional(),
+      since: z.string().nullable().optional(),
+    })
+    .optional(),
+  items: z
+    .array(
+      z.object({
+        repoFullName: z.string(),
+        pullNumber: z.number(),
+        reason: z.string(),
+        timestamp: z.string(),
+        remediation: z.string(),
+      }),
+    )
+    .optional(),
 };
 
 const contributorProfileOutputSchema = {
@@ -1677,6 +1711,17 @@ export class LoopoverMcp {
         outputSchema: gatePrecisionOutputSchema,
       },
       async (input) => this.toolResult(await this.getGatePrecision(input)),
+    );
+
+    server.registerTool(
+      "loopover_get_skipped_pr_audit",
+      {
+        description:
+          "Return the read-only skipped-PR audit trail: PRs the automated reviewer skipped publicly, with reason codes and optional repo/reason/since filters. Maintainer-authenticated; measurement only.",
+        inputSchema: skippedPrAuditShape,
+        outputSchema: skippedPrAuditOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getSkippedPrAudit(input)),
     );
 
     server.registerTool(
@@ -2975,6 +3020,55 @@ export class LoopoverMcp {
     };
   }
 
+  private async getSkippedPrAudit(input: {
+    repoFullName?: string | undefined;
+    reason?: (typeof PR_VISIBILITY_SKIP_REASONS)[number] | undefined;
+    since?: string | undefined;
+    limit?: number | undefined;
+  }): Promise<ToolPayload> {
+    const roleSummary =
+      this.identity.kind === "session"
+        ? await loadControlPanelRoleSummary(this.env, this.identity.actor)
+        : buildStaticControlPanelRoleSummary(this.identity.actor);
+    if ((this.identity.kind === "static" && this.identity.actor === "mcp") || !roleSummary.roles.some((role) => ["maintainer", "owner", "operator"].includes(role))) {
+      throw new Error("Forbidden: maintainer access is required for the skipped PR audit.");
+    }
+    const sinceIso = input.since ? toIsoQueryDate(input.since) : undefined;
+    if (input.since && !sinceIso) {
+      throw new Error("Invalid request: since must be a valid date string.");
+    }
+    const scope = await skippedPrAuditRepoScope(this.env, this.identity, roleSummary.roles, input.repoFullName);
+    if (!scope.ok) {
+      throw new Error("Forbidden: maintainer access is required for this repository.");
+    }
+    const page = await listPrVisibilitySkipAuditEvents(this.env, {
+      limit: clampInteger(input.limit ?? 50, 1, 100),
+      repoFullNames: scope.repoFullNames,
+      reason: input.reason,
+      sinceIso,
+    });
+    return {
+      summary: `LoopOver skipped-PR audit returned ${page.items.length} entr${page.items.length === 1 ? "y" : "ies"}.`,
+      data: {
+        generatedAt: nowIso(),
+        limit: page.limit,
+        hasMore: page.hasMore,
+        filters: {
+          repoFullName: input.repoFullName ?? null,
+          reason: input.reason ?? null,
+          since: sinceIso ?? null,
+        },
+        items: page.items.map((item) => ({
+          repoFullName: item.repoFullName,
+          pullNumber: item.pullNumber,
+          reason: item.reason,
+          timestamp: item.createdAt,
+          remediation: skippedPrAuditRemediation(item.reason),
+        })),
+      },
+    };
+  }
+
   // #2224 - surface the deterministic open-PR pressure simulator over MCP. Pure and read-only: the caller
   // supplies all queue/role context, so nothing beyond a computation on that input is revealed and no repo
   // access is required (mirrors loopover_run_local_scorer). Output is already public-safe - every scenario
@@ -4078,6 +4172,11 @@ function redactSensitiveForMcp(value: unknown): unknown {
       .filter(([key]) => !/hotkey|coldkey|wallet|private_key|privateKey|mnemonic|alphaPerDay|taoPerDay|usdPerDay/i.test(key))
       .map(([key, entry]) => [key, redactSensitiveForMcp(entry)]),
   );
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  const floored = Number.isFinite(value) ? Math.trunc(value) : min;
+  return Math.min(max, Math.max(min, floored));
 }
 
 async function authenticateMcpRequest(c: AppContext): Promise<AuthIdentity | null> {

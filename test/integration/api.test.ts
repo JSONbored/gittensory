@@ -5311,6 +5311,7 @@ describe("api routes", () => {
     expect(toolNames).toContain("loopover_get_repo_onboarding_pack");
     expect(toolNames).toContain("loopover_get_issue_quality");
     expect(toolNames).toContain("loopover_get_burden_forecast");
+    expect(toolNames).toContain("loopover_get_skipped_pr_audit");
     expect(toolNames).toContain("loopover_get_contributor_profile");
     expect(toolNames).toContain("loopover_get_decision_pack");
     expect(toolNames).toContain("loopover_explain_repo_decision");

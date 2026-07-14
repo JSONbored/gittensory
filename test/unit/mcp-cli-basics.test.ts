@@ -83,6 +83,16 @@ describe("loopover-mcp CLI — basics", () => {
     }
   });
 
+  it("adds skipped-PR audit to the maintainer-triage recommended toolset", () => {
+    const payload = JSON.parse(run(["init-client", "--print", "codex", "--agent-profile", "maintainer-triage", "--json"])) as {
+      agentProfile: { id: string; recommendedTools: string[] };
+    };
+    expect(payload.agentProfile.id).toBe("maintainer-triage");
+    expect(payload.agentProfile.recommendedTools).toEqual(
+      expect.arrayContaining(["loopover_get_repo_context", "loopover_get_burden_forecast", "loopover_get_skipped_pr_audit", "loopover_preflight_pr"]),
+    );
+  });
+
   it("prints the gate-throttled miner-auto-dev profile with a plan→implement→push driving loop (#781)", () => {
     const payload = JSON.parse(run(["init-client", "--print", "codex", "--agent-profile", "miner-auto-dev", "--json"])) as {
       agentProfile: { id: string; title: string; recommendedTools: string[]; drivingLoop: string[]; boundaries: string[]; whenNotToUse: string };
