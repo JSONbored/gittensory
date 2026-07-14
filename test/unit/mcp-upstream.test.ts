@@ -44,6 +44,20 @@ describe("MCP contributor access", () => {
     expect(JSON.stringify(payload)).not.toContain("SECRET private issue");
   });
 
+  it("computes issue-quality live (no snapshot persisted) instead of serving a cached one", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "public-repo", full_name: "someone/public-repo", private: false, owner: { login: "someone" }, default_branch: "main" });
+
+    const payload = await (
+      new LoopoverMcp(env, { kind: "static", actor: "api" }) as unknown as {
+        getIssueQuality(input: { owner: string; repo: string }): Promise<{ summary: string; data: Record<string, unknown> }>;
+      }
+    ).getIssueQuality({ owner: "someone", repo: "public-repo" });
+
+    expect(payload.summary).toContain("computed from cached metadata");
+    expect((payload.data as { source?: string }).source).toBe("computed");
+  });
+
   it("blocks session actors from pre-start checks for inaccessible repos", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "private-repo", full_name: "victim/private-repo", private: true, owner: { login: "victim" }, default_branch: "main" });
