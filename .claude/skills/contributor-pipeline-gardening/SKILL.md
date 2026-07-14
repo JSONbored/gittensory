@@ -46,7 +46,7 @@ assume it keeps happening, don't assume today's backlog is clean.
 
 ## Pass 2 — backlog top-up
 
-**Target: keep the repo-wide contributor-available count (unassigned, no `maintainer-only`, carries a `gittensor:*` label) at roughly 30-50, combined with metagraphed's own count** — check the combined total across both repos before deciding how many to add here; don't generate a fixed number blind. Compute it fresh: `gh issue list --state open --limit 1000 --json number,labels,assignees` and filter.
+**Target: keep this repo's own contributor-available count (unassigned, no `maintainer-only`, carries a `gittensor:*` label) at 50-100+, independently of metagraphed's count** — this is NOT a combined/shared pool across the two repos; each repo needs its own 50-100+ on its own goals. Compute it fresh: `gh issue list --state open --limit 1000 --json number,labels,assignees` and filter.
 
 1. **Read `reference.md`'s "what's safe to unleash" framework first.** The single most common mistake is generating architecture/business-decision issues (hosted multi-tenant SaaS design, billing, SLAs, pricing) that must stay `maintainer-only` — this repo has ~90 such issues already correctly gated and the automation must not erode that boundary. Concrete engineering work with a clear existing precedent to follow is the target; open-ended product/business decisions are not.
 2. Pick real gaps to scope from, in priority order:
@@ -56,7 +56,7 @@ assume it keeps happening, don't assume today's backlog is clean.
 3. Every new issue gets: the correct existing milestone (create a new one only if none fits — don't dump unrelated work into an ill-fitting bucket), a `gittensor:bug` (0.05x), `gittensor:feature` (0.25x), or `gittensor:priority` (1.5x, reserved for mission-critical/time-sensitive work only — this repo uses it sparingly, unlike metagraphed's looser convention, see `reference.md`) label, plus `help wanted` (the maintainer confirmed this stays as a visibility signal alongside the points label, not a replacement for one).
 4. Every new issue body follows the template in `reference.md` — Context, Requirements, Deliverables, Test Coverage Requirements (this repo's Codecov patch gate is 99%+, hard — every new issue implicitly inherits this unless it's `apps/**`-only UI work), Expected Outcome. No "left to interpretation" scope — the maintainer's own stated preference is that thin/ambiguous issue bodies are worse than fewer, complete ones.
 5. Link relationships using GitHub's native features, not prose: `addSubIssue` to attach a new issue under its parent epic, `addBlockedBy` when an issue genuinely cannot start before another lands. Only use these where a real dependency exists — don't chain issues into an artificial order to look organized.
-6. Quality over the number. If a scan doesn't turn up 30-50 genuinely well-scoped, non-redundant, correctly-boundaried issues combined across both repos on a given day, file fewer rather than pad with weak ones — note the shortfall in the daily digest instead.
+6. Quality over the number. If a scan doesn't turn up enough genuinely well-scoped, non-redundant, correctly-boundaried issues in this repo alone to keep its own count in the 50-100+ range on a given day, file fewer rather than pad with weak ones — note the shortfall in the daily digest instead.
 
 ## Daily digest
 
