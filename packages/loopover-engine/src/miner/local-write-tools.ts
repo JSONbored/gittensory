@@ -1,4 +1,4 @@
-// #780 miner write-tools. These build ACTION SPECS — gittensory supplies the content; the miner's OWN local
+// #780 miner write-tools. These build ACTION SPECS — loopover supplies the content; the miner's OWN local
 // harness runs the command with its OWN GitHub credentials. LoopOver NEVER performs the write, so source code
 // and the write both stay on the miner's machine: the no-cloud-write boundary holds. Pure + deterministic: every
 // builder returns a self-contained, shell-safe spec and touches nothing.
@@ -6,7 +6,7 @@
 // MOVED HERE FROM src/mcp/local-write-tools.ts (#2337): this module has zero root-specific dependencies (it only
 // ever needed a generic JSON-value type), so it belongs in the shared "brain" layer alongside the rest of the
 // portable engine, not root-only. This is what lets packages/loopover-miner's own real driving-loop entrypoint
-// construct the EXACT SAME open_pr command gittensory's MCP server would return, with zero network round-trip
+// construct the EXACT SAME open_pr command loopover's MCP server would return, with zero network round-trip
 // and zero duplicated/drifting logic: both consumers import the same functions from this one place. Root's
 // src/mcp/local-write-tools.ts is now a thin re-export preserving every existing import path unchanged.
 
@@ -37,7 +37,7 @@ function spec(action: string, description: string, inputs: Record<string, LocalW
   return { action, description, inputs, command, boundary: LOCAL_WRITE_BOUNDARY };
 }
 
-/** Open a PR from a local branch (content typically taken from gittensory's prepare_pr_packet). */
+/** Open a PR from a local branch (content typically taken from loopover's prepare_pr_packet). */
 export function buildOpenPrSpec(input: { repoFullName: string; base: string; head: string; title: string; body: string; draft?: boolean | undefined }): LocalWriteActionSpec {
   const draft = input.draft === true;
   const command = `gh pr create --repo ${sq(input.repoFullName)} --base ${sq(input.base)} --head ${sq(input.head)} --title ${sq(input.title)} --body ${sq(input.body)}${draft ? " --draft" : ""}`;
@@ -101,7 +101,7 @@ export function buildDeleteBranchSpec(input: { branch: string; remote?: boolean 
 // verb that "scaffolds a test file" across vitest/jest/pytest/go test/rspec/cargo test — so `command` here is a
 // safe, informative `echo` of the plan (target files + boundary criteria) rather than a real write, and the
 // actual scaffolding is left to the contributor's OWN agent reading the structured `inputs`. This keeps the same
-// no-cloud-write guarantee as every other spec in this file: gittensory supplies WHAT test cases should exist at
+// no-cloud-write guarantee as every other spec in this file: loopover supplies WHAT test cases should exist at
 // which boundaries, never the test file content or its execution.
 export function buildTestGenSpec(input: {
   repoFullName: string;

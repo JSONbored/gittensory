@@ -140,7 +140,7 @@ export function formatAttemptLogJsonl(events: readonly NormalizedAttemptLogEvent
   return events.map((event) => JSON.stringify(event)).join("\n");
 }
 
-/** In-memory appender for tests and local tooling — production persistence uses `gittensory-miner/lib/attempt-log.js`. */
+/** In-memory appender for tests and local tooling — production persistence uses `loopover-miner/lib/attempt-log.js`. */
 export function createAttemptLogBuffer(): {
   append: (event: AttemptLogEvent) => NormalizedAttemptLogEvent;
   events: () => readonly NormalizedAttemptLogEvent[];

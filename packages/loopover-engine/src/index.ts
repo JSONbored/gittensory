@@ -1,7 +1,7 @@
 // Barrel export for @loopover/engine.
 //
 // This package houses the deterministic, side-effect-free logic shared by the LoopOver review-stack
-// backend and the gittensory-miner (scoring preview/model, predicted-gate types, reward-risk, slop signals,
+// backend and the loopover-miner (scoring preview/model, predicted-gate types, reward-risk, slop signals,
 // focus-manifest parse/compile core, duplicate-winner adjudication, and their engine-parity fixtures).
 // More modules land in follow-up issues.
 export { ENGINE_VERSION } from "./version.js";
@@ -193,7 +193,7 @@ export {
   type AcceptanceCriteria,
   type AcceptanceCriteriaInput,
 } from "./miner/acceptance-criteria.js";
-// Pure deny-hook evaluator + rule-proposal synthesis moved out of gittensory-miner (#5667). The miner-lib
+// Pure deny-hook evaluator + rule-proposal synthesis moved out of loopover-miner (#5667). The miner-lib
 // `deny-hooks.js`/`deny-hook-synthesis.js` are now thin wrappers over these (the SQLite proposal store stays in
 // the miner). `synthesizeDenyRuleProposals` takes an injected `nowMs` clock so synthesis is deterministic/pure.
 export {
@@ -775,7 +775,7 @@ export {
 } from "./reward-risk.js";
 
 // Shared subprocess env-allowlist + secret-redaction helpers (#4284) — one source of truth for every driver that
-// spawns a locally-authenticated CLI subprocess (src/selfhost/ai.ts and the coming gittensory-miner drivers).
+// spawns a locally-authenticated CLI subprocess (src/selfhost/ai.ts and the coming loopover-miner drivers).
 export {
   SUBPROCESS_CLI_ENV_ALLOWLIST,
   buildAllowlistedEnv,

@@ -7,7 +7,7 @@ import { buildAllowlistedEnv, redactSecrets } from "../subprocess-env.js";
 
 // CLI-subprocess CodingAgentDriver (#4266). Implements the CodingAgentDriver seam (#4262) by running the coding
 // agent (`claude`/`codex`) as a subprocess in the attempt's scoped working directory. The spawn primitive is
-// INJECTED (a generalized version of src/selfhost/ai.ts's SpawnFn, redeclared here so gittensory-engine stays
+// INJECTED (a generalized version of src/selfhost/ai.ts's SpawnFn, redeclared here so loopover-engine stays
 // standalone and doesn't import from src/), so the driver is fully testable without a real child process. Two
 // safety primitives are reused from subprocess-env.ts (#4284) rather than re-implemented: the child gets a STRICT
 // allowlisted env (never the full host env — a coding-agent subprocess is prompt-injectable), and any subprocess

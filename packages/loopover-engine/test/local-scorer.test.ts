@@ -16,7 +16,7 @@ test("classifies source / test / non-code disjointly from changed-file metadata"
     ],
   });
   assert.equal(r.mode, "external_command");
-  assert.equal(r.activeModel, "gittensory-deterministic");
+  assert.equal(r.activeModel, "loopover-deterministic");
   assert.equal(r.sourceTokenScore, 12);
   assert.equal(r.testTokenScore, 6);
   assert.equal(r.nonCodeTokenScore, 4);

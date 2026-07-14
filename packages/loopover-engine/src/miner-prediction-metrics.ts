@@ -3,9 +3,9 @@
 // prediction-ledger rows (packages/loopover-miner/lib/prediction-ledger.js `readPredictions`) — optionally
 // joined with their realized outcome — into counters a future dashboard can scrape.
 //
-// Scoped as an on-demand RENDERER, not a live HTTP registry: gittensory-miner is a local CLI, not a daemon, so a
+// Scoped as an on-demand RENDERER, not a live HTTP registry: loopover-miner is a local CLI, not a daemon, so a
 // caller renders this to stdout for its own scrape/cron setup and reads the ledger itself (no data collection of
-// its own lives here — this stays a pure, side-effect-free function like the rest of gittensory-engine). It mirrors
+// its own lives here — this stays a pure, side-effect-free function like the rest of loopover-engine). It mirrors
 // the metric-naming (`loopover_miner_*_total`) and HELP/TYPE/label conventions of src/selfhost/metrics.ts rather
 // than importing across the package boundary.
 //

@@ -11,7 +11,7 @@
  * caller can compute the winner ONCE per review run and thread the result boolean consistently into every
  * surface (advisory finding, close reason, slop, panels), so they agree by construction.
  *
- * ELECTION ORDER: compare `linkedIssueClaimedAt`, the time gittensory first observed the PR claiming
+ * ELECTION ORDER: compare `linkedIssueClaimedAt`, the time loopover first observed the PR claiming
  * the issue. GitHub `pull_request.created_at` is intentionally not an ordering signal here: contributors can
  * edit an old placeholder PR to add a linked issue later, so creation time would let backdated claims steal
  * duplicate-winner credit from the PR that actually claimed the issue first. Sparse legacy rows that lack

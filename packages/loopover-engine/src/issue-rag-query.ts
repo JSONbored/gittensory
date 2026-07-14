@@ -1,5 +1,5 @@
 // Issue-centric RAG query composition (#2320), extracted from `src/review/issue-rag-wire.ts` (#4254) so the
-// gittensory-miner analyze phase can build the identical retrieval query without importing the review stack.
+// loopover-miner analyze phase can build the identical retrieval query without importing the review stack.
 // Pure, string-only: the miner has no PR diff yet, so retrieval is fed from the issue's title/body/labels
 // while the RAG engine itself stays unchanged (retrieveContext remains Vectorize/D1-bound in `src/review/rag.ts`
 // and is intentionally NOT part of this module).

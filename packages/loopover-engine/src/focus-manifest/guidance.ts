@@ -20,7 +20,7 @@ function normalizePathForMatch(path: string): string {
 
 /**
  * LINEAR-TIME wildcard matcher for a `*`-glob pattern over an already-normalized path. `*` (and a collapsed
- * run of `*`) matches any run of characters INCLUDING `/` (gittensory globs cross slashes). Implemented as a
+ * run of `*`) matches any run of characters INCLUDING `/` (loopover globs cross slashes). Implemented as a
  * prefix + suffix + ordered-substring (indexOf) scan rather than a `.*`-per-star regex: the old regex
  * (`^.*a.*a...$`) backtracks catastrophically on a near-miss path and could hang the gate for an entire repo
  * (a manifest glob with many non-adjacent `*`). This algorithm is O(path × parts) with NO backtracking.

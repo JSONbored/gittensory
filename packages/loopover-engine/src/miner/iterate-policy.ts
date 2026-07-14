@@ -3,7 +3,7 @@
 // from the loop MECHANICS (#2333) so the actual thresholds/rules are one small, individually-reviewable, pure
 // artifact -- `decideNextAction` needs no driver, no worktree, no IO to test.
 //
-// STRATEGIC CONSTRAINTS this policy encodes (gittensory-miner-autonomy-roadmap):
+// STRATEGIC CONSTRAINTS this policy encodes (loopover-miner-autonomy-roadmap):
 //   - "never auto-submit (P4) before governor+caps (P5)" -- a mandatory clean predicted-gate PASS is the ONLY
 //     path to `"handoff"`; an ambiguous or errored self-review downgrades to abandon, never optimistically
 //     hands off.

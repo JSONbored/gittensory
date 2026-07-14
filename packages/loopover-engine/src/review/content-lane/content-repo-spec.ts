@@ -1,7 +1,7 @@
 // Modular content-repository configuration for the curated-list content lane (the awesome-claude lane and any
 // self-hosted curated list). The curated-list analogue of RegistryLaneSpec (the metagraphed registry lane): a
 // maintainer whose list uses different categories or a different entry-file layout parameterizes the lane via
-// config instead of a gittensory code change. Defaults preserve the awesome-claude behaviour byte-for-byte.
+// config instead of a loopover code change. Defaults preserve the awesome-claude behaviour byte-for-byte.
 //
 // This is a LEAF module (no content-lane imports) so every consumer — scope, duplicates, source-evidence — can
 // import the spec without an import cycle. Fields are added here as each consumer is migrated.

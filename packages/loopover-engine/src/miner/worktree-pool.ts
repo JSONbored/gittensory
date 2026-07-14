@@ -4,7 +4,7 @@
 // tears down ONE worktree; this manages the SET of them so two concurrent attempts never collide and a crash
 // can't leak worktree slots forever.
 //
-// Per #4297, the pure allocation logic lives here in gittensory-engine so it is unit-testable WITHOUT touching
+// Per #4297, the pure allocation logic lives here in loopover-engine so it is unit-testable WITHOUT touching
 // a real filesystem or database. The thin bookkeeping wrapper that PERSISTS this state (local SQLite, the same
 // way claim-ledger.js / run-state.js do) is a separate miner-package layer — it holds a WorktreePoolState,
 // calls these pure transitions, and writes the result back. No IO here: every function takes state in and

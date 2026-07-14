@@ -259,12 +259,12 @@ export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
  *  `LOOPOVER_REVIEW_REPOS` allowlist default, so an operator who sets nothing keeps today's behavior. */
 export type FocusManifestFeaturesConfig = { present: boolean } & Record<ConvergedFeatureKey, boolean | null>;
 
-/** Optional ecosystem/network integrations under the `experimental:` block — plugins that couple gittensory to
+/** Optional ecosystem/network integrations under the `experimental:` block — plugins that couple loopover to
  *  an external system rather than core review behavior. Starts with `gittensor` (the subnet mining-registry/
- *  scoring integration gittensory originally shipped with); future plugins land in this same array as the
+ *  scoring integration loopover originally shipped with); future plugins land in this same array as the
  *  product broadens beyond gittensor. Deliberately a SEPARATE block from `features:` (converged review
  *  capabilities) — an operator (especially self-host) should be able to see at a glance which toggles are "how
- *  gittensory reviews PRs" vs "which external network/ecosystem this instance opts into." */
+ *  loopover reviews PRs" vs "which external network/ecosystem this instance opts into." */
 export const EXPERIMENTAL_PLUGIN_KEYS = ["gittensor"] as const;
 export type ExperimentalPluginKey = (typeof EXPERIMENTAL_PLUGIN_KEYS)[number];
 
@@ -277,7 +277,7 @@ export type FocusManifestExperimentalConfig = { present: boolean } & Record<Expe
 /**
  * Per-repo registry-review lane configuration (`contentLane:` block, #2435) — lets a self-hosted maintainer
  * configure their OWN registry (structural file-scope patterns + entry-count cap + dedup fields) without a
- * gittensory code change. `entryFileGlob` and `collectionField` are the two REQUIRED fields to build a usable
+ * loopover code change. `entryFileGlob` and `collectionField` are the two REQUIRED fields to build a usable
  * spec; `present` is true only when both are set (a partial config degrades to "not configured," not a broken
  * half-spec — see `parseContentLaneConfig`). `validatorId` optionally references a code-registered domain
  * validator (`review/content-lane/spec-resolver.ts`'s `REGISTRY_VALIDATORS`); omitted ⇒ structural gating only
@@ -344,7 +344,7 @@ export type FocusManifestReviewRecapConfig = {
  * under `maintainerRecap:`. Distinct from `reviewRecap:` above (that is the single-repo digest's own window/
  * enable knob); this instead overrides the LOOPOVER_MAINTAINER_RECAP / LOOPOVER_RECAP_CADENCE env vars
  * that gate the cron-scheduled cross-repo digest (buildMaintainerRecap, #2239 / #2248) — read from the
- * gittensory self-repo's manifest (resolveLoopOverSelfRepoFullName), since the digest is an operator-level
+ * loopover self-repo's manifest (resolveLoopOverSelfRepoFullName), since the digest is an operator-level
  * setting, not a per-contributor-repo one. Mirrors `reviewRecap:` exactly: no DB-backed counterpart, so the
  * parsed value (or the default below when unset) IS the effective value. Not present (or present with no
  * fields set) ⇒ the caller falls back to the env vars, byte-identical to before this override existed.
@@ -485,7 +485,7 @@ export const REVIEW_FINDING_SEVERITY_LADDER = ["critical", "major", "minor", "ni
 
 /**
  * Maintainer overrides for the public review-panel CONTENT, declared under `review:`. Customizes the
- * panel without changing what gittensory measures: a custom public-safe footer lead line, a custom intro
+ * panel without changing what loopover measures: a custom public-safe footer lead line, a custom intro
  * note, and per-row show/hide toggles. The Gittensor attribution + register link is ALWAYS appended to
  * the footer regardless (the growth surface is preserved); maintainer text that fails the public-safe
  * filter is dropped, never published.
@@ -812,7 +812,7 @@ export type VisualConfig = {
   enabled: boolean | null;
   /** `review.visual.theme_storage_key` (#4109): the `localStorage` key the capture pipeline ALSO forces
    *  `theme` into (plus a reload) before rendering, for a target whose theming reads an explicit stored
-   *  preference instead of consulting `prefers-color-scheme` — verified (against gittensory-ui's own
+   *  preference instead of consulting `prefers-color-scheme` — verified (against loopover-ui's own
    *  dark-mode-only build) that `emulateMediaFeatures` alone has zero effect on that class of app, since it
    *  only changes what CSS media queries / `matchMedia` report. null (default) ⇒ no `localStorage` write, no
    *  reload — byte-identical to today. Only takes effect when `themes` is also configured; the key name is
@@ -851,7 +851,7 @@ export type VisualPreviewConfig = {
 export type VisualRoutesConfig = {
   /** `review.visual.routes.paths`: an explicit, always-screenshotted route list. When non-empty, this
    *  REPLACES automatic file-to-route inference entirely — for repos whose routing convention isn't
-   *  gittensory-ui's TanStack file-based one, an explicit list is simpler and more robust than trying to
+   *  loopover-ui's TanStack file-based one, an explicit list is simpler and more robust than trying to
    *  infer one. Empty (default) ⇒ automatic inference (falling back to "/" when nothing matches). */
   paths: string[];
   /** `review.visual.routes.max_routes`: overrides the built-in cap (2) on how many routes get screenshotted
@@ -1547,7 +1547,7 @@ export function featuresConfigToJson(features: FocusManifestFeaturesConfig): Jso
 /**
  * Parse the optional `experimental:` mapping — per-repo activation for optional ecosystem/network plugins
  * (starting with `gittensor`, the subnet mining/scoring integration). Mirrors parseFeaturesConfig's shape and
- * validation; kept as a SEPARATE top-level block from `features:` so plugin integrations that couple gittensory
+ * validation; kept as a SEPARATE top-level block from `features:` so plugin integrations that couple loopover
  * to an external network stay visibly distinct from the converged REVIEW capabilities `features:` toggles, and
  * so future plugins land in the same place without touching `features:`'s semantics.
  */
@@ -2185,7 +2185,7 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   const moderationBannedLabel = normalizeModerationLabel(r.moderationBannedLabel);
   if (moderationBannedLabel !== undefined) out.moderationBannedLabel = moderationBannedLabel;
   // Review-evasion protection (#review-evasion-protection): a contributor closing/converting-to-draft their
-  // own PR while gittensory has an active review pass running is dodging the one-shot review.
+  // own PR while loopover has an active review pass running is dodging the one-shot review.
   const reviewEvasionProtection = normalizeOptionalEnum(r.reviewEvasionProtection, "settings.reviewEvasionProtection", ["off", "close"] as const, warnings);
   if (reviewEvasionProtection !== null) out.reviewEvasionProtection = reviewEvasionProtection;
   // #label-scoping: same load-bearing-null idiom as blacklistLabel above.
@@ -3114,7 +3114,7 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
 
 /**
  * Parse raw manifest file/record content (JSON or YAML). Malformed content degrades to an empty
- * manifest with a warning rather than throwing, so a broken `.gittensory` config never breaks analysis.
+ * manifest with a warning rather than throwing, so a broken `.loopover` config never breaks analysis.
  */
 export function parseFocusManifestContent(content: string | null | undefined, source: FocusManifestSource = "repo_file"): FocusManifest {
   if (content === undefined || content === null || content.trim() === "") return emptyManifest(source);
@@ -3163,7 +3163,7 @@ function normalizePathForMatch(path: string): string {
 
 /**
  * LINEAR-TIME wildcard matcher for a `*`-glob pattern over an already-normalized path. `*` (and a collapsed
- * run of `*`) matches any run of characters INCLUDING `/` (gittensory globs cross slashes). Implemented as a
+ * run of `*`) matches any run of characters INCLUDING `/` (loopover globs cross slashes). Implemented as a
  * prefix + suffix + ordered-substring (indexOf) scan rather than a `.*`-per-star regex: the old regex
  * (`^.*a.*a...$`) backtracks catastrophically on a near-miss path and could hang the gate for an entire repo
  * (a manifest glob with many non-adjacent `*`). This algorithm is O(path × parts) with NO backtracking.

@@ -1,5 +1,5 @@
 // #782 deterministic local scorer, extracted from src/signals/local-scorer.ts (#4253) so the published
-// gittensory-mcp / gittensory-miner CLIs and the hosted Worker share one implementation. Replicates the
+// loopover-mcp / loopover-miner CLIs and the hosted Worker share one implementation. Replicates the
 // gittensor-root token-scoring view from changed-file METADATA (paths + line counts) — never source content,
 // so the no-upload boundary holds and it runs in every surface. It mirrors buildScorePreview's
 // source/test/non-code classification, so feeding its output back in as `localScorer` (mode external_command)
@@ -56,7 +56,7 @@ export function computeLocalScorerTokens(input: { changedFiles: LocalScorerChang
   const warnings = failed ? ["Local validation reported failures — token scores describe the diff, not a passing build."] : [];
   return {
     mode: "external_command",
-    activeModel: "gittensory-deterministic",
+    activeModel: "loopover-deterministic",
     sourceTokenScore,
     totalTokenScore,
     sourceLines: Math.max(1, sourceTokenScore || totalTokenScore || 1),

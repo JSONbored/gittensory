@@ -1,10 +1,10 @@
-// Content-lane feature flag (convergence — reviewbot→gittensory content-review port).
+// Content-lane feature flag (convergence — reviewbot→loopover content-review port).
 //
-// gittensory's native code-gate reviews CODE repos. The content lane reviews CONTENT repos — a
+// loopover's native code-gate reviews CODE repos. The content lane reviews CONTENT repos — a
 // curated list (awesome-claude) and a registry (metagraphed) — a different domain with its own
 // deterministic primitives (duplicate detection, source-evidence reachability, security scanning,
 // scope classification, and metagraphed's netuid grounding). The lane is ported as native,
-// self-contained gittensory modules under this directory.
+// self-contained loopover modules under this directory.
 //
 // FLAG-GATED + DEFAULT-OFF: the lane only runs when LOOPOVER_REVIEW_CONTENT_LANE is truthy in the Env.
 // Flag-off, the host never reaches these modules, so the live behavior is byte-identical. At

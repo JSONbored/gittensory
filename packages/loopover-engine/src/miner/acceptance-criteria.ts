@@ -8,7 +8,7 @@ import type { FeasibilityGateResult, FeasibilityVerdict } from "../feasibility.j
 // agent "boundary membrane") and the `FeasibilityGateResult` go/raise/avoid verdict (feasibility.ts) — into one
 // document. Producing the document is this module's job; actually writing it into the attempt's worktree is the
 // worktree primitive's (#4269), and handing it to the driver is the driver interface's (#4262) — neither is here,
-// so this stays pure and side-effect-free like the rest of gittensory-engine.
+// so this stays pure and side-effect-free like the rest of loopover-engine.
 //
 // DECISIONS this file makes (per the issue's open questions):
 // - Serialization format: JSON, not markdown. The acceptance criteria are an immutable, checksum-verifiable success
