@@ -78,8 +78,18 @@ describe("panelRowsToSignalRows", () => {
   });
 
   it("maps a ❌ result cell to fail", () => {
-    const rows = panelRowsToSignalRows([{ key: "contributorContext", cells: ["Contributor context", "❌ No public Gittensor match", "octocat; not a blocker.", "No action."] }]);
+    const rows = panelRowsToSignalRows([{ key: "linkedIssue", cells: ["Linked issue", "❌ Missing linked issue", "no closes/fixes reference", "Link an issue."] }]);
     expect(rows[0]?.state).toBe("fail");
+  });
+
+  // #5100: a leading ℹ️ is a neutral/informational marker (e.g. a non-Gittensor contributor, "none detected") — it must
+  // map to the `info` state, NOT fall through to `warn`, and the icon must be stripped so it isn't doubled in the render.
+  it("maps a ℹ️ result cell to the neutral info state and strips the leading icon", () => {
+    const rows = panelRowsToSignalRows([
+      { key: "contributorContext", cells: ["Contributor context", "ℹ️ No public Gittensor match", "octocat; not a blocker.", "No action."] },
+    ]);
+    expect(rows[0]?.state).toBe("info");
+    expect(rows[0]?.result).toBe("No public Gittensor match");
   });
 });
 

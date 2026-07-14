@@ -116,12 +116,15 @@ export function verdictToRecommendation(verdict: Verdict): ReviewRecommendation 
 function rowState(resultCell: string): UnifiedSignalRow["state"] {
   if (resultCell.startsWith("✅")) return "ok";
   if (resultCell.startsWith("❌")) return "fail";
+  // A leading ℹ️ is an explicit neutral/informational marker (e.g. "no public Gittensor match", "none detected") —
+  // it must map to the `info` state, not fall through to `warn`, so a non-blocking row never renders as ⚠️.
+  if (resultCell.startsWith("ℹ️")) return "info";
   return "warn";
 }
 
 /** Strip the leading status icon from a result cell so it is not duplicated next to the unified icon. */
 function rowResultText(resultCell: string): string {
-  return resultCell.replace(/^[✅⚠️❌]+\s*/u, "").trim();
+  return resultCell.replace(/^[✅⚠️❌ℹ️]+\s*/u, "").trim();
 }
 
 /** Map the legacy panel signal rows → the unified table's rows (label/state/result/evidence). The

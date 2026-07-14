@@ -4957,8 +4957,11 @@ function contributorContextPanelResult(
   const login = pr.authorLogin ?? profile.login;
   const githubLink = `[${sanitizePanelText(login)}](${githubProfileUrl(login)})`;
   if (!confirmedMiner) {
+    // #5100 bug fix: a ❌ (hard-failure icon everywhere else in this table) directly contradicted the adjacent
+    // "not a blocker" text — every non-Gittensor contributor, the majority of PR authors on most repos, saw a red
+    // X on their own PR for something that was never a failure. This is a neutral/informational state, never ❌.
     return {
-      result: "❌ No public Gittensor match",
+      result: "ℹ️ No public Gittensor match",
       evidence: `${githubLink}; not a blocker.`,
       action: "No action.",
     };

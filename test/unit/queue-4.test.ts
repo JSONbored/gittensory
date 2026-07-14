@@ -3016,7 +3016,9 @@ describe("queue processors", () => {
       // unified renderer's table only surfaces the first 3 of each row's 4 cells (Label/Result/Evidence, not
       // Action) — same as the adjacent "Gate result" row, which also never shows its own 4th cell here — so this
       // asserts against the 3 columns this renderer actually prints, not the row's full cells array.
-      expect(postedBody).toContain("| Improvement | ⚠️ ℹ️ None detected | value: none |");
+      // #5100: the "none detected" band is informational — a single neutral ℹ️. It formerly rendered "⚠️ ℹ️" (a
+      // warn icon prepended by the bridge PLUS an un-stripped legacy ℹ️ — a visible double-icon bug now fixed).
+      expect(postedBody).toContain("| Improvement | ℹ️ None detected | value: none |");
       // Public-safe regardless: no internal trust/economics fields leak through this new row either.
       expect(postedBody).not.toMatch(/wallet|hotkey|coldkey|reward|trust score/i);
     } finally {
@@ -3194,7 +3196,8 @@ describe("queue processors", () => {
       // The quadrant rating ("risk: low · value: none") threaded from the REAL slopBand computed this pass
       // (missingTestEvidence only, slopRisk 15 -> band "low") IS the concise Evidence cell (#5101) -- proving
       // processors.ts's hoisted slopBand reaches the rendered comment, not just computed and discarded.
-      expect(postedBody).toContain("| Improvement | ⚠️ ℹ️ None detected | risk: low · value: none |");
+      // #5100: single neutral ℹ️ (was the "⚠️ ℹ️" double-icon bug — see the sibling assertion above).
+      expect(postedBody).toContain("| Improvement | ℹ️ None detected | risk: low · value: none |");
       // Public-safe regardless: no internal trust/economics fields leak through the new quadrant clause either.
       expect(postedBody).not.toMatch(/wallet|hotkey|coldkey|reward|trust score/i);
     } finally {

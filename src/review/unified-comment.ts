@@ -198,7 +198,7 @@ export interface UnifiedReviewInput {
 /** One row of the readiness signal table (loopover side, host-provided; the engine adds Code review). */
 export interface UnifiedSignalRow {
   label: string;
-  state: "ok" | "warn" | "fail";
+  state: "ok" | "warn" | "fail" | "info";
   /** Short result text, e.g. "Linked", "25/25". */
   result?: string;
   /** Evidence cell, e.g. "#1372". */
@@ -296,7 +296,9 @@ const STATUS_META: Record<UnifiedCommentStatus, { alert: string; square: string;
   blocked: { alert: "CAUTION", square: "🟥", icon: "🛑" },
 };
 
-const SIGNAL_ICON: Record<UnifiedSignalRow["state"], string> = { ok: "✅", warn: "⚠️", fail: "❌" };
+// `info` is a neutral/grey state — informational, NEVER implying a warning (⚠️) or failure (❌). It backs rows like a
+// non-Gittensor contributor match or "no improvement detected" that are advisory context, not a reason to flag the PR.
+const SIGNAL_ICON: Record<UnifiedSignalRow["state"], string> = { ok: "✅", warn: "⚠️", fail: "❌", info: "ℹ️" };
 
 /** Derive the single unified status from reviewbot's decision/recs/CI + the host override. */
 export function deriveUnifiedStatus(input: UnifiedReviewInput, ctx: UnifiedCommentContext = {}): UnifiedCommentStatus {
