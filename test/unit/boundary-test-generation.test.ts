@@ -12,6 +12,20 @@ describe("detectBoundaryTouches", () => {
     expect(touches[0]).toMatchObject({ path: "src/list.ts", kind: "array_index_bounds" });
   });
 
+  it("detects the .at(-1)/.at(0) last-element idiom as an array/index bounds pattern", () => {
+    expect(detectBoundaryTouches([{ path: "src/list.ts", patch: "+const last = items.at(-1);\n" }])).toHaveLength(1);
+    expect(detectBoundaryTouches([{ path: "src/list.ts", patch: "+const first = items.at(0);\n" }])[0]).toMatchObject({
+      path: "src/list.ts",
+      kind: "array_index_bounds",
+    });
+    expect(detectBoundaryTouches([{ path: "src/list.ts", patch: "+const secondLast = items.at(-2);\n" }])).toHaveLength(1);
+  });
+
+  it("does not match .at(...) with a non-literal (variable) argument", () => {
+    const touches = detectBoundaryTouches([{ path: "src/list.ts", patch: "+const item = items.at(someVariable);\n" }]);
+    expect(touches).toHaveLength(0);
+  });
+
   it("detects a null/undefined branch pattern in an added line", () => {
     const touches = detectBoundaryTouches([{ path: "src/user.ts", patch: "@@ -1,1 +1,2 @@\n+if (user === null) return defaultUser;\n" }]);
     expect(touches).toHaveLength(1);

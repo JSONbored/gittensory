@@ -32,7 +32,8 @@ export type BoundaryTouch = {
 // true-positive set). Each pattern only matches an ADDED line (a line starting with a single `+`, not `++`
 // which is the `+++ b/file` patch header) so this only ever reacts to genuinely new code, never context lines
 // or the file the diff is against.
-const ARRAY_INDEX_BOUNDS_PATTERN = /\[\s*(?:[\w.]+\.length|[\w.]+\.length\s*-\s*1|-1)\s*\]|\.length\s*(?:-\s*1)?\s*[<>]=?/;
+const ARRAY_INDEX_BOUNDS_PATTERN =
+  /\[\s*(?:[\w.]+\.length|[\w.]+\.length\s*-\s*1|-1)\s*\]|\.length\s*(?:-\s*1)?\s*[<>]=?|\.at\(\s*-?\d+\s*\)/;
 const NULL_OR_UNDEFINED_BRANCH_PATTERN = /(?:===?|!==?)\s*(?:null|undefined)\b|\b(?:null|undefined)\s*(?:===?|!==?)|\?\?|\?\./;
 const EMPTY_COLLECTION_CHECK_PATTERN = /\.length\s*(?:===?|!==?|[<>]=?)\s*0\b|\blen\(.*\)\s*(?:===?|!==?|[<>]=?)\s*0\b|\.(?:isEmpty|is_empty)\s*\(/;
 
