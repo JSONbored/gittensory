@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1](https://github.com/JSONbored/loopover/compare/engine-v3.1.0...engine-v3.1.1) (2026-07-14)
+
+
+### Fixes
+
+* **review:** restore engine-parity after gittensory rename drift ([#5892](https://github.com/JSONbored/loopover/issues/5892)) ([f7004b9](https://github.com/JSONbored/loopover/commit/f7004b9afeb81e9b4c3290482a71dda43e850590))
+
 ## [3.1.0](https://github.com/JSONbored/loopover/compare/engine-v3.0.0...engine-v3.1.0) (2026-07-14)
 
 
