@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.0.0](https://github.com/JSONbored/loopover/compare/mcp-v1.0.0...mcp-v2.0.0) (2026-07-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** every GITTENSORY_* environment variable is now LOOPOVER_*. No dual-read/alias, per the epic's full-cutover mandate. Operators must rename these in their .env / secrets before deploying this change.
+* **build:** every gittensory-prefixed directory under apps/ and packages/ is now loopover-prefixed, and the two extension packages' npm names changed from @jsonbored/gittensory-* to @loopover/*. No dual-path/alias, per the epic's full-cutover mandate.
+
+### Features
+
+* **build:** Phase 5 - full-cutover rename all gittensory-* directories to loopover-* ([#5743](https://github.com/JSONbored/loopover/issues/5743)) ([81e4ac3](https://github.com/JSONbored/loopover/commit/81e4ac34dfb4dee9c3cadefcc27a515617462da9))
+* **config:** Phase 6 - full-cutover rename internal GITTENSORY_* constants to LOOPOVER_* ([#5750](https://github.com/JSONbored/loopover/issues/5750)) ([12958f4](https://github.com/JSONbored/loopover/commit/12958f4f36cbf1f9f1ac732e718a4316e91cb103)), closes [#5705](https://github.com/JSONbored/loopover/issues/5705)
+
 ## [1.0.0](https://github.com/JSONbored/gittensory/compare/mcp-v0.9.0...mcp-v1.0.0) (2026-07-14)
 
 
