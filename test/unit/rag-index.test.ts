@@ -906,6 +906,27 @@ describe("rag-index-repo job dispatch (processors.ts wiring)", () => {
     expect(sent.filter((m) => (m as { repoFullName?: string }).repoFullName === "JSONbored/gittensory").length).toBe(1);
   });
 
+  it("cron fan-out includes an INSTALLED, non-registered, non-allowlisted repo once a features.rag override opts it in (#5024)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({
+      LOOPOVER_REVIEW_RAG: "true",
+      LOOPOVER_REVIEW_REPOS: "", // empty allowlist — this repo must be discoverable without it
+      JOBS: { async send(message: import("../../src/types").JobMessage) { sent.push(message); } } as unknown as Queue,
+    });
+    // Installed via the GitHub App (installationId set ⇒ is_installed=1) but never went through the registration
+    // webhook — is_registered stays 0 (registerRepo() is deliberately NOT called), and it's not in the allowlist
+    // either. Before this fix, fanOutRagIndexJobs's candidate pool was isRegistered-repos UNION the static
+    // allowlist, so this repo was never even a candidate — the per-repo features.rag override below could never
+    // resurface it, unlike fanOutAgentRegateSweepJobs's candidate set (ALL listRepositories()), which the regate
+    // sweep already covers this exact repo through.
+    await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "owner/widgets", private: false, owner: { login: "owner" } }, 456);
+    await upsertRepoFocusManifest(env, "owner/widgets", { features: { rag: true } });
+
+    await processJob(env, { type: "rag-index-repo", requestedBy: "schedule" });
+
+    expect(sent).toEqual([{ type: "rag-index-repo", requestedBy: "schedule", repoFullName: "owner/widgets", installationId: 456 }]);
+  });
+
   it("FLAG-OFF cron fan-out is a no-op (no per-repo jobs enqueued, no fan-out audit)", async () => {
     const sent: import("../../src/types").JobMessage[] = [];
     const env = createTestEnv({

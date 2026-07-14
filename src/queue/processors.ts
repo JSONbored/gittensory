@@ -1159,24 +1159,25 @@ export async function runRagIndexJob(
   await indexRepo(env, project, repo);
 }
 
-// Enqueue one per-repo FULL re-index job for every registered + cutover-allowlisted repo (mirrors the
-// signal-snapshot / agent-regate fan-out: a delayed per-repo queue message so each repo's index runs as its own
-// bounded, retryable job rather than one giant tick). Only allowlisted repos are indexed — retrieval is gated the
-// same way, so indexing a non-converged repo would only burn the free-tier vector budget for no benefit.
+// Enqueue one per-repo FULL re-index job for every RAG-active repo, candidates drawn from ALL known repos plus the
+// cutover allowlist (mirrors the agent-regate fan-out: a delayed per-repo queue message so each repo's index runs
+// as its own bounded, retryable job rather than one giant tick). Only RAG-active repos are indexed — retrieval is
+// gated the same way, so indexing a non-converged repo would only burn the free-tier vector budget for no benefit.
 async function fanOutRagIndexJobs(
   env: Env,
   requestedBy: "schedule" | "api" | "webhook" | "test",
 ): Promise<void> {
-  // Candidate repos = the webhook-REGISTERED repos UNION the maintainer's CONFIGURED repos (LOOPOVER_REVIEW_REPOS).
-  // The union is the fix for the brokered self-host: a maintainer's repos are is_registered=0 (never went through the
-  // registration webhook), so a registered-only fan-out never indexed them — leaving reviews without codebase context.
-  // Deduped case-insensitively (a repo can be both registered AND configured). Each is then filtered by whether RAG is
-  // active for it (`features.rag` override → LOOPOVER_REVIEW_REPOS allowlist default), so nothing extra is indexed.
+  // Candidate repos = ALL known repos UNION the maintainer's CONFIGURED repos (LOOPOVER_REVIEW_REPOS) — mirrors
+  // fanOutAgentRegateSweepJobs's own candidate set exactly (#5024). Filtering to isRegistered-only left an
+  // installed-but-never-registered repo (the brokered self-host case: is_registered=0, never went through the
+  // registration webhook) out of the candidate pool entirely, so even a per-repo `features.rag` override could never
+  // resurface it — the regate sweep still reviewed that repo, just without codebase-context retrieval. Deduped
+  // case-insensitively (a repo can be both known AND configured). Each candidate is then filtered by whether RAG is
+  // active for it (`features.rag` override → LOOPOVER_REVIEW_REPOS allowlist default) just below, so this widens
+  // ELIGIBILITY only — the convergedFeatureActive gate below is what actually controls indexing spend.
   const repositoriesByKey = new Map((await listRepositories(env)).map((repo) => [repo.fullName.toLowerCase(), repo]));
   const byKey = new Map<string, { fullName: string; installationId?: number }>();
-  for (const repo of [...repositoriesByKey.values()].filter(
-    (r) => r.isRegistered,
-  ))
+  for (const repo of repositoriesByKey.values())
     byKey.set(repo.fullName.toLowerCase(), { fullName: repo.fullName, ...(typeof repo.installationId === "number" ? { installationId: repo.installationId } : {}) });
   for (const fullName of listConvergenceRepos(env)) {
     const repo = repositoriesByKey.get(fullName.toLowerCase());
