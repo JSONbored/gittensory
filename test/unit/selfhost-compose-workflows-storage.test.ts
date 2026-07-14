@@ -57,7 +57,7 @@ describe("docker-compose.yml — workflows + storage profiles (#1219)", () => {
   });
 
   it("gates n8n behind --profile workflows with basic-auth env and a runtime password check", () => {
-    expect(n8n.image).toBe("n8nio/n8n:latest");
+    expect(n8n.image).toBe("n8nio/n8n:2.31.0");
     expect(n8n.profiles).toEqual(["workflows"]);
     expect(n8n.ports).toEqual(["5678:5678"]);
     expect(n8n.volumes).toEqual(["n8n-data:/home/node/.n8n"]);
@@ -101,7 +101,7 @@ describe("docker-compose.yml — workflows + storage profiles (#1219)", () => {
   });
 
   it("gates MinIO behind --profile storage on the S3 API and console ports", () => {
-    expect(minio.image).toBe("minio/minio:latest");
+    expect(minio.image).toBe("minio/minio:RELEASE.2025-09-07T16-13-09Z");
     expect(minio.profiles).toEqual(["storage"]);
     expect(minio.ports).toEqual(["9000:9000", "9001:9001"]);
     expect(minio.volumes).toEqual(["minio-data:/data"]);
@@ -112,6 +112,11 @@ describe("docker-compose.yml — workflows + storage profiles (#1219)", () => {
     // Same soft-default posture as n8n/grafana/browserless -- avoids breaking default `docker compose up`.
     expect(env.MINIO_ROOT_USER).toBe("${MINIO_ROOT_USER:-}");
     expect(env.MINIO_ROOT_PASSWORD).toBe("${MINIO_ROOT_PASSWORD:-}");
+  });
+
+  it("pins workflow/storage images to explicit versions, not floating :latest tags", () => {
+    expect(n8n.image).not.toMatch(/:latest$/);
+    expect(minio.image).not.toMatch(/:latest$/);
   });
 
   it("declares persistent volumes for both optional services", () => {

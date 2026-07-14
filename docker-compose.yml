@@ -670,7 +670,7 @@ services:
   # via http://localhost:5678/workflows/import. Set N8N_WEBHOOK_URL to your public URL when
   # receiving webhooks from outside the host. Zero impact on the review engine when inactive.
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:2.31.0
     restart: unless-stopped
     <<: *default-logging
     profiles: ["workflows"]
@@ -708,7 +708,7 @@ services:
   # visual-review screenshot artifacts, Orb event archive. Console UI at http://localhost:9001.
   # S3 API: http://minio:9000 from other containers, http://localhost:9000 from the host.
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     <<: *default-logging
     profiles: ["storage"]
@@ -727,7 +727,7 @@ services:
       resources:
         limits:
           memory: "${MINIO_MEM_LIMIT:-1g}"
-    # No healthcheck: minio/minio:latest is scratch/distroless (no shell, curl, wget, or mc), so an
+    # No healthcheck: minio/minio is scratch/distroless (no shell, curl, wget, or mc), so an
     # in-container probe cannot run -- same constraint as grafana/loki above. Readiness is observable
     # at GET /minio/health/live on :9000 once the server binds.
 
