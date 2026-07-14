@@ -1,0 +1,97 @@
+{
+  "name": "Gittensory Issue Auto-Triage",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gittensory-pr-closed",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-pr-closed",
+      "name": "PR auto-closed webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "gittensory-pr-closed"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-linked-issue",
+              "leftValue": "={{ $json.body.linkedIssueNumber ?? $json.linkedIssueNumber }}",
+              "rightValue": "",
+              "operator": {
+                "type": "number",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-linked-issue",
+      "name": "Has linked issue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "owner": "={{ $json.body.owner ?? $json.owner }}",
+        "repository": "={{ $json.body.repo ?? $json.repo }}",
+        "issueNumber": "={{ $json.body.linkedIssueNumber ?? $json.linkedIssueNumber }}",
+        "body": "=PR #{{ $json.body.prNumber ?? $json.prNumber }} was auto-closed by the loopover gate.\n\nReason: {{ $json.body.closeReason ?? $json.closeReason ?? 'see gate comment on the PR' }}"
+      },
+      "id": "github-comment",
+      "name": "Comment on linked issue",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1.1,
+      "position": [560, 0],
+      "credentials": {
+        "githubApi": {
+          "id": "CONFIGURE_GITHUB_CREDENTIAL",
+          "name": "GitHub account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "PR auto-closed webhook": {
+      "main": [
+        [
+          {
+            "node": "Has linked issue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has linked issue?": {
+      "main": [
+        [
+          {
+            "node": "Comment on linked issue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "gittensory-issue-auto-triage"
+  }
+}

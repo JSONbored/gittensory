@@ -20,6 +20,8 @@
 #   --profile visual-review Headless Chromium (browserless) for before/after PR screenshot capture
 #   --profile rees          Review-enrichment service (REES) for heavier PR analysis, in-network only
 #   --profile litestream    Continuous SQLite backup to S3/B2/R2 via Litestream
+#   --profile workflows     n8n workflow automation (Slack/Teams/email fan-out, scheduled reports)
+#   --profile storage       MinIO S3-compatible object store (Litestream destination, artifact blobs)
 #   --profile caddy         Caddy HTTPS terminator with auto-TLS (set DOMAIN= in .env)
 #   --profile observability Prometheus + Alertmanager + Loki + Promtail + Grafana (pre-wired)
 #   --profile tailscale     Tailscale sidecar — access the stack via your tailnet
@@ -31,6 +33,8 @@
 #   docker compose --profile postgres --profile caddy up -d     # Postgres + HTTPS
 #   docker compose --profile observability up -d                 # metrics + logs + dashboards
 #   docker compose --profile rees up -d                           # local REES review enrichment
+#   docker compose --profile workflows up -d                        # n8n automation at :5678
+#   docker compose --profile storage up -d                          # MinIO S3 API :9000, console :9001
 #   docker compose --profile tailscale --profile runners up -d   # tailnet + CI runners
 #
 # HOST CLOCK (#3811): containers share the HOST kernel clock, so this compose file cannot fix a
@@ -660,6 +664,73 @@ services:
       LITESTREAM_ENDPOINT: ${LITESTREAM_ENDPOINT:-}
       LITESTREAM_REGION: ${LITESTREAM_REGION:-us-east-1}
 
+  # ── n8n workflow automation (--profile workflows) ─────────────────────────
+  # Optional no-code automation: webhook fan-out (Slack/Teams/email), scheduled gate summaries,
+  # GitHub issue auto-triage from review signals. Import bundled templates from n8n/workflows/
+  # via http://localhost:5678/workflows/import. Set N8N_WEBHOOK_URL to your public URL when
+  # receiving webhooks from outside the host. Zero impact on the review engine when inactive.
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    <<: *default-logging
+    profiles: ["workflows"]
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      # Soft default, not ":?required" -- compose interpolates every service's env vars for the whole file
+      # even when --profile workflows isn't active, so a hard-required var here would break `docker compose up`
+      # for every self-hoster not using this profile (same reasoning as BROWSERLESS_TOKEN / REES_SHARED_SECRET).
+      # The entrypoint below fails closed at container start when the profile is active but N8N_PASSWORD is unset.
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      GENERIC_TIMEZONE: ${TZ:-UTC}
+    deploy:
+      resources:
+        limits:
+          memory: "${N8N_MEM_LIMIT:-512m}"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -z "$${N8N_BASIC_AUTH_PASSWORD:-}" ]; then
+          echo >&2 "Set N8N_PASSWORD in .env before using --profile workflows."
+          exit 1
+        fi
+        exec /docker-entrypoint.sh
+
+  # ── MinIO S3-compatible object storage (--profile storage) ──────────────
+  # Local blob store: Litestream backup destination (set LITESTREAM_ENDPOINT=http://minio:9000),
+  # visual-review screenshot artifacts, Orb event archive. Console UI at http://localhost:9001.
+  # S3 API: http://minio:9000 from other containers, http://localhost:9000 from the host.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    <<: *default-logging
+    profiles: ["storage"]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    environment:
+      # Soft defaults for the same whole-file interpolation reason as N8N_PASSWORD above. MinIO itself
+      # refuses to start without credentials when this profile is active -- fail closed, not open.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    command: server /data --console-address ":9001"
+    deploy:
+      resources:
+        limits:
+          memory: "${MINIO_MEM_LIMIT:-1g}"
+    # No healthcheck: minio/minio:latest is scratch/distroless (no shell, curl, wget, or mc), so an
+    # in-container probe cannot run -- same constraint as grafana/loki above. Readiness is observable
+    # at GET /minio/health/live on :9000 once the server binds.
+
   # ── Caddy (--profile caddy) ────────────────────────────────────────────────
   # Auto-TLS via Let's Encrypt. Set DOMAIN=reviews.yourcompany.com in .env, then
   # remove the plain `ports:` entry from the loopover service above.
@@ -1213,6 +1284,8 @@ volumes:
   runner-work:
   loopover-backups:
   tempo-data:
+  n8n-data:
+  minio-data:
 
 networks:
   # The implicit project network every service joins by default (declared so it can be referenced

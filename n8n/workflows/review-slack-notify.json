@@ -1,0 +1,55 @@
+{
+  "name": "Gittensory Review → Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gittensory-review",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-review",
+      "name": "Gittensory review webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "gittensory-review"
+    },
+    {
+      "parameters": {
+        "channel": "#reviews",
+        "text": "=Review {{ $json.body.verdict ?? $json.verdict ?? 'unknown' }} for {{ $json.body.repo ?? $json.repo ?? 'repo' }} PR #{{ $json.body.prNumber ?? $json.prNumber ?? '?' }}",
+        "otherOptions": {}
+      },
+      "id": "slack-notify",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [320, 0],
+      "credentials": {
+        "slackApi": {
+          "id": "CONFIGURE_SLACK_CREDENTIAL",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gittensory review webhook": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "gittensory-review-slack-notify"
+  }
+}
