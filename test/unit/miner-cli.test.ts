@@ -101,7 +101,10 @@ describe("loopover-miner CLI helpers", () => {
       "../../packages/loopover-miner/package.json",
       { with: { type: "json" } }
     );
-    expect(packageJson.default.version).toBe("2.0.0");
+    const { resolveMinerVersion } = await import(
+      "../../packages/loopover-miner/lib/version.js"
+    );
+    expect(resolveMinerVersion({})).toBe(packageJson.default.version);
   });
 });
 
@@ -318,9 +321,13 @@ describe("loopover-miner startup update check (#2331)", () => {
     );
   });
 
-  it("serves --version without blocking when update checks are disabled", () => {
+  it("serves --version without blocking when update checks are disabled", async () => {
+    const packageJson = await import(
+      "../../packages/loopover-miner/package.json",
+      { with: { type: "json" } }
+    );
     const output = runCapture(["--version", "--no-update-check"]);
-    expect(output).toContain("@loopover/miner/2.0.0");
+    expect(output).toContain(`@loopover/miner/${packageJson.default.version}`);
   });
 
   it("serves --help immediately without waiting for a slow registry check", async () => {
