@@ -611,6 +611,14 @@ export {
   type ProgressSnapshot,
 } from "./loop-progress.js";
 export {
+  evaluateLoopHealth,
+  LOOP_HEALTH_WARN_PCT,
+  LOOP_HEALTH_NO_PROGRESS_STREAK,
+  type LoopHealthInput,
+  type LoopHealthReport,
+  type LoopHealthStatus,
+} from "./loop-health.js";
+export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
   computeMetadataFeasibility,

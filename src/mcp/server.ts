@@ -158,6 +158,7 @@ import { buildSlopAssessment } from "../signals/slop";
 import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan } from "../idea-intake";
 import { buildResultsPayload } from "../results-payload";
 import { buildProgressSnapshot } from "../loop-progress";
+import { evaluateLoopHealth } from "../loop-health";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
 import { buildRepoDataQuality } from "../signals/data-quality";
@@ -999,6 +1000,24 @@ const buildProgressSnapshotOutputSchema = {
   done: z.boolean().optional(),
 };
 
+// Loop health / anomaly evaluator input (#4808): a running loop's already-computed run metrics.
+const evaluateLoopHealthShape = {
+  iteration: z.number().int(),
+  maxIterations: z.number().int().nullable().optional(),
+  costUsed: z.number().nullable().optional(),
+  costCeiling: z.number().nullable().optional(),
+  noProgressStreak: z.number().int().optional(),
+  errored: z.boolean().optional(),
+  stalled: z.boolean().optional(),
+};
+
+const evaluateLoopHealthOutputSchema = {
+  status: z.enum(["healthy", "degraded", "critical"]).optional(),
+  anomalies: z.array(z.string()).optional(),
+  iterationBudgetUsedPct: z.number().nullable().optional(),
+  costUsedPct: z.number().nullable().optional(),
+};
+
 // Deterministic structural-improvement counterpart to checkSlopRiskShape (#4746, sub-issue I of epic #4737):
 // the positive-axis mirror of checkSlopRisk, same pure local-metadata contract. changedFiles/tests/testFiles
 // are reused verbatim (same shape as checkSlopRiskShape) so the two signals never disagree about what counts
@@ -1791,6 +1810,17 @@ export class LoopoverMcp {
         outputSchema: buildProgressSnapshotOutputSchema,
       },
       async (input) => this.toolResult(await this.buildLoopProgress(input)),
+    );
+
+    server.registerTool(
+      "loopover_evaluate_loop_health",
+      {
+        description:
+          "Classify a running rented loop's health and flag its alert-worthy anomalies (#4808) from already-computed run metrics (iteration/cost budgets, no-progress streak, error/stall) — the deterministic alert-rule logic an ops dashboard consumes. Source-free; returns healthy/degraded/critical, anomaly codes, and budget-used percentages.",
+        inputSchema: evaluateLoopHealthShape,
+        outputSchema: evaluateLoopHealthOutputSchema,
+      },
+      async (input) => this.toolResult(await this.evalLoopHealth(input)),
     );
 
     server.registerTool(
@@ -3103,6 +3133,15 @@ export class LoopoverMcp {
     return {
       summary: payload.summary,
       data: payload as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async evalLoopHealth(input: z.infer<z.ZodObject<typeof evaluateLoopHealthShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("loopover_evaluate_loop_health");
+    const report = evaluateLoopHealth(input);
+    return {
+      summary: `Loop health: ${report.status}, ${report.anomalies.length} anomaly code(s).`,
+      data: report as unknown as Record<string, unknown>,
     };
   }
 
