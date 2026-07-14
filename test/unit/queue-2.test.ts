@@ -1933,6 +1933,84 @@ describe("queue processors", () => {
     }
   }, 60_000);
 
+  it("REGRESSION (#orb-retry-storm, backlog-convergence half): a PR whose head SHA already exhausted the shared repair-attempt budget is not re-dispatched by the backlog-convergence sweep", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertInstallation(env, { action: "created", installation: { id: 9412, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo4", full_name: "owner/agent-repo4", private: false, owner: { login: "owner" } }, 9412);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo4", autonomy: { merge: "auto" }, reviewCheckMode: "required", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    // Never marked surface-published for this head -- needsSurfaceConvergence is true, a genuine backlog-convergence candidate.
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo4", { number: 1, title: "Stuck convergence", state: "open", user: { login: "c" }, head: { sha: "stuck-sha" }, labels: [], body: "" });
+    const targetKey = "owner/agent-repo4#1#stuck-sha";
+    // Pre-seed the SAME shared budget the main sweep's repair path charges against -- this is the whole point of
+    // sharing isRegateRepairExhausted rather than giving backlog-convergence its own independent counter.
+    for (let i = 0; i < 5; i += 1) {
+      await repositoriesModule.recordAuditEvent(env, {
+        eventType: "agent.sweep.regate.repair_attempt",
+        actor: "loopover",
+        targetKey,
+        outcome: "queued",
+        detail: "prior attempt",
+        metadata: {},
+      });
+    }
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await processJob(env, { type: "backlog-convergence-sweep", requestedBy: "test", repoFullName: "owner/agent-repo4" });
+
+      const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
+      expect(fanned.every((job) => job.deliveryId !== "backlog-convergence:owner/agent-repo4#1")).toBe(true);
+      const exhausted = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+        .bind("agent.sweep.regate.repair_exhausted", targetKey)
+        .first<{ n: number }>();
+      expect(exhausted?.n).toBe(1);
+      const exhaustedLogs = errors.mock.calls.filter(([line]) => typeof line === "string" && line.includes("regate_repair_exhausted"));
+      expect(exhaustedLogs).toHaveLength(1);
+    } finally {
+      errors.mockRestore();
+    }
+  }, 60_000);
+
+  it("a fresh backlog-convergence candidate under the cap is dispatched with repairHeadSha set, and executing it charges the SAME shared attempt budget the main sweep's repair path reads", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertInstallation(env, { action: "created", installation: { id: 9413, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: {}, events: [] } });
+    await upsertRepositoryFromGitHub(env, { name: "agent-repo5", full_name: "owner/agent-repo5", private: false, owner: { login: "owner" } }, 9413);
+    await upsertRepositorySettings(env, { repoFullName: "owner/agent-repo5", autonomy: { merge: "auto" }, aiReviewMode: "off", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+    await upsertPullRequestFromGitHub(env, "owner/agent-repo5", { number: 2, title: "Fresh convergence", state: "open", user: { login: "c" }, head: { sha: "fresh-sha" }, base: { ref: "main" }, labels: [], body: "" });
+    const targetKey = "owner/agent-repo5#2#fresh-sha";
+    vi.setSystemTime(new Date("2026-05-28T02:00:00.000Z"));
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (/\/pulls\/2(?:\?|$)/.test(url)) return Response.json({ number: 2, title: "Fresh convergence", state: "open", user: { login: "c" }, head: { sha: "fresh-sha" }, mergeable_state: "clean", labels: [], body: "" });
+      if (url.includes("/pulls/2/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+      return Response.json({});
+    });
+
+    await processJob(env, { type: "backlog-convergence-sweep", requestedBy: "test", repoFullName: "owner/agent-repo5" });
+
+    const fanned = sent.filter((job): job is Extract<import("../../src/types").JobMessage, { type: "agent-regate-pr" }> => job.type === "agent-regate-pr");
+    const dispatched = fanned.find((job) => job.deliveryId === "backlog-convergence:owner/agent-repo5#2");
+    expect(dispatched).toMatchObject({ repoFullName: "owner/agent-repo5", prNumber: 2, repairHeadSha: "fresh-sha" });
+
+    const attemptsBefore = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.sweep.regate.repair_attempt", targetKey)
+      .first<{ n: number }>();
+    expect(attemptsBefore?.n).toBe(0);
+
+    await processJob(env, dispatched!);
+
+    // The SAME event type/target key the main sweep's repair path reads -- proves the two sweeps share one
+    // budget for this SHA instead of each independently retrying it.
+    const attemptsAfter = await env.DB.prepare("select count(*) as n from audit_events where event_type = ? and target_key = ?")
+      .bind("agent.sweep.regate.repair_attempt", targetKey)
+      .first<{ n: number }>();
+    expect(attemptsAfter?.n).toBe(1);
+  }, 60_000);
+
   it("REGRESSION (#5385-sentry, GITTENSORY-1E gate-finding): a retryable GitHub rate-limit error surfacing from real post-readiness review work STILL records the repair attempt before propagating for the queue's own retry", async () => {
     // LoopOver review finding on PR #5482: the original fix recorded the attempt AFTER reReviewStoredPullRequest
     // returns, so a retryable error thrown from a genuinely-executed (post-readiness) pass never got charged --

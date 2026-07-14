@@ -1052,6 +1052,49 @@ function regateRepairTargetKey(repoFullName: string, prNumber: number, headSha: 
   return `${repoFullName}#${prNumber}#${headSha}`;
 }
 
+/**
+ * True when `pr`'s current head SHA has already exhausted REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA repair attempts
+ * within the lookback window. Records (at most once per SHA) the exhausted audit event + error-level log as a
+ * side effect the first time a SHA crosses the cap. Shared by both surfaceRepairPriorityPullNumbers and
+ * sweepRepoBacklogConvergence (#orb-retry-storm, backlog-convergence half): both sweeps re-select on the
+ * identical lastPublishedSurfaceSha-mismatch signal, so they share one attempt budget per SHA rather than each
+ * independently hammering the same stuck PR.
+ */
+async function isRegateRepairExhausted(env: Env, repoFullName: string, pr: Pick<PullRequestRecord, "number" | "headSha">): Promise<boolean> {
+  const headSha = pr.headSha!;
+  const sinceIso = new Date(Date.now() - REGATE_REPAIR_ATTEMPT_LOOKBACK_MS).toISOString();
+  const targetKey = regateRepairTargetKey(repoFullName, pr.number, headSha);
+  const attempts = await countRecentAuditEventsForActorAndTarget(env, "loopover", REGATE_REPAIR_ATTEMPT_EVENT_TYPE, targetKey, sinceIso);
+  if (attempts < REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA) return false;
+  const alreadyFlagged = await countRecentAuditEventsForActorAndTarget(env, "loopover", REGATE_REPAIR_EXHAUSTED_EVENT_TYPE, targetKey, sinceIso);
+  if (alreadyFlagged === 0) {
+    await recordAuditEvent(env, {
+      eventType: REGATE_REPAIR_EXHAUSTED_EVENT_TYPE,
+      actor: "loopover",
+      targetKey,
+      outcome: "denied",
+      detail: `re-gate repair exhausted after ${attempts} attempt(s) for the same head SHA; falling back to ordinary staleness cadence`,
+      metadata: { repoFullName, prNumber: pr.number, headSha, attempts },
+    });
+    // level:"error" is deliberate, not a code failure: this line only fires once the cap above already
+    // stopped the wasteful repair loop, so its OWN existence is the operator-visible signal (via the
+    // structured log → Sentry forwarder, forwardStructuredLogToSentry) that a PR kept failing repair for the
+    // same head SHA — the same "surface an anomaly at error level" convention selfhost_ai_provider_failed /
+    // selfhost_ai_providers_exhausted already use in src/selfhost/ai.ts.
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "regate_repair_exhausted",
+        repo: repoFullName,
+        pullNumber: pr.number,
+        headSha,
+        attempts,
+      }),
+    );
+  }
+  return true;
+}
+
 async function surfaceRepairPriorityPullNumbers(
   env: Env,
   repoFullName: string,
@@ -1080,53 +1123,12 @@ async function surfaceRepairPriorityPullNumbers(
       }),
     );
   }
-  const sinceIso = new Date(Date.now() - REGATE_REPAIR_ATTEMPT_LOOKBACK_MS).toISOString();
   await Promise.all(
     [...priorityPullNumbers].map(async (prNumber) => {
       const pr = pulls.find((candidate) => candidate.number === prNumber);
       /* v8 ignore next -- priorityPullNumbers is only ever populated (both loops above) from a `pr` in `pulls` that already had a truthy headSha, so this lookup always succeeds with one; the guard only satisfies Array#find's `| undefined` return type. */
       if (!pr?.headSha) return;
-      const targetKey = regateRepairTargetKey(repoFullName, pr.number, pr.headSha);
-      const attempts = await countRecentAuditEventsForActorAndTarget(
-        env,
-        "loopover",
-        REGATE_REPAIR_ATTEMPT_EVENT_TYPE,
-        targetKey,
-        sinceIso,
-      );
-      if (attempts < REGATE_REPAIR_MAX_ATTEMPTS_PER_SHA) return;
-      priorityPullNumbers.delete(prNumber);
-      const alreadyFlagged = await countRecentAuditEventsForActorAndTarget(
-        env,
-        "loopover",
-        REGATE_REPAIR_EXHAUSTED_EVENT_TYPE,
-        targetKey,
-        sinceIso,
-      );
-      if (alreadyFlagged > 0) return;
-      await recordAuditEvent(env, {
-        eventType: REGATE_REPAIR_EXHAUSTED_EVENT_TYPE,
-        actor: "loopover",
-        targetKey,
-        outcome: "denied",
-        detail: `re-gate repair exhausted after ${attempts} attempt(s) for the same head SHA; falling back to ordinary staleness cadence`,
-        metadata: { repoFullName, prNumber: pr.number, headSha: pr.headSha, attempts },
-      });
-      // level:"error" is deliberate, not a code failure: this line only fires once the cap above already
-      // stopped the wasteful repair loop, so its OWN existence is the operator-visible signal (via the
-      // structured log → Sentry forwarder, forwardStructuredLogToSentry) that a PR kept failing repair for the
-      // same head SHA — the same "surface an anomaly at error level" convention selfhost_ai_provider_failed /
-      // selfhost_ai_providers_exhausted already use in src/selfhost/ai.ts.
-      console.error(
-        JSON.stringify({
-          level: "error",
-          event: "regate_repair_exhausted",
-          repo: repoFullName,
-          pullNumber: pr.number,
-          headSha: pr.headSha,
-          attempts,
-        }),
-      );
+      if (await isRegateRepairExhausted(env, repoFullName, pr)) priorityPullNumbers.delete(prNumber);
     }),
   );
   return [...priorityPullNumbers];
@@ -1724,7 +1726,15 @@ export async function sweepRepoBacklogConvergence(
   const sweepInstallationId = repo?.installationId ?? null;
   if (sweepInstallationId == null) return;
   const openPullRequests = await listOpenPullRequests(env, repoFullName);
-  const candidates = selectBacklogConvergenceCandidates({ pulls: openPullRequests });
+  const allCandidates = selectBacklogConvergenceCandidates({ pulls: openPullRequests });
+  // #orb-retry-storm (backlog-convergence half): needsSurfaceConvergence re-fires on the exact same
+  // lastPublishedSurfaceSha-mismatch signal as the main sweep's outage-repair priority path, but this sweeper
+  // had no memory of prior attempts at all -- a PR whose gate-check finalize kept failing silently got a fresh
+  // full re-review dispatched every ~30 minutes indefinitely. Share the same per-SHA attempt budget as the main
+  // sweep (isRegateRepairExhausted) rather than adding an independent cap, since both sweeps competing for the
+  // same stuck PR would otherwise double the wasted spend the cap exists to prevent.
+  const exhaustedFlags = await Promise.all(allCandidates.map((pr) => isRegateRepairExhausted(env, repoFullName, pr)));
+  const candidates = allCandidates.filter((_pr, index) => !exhaustedFlags[index]);
   if (candidates.length === 0) return;
   // Stamp the backlog-convergence draining marker for EVERY candidate NOW, at dispatch — not in the downstream
   // per-PR job (#4502, mirrors #audit-sweep-dispatch-stamp). This makes getLatestBacklogConvergenceRegatedAt
@@ -1752,6 +1762,12 @@ export async function sweepRepoBacklogConvergence(
         repoFullName,
         prNumber: pr.number,
         installationId: sweepInstallationId,
+        // #orb-retry-storm: selectBacklogConvergenceCandidates only returns PRs needsSurfaceConvergence already
+        // confirmed have a truthy headSha, so this is unconditional (unlike the main sweep's priority-repair
+        // dispatch, which mixes repair and ordinary candidates). Passing it lets regatePullRequest record the
+        // attempt at execution time against the SAME shared per-SHA budget isRegateRepairExhausted checked
+        // above -- jobs deferred or dropped before they run still don't count against the cap.
+        repairHeadSha: pr.headSha!,
         ...(pr.createdAt ? { prCreatedAt: pr.createdAt } : {}),
       };
       const delaySeconds = Math.min(index * 10, 600);
