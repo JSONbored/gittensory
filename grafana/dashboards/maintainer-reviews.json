@@ -18,9 +18,9 @@
         "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" },
         "query": { "queryType": "table", "queryText": "SELECT DISTINCT repo FROM review_targets ORDER BY repo", "rawQueryText": "SELECT DISTINCT repo FROM review_targets ORDER BY repo" },
         "includeAll": true,
-        "allValue": "$__all",
+        "allValue": "__ALL__",
         "multi": false,
-        "current": { "text": "All", "value": "$__all" },
+        "current": { "text": "All", "value": "__ALL__" },
         "refresh": 2,
         "sort": 1
       }
@@ -45,7 +45,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS prs FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -55,7 +55,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS merged FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='merged' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -65,7 +65,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='closed' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -76,7 +76,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS manual FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (status='manual' OR verdict='manual') AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -87,7 +87,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS commented FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='commented' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -98,7 +98,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "short" }, "overrides": [] },
       "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='manual' AND verdict IS NULL AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='manual' AND verdict IS NULL AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='manual' AND verdict IS NULL AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS ignored FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND status='manual' AND verdict IS NULL AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "row",
@@ -116,7 +116,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 6 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } },
       "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS opened FROM issues WHERE (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS opened FROM issues WHERE (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS opened FROM issues WHERE (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS opened FROM issues WHERE (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -127,7 +127,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 6 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } },
       "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}", "rawQueryText": "SELECT count(*) AS closed FROM issues WHERE state='closed' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds}" }]
     },
     {
       "type": "stat",
@@ -138,7 +138,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 6 },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } } },
       "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})", "rawQueryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring})", "rawQueryText": "SELECT count(*) AS open FROM issues WHERE state='open' AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring})" }]
     },
     {
       "type": "table",
@@ -172,7 +172,7 @@
         ]
       },
       "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false }, "sortBy": [{ "displayName": "updated_at", "desc": true }] },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000", "rawQueryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000", "rawQueryText": "SELECT repo, number, submitter AS author, status, verdict, title, updated_at FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} ORDER BY updated_at DESC LIMIT 1000" }]
     },
     {
       "type": "timeseries",
@@ -182,7 +182,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "showPoints": "never", "stacking": { "mode": "none" } }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "time series", "timeColumns": ["time"], "queryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time", "rawQueryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "time series", "timeColumns": ["time"], "queryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time", "rawQueryText": "SELECT date(updated_at) AS time, count(*) AS reviews FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY date(updated_at) ORDER BY time" }]
     },
     {
       "type": "piechart",
@@ -192,7 +192,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "right", "showLegend": true, "values": ["value", "percent"] }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "tooltip": { "mode": "single", "sort": "none" } },
-      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC", "rawQueryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND (${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC" }]
+      "targets": [{ "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" }, "refId": "A", "queryType": "table", "queryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC", "rawQueryText": "SELECT verdict, count(*) AS c FROM review_targets WHERE (submitter NOT LIKE '%[bot]%' OR submitter IS NULL) AND verdict IS NOT NULL AND (${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring}) AND unixepoch(updated_at) >= ${__from:date:seconds} AND unixepoch(updated_at) < ${__to:date:seconds} GROUP BY verdict ORDER BY c DESC" }]
     }
   ]
 }

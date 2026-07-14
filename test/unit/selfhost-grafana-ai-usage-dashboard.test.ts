@@ -71,17 +71,28 @@ function targetForPanel(panelId: number): DashboardTarget {
 }
 
 /** Simulate Grafana's own template-variable substitution for a direct sqlite3 CLI run: default every
- *  variable to "All" ('$__all' both sides of its OR clause) unless a caller substitutes a real value
- *  first, and expand the time-range placeholders to a fixed window. */
+ *  variable to "All" ('__ALL__' both sides of its OR clause) unless a caller substitutes a real value
+ *  first, and expand the time-range placeholders to a fixed window.
+ *
+ *  REGRESSION (#orb-grafana-ai-usage-all-filter, 2026-07-14): the sentinel is deliberately `__ALL__`,
+ *  not Grafana's own `$__all` global. Confirmed live against a real Grafana + frser-sqlite-datasource
+ *  instance: `${var:sqlstring}` does NOT sql-quote a value that itself starts with `$__` (Grafana
+ *  treats any `$__`-prefixed value as a macro reference, not literal data), so the previous
+ *  `allValue: "$__all"` substituted into `${var:sqlstring} = '$__all' OR col = ${var:sqlstring}`
+ *  produced the RAW unquoted token `$__all` on both sides. SQLite then parsed that token as its own
+ *  `$__all` NAMED BIND PARAMETER (SQLite's `$name` placeholder syntax) rather than a string literal --
+ *  unbound, so every "All"-filtered panel query either errored ("missing named argument \"__all\"")
+ *  or silently returned zero rows, even though the underlying data was present and fresh. This
+ *  simulation previously matched that same (wrong) assumption, so it never caught the bug. */
 function expandGrafanaRange(query: string): string {
   const from = Math.floor(Date.parse("2026-07-01T00:00:00Z") / 1000);
   const to = Math.floor(Date.parse("2026-07-02T00:00:00Z") / 1000);
   return query
     .replaceAll(timeFrom, String(from))
     .replaceAll(timeTo, String(to))
-    .replaceAll("${provider:sqlstring}", "'$__all'")
-    .replaceAll("${feature:sqlstring}", "'$__all'")
-    .replaceAll("${model:sqlstring}", "'$__all'");
+    .replaceAll("${provider:sqlstring}", "'__ALL__'")
+    .replaceAll("${feature:sqlstring}", "'__ALL__'")
+    .replaceAll("${model:sqlstring}", "'__ALL__'");
 }
 
 function sqlString(value: string): string {
@@ -143,9 +154,9 @@ describe("Loopover - AI usage dashboard (Phase B2 consolidation)", () => {
     const targets = sqliteTargets();
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) {
-      expect(target.queryText).toContain("(${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring})");
-      expect(target.queryText).toContain("(${feature:sqlstring} = '$__all' OR feature = ${feature:sqlstring})");
-      expect(target.queryText).toContain("(${model:sqlstring} = '$__all' OR model = ${model:sqlstring})");
+      expect(target.queryText).toContain("(${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring})");
+      expect(target.queryText).toContain("(${feature:sqlstring} = '__ALL__' OR feature = ${feature:sqlstring})");
+      expect(target.queryText).toContain("(${model:sqlstring} = '__ALL__' OR model = ${model:sqlstring})");
       expect(target.queryText).toContain("unixepoch(created_at) >=");
       expect(target.queryText).toContain("unixepoch(created_at) <");
     }
@@ -153,7 +164,7 @@ describe("Loopover - AI usage dashboard (Phase B2 consolidation)", () => {
 
   it("scopes the 'events missing real usage' panel by Feature and time only, never by Provider/Model (those are exactly the columns it's trying to catch as absent)", () => {
     const target = targetForPanel(5);
-    expect(target.queryText).toContain("(${feature:sqlstring} = '$__all' OR feature = ${feature:sqlstring})");
+    expect(target.queryText).toContain("(${feature:sqlstring} = '__ALL__' OR feature = ${feature:sqlstring})");
     expect(target.queryText).not.toContain("${provider:sqlstring}");
     expect(target.queryText).not.toContain("${model:sqlstring}");
     expect(target.queryText).toContain("provider IS NULL");

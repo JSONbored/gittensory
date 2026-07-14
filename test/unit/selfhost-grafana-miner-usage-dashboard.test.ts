@@ -68,14 +68,18 @@ function targetForPanel(panelId: number): DashboardTarget {
 
 /** Mirrors selfhost-grafana-ai-usage-dashboard.test.ts's own helper: default $provider to "All" and expand the
  *  time-range placeholders to a fixed window, simulating Grafana's own template-variable substitution for a
- *  direct sqlite3 CLI run. */
+ *  direct sqlite3 CLI run.
+ *
+ *  REGRESSION (#orb-grafana-ai-usage-all-filter, 2026-07-14): see the sibling helper's own doc comment in
+ *  selfhost-grafana-ai-usage-dashboard.test.ts -- `__ALL__`, not Grafana's `$__all` global, which Grafana
+ *  passes through unquoted (confirmed live) and SQLite then misparses as its own `$__all` bind parameter. */
 function expandGrafanaRange(query: string): string {
   const from = Math.floor(Date.parse("2026-07-01T00:00:00Z") / 1000);
   const to = Math.floor(Date.parse("2026-07-02T00:00:00Z") / 1000);
   return query
     .replaceAll(timeFrom, String(from))
     .replaceAll(timeTo, String(to))
-    .replaceAll("${provider:sqlstring}", "'$__all'");
+    .replaceAll("${provider:sqlstring}", "'__ALL__'");
 }
 
 function sqlString(value: string): string {
@@ -155,7 +159,7 @@ describe("LoopOver — Miner usage (AMS) dashboard (#5185)", () => {
   it("scopes every panel query to event_type='attempt_outcome_summary', $provider, AND the selected time window", () => {
     for (const target of allTargets()) {
       expect(target.queryText).toContain("event_type = 'attempt_outcome_summary'");
-      expect(target.queryText).toContain("(${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring})");
+      expect(target.queryText).toContain("(${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring})");
       expect(target.queryText).toContain("unixepoch(created_at) >=");
       expect(target.queryText).toContain("unixepoch(created_at) <");
     }

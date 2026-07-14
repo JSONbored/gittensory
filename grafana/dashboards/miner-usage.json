@@ -40,11 +40,11 @@
           "rawQueryText": "SELECT DISTINCT provider FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND provider IS NOT NULL ORDER BY provider"
         },
         "includeAll": true,
-        "allValue": "$__all",
+        "allValue": "__ALL__",
         "multi": false,
         "current": {
           "text": "All",
-          "value": "$__all"
+          "value": "__ALL__"
         },
         "refresh": 2,
         "sort": 1
@@ -81,8 +81,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
-          "rawQueryText": "SELECT count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+          "queryText": "SELECT count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
         }
       ]
     },
@@ -109,8 +109,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT count(*) AS succeeded FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND action_class = 'attempt_submitted' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
-          "rawQueryText": "SELECT count(*) AS succeeded FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND action_class = 'attempt_submitted' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+          "queryText": "SELECT count(*) AS succeeded FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND action_class = 'attempt_submitted' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT count(*) AS succeeded FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND action_class = 'attempt_submitted' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
         }
       ]
     },
@@ -138,8 +138,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
-          "rawQueryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+          "queryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT coalesce(sum(cost_usd), 0) AS cost_usd FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
         }
       ]
     },
@@ -166,8 +166,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT coalesce(sum(tokens_used), 0) AS tokens FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
-          "rawQueryText": "SELECT coalesce(sum(tokens_used), 0) AS tokens FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
+          "queryText": "SELECT coalesce(sum(tokens_used), 0) AS tokens FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}",
+          "rawQueryText": "SELECT coalesce(sum(tokens_used), 0) AS tokens FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds}"
         }
       ]
     },
@@ -198,8 +198,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT provider, sum(CASE WHEN action_class = 'attempt_submitted' THEN 1 ELSE 0 END) AS succeeded, sum(CASE WHEN action_class != 'attempt_submitted' THEN 1 ELSE 0 END) AS failed, count(*) AS total, coalesce(sum(cost_usd), 0) AS cost_usd, coalesce(sum(tokens_used), 0) AS tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY total DESC",
-          "rawQueryText": "SELECT provider, sum(CASE WHEN action_class = 'attempt_submitted' THEN 1 ELSE 0 END) AS succeeded, sum(CASE WHEN action_class != 'attempt_submitted' THEN 1 ELSE 0 END) AS failed, count(*) AS total, coalesce(sum(cost_usd), 0) AS cost_usd, coalesce(sum(tokens_used), 0) AS tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY total DESC"
+          "queryText": "SELECT provider, sum(CASE WHEN action_class = 'attempt_submitted' THEN 1 ELSE 0 END) AS succeeded, sum(CASE WHEN action_class != 'attempt_submitted' THEN 1 ELSE 0 END) AS failed, count(*) AS total, coalesce(sum(cost_usd), 0) AS cost_usd, coalesce(sum(tokens_used), 0) AS tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY total DESC",
+          "rawQueryText": "SELECT provider, sum(CASE WHEN action_class = 'attempt_submitted' THEN 1 ELSE 0 END) AS succeeded, sum(CASE WHEN action_class != 'attempt_submitted' THEN 1 ELSE 0 END) AS failed, count(*) AS total, coalesce(sum(cost_usd), 0) AS cost_usd, coalesce(sum(tokens_used), 0) AS tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY total DESC"
         }
       ]
     },
@@ -226,8 +226,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT provider, count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY attempts DESC",
-          "rawQueryText": "SELECT provider, count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY attempts DESC"
+          "queryText": "SELECT provider, count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY attempts DESC",
+          "rawQueryText": "SELECT provider, count(*) AS attempts FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY provider ORDER BY attempts DESC"
         }
       ]
     },
@@ -257,8 +257,8 @@
         {
           "refId": "A",
           "queryType": "table",
-          "queryText": "SELECT created_at, attempt_id, provider, action_class, mode, coalesce(cost_usd, 0) AS cost_usd, tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} ORDER BY created_at DESC LIMIT 100",
-          "rawQueryText": "SELECT created_at, attempt_id, provider, action_class, mode, coalesce(cost_usd, 0) AS cost_usd, tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '$__all' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} ORDER BY created_at DESC LIMIT 100"
+          "queryText": "SELECT created_at, attempt_id, provider, action_class, mode, coalesce(cost_usd, 0) AS cost_usd, tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} ORDER BY created_at DESC LIMIT 100",
+          "rawQueryText": "SELECT created_at, attempt_id, provider, action_class, mode, coalesce(cost_usd, 0) AS cost_usd, tokens_used FROM attempt_log_events WHERE event_type = 'attempt_outcome_summary' AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} ORDER BY created_at DESC LIMIT 100"
         }
       ]
     }
