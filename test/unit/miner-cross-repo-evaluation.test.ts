@@ -19,6 +19,7 @@ import {
   scanPositiveGittensoryAssumptions,
   summarizeCrossRepoEvaluation,
 } from "../../packages/loopover-miner/lib/cross-repo-evaluation.js";
+import type { RepoStackResult } from "../../packages/loopover-miner/lib/stack-detection.js";
 import {
   loadCrossRepoEvaluationManifest,
   parseCrossRepoEvaluationArgs,
@@ -267,7 +268,8 @@ describe("cross-repo evaluation harness (#4788)", () => {
         {
           repoPath,
           existsSync: () => true,
-          detectRepoStack: () => ({ detected: false, reason: "no manifest" }),
+          // Simulate a legacy detector that omits `reason` at runtime; evaluateRepoReadiness must fall back.
+          detectRepoStack: () => ({ detected: false }) as RepoStackResult,
         },
       );
       expect(result.reason).toContain("did not recognize");
