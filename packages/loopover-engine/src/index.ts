@@ -611,6 +611,15 @@ export {
   type ProgressSnapshot,
 } from "./loop-progress.js";
 export {
+  evaluateEscalation,
+  type EscalationAction,
+  type EscalationDecision,
+  type EscalationSeverity,
+  type LoopEscalationInput,
+  type LoopHealthTier,
+  type LoopRunOutcome,
+} from "./loop-escalation.js";
+export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
   computeMetadataFeasibility,

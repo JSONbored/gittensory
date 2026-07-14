@@ -158,6 +158,7 @@ import { buildSlopAssessment } from "../signals/slop";
 import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan } from "../idea-intake";
 import { buildResultsPayload } from "../results-payload";
 import { buildProgressSnapshot } from "../loop-progress";
+import { evaluateEscalation } from "../loop-escalation";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
 import { buildRepoDataQuality } from "../signals/data-quality";
@@ -999,6 +1000,21 @@ const buildProgressSnapshotOutputSchema = {
   done: z.boolean().optional(),
 };
 
+// Loop escalation evaluator input (#4806): an already-computed loop outcome + health tier + operator signals.
+const evaluateEscalationShape = {
+  runStatus: z.enum(["running", "converged", "abandoned", "error"]),
+  healthStatus: z.enum(["healthy", "degraded", "critical"]).optional(),
+  customerFlagged: z.boolean().optional(),
+  killRequested: z.boolean().optional(),
+};
+
+const evaluateEscalationOutputSchema = {
+  shouldEscalate: z.boolean().optional(),
+  action: z.enum(["none", "notify", "human_review", "stop"]).optional(),
+  severity: z.enum(["none", "low", "medium", "high"]).optional(),
+  reasons: z.array(z.string()).optional(),
+};
+
 // Deterministic structural-improvement counterpart to checkSlopRiskShape (#4746, sub-issue I of epic #4737):
 // the positive-axis mirror of checkSlopRisk, same pure local-metadata contract. changedFiles/tests/testFiles
 // are reused verbatim (same shape as checkSlopRiskShape) so the two signals never disagree about what counts
@@ -1791,6 +1807,17 @@ export class LoopoverMcp {
         outputSchema: buildProgressSnapshotOutputSchema,
       },
       async (input) => this.toolResult(await this.buildLoopProgress(input)),
+    );
+
+    server.registerTool(
+      "loopover_evaluate_escalation",
+      {
+        description:
+          "Decide whether a rented loop needs a human, and what action to take (#4806), from an already-computed run outcome, health tier, and operator/customer signals — the deterministic support/escalation-path logic. Source-free; returns shouldEscalate + action (none/notify/human_review/stop) + severity + reasons. It decides; the caller wires the action.",
+        inputSchema: evaluateEscalationShape,
+        outputSchema: evaluateEscalationOutputSchema,
+      },
+      async (input) => this.toolResult(await this.evalEscalation(input)),
     );
 
     server.registerTool(
@@ -3103,6 +3130,15 @@ export class LoopoverMcp {
     return {
       summary: payload.summary,
       data: payload as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async evalEscalation(input: z.infer<z.ZodObject<typeof evaluateEscalationShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("loopover_evaluate_escalation");
+    const decision = evaluateEscalation(input);
+    return {
+      summary: `Escalation: ${decision.action} (severity ${decision.severity}), ${decision.reasons.length} reason(s).`,
+      data: decision as unknown as Record<string, unknown>,
     };
   }
 
