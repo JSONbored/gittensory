@@ -140,7 +140,7 @@ describe("handleStats — bearer-gated, CORS-open feed", () => {
     new Request("https://w.dev/stats/data?days=30&bucket=day", { method, headers });
 
   it("204s a CORS preflight with no auth", async () => {
-    const res = await handleStats(req({}, "OPTIONS"), stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }));
+    const res = await handleStats(req({}, "OPTIONS"), stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }));
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
   });
@@ -151,13 +151,13 @@ describe("handleStats — bearer-gated, CORS-open feed", () => {
   });
 
   it("401s a missing/wrong token", async () => {
-    const env = stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" });
+    const env = stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" });
     expect((await handleStats(req(), env)).status).toBe(401);
     expect((await handleStats(req({ authorization: "Bearer nope" }), env)).status).toBe(401);
   });
 
   it("200s with JSON + CORS for the correct token", async () => {
-    const res = await handleStats(req({ authorization: "Bearer s3cret" }), stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }));
+    const res = await handleStats(req({ authorization: "Bearer s3cret" }), stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }));
     expect(res.status).toBe(200);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
     const body = (await res.json()) as { projects: string[] };
@@ -306,20 +306,20 @@ describe("handleParity — bearer-gated, CORS-open cross-system parity feed", ()
     new Request("https://w.dev/gittensory/internal/parity?days=90&shadow=gittensory", { method, headers });
 
   it("204s a CORS preflight with no auth", async () => {
-    const res = await handleParity(req({}, "OPTIONS"), stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory");
+    const res = await handleParity(req({}, "OPTIONS"), stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory");
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
   });
 
   it("401s when the token is unset or wrong", async () => {
     expect((await handleParity(req({ authorization: "Bearer anything" }), stubEnv(), "gittensory")).status).toBe(401); // unset
-    const env = stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" });
+    const env = stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" });
     expect((await handleParity(req(), env, "gittensory")).status).toBe(401); // no header
     expect((await handleParity(req({ authorization: "Bearer nope" }), env, "gittensory")).status).toBe(401); // wrong
   });
 
   it("200s with the parity report + per-row cutoverReady for the correct token", async () => {
-    const res = await handleParity(req({ authorization: "Bearer s3cret" }), stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory", PARITY_DEPS);
+    const res = await handleParity(req({ authorization: "Bearer s3cret" }), stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory", PARITY_DEPS);
     expect(res.status).toBe(200);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
     const body = (await res.json()) as { authoritative: string; shadow: string; cutoverReady: Array<{ project: string; ready: boolean }> };
@@ -343,7 +343,7 @@ describe("handleParity — bearer-gated, CORS-open cross-system parity feed", ()
       method: "GET",
       headers: { authorization: "Bearer s3cret" },
     });
-    const res = await handleParity(r, stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory", deps);
+    const res = await handleParity(r, stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory", deps);
     expect(res.status).toBe(200);
     expect(seen).toEqual({ days: 14, authoritative: "reviewbot", shadow: "gittensory" });
   });
@@ -360,13 +360,13 @@ describe("handleParity — bearer-gated, CORS-open cross-system parity feed", ()
     };
     // No days / authoritative / shadow params → days defaults to 90, both spreads collapse to {}.
     const r = new Request("https://w.dev/gittensory/internal/parity", { method: "GET", headers: { authorization: "Bearer s3cret" } });
-    const res = await handleParity(r, stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory", deps);
+    const res = await handleParity(r, stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory", deps);
     expect(res.status).toBe(200);
     expect(seen).toEqual({ days: 90, hasAuthoritative: false, hasShadow: false });
   });
 
   it("uses the default deps (defaultStatsEvalDeps) when none are injected — empty parity, no cutoverReady rows", async () => {
-    const res = await handleParity(req({ authorization: "Bearer s3cret" }), stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory");
+    const res = await handleParity(req({ authorization: "Bearer s3cret" }), stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }), "gittensory");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { authoritative: string; cutoverReady: unknown[] };
     // default emptyParity uses the URL's shadow=gittensory and a default authoritative=reviewbot.
@@ -389,7 +389,7 @@ describe("handleStats — query-param default branches", () => {
     };
     // No days / bucket query params → days ?? 90, bucket ?? "day".
     const r = new Request("https://w.dev/stats/data", { method: "GET", headers: { authorization: "Bearer s3cret" } });
-    const res = await handleStats(r, stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }), deps);
+    const res = await handleStats(r, stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }), deps);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { window: { days: number; bucket: string } };
     expect(body.window.days).toBe(90);
@@ -714,7 +714,7 @@ describe("timingSafeEqual + readSecret — branches reached through the handlers
       // Correct token, equal lengths → the native path is taken and authorizes (200).
       const res = await handleStats(
         new Request("https://w.dev/stats/data?days=1&bucket=day", { method: "GET", headers: { authorization: "Bearer s3cret" } }),
-        stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "s3cret" }),
+        stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "s3cret" }),
       );
       expect(res.status).toBe(200);
       expect(native).toHaveBeenCalled();
@@ -733,7 +733,7 @@ describe("timingSafeEqual + readSecret — branches reached through the handlers
       // the loop XORs out-of-range indices via `?? 0`, and the compare fails → 401.
       const res = await handleStats(
         new Request("https://w.dev/stats/data", { method: "GET", headers: { authorization: "Bearer x" } }),
-        stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: "averylongtokenvalue-far-longer-than-x" }),
+        stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: "averylongtokenvalue-far-longer-than-x" }),
       );
       expect(res.status).toBe(401);
     } finally {
@@ -743,8 +743,8 @@ describe("timingSafeEqual + readSecret — branches reached through the handlers
   });
 
   it("treats a non-string token secret as unset (readSecret's `: \"\"` branch → 401)", async () => {
-    // GITTENSORY_REVIEW_STATS_TOKEN present but NOT a string → readSecret returns "" → !expected → 401.
-    const env = stubEnv({ GITTENSORY_REVIEW_STATS_TOKEN: 12345 });
+    // LOOPOVER_REVIEW_STATS_TOKEN present but NOT a string → readSecret returns "" → !expected → 401.
+    const env = stubEnv({ LOOPOVER_REVIEW_STATS_TOKEN: 12345 });
     const res = await handleStats(
       new Request("https://w.dev/stats/data", { method: "GET", headers: { authorization: "Bearer 12345" } }),
       env,

@@ -255,7 +255,7 @@ function Tuning() {
           secrets. Global.
         </li>
         <li>
-          <code>GITTENSORY_REVIEW_STATS_TOKEN</code> — the bearer secret for the stats data
+          <code>LOOPOVER_REVIEW_STATS_TOKEN</code> — the bearer secret for the stats data
           endpoint. Not an on/off switch; it is the token value. When set, the stats route requires
           this bearer token.
         </li>
