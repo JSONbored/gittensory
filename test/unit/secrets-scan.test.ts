@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scanForSecrets } from "../../src/review/secrets-scan";
+import { scanDiffForSecretsWithLocations, scanForSecrets } from "../../src/review/secrets-scan";
 
 describe("scanForSecrets — deterministic secret-pattern scanner", () => {
   it("returns no findings for empty / benign text", () => {
@@ -239,5 +239,57 @@ describe("scanForSecrets — deterministic secret-pattern scanner", () => {
     ["token with digit", 'token = "session2024-token"'],
   ])("still flags a self-naming-suffix-shaped credential assigned to %s", (_name, snippet) => {
     expect(scanForSecrets(snippet).kinds).toContain("generic_secret_assignment");
+  });
+});
+
+describe("scanDiffForSecretsWithLocations — added-line classification (#5942)", () => {
+  const fakeToken = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+  it("detects a secret on an added line whose content itself starts with ++", () => {
+    // Unified-diff marker `+` + content beginning with `++` yields a scanner input line of `+++…`.
+    // The stale `!line.startsWith("+++")` guard used to skip this entirely.
+    const diff = [
+      "### notes.md (modified) +1/-0",
+      "@@ -1,0 +1,1 @@",
+      `+++ token: ${fakeToken} +++`,
+    ].join("\n");
+    const hits = scanDiffForSecretsWithLocations(diff);
+    expect(hits.some((hit) => hit.kind === "github_token")).toBe(true);
+    expect(hits).toContainEqual({ kind: "github_token", path: "notes.md", line: 1 });
+  });
+
+  it("still classifies ordinary added lines and skips removed/context lines", () => {
+    const diff = [
+      "### src/config.ts (modified) +2/-1",
+      "@@ -1,2 +1,3 @@",
+      `+const token = "${fakeToken}";`,
+      " const keep = 1;",
+      "-const gone = 2;",
+      "+const next = 3;",
+    ].join("\n");
+    const hits = scanDiffForSecretsWithLocations(diff);
+    expect(hits).toEqual([{ kind: "github_token", path: "src/config.ts", line: 1 }]);
+  });
+
+  it("does not scan the ### path (status) +N/-N file header as added content", () => {
+    // The header contains a literal `+1/-0`, but file-boundary detection owns that line via
+    // DIFF_FILE_HEADER_PATTERN before the added-line branch — removing the stale `+++` guard must
+    // not falsely treat the header (or its path) as a content-line hit (line > 0).
+    const diff = [
+      `### safe-path.ts (added) +1/-0`,
+      "@@ -0,0 +1,1 @@",
+      "+const ok = 1;",
+    ].join("\n");
+    const hits = scanDiffForSecretsWithLocations(diff);
+    expect(hits.every((hit) => hit.line === 0 || hit.path === "safe-path.ts")).toBe(true);
+    expect(hits.some((hit) => hit.line > 0 && hit.kind === "github_token")).toBe(false);
+    expect(hits.filter((hit) => hit.line > 0)).toEqual([]);
+  });
+
+  it("still attributes a secret in an added/renamed file path to line 0 via the header", () => {
+    const dirtyPath = `secrets/${fakeToken}.env`;
+    const diff = [`### ${dirtyPath} (added) +0/-0`].join("\n");
+    const hits = scanDiffForSecretsWithLocations(diff);
+    expect(hits).toContainEqual({ kind: "github_token", path: dirtyPath, line: 0 });
   });
 });

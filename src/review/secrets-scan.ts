@@ -80,7 +80,13 @@ export function scanDiffForSecretsWithLocations(diff: string): SecretScanLocatio
       currentNewLine = Number(hunkHeader[1]) - 1;
       continue;
     }
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    // Any single leading `+` is an added line in this scanner's format. Do NOT exclude `+++…` —
+    // `buildSecretScanDiff` never emits unified-diff `+++`/`---` file headers (boundaries are the
+    // `### path (status) +N/-N` lines matched above), so a `+++` guard's only live effect was to
+    // skip genuine added lines whose content itself starts with `++` (e.g. `+++ token: ghp_… +++`,
+    // a C `++x`, Markdown `+++` delimiters) and silently bypass the unconditional secret_leak
+    // hard blocker (#5942).
+    if (line.startsWith("+")) {
       currentNewLine += 1;
       const content = line.slice(1);
       for (const kind of matchedKindsIn(content)) {
