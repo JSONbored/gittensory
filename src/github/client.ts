@@ -27,7 +27,7 @@ const DEFAULT_METADATA_TTL_SECONDS = 10 * 60;
 // briefly. Long enough to dedup the two upstream ref→SHA resolves that fire in the SAME hourly window (scoring +
 // drift), short enough that the pinned SHA is never meaningfully stale.
 const DEFAULT_COMMIT_TTL_SECONDS = 15 * 60;
-export const GITHUB_RESPONSE_CACHE_REPLAY_HEADER = "x-gittensory-cache";
+export const GITHUB_RESPONSE_CACHE_REPLAY_HEADER = "x-loopover-cache";
 
 /** The single source of truth for the product's outbound User-Agent, used by every raw-`fetch`/`timeoutFetch`
  *  call across `src/` that identifies itself generically (as opposed to a service-specific variant like the

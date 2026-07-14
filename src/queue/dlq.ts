@@ -8,7 +8,7 @@ const DLQ_DEAD_LETTERED_METRIC = "loopover_dlq_dead_lettered_total";
 const DLQ_REDRIVEN_METRIC = "loopover_dlq_redriven_total";
 
 /**
- * DLQ consumer for both `gittensory-jobs-dlq` (maintenance lane) and `gittensory-webhooks-dlq` (the
+ * DLQ consumer for both `loopover-jobs-dlq` (maintenance lane) and `loopover-webhooks-dlq` (the
  * webhook lane added with the dedicated WEBHOOKS queue, #1276). Called when a job exhausts all retries
  * on its main queue and is dead-lettered. Logs every dropped job and records an audit event so the drop
  * is observable rather than silent (countRecentDeadLetters surfaces the rate). Always acks — no further

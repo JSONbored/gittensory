@@ -164,7 +164,7 @@ declare global {
     /** Webhook secret for the central LoopOver Orb GitHub App (#1255) — distinct from the review app's
      *  GITHUB_WEBHOOK_SECRET. Verifies inbound POST /v1/orb/webhook deliveries. Inject as a wrangler secret. */
     ORB_GITHUB_WEBHOOK_SECRET?: string;
-    /** The central Orb GitHub App's OWN credentials (separate from the gittensory review App above). Inject as
+    /** The central Orb GitHub App's OWN credentials (separate from the loopover review App above). Inject as
      *  wrangler secrets. Used to mint the Orb App JWT → list installations + mint short-lived installation tokens
      *  (the token-broker). CLIENT_ID/SECRET drive the OAuth onboarding flow. */
     ORB_GITHUB_APP_ID?: string;
@@ -179,7 +179,7 @@ declare global {
      *  key. Cloud never sets it ⇒ inert there. See src/orb/broker-client. (A secret — never commit a real value.) */
     ORB_ENROLLMENT_SECRET?: string;
     /** Override the Orb broker base URL the self-host client calls (default https://api.loopover.ai);
-     *  point at a private gittensory deployment if you self-host the broker too. */
+     *  point at a private loopover deployment if you self-host the broker too. */
     ORB_BROKER_URL?: string;
     /** The retired review App's own credentials. Optional: that App has been fully deleted — cloud no longer
      *  mints tokens or verifies check-run ownership with it (review execution is self-host-only now, brokered
@@ -220,7 +220,7 @@ declare global {
     LOOPOVER_AUTO_FILE_DRIFT_ISSUES?: string;
     LOOPOVER_DRIFT_ISSUE_REPO?: string;
     LOOPOVER_DRIFT_ISSUE_TOKEN?: string;
-    /** Comma-separated GitHub logins assigned to filed upstream-drift issues (default: the gittensory
+    /** Comma-separated GitHub logins assigned to filed upstream-drift issues (default: the loopover
      *  maintainer). Lets a self-host operator route drift issues to their own team. */
     LOOPOVER_DRIFT_ISSUE_ASSIGNEES?: string;
     /** Comma-separated GitHub bot logins ADDITIONALLY trusted to author review-thread blockers via scanner
@@ -357,7 +357,7 @@ declare global {
      *  unset/false reads NO reputation, records NOTHING, and leaves the AI-spend gate byte-identical (the new
      *  branch is unreachable when off). */
     LOOPOVER_REVIEW_REPUTATION?: string;
-    /** Convergence (ops / observability): when truthy, gittensory's OWN review-outcome data drives two
+    /** Convergence (ops / observability): when truthy, loopover's OWN review-outcome data drives two
      *  operator surfaces — (1) on the cron tick, an anomaly scan over the gate-block ledger + recommendation /
      *  slop calibration emits a structured `ops_anomaly` log when something drifts (gate false-positive spike,
      *  slop score inverting, a recommendation negative-rate spike); and (2) a bearer-gated
@@ -423,7 +423,7 @@ declare global {
      *  reviewer; a generic hard blocker (e.g. a committed secret) is always preserved over a surface "merge". */
     LOOPOVER_REVIEW_CONTENT_LANE?: string;
     /** Convergence (self-improve / auto-tune): when truthy, the ported self-improvement loop
-     *  (src/review/auto-tune.ts + auto-apply.ts) runs on the cron tick over gittensory's OWN review-outcome
+     *  (src/review/auto-tune.ts + auto-apply.ts) runs on the cron tick over loopover's OWN review-outcome
      *  data — it computes tuning recommendations, SHADOW-SOAKS any STRICTLY-TIGHTENING recommendation in the
      *  `tunables_overrides_shadow` table, and AUTO-PROMOTES it to `tunables_overrides` ONLY after the soak
      *  window passes the gate (tightening + evidence + soaked). Every action is recorded to `override_audit`.
@@ -431,20 +431,20 @@ declare global {
      *  (isStrictlyTightening + evaluateShadowPromotion enforce the direction). Default OFF — unset/false means
      *  the cron enqueues NO selftune job (does ZERO tuning work, reads/writes NO override), so the worker is
      *  byte-identical to today. NOTE: config-application is DEFERRED — a promoted override is NOT yet read by
-     *  the live gate-config resolution (gittensory has no confidenceFloor/scopeCap tunable and its native
+     *  the live gate-config resolution (loopover has no confidenceFloor/scopeCap tunable and its native
      *  signal measures gate false positives, a loosening direction); the shadow-soak + audit + recommendation
      *  recording are wired, reading a promoted override into the live gate is a noted follow-up that must not
      *  risk loosening the gate. See src/review/selftune-wire.ts. */
     LOOPOVER_REVIEW_SELFTUNE?: string;
     /** Experimental `gittensor` plugin (the `experimental:` manifest block, first key): the operator-level
-     *  kill-switch for gittensory's original subnet mining-registry/scoring integration, now opt-in rather than
+     *  kill-switch for loopover's original subnet mining-registry/scoring integration, now opt-in rather than
      *  a core dependency. ANDed with the per-repo `.loopover.yml experimental.gittensor` opt-in -- neither
      *  alone is sufficient, and unlike `features:` there is no LOOPOVER_REVIEW_REPOS allowlist fallback.
      *  Default OFF -- flag-OFF (or every repo unset), refresh-registry is never enqueued (see src/index.ts) and
      *  a self-host box makes zero outbound contact with the gittensor subnet registry. See
      *  src/review/gittensor-wire.ts. */
     LOOPOVER_EXPERIMENTAL_GITTENSOR?: string;
-    /** Maintainer recap digest (#1963, #2248): when truthy, a cross-repo RecapReport -- gittensory's OWN
+    /** Maintainer recap digest (#1963, #2248): when truthy, a cross-repo RecapReport -- loopover's OWN
      *  gate-precision + outcome-calibration data folded across every scanned repo (buildMaintainerRecap,
      *  #2239) -- is delivered to Discord on a cron cadence. LOOPOVER_RECAP_CADENCE ("daily" | "weekly",
      *  default "weekly"; an invalid value falls back to "weekly") picks how often; LOOPOVER_RECAP_HOUR
@@ -539,7 +539,7 @@ declare global {
      *  monitor. Presence of this AND the two vars below IS the enablement switch (see isD1SizeProbeEnabled,
      *  src/selfhost/d1-size-probe.ts) -- unset/blank ⇒ the probe never runs, byte-identical to today. Most
      *  self-host operators run their own SQLite/Postgres backend and have no Cloudflare D1 to watch; this is
-     *  for whichever deployment owns a real D1 worth monitoring (including gittensory's own central cloud
+     *  for whichever deployment owns a real D1 worth monitoring (including loopover's own central cloud
      *  database, the one that hit its ~10GB cap on 2026-07-06). */
     CLOUDFLARE_D1_MONITOR_ACCOUNT_ID?: string;
     /** The D1 database id (uuid) to monitor. See CLOUDFLARE_D1_MONITOR_ACCOUNT_ID. */

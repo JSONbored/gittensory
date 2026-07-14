@@ -4,11 +4,11 @@
 // existing ref (`PATCH git/refs/{ref}`) instead of creating a new branch/PR.
 //
 // Deliberately narrower in scope than repo-doc-pr.ts: this writes to SOMEONE ELSE'S branch (the PR author's),
-// not a branch gittensory itself owns, so it carries a materially bigger blast radius — see #4195's
+// not a branch loopover itself owns, so it carries a materially bigger blast radius — see #4195's
 // maintainer-only authorization tier and the miner-scoring safeguard below, both required before this is ever
 // invoked for real.
 //
-// SCORING-INTEGRITY SAFEGUARD (#4201): gittensory does not compute the authoritative Gittensor score itself —
+// SCORING-INTEGRITY SAFEGUARD (#4201): loopover does not compute the authoritative Gittensor score itself —
 // it is computed by external validators reading the merged PR directly from GitHub. A commit this module
 // pushes onto a CONFIRMED MINER's PR branch would be indistinguishable, to that external validator, from a
 // line the miner wrote themselves, inflating their apparent contribution. `isMinerAuthoredBranch` must be
@@ -30,7 +30,7 @@ export type E2eTestCommitResult =
  *  wants a different location can move the file after it lands; this module has no per-repo convention to
  *  read (that is a possible future enhancement, not required for this first delivery mode). */
 export function defaultE2eTestFilePath(prNumber: number): string {
-  return `e2e/gittensory-pr-${prNumber}.spec.ts`;
+  return `e2e/loopover-pr-${prNumber}.spec.ts`;
 }
 
 /**

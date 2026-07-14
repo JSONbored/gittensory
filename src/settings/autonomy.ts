@@ -1,7 +1,7 @@
 import type { AgentActionClass, AutoMaintainPolicy, AutoMergeMethod, AutonomyLevel, AutonomyPolicy } from "../types";
 
 // The graduated autonomy dial (#773), ordered least → most autonomous. Every later agent-layer phase reads
-// this BEFORE acting. `observe` is the deny-by-default floor — gittensory watches but never takes an action.
+// this BEFORE acting. `observe` is the deny-by-default floor — loopover watches but never takes an action.
 // (#4620: `suggest`/`propose` removed -- both were 100% behaviorally identical to `observe`, see
 // AutonomyLevel's own doc comment.)
 export const AUTONOMY_LEVELS = ["observe", "auto_with_approval", "auto"] as const;
@@ -22,7 +22,7 @@ const AUTONOMY_LEVEL_SET = new Set<string>(AUTONOMY_LEVELS);
 /**
  * Resolve the configured autonomy level for one action class on a repo. THE single gate the action layer
  * (#778) consults before any write action. Deny-by-default: an unset (or malformed) action class is
- * `observe` — gittensory observes but never acts. Pure.
+ * `observe` — loopover observes but never acts. Pure.
  */
 export function resolveAutonomy(autonomy: AutonomyPolicy | null | undefined, actionClass: AgentActionClass): AutonomyLevel {
   return autonomy?.[actionClass] ?? DEFAULT_AUTONOMY_LEVEL;

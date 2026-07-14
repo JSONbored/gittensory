@@ -42,8 +42,8 @@ export { RateLimiter };
 export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
-    // Both dead-letter queues (the maintenance lane's gittensory-jobs-dlq and the webhook lane's
-    // gittensory-webhooks-dlq, #1276) drain through the same observability + self-heal consumer.
+    // Both dead-letter queues (the maintenance lane's loopover-jobs-dlq and the webhook lane's
+    // loopover-webhooks-dlq, #1276) drain through the same observability + self-heal consumer.
     if (batch.queue?.endsWith("-dlq")) {
       await processDlqBatch(batch, env, { redriveWebhooks: isSelfHostedReviewRuntime(env) });
       return;
@@ -224,7 +224,7 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
     jobs.push({ type: "refresh-scoring-model", requestedBy: "schedule" });
     jobs.push({ type: "refresh-upstream-drift", requestedBy: "schedule" });
     jobs.push({ type: "rollup-product-usage", requestedBy: "schedule", days: 7 });
-    // Convergence (ops / observability, flag LOOPOVER_REVIEW_OPS). Hourly anomaly scan over gittensory's own
+    // Convergence (ops / observability, flag LOOPOVER_REVIEW_OPS). Hourly anomaly scan over loopover's own
     // review-outcome data. Enqueued ONLY when the flag is ON — flag-OFF (default) this job is never created,
     // so the cron tick does ZERO new work and the enqueued set is byte-identical to today.
     if (selfHostedReviews && isOpsEnabled(env)) jobs.push({ type: "ops-alerts", requestedBy: "schedule" });
@@ -234,7 +234,7 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
     // created, so the cron tick does ZERO new work and the enqueued set is byte-identical to today.
     if (selfHostedReviews && isSweepWatchdogEnabled(env)) jobs.push({ type: "sweep-liveness-watchdog", requestedBy: "schedule" });
     // Convergence (self-improve / auto-tune, flag LOOPOVER_REVIEW_SELFTUNE). Hourly self-improvement tick over
-    // gittensory's own review-outcome data: compute tuning recommendations, shadow-soak any strictly-tightening
+    // loopover's own review-outcome data: compute tuning recommendations, shadow-soak any strictly-tightening
     // one, and auto-promote it to live only after the soak window passes the gate (TIGHTENING-ONLY, audited).
     // Enqueued ONLY when the flag is ON — flag-OFF (default) this job is never created, so the cron tick does
     // ZERO new tuning work and the enqueued set is byte-identical to today.
@@ -257,7 +257,7 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
   // Maintainer recap digest (#1963, #2248/#2250; flag LOOPOVER_MAINTAINER_RECAP). Cross-repo RecapReport
   // delivered to Discord on a configurable cadence (LOOPOVER_RECAP_CADENCE=daily|weekly, default weekly) at
   // the configured hour/day-of-week (LOOPOVER_RECAP_HOUR / LOOPOVER_RECAP_DAY). Enable/cadence can ALSO be
-  // set as code via the gittensory self-repo's `.loopover.yml maintainerRecap:` block (config-as-code parity,
+  // set as code via the loopover self-repo's `.loopover.yml maintainerRecap:` block (config-as-code parity,
   // #2250) -- a present manifest block wins over the env vars; absent, the env vars decide exactly as before.
   // Enqueued ONLY when this tick matches the resolved cadence -- disabled (the default) this job is never
   // created, so the cron tick does ZERO new work and the enqueued set is byte-identical to today.

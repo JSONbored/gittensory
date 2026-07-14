@@ -1149,7 +1149,7 @@ function githubDriftIssueTitle(report: UpstreamDriftReportRecord): string {
 }
 
 /**
- * Who upstream-drift issues are assigned to. Defaults to the gittensory maintainer, but a self-host operator
+ * Who upstream-drift issues are assigned to. Defaults to the loopover maintainer, but a self-host operator
  * can set LOOPOVER_DRIFT_ISSUE_ASSIGNEES (comma-separated logins; empty/whitespace = the default) so drift
  * issues land on THEIR team instead of a login that doesn't exist on their fork. Pairs with the existing
  * LOOPOVER_DRIFT_ISSUE_REPO override.

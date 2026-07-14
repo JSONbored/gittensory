@@ -2942,7 +2942,7 @@ async function reduceLiveCiAggregate(
   // expected-checks list against.
   const ciCompletenessWarning =
     !enforceRequiredOnly && ciState === "passed"
-      ? "CI resolved to passed with no branch-protection required checks configured — gittensory cannot verify every expected workflow ran on this commit (a path-filtered or misconfigured workflow that never triggers is indistinguishable from one that doesn't exist). Configure branch protection or an expected-checks list for full CI-completeness verification."
+      ? "CI resolved to passed with no branch-protection required checks configured — loopover cannot verify every expected workflow ran on this commit (a path-filtered or misconfigured workflow that never triggers is indistinguishable from one that doesn't exist). Configure branch protection or an expected-checks list for full CI-completeness verification."
       : null;
   // A partial/paginated read can't tell "never appears" from "appears on a page we didn't fetch" -- only a
   // COMPLETE read's absence is a confident signal worth a short surfacing cap (#selfhost-ci-deferral-staleness).
@@ -3161,7 +3161,7 @@ export async function fetchLiveCiAggregatePreferGraphQl(
 
 /**
  * Fetch a PR's LIVE `mergeable_state` (clean / dirty / blocked / unstable / behind / has_hooks / unknown). The
- * STORED value lags GitHub's async recompute — e.g. right after gittensory[bot]'s own APPROVE flips a `blocked`
+ * STORED value lags GitHub's async recompute — e.g. right after loopover[bot]'s own APPROVE flips a `blocked`
  * PR to `clean`, the stored row is still `blocked`, which stops an otherwise-eligible PR from auto-merging
  * (observed: green+approved PRs stuck OPEN at `mergeState=CLEAN`). The auto-maintain planner uses this so the
  * merge decision sees the CURRENT state. `unknown` (GitHub still computing) ⇒ caller treats as not-yet-clean and
@@ -3958,9 +3958,9 @@ function isTrustedScannerReviewThreadAuthor(env: Env, login: string | null | und
 
 // Match only OUR OWN app bot login (a `${GITHUB_APP_SLUG}` / `${GITHUB_APP_SLUG}-orb[bot]` PREFIX), never a
 // third-party slug that merely ENDS in `-${GITHUB_APP_SLUG}[bot]`. Anchored to `^`: a `\b` boundary also fires
-// after a hyphen, so the prior `\bgittensory…` misclassified e.g. `evil-gittensory[bot]` as our own author and
+// after a hyphen, so the prior `\bloopover…` misclassified e.g. `evil-loopover[bot]` as our own author and
 // dropped its review-thread comment as a self-authored non-blocker (fail-open) instead of evaluating it as
-// external. Derived from `env.GITHUB_APP_SLUG` (#4615) rather than a hardcoded "gittensory" literal -- every
+// external. Derived from `env.GITHUB_APP_SLUG` (#4615) rather than a hardcoded "loopover" literal -- every
 // other "is this our own bot" check in the codebase already does this (self-authored.ts, pr-actions.ts,
 // comments.ts, processors.ts) -- so a self-hoster who renamed their App still recognizes its own comments.
 export function isOwnReviewThreadAuthor(env: Env, login: string | null | undefined): boolean {

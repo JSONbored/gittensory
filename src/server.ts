@@ -1,4 +1,4 @@
-// Self-host Node entry (#980). Runs gittensory's SAME Worker handlers on Node. Backends are pluggable:
+// Self-host Node entry (#980). Runs loopover's SAME Worker handlers on Node. Backends are pluggable:
 //   • DB:    SQLite (node:sqlite, default) OR Postgres (DATABASE_URL=postgres://… → shared, multi-instance).
 //   • Queue: durable SQLite queue OR a Postgres queue (FOR UPDATE SKIP LOCKED).
 //   • Redis: required transient review state + fixed-window rate limiter.
@@ -126,7 +126,7 @@ interface Backend {
 }
 
 /** Retry a Postgres connection until it succeeds (up to maxWaitMs). Prevents crash-restart loops when
- *  gittensory starts before Postgres is ready (common in `--profile postgres` compose stacks). */
+ *  loopover starts before Postgres is ready (common in `--profile postgres` compose stacks). */
 async function waitForPostgres(url: string, maxWaitMs = 30_000): Promise<void> {
   const pg = (await import("pg")).default;
   const start = Date.now();
@@ -160,7 +160,7 @@ async function waitForPostgres(url: string, maxWaitMs = 30_000): Promise<void> {
 }
 
 /** Retry an async readiness operation with backoff until it succeeds (up to maxWaitMs). Prevents a
- *  crash-restart loop when gittensory starts before a dependency (e.g. Qdrant) is accepting connections —
+ *  crash-restart loop when loopover starts before a dependency (e.g. Qdrant) is accepting connections —
  *  Qdrant's init is a single fetch with no retry, so a slow-starting --profile qdrant container would
  *  otherwise take the whole process down. */
 async function retryUntilReady(
@@ -401,7 +401,7 @@ async function main(): Promise<void> {
       }),
     );
 
-  // Public-origin advisory (JSONbored/gittensory#4180): warn LOUDLY at boot if PUBLIC_API_ORIGIN/
+  // Public-origin advisory (JSONbored/loopover#4180): warn LOUDLY at boot if PUBLIC_API_ORIGIN/
   // PUBLIC_SITE_ORIGIN look like a private/internal hostname, so an operator doesn't run for weeks with every
   // visual-capture screenshot silently rendering as a broken image in public PR comments.
   const publicOriginOpts = {
@@ -1011,7 +1011,7 @@ async function main(): Promise<void> {
 
   backend.queue.start();
 
-  // Cron — gittensory ticks ~every 2 minutes; drive the SAME scheduled handler.
+  // Cron — loopover ticks ~every 2 minutes; drive the SAME scheduled handler.
   const intervalMs = Number(process.env.CRON_INTERVAL_MS ?? 120_000);
   /* v8 ignore start -- self-host entrypoint timers start a live server; monitor semantics are covered in selfhost tests. */
   const cron = setInterval(() => {

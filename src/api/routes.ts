@@ -2463,7 +2463,7 @@ export function createApp() {
     );
   });
 
-  // Repo gittensory settings (gate config, AI-review mode/provider/model — NON-secret; the BYOK key is
+  // Repo loopover settings (gate config, AI-review mode/provider/model — NON-secret; the BYOK key is
   // never here). Maintainer DATA: session callers must be a verified maintainer of THIS repo (per-repo
   // scope), so a maintainer of repo A cannot read repo B's config. Server-to-server tokens are exempt.
   app.get("/v1/repos/:owner/:repo/settings", async (c) => {
@@ -3691,7 +3691,7 @@ export function createApp() {
 
   // #predicted-live-gate-agreement (maintainer review-stack x AMS integration audit, 2026-07-09): how often the
   // MCP predict_gate/explain_gate_disposition verdict agrees with the REAL gate decision a contributor's PR
-  // later receives -- a DIFFERENT question than /v1/internal/parity's reviewbot-vs-gittensory migration parity
+  // later receives -- a DIFFERENT question than /v1/internal/parity's reviewbot-vs-loopover migration parity
   // (see src/review/predicted-gate-agreement.ts's module header). Same gate/auth contract as /v1/internal/parity:
   // bearer-gated by the `/v1/internal/*` middleware, 404 when LOOPOVER_REVIEW_PARITY_AUDIT is off so the
   // endpoint does not exist on a deploy not running this telemetry family. Aggregate counts only — no PR
@@ -5843,7 +5843,7 @@ const DEFAULT_CORS_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:4173",
   "http://localhost:5173",
-  // gittensory-ui's dev server (@lovable.dev/vite-tanstack-config) binds 8080, not Vite's 5173 default —
+  // loopover-ui's dev server (@lovable.dev/vite-tanstack-config) binds 8080, not Vite's 5173 default —
   // without this, every local/preview dev server is CORS-blocked from /health and shows a false "API unreachable" banner.
   "http://localhost:8080",
   "http://127.0.0.1:3000",

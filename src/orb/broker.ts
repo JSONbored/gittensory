@@ -1,6 +1,6 @@
 // LoopOver Orb central GitHub App (#1255) — the token-broker. A maintainer's self-hosted container exchanges a
 // one-time enrollment secret for short-lived GitHub installation tokens, so it can act on its own repos WITHOUT
-// ever holding the Orb App private key (gittensory holds it centrally and mints on demand).
+// ever holding the Orb App private key (loopover holds it centrally and mints on demand).
 //
 // Trust model (das-github-mirror): the OPERATOR is the authority. An enrollment is issued only for an install the
 // operator has already opted in (registered=1) via the internal-token-gated POST /v1/internal/orb/enrollments;

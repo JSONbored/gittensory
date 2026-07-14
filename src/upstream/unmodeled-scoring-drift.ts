@@ -35,7 +35,7 @@ export async function syncUnmodeledScoringConstantDrift(
       ...existing,
       status: "resolved",
       severity: "low",
-      summary: "All upstream scoring constants are modeled in gittensory.",
+      summary: "All upstream scoring constants are modeled in loopover.",
       updatedAt: now,
       payload: {
         ...existing.payload,
@@ -55,7 +55,7 @@ export async function syncUnmodeledScoringConstantDrift(
     commitSha: null,
   };
   const unmodeled = [...args.unmodeledConstants].sort();
-  const summary = `Upstream defines ${unmodeled.length} scoring constant(s) gittensory does not model: ${unmodeled.slice(0, 12).join(", ")}${unmodeled.length > 12 ? ", …" : ""}`;
+  const summary = `Upstream defines ${unmodeled.length} scoring constant(s) loopover does not model: ${unmodeled.slice(0, 12).join(", ")}${unmodeled.length > 12 ? ", …" : ""}`;
   const severity: UpstreamDriftSeverity = unmodeled.length >= 3 ? "high" : "medium";
   const affectedAreas: UpstreamDriftArea[] = ["scoring_model"];
   const report: UpstreamDriftReportRecord = {
@@ -72,7 +72,7 @@ export async function syncUnmodeledScoringConstantDrift(
     payload: {
       kind: "unmodeled_scoring_constants",
       unmodeledUpstreamConstants: unmodeled,
-      changes: [`${unmodeled.length} upstream scoring constant(s) are not modeled in gittensory`],
+      changes: [`${unmodeled.length} upstream scoring constant(s) are not modeled in loopover`],
       source,
       recommendedFollowUp: SCORING_MODEL_FOLLOW_UP,
     },

@@ -322,7 +322,7 @@ async function closeDraftDodgeAttemptIfBlocked(
  *  pass; a plain boolean can't distinguish "evaluated, not blocked" from "reclosed, stop here". */
 export type ReopenRecloseOutcome = "reclosed" | "allowed";
 
-/** Reopen-prevention (#one-shot-reopen): re-close a contributor's reopen of a PR that gittensory / a maintainer
+/** Reopen-prevention (#one-shot-reopen): re-close a contributor's reopen of a PR that loopover / a maintainer
  *  closed (closes are one-shot). Returns "reclosed" when it re-closed (caller skips the re-review). Exempt: the
  *  bot's own re-review reopens, owner/admin reopens, and a contributor reopening a PR they CLOSED THEMSELVES.
  *  Per-PR actuation-locked (#2135/#2447): a concurrent delivery for the same PR must not evaluate + potentially
@@ -378,7 +378,7 @@ async function recloseDisallowedReopenIfNeeded(
     );
   };
   if (await hasMaintainerPermission(reopener)) return false; // owner / admin / write collaborators may reopen
-  // A non-maintainer reopened: re-close ONLY if gittensory or a maintainer closed it (one-shot). A contributor
+  // A non-maintainer reopened: re-close ONLY if loopover or a maintainer closed it (one-shot). A contributor
   // reopening a PR they closed themselves is allowed (fail-open on an unknown closer).
   const closerResult = await getLastCloserLogin(
     env,
@@ -534,7 +534,7 @@ async function hasMaintainerOrOwnerPermission(env: Env, installationId: number, 
 }
 
 /** Review-evasion protection (#review-evasion-protection): a CONTRIBUTOR closing their OWN PR while
- *  gittensory has an ACTIVE review pass running against its current headSha is dodging the one-shot review,
+ *  loopover has an ACTIVE review pass running against its current headSha is dodging the one-shot review,
  *  not making an ordinary close. GitHub lets a contributor reopen a PR they closed themselves but NOT one
  *  closed by a maintainer or the App (#one-shot-reopen) -- so this reopens the PR (as the App) and
  *  immediately re-closes it (as the App), converting the contributor's own close into an App-authored,
@@ -731,7 +731,7 @@ async function closeReviewEvasionSelfCloseIfActive(
 }
 
 /** Review-evasion protection (#review-evasion-protection): a contributor converting their OWN OPEN PR to
- *  draft while gittensory has an ACTIVE review pass running against its current headSha is dodging the
+ *  draft while loopover has an ACTIVE review pass running against its current headSha is dodging the
  *  one-shot review, distinct from the EXISTING draft-dodge guard above (which only fires after a PRIOR gate
  *  FAILURE on this head). Unlike the self-close sibling, converting to draft never closes the PR on GitHub,
  *  so no reopen step is needed -- a direct close, exactly like the draft-dodge guard's own close step,

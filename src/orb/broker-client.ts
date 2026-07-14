@@ -1,6 +1,6 @@
 // Self-host BROKER CLIENT (#1255). A self-hosted engine exchanges its operator-issued enrollment secret for a
 // short-lived GitHub installation token from the central Orb (POST /v1/orb/token), so it can act on its own repos
-// WITHOUT ever holding a GitHub App private key (gittensory holds the Orb App key centrally and mints on demand —
+// WITHOUT ever holding a GitHub App private key (loopover holds the Orb App key centrally and mints on demand —
 // the das-github-mirror model). Used by createInstallationToken in broker mode; the installation-token CACHE lives
 // with the App-key path in src/github/app.ts (one mint per ~hour per installation, broker or local).
 //
@@ -9,7 +9,7 @@
 
 import { incr } from "../selfhost/metrics";
 
-/** The Orb's hosted broker base; override (ORB_BROKER_URL) only to point at a private gittensory deployment. */
+/** The Orb's hosted broker base; override (ORB_BROKER_URL) only to point at a private loopover deployment. */
 const DEFAULT_BROKER_URL = "https://api.loopover.ai";
 // The broker's cold token mint can take many seconds when GitHub is throttling the App; allow headroom so the one
 // uncached mint completes and populates the broker-side cache (steady-state cache hits return in well under a second).

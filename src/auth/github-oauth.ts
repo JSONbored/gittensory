@@ -170,7 +170,7 @@ export async function createSessionFromGitHubToken(
 ): Promise<{ token: string; login: string; expiresAt: string; scopes: string[] }> {
   // A caller-supplied token (the github_token_exchange route) carries no proof it was minted for THIS
   // OAuth app. Without an audience check, any token a victim issued to an unrelated app would mint a
-  // gittensory session as that login. The device/web flows skip this — they minted the token themselves.
+  // loopover session as that login. The device/web flows skip this — they minted the token themselves.
   if (options.verifyAppAudience && !(await verifyTokenBelongsToApp(env, githubToken))) {
     await recordAuditEvent(env, {
       eventType: "auth.github_session",

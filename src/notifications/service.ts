@@ -84,7 +84,7 @@ export async function detectIssueWatchEvents(env: Env, repoFullName: string, iss
     // Don't ping the maintainer who opened the issue about their own issue.
     .filter((watcher) => watcher.login.toLowerCase() !== authorLogin);
 
-  // Access gate: a gittensory-tracked PUBLIC repo fans out to every matching watcher (the miner use case);
+  // Access gate: a loopover-tracked PUBLIC repo fans out to every matching watcher (the miner use case);
   // a PRIVATE — or untracked/unknown — repo only to watchers who can access it, so private-repo issues never
   // reach a non-collaborator. The repo is the same for all watchers, so resolve it once and only pay the
   // per-watcher access check on the private path.

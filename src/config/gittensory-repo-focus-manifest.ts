@@ -1,5 +1,5 @@
 /**
- * Bundled fallback for JSONbored/gittensory when the repo file is not yet reachable
+ * Bundled fallback for JSONbored/loopover when the repo file is not yet reachable
  * (local dev, pre-merge branches). Keep aligned with `.loopover.yml` at repo root.
  */
 export const LOOPOVER_REPO_FOCUS_MANIFEST_YAML = `# LoopOver repo focus manifest — machine-readable contributor policy for this project.
@@ -87,7 +87,7 @@ review:
 # gittensor:priority at once); resolvePrTypeLabel composes every additive match alongside the one exclusive
 # winner, rather than the two categories competing for a single slot.
 #
-# Review-evasion protection: closing or converting-to-draft your OWN PR while gittensory has an active
+# Review-evasion protection: closing or converting-to-draft your OWN PR while loopover has an active
 # review pass running, a prior recorded gate failure, or a repeated ready<->draft cycle on this PR, is
 # treated as dodging the one-shot review rather than an ordinary action (layered OVER the dashboard's
 # own default of "off").
@@ -127,7 +127,7 @@ maintainerNotes:
   - Cosmetic UI-only polish without API wiring or maintainer-approved issue context should be redirected to backend or operator-facing work.
 `;
 
-export const GITTENSOR_SELF_REPO_DEFAULT = "JSONbored/gittensory";
+export const GITTENSOR_SELF_REPO_DEFAULT = "JSONbored/loopover";
 
 export function resolveLoopOverSelfRepoFullName(env: { LOOPOVER_DRIFT_ISSUE_REPO?: string }): string {
   const configured = env.LOOPOVER_DRIFT_ISSUE_REPO?.trim();

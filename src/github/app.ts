@@ -345,7 +345,7 @@ async function mintInstallationToken(
 
 /**
  * Dual-app webhook safety (#selfhost-app-id): TRUE when a delivery's installation belongs to a DIFFERENT
- * gittensory App than this backend's own (`GITHUB_APP_ID`), e.g. the cloud App and a self-host App installed on
+ * loopover App than this backend's own (`GITHUB_APP_ID`), e.g. the cloud App and a self-host App installed on
  * the same account during the migration. FAIL-OPEN by construction — returns FALSE (process the webhook) whenever
  * we cannot be certain it is foreign: no configured own id, an unparseable own id, or an unknown installation
  * app_id (existing rows backfill lazily). It returns TRUE only on a POSITIVE numeric mismatch, so it can never

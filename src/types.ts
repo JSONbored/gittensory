@@ -198,7 +198,7 @@ export type JobMessage =
       deliveryId: string;
     }
   | {
-      // Convergence (ops / observability, flag-gated by LOOPOVER_REVIEW_OPS). Scan gittensory's review-outcome data
+      // Convergence (ops / observability, flag-gated by LOOPOVER_REVIEW_OPS). Scan loopover's review-outcome data
       // (gate-block ledger + recommendation/slop calibration) and emit a structured `ops_anomaly` log on drift.
       // Enqueued hourly by the cron ONLY when the flag is ON (index.ts), so flag-OFF this job never exists.
       type: "ops-alerts";
@@ -224,7 +224,7 @@ export type JobMessage =
     }
   | {
       // Convergence (self-improve / auto-tune, flag-gated by LOOPOVER_REVIEW_SELFTUNE). Run the ported
-      // self-improvement loop over gittensory's review-outcome data — compute tuning recommendations,
+      // self-improvement loop over loopover's review-outcome data — compute tuning recommendations,
       // SHADOW-SOAK any strictly-tightening one, and AUTO-PROMOTE it to live only after the soak window passes
       // the gate; every action is audited. TIGHTENING-ONLY. Enqueued hourly by the cron ONLY when the flag is
       // ON (index.ts), so flag-OFF this job never exists.
@@ -526,8 +526,8 @@ export type PullRequestRecord = {
   reviewDecision?: string | null | undefined;
   body?: string | null | undefined;
   /** GitHub's own PR creation time (`pull_request.created_at`) — the ground-truth order contributors actually
-   *  opened their PRs in, independent of when gittensory's own webhook/sweep pipeline happened to observe or
-   *  process this PR. NOT the same as {@link linkedIssueClaimedAt} (gittensory's own sync-time). Preferred for
+   *  opened their PRs in, independent of when loopover's own webhook/sweep pipeline happened to observe or
+   *  process this PR. NOT the same as {@link linkedIssueClaimedAt} (loopover's own sync-time). Preferred for
    *  duplicate-cluster winner election when present on both sides being compared (#dup-winner). */
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
@@ -1021,7 +1021,7 @@ export type RepositorySettings = {
    *  touched. */
   contributorCapLabel?: string | null | undefined;
   /** Cancel in-flight CI runs on a contributor_cap close (#2462, anti-abuse): when true, after a PR is
-   *  auto-closed for exceeding {@link contributorOpenPrCap}, gittensory lists and cancels that PR's
+   *  auto-closed for exceeding {@link contributorOpenPrCap}, loopover lists and cancels that PR's
    *  in-progress/queued Actions runs at its head SHA. Requires the App installation to have granted
    *  `actions: write` -- degrades gracefully (skipped + logged, never blocks the close) when it hasn't.
    *  `null`/undefined (the DB-layer default) means "unset" and falls back to the
@@ -1059,7 +1059,7 @@ export type RepositorySettings = {
    *  or a login on {@link autoCloseExemptLogins}. */
   reviewNagMonitoredMentions?: string[] | undefined;
   /** Shared repo-scoped exemption list (#2463, anti-abuse): GitHub logins that are NEVER throttled or closed by
-   *  gittensory's deterministic anti-abuse mechanisms (review-nag and the per-contributor open-item cap above),
+   *  loopover's deterministic anti-abuse mechanisms (review-nag and the per-contributor open-item cap above),
    *  on top of the standing owner/admin/automation-bot exemption. Always populated by the DB layer (default
    *  `[]`); optional so existing settings fixtures/callers need not be touched. */
   autoCloseExemptLogins?: string[] | undefined;
@@ -1081,7 +1081,7 @@ export type RepositorySettings = {
    *  apply one manual-review label without enabling ready/changes-requested disposition labels. */
   manualReviewLabel?: string | null | undefined;
   /** Optional review-state label names. Config-as-code only; each `null` disables that specific label. These are
-   *  deliberately generic defaults rather than `gittensory:*` names so self-hosters can opt into their own
+   *  deliberately generic defaults rather than `loopover:*` names so self-hosters can opt into their own
    *  taxonomy without inheriting project-specific labels. */
   readyToMergeLabel?: string | null | undefined;
   changesRequestedLabel?: string | null | undefined;
@@ -1171,7 +1171,7 @@ export type RepositorySettings = {
    *  optional so existing settings fixtures/callers need not be touched. */
   skipAutomationBotAuthors?: "inherit" | "off" | "enabled" | undefined;
   /** Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN
-   *  PR to draft while gittensory has an ACTIVE review pass running against it is dodging the one-shot
+   *  PR to draft while loopover has an ACTIVE review pass running against it is dodging the one-shot
    *  review process. The effective default is `"close"` as of #4011 (see `normalizeReviewEvasionProtection`
    *  in `db/repositories.ts`) -- `"off"` is now an explicit opt-out, not the default. `"close"` reopens (if
    *  needed) and re-closes as the App -- a close the contributor cannot themselves reopen (#one-shot-reopen)
@@ -1379,7 +1379,7 @@ export type ContributorBlacklistEntry = {
 };
 
 /** Agent-layer graduated autonomy (#773), least → most autonomous. `observe` is the deny-by-default floor:
- *  gittensory watches but never acts. `auto_with_approval` executes behind a human approval gate (#779);
+ *  loopover watches but never acts. `auto_with_approval` executes behind a human approval gate (#779);
  *  `auto` executes directly. (#4620: `suggest`/`propose` were removed here -- the doc comment promised
  *  distinct "surface guidance/concrete proposals without executing" behavior, but every read site
  *  (`isActingAutonomyLevel`/`autonomyRequiresApproval`) only ever distinguished acting from non-acting, so
@@ -1940,7 +1940,7 @@ export type GateOutcomeRecord = {
 };
 
 // Review memory (#2178, data-model slice of #1964). One row per (repoFullName, category, pathGlob,
-// patternHash) — a maintainer-dismissed finding shape gittensory should suppress/demote if it recurs.
+// patternHash) — a maintainer-dismissed finding shape loopover should suppress/demote if it recurs.
 // Privacy: repo + category (the finding's own deterministic `code`) + a path glob + a message HASH ONLY —
 // never the raw finding message/title, never an actor's trust/reward fields.
 export type ReviewSuppressionRecord = {
@@ -2583,7 +2583,7 @@ export type MaintainerRecapRepo = {
   cohorts?: { miner: MaintainerRecapCohortCounts; human: MaintainerRecapCohortCounts } | undefined;
 };
 
-/** A serializable maintainer recap: a window of gittensory's OWN review-outcome data folded across repos.
+/** A serializable maintainer recap: a window of loopover's OWN review-outcome data folded across repos.
  *  Foundation for the #1963 recap digest — the pure data-shaping seam only (no delivery, no scheduling).
  *  Distinct from {@link ReviewRecap} (single-repo, sourced from gate merge-precision predictions); this is
  *  multi-repo and sourced from the gate-precision + outcome-calibration aggregators. (#2239) */

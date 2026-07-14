@@ -18,7 +18,7 @@ const DEFAULT_SLOP_GATE_MIN_SCORE = 60;
 
 // The bucket labels the layer applies to reflect the gate verdict. These are generic fallbacks only; self-host
 // operators can rename or disable them via config-as-code so engine behavior never depends on project-specific
-// `gittensory:*` labels.
+// `loopover:*` labels.
 export const AGENT_LABEL_READY = "ready-to-merge";
 export const AGENT_LABEL_CHANGES = "changes-requested";
 // Default label applied to a blacklisted contributor's PR (#1425). NOT hardcoded into the action — it is

@@ -12,7 +12,7 @@ export const installations = sqliteTable("installations", {
   accountId: integer("account_id").notNull(),
   // The GitHub App this installation belongs to (#selfhost-app-id). Nullable: only `installation` events (and
   // the App-installation API refresh) carry it, so existing rows backfill lazily. Lets a backend tell its OWN
-  // installations from a SECOND gittensory App installed on the same account (cloud + self-host side by side).
+  // installations from a SECOND loopover App installed on the same account (cloud + self-host side by side).
   appId: integer("app_id"),
   targetType: text("target_type").notNull(),
   repositorySelection: text("repository_selection"),
@@ -80,7 +80,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   // Linked-issue satisfaction gate (#1961/#3906). off = the assessment never runs (byte-identical to today,
   // and the default); advisory = it runs and renders in the comment but never blocks; block = an above-
   // confidence-floor "unaddressed" verdict additionally becomes a hard blocker. See src/rules/advisory.ts's
-  // isConfiguredGateBlocker (linked_issue_scope_mismatch) and gittensory-gate-setting-wiring for the pattern.
+  // isConfiguredGateBlocker (linked_issue_scope_mismatch) and loopover-gate-setting-wiring for the pattern.
   linkedIssueSatisfactionGateMode: text("linked_issue_satisfaction_gate_mode").notNull().default("off"),
   firstTimeContributorGrace: integer("first_time_contributor_grace", { mode: "boolean" }).notNull().default(false),
   slopGateMinScore: integer("slop_gate_min_score"),
@@ -453,38 +453,38 @@ export const pullRequests = sqliteTable(
     linkedIssueClaimedAt: text("linked_issue_claimed_at"),
     lastSeenOpenAt: text("last_seen_open_at"),
     payloadJson: text("payload_json").notNull().default("{}"),
-    // Latest deterministic slop assessment (gittensory-computed; written separately from the GitHub sync).
+    // Latest deterministic slop assessment (loopover-computed; written separately from the GitHub sync).
     slopRisk: integer("slop_risk"),
     slopBand: text("slop_band"),
     // RC3 terminal-fail merges: failed-merge attempt count + the head SHA at which the merge is terminally
     // blocked (perms/required-check/conflict) so the planner stops planning a merge. Keyed to head SHA → a new
-    // commit auto-clears it. gittensory-computed (executor-written), omitted from the GitHub-sync SET clause.
+    // commit auto-clears it. loopover-computed (executor-written), omitted from the GitHub-sync SET clause.
     mergeAttemptCount: integer("merge_attempt_count").notNull().default(0),
     mergeBlockedSha: text("merge_blocked_sha"),
     mergeBlockedReason: text("merge_blocked_reason"),
     // Review-evasion: repeated ready<->draft cycling (#gaming-tactic-draft-cycle). Counts every converted_to_draft
     // webhook ever processed for this PR NUMBER -- deliberately NOT scoped to head SHA like mergeAttemptCount,
     // since cycling back to draft after a fresh push is exactly the same evasion shape a new commit must not
-    // reset. gittensory-computed (webhook-written), omitted from the GitHub-sync SET clause.
+    // reset. loopover-computed (webhook-written), omitted from the GitHub-sync SET clause.
     draftConversionCount: integer("draft_conversion_count").notNull().default(0),
     // Re-approval idempotency: the head SHA the bot last auto-approved. The planner skips the `approve`
     // disposition while approved_head_sha == headSha (this commit is already approved). Keyed to head SHA → a
-    // new commit makes the bot re-approve the new code. gittensory-computed (executor-written), omitted from
+    // new commit makes the bot re-approve the new code. loopover-computed (executor-written), omitted from
     // the GitHub-sync SET clause so a later sync cannot clobber it. (Mirrors merge_blocked_sha.)
     approvedHeadSha: text("approved_head_sha"),
     // Sweep convergence: the timestamp the scheduled re-gate sweep last recomputed this PR. selectRegateCandidates
     // orders the sweep by THIS marker (not GitHub's updated_at) so it advances through all open PRs even when the
-    // review WRITE that would bump updated_at is suppressed (dry-run / paused). gittensory-computed (sweep-written),
+    // review WRITE that would bump updated_at is suppressed (dry-run / paused). loopover-computed (sweep-written),
     // omitted from the GitHub-sync SET clause so a later sync cannot clobber it. (Mirrors approved_head_sha.)
     lastRegatedAt: text("last_regated_at"),
     // Draining guard for backlog-convergence-sweep (#4502), mirroring lastRegatedAt but scoped to THIS sweep --
     // stamped at dispatch by sweepRepoBacklogConvergence, read by fanOutBacklogConvergenceSweepJobs to skip a
     // repo whose prior fan-out is still draining. Kept separate from lastRegatedAt so the two differently-cadenced
-    // sweeps' in-flight signals never conflate. gittensory-computed, omitted from the GitHub-sync SET clause.
+    // sweeps' in-flight signals never conflate. loopover-computed, omitted from the GitHub-sync SET clause.
     lastBacklogConvergenceRegatedAt: text("last_backlog_convergence_regated_at"),
     // Public-surface marker: the head SHA at which the public surface (comment/label/check-run) was LAST published.
     // Used for reporting and stale-surface diagnostics, not as a hard sweep skip; GitHub comments/checks can still
-    // be stale or partial while this marker matches headSha. gittensory-computed (publish-written), omitted from
+    // be stale or partial while this marker matches headSha. loopover-computed (publish-written), omitted from
     // the GitHub-sync SET clause so a later sync cannot clobber it. (Mirrors approved_head_sha.)
     lastPublishedSurfaceSha: text("last_published_surface_sha"),
     // Linked-issue hard-rule violation memory (#linked-issue-hard-rule-persistence). The FIRST time this PR NUMBER
@@ -494,7 +494,7 @@ export const pullRequests = sqliteTable(
     // ADDITIONALLY alongside resolveLinkedIssueHardRule's own live re-parse so a contributor cannot dodge the
     // flag-then-close verification window by stripping the closing reference from the body, or by the linked
     // issue's live state changing (e.g. unassigned), between the flagging pass and the verification pass.
-    // gittensory-computed (planner-written), omitted from the GitHub-sync SET clause so a later sync cannot clobber
+    // loopover-computed (planner-written), omitted from the GitHub-sync SET clause so a later sync cannot clobber
     // it.
     linkedIssueHardRuleViolatedAt: text("linked_issue_hard_rule_violated_at"),
     // The specific rule reason text captured at the moment of the FIRST violation (mirrors merge_blocked_reason's
@@ -506,7 +506,7 @@ export const pullRequests = sqliteTable(
     // shot) for this PR. Lets the deterministic screenshotTableGate treat a successful automated capture as
     // equivalent evidence to a hand-authored before/after table. Keyed to head SHA (mirrors approved_head_sha /
     // last_published_surface_sha) -- a new commit re-arms the requirement until capture succeeds again for the
-    // new head. gittensory-computed (publish-written), omitted from the GitHub-sync SET clause so a later sync
+    // new head. loopover-computed (publish-written), omitted from the GitHub-sync SET clause so a later sync
     // cannot clobber it.
     visualCaptureSatisfiedSha: text("visual_capture_satisfied_sha"),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
@@ -819,7 +819,7 @@ export const gateOutcomes = sqliteTable(
 );
 
 // Review-evasion active-review tracking (#review-evasion-protection): one row per (repo, PR), recording that
-// gittensory started a fresh review pass against a specific headSha before any cost-bearing AI-review work
+// loopover started a fresh review pass against a specific headSha before any cost-bearing AI-review work
 // begins. Read by the closed/converted_to_draft webhook handlers to tell a contributor evading the one-shot
 // review mid-pass apart from an ordinary close/draft conversion after the review already concluded. `status`
 // flips 'active' -> 'terminal' once the pass concludes (published, PR closed/merged, head moved, or evasion

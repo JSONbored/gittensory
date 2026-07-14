@@ -114,10 +114,10 @@ function shell(heading: string, inner: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${heading}</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0b0d;color:#e7e7ea;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}.card{max-width:34rem;margin:1.5rem;padding:2.75rem;background:#16161a;border:1px solid #2a2a30;border-radius:14px;text-align:center}h1{font-size:1.35rem;font-weight:600;margin:0 0 .7rem}p{font-size:.95rem;line-height:1.6;color:#a8a8b0;margin:0 0 1.6rem}a{display:inline-block;padding:.6rem 1.4rem;background:#1f6feb;color:#fff;text-decoration:none;border-radius:8px;font-size:.9rem}code{background:#0b0b0d;border:1px solid #2a2a30;border-radius:6px;padding:.15rem .4rem;font-size:.85rem}pre{background:#0b0b0d;border:1px solid #2a2a30;border-radius:8px;padding:1rem;overflow:auto;text-align:left;color:#7ee787;font-size:.9rem;user-select:all}</style></head><body><div class="card"><h1>${heading}</h1>${inner}</div></body></html>`;
 }
 
-// The Orb App itself stays a single centrally-hosted hub (broker.ts: gittensory holds the App key centrally
+// The Orb App itself stays a single centrally-hosted hub (broker.ts: loopover holds the App key centrally
 // and mints tokens on demand) -- that part is architecturally fixed. This link is just where the browser lands
 // after OAuth, so it follows the SAME self-hoster-configurable pattern as maintainerControlPanelUrl one
-// file-family over (github/footer.ts): env.PUBLIC_SITE_ORIGIN when set, else the public gittensory dashboard
+// file-family over (github/footer.ts): env.PUBLIC_SITE_ORIGIN when set, else the public loopover dashboard
 // (#4615).
 function landingPage(env: Env, heading: string, message: string): string {
   const dashboardOrigin = (env.PUBLIC_SITE_ORIGIN ?? LOOPOVER_SITE_URL).replace(/\/$/, "");

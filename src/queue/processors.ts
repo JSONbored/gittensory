@@ -1229,7 +1229,7 @@ const RAG_REINDEX_MAX_PATHS = 100;
  * an incremental re-index of the PR's changed files so the index reflects the new default-branch state. No-op when
  * the flag is off, the repo isn't allowlisted, the action isn't a merge-close, or there are no changed paths.
  *
- * INCREMENTAL TRIGGER NOTE: gittensory does not (yet) subscribe to raw `push` events — the merged-PR close is the
+ * INCREMENTAL TRIGGER NOTE: loopover does not (yet) subscribe to raw `push` events — the merged-PR close is the
  * available signal that "code landed on the default branch". If a `push` handler is added later, that is the
  * stronger trigger (it also catches direct-to-default-branch commits); enqueue the same `rag-index-repo` job with
  * the pushed paths there. The slow-cadence cron full re-index (index.ts) is the backstop that catches anything
@@ -2666,7 +2666,7 @@ async function runAgentMaintenancePlanAndExecute(
   // (markPullRequestLinkedIssueHardRuleViolated is a no-op once already set) so a LATER pass can't lose it to a
   // body edit or a linked issue's live state changing -- see mergeLinkedIssueHardRuleWithPersistedViolation's own
   // doc comment for the full dodge-window rationale. Best-effort write: a D1 hiccup here only means this ONE
-  // confirmed violation isn't remembered, matching every other gittensory-computed marker write in this file
+  // confirmed violation isn't remembered, matching every other loopover-computed marker write in this file
   // (mergeBlockedSha, draftConversionCount, lastRegatedAt).
   if (liveLinkedIssueHardRule?.violated === true) {
     await markPullRequestLinkedIssueHardRuleViolated(env, repoFullName, pr.number, liveLinkedIssueHardRule.reason ?? "the linked issue is not eligible for a community PR").catch(() => undefined);
@@ -5154,7 +5154,7 @@ async function maybeHandleInstallationDeletedWebhookEvent(
 
 /**
  * Dual-app safety (#selfhost-app-id): acks and skips a delivery whose installation belongs to a DIFFERENT
- * gittensory App than this backend's own (cloud + self-host installed on the same account), so neither
+ * loopover App than this backend's own (cloud + self-host installed on the same account), so neither
  * backend acts on the other's installation. Returns `true` when handled (the caller must return
  * immediately), `false` otherwise. Extracted from processGitHubWebhook (#4607) — pure code motion, no
  * behavior change.
@@ -5166,7 +5166,7 @@ async function maybeHandleForeignAppInstallationWebhookEvent(
   payload: GitHubWebhookPayload,
   installationAppId: number | null,
 ): Promise<boolean> {
-  // Dual-app safety (#selfhost-app-id): if this delivery's installation belongs to a DIFFERENT gittensory App
+  // Dual-app safety (#selfhost-app-id): if this delivery's installation belongs to a DIFFERENT loopover App
   // (cloud + self-host installed on the same account), ack it without processing so neither backend acts on the
   // other's installation. FAIL-OPEN — an unknown/own-matching app_id always processes, so the LIVE single-app
   // path is byte-identical. Signature verification (per-App secret) is the primary isolation; this is the
@@ -5637,7 +5637,7 @@ async function handlePullRequestWebhookEvent(
       /* v8 ignore next -- best-effort: the guarded CAS update never rejects against a healthy D1, and a cleanup failure here must never block the webhook. */
       await terminalizeActiveReviewTracking(env, repoFullName, pr.number).catch(() => undefined);
     }
-    // Reopen-prevention (#one-shot-reopen): a CONTRIBUTOR may not reopen a PR that gittensory or a maintainer
+    // Reopen-prevention (#one-shot-reopen): a CONTRIBUTOR may not reopen a PR that loopover or a maintainer
     // closed — closes are one-shot (resubmit, don't reopen). If a non-maintainer reopened a PR whose last close
     // was by the bot / repo owner / admin, re-close it and skip the re-review. Self-closes (the contributor
     // closed their own PR) stay reopenable; the bot's own nightly-re-review reopens are exempt. A contended
@@ -5761,7 +5761,7 @@ async function handlePullRequestWebhookEvent(
       actionMode: await resolveRepoActionMode(env, settings),
     });
     // Review-evasion protection (#review-evasion-protection): a contributor closing their OWN PR while
-    // gittensory has an ACTIVE review pass running is dodging the one-shot review, not making an ordinary
+    // loopover has an ACTIVE review pass running is dodging the one-shot review, not making an ordinary
     // close. Runs regardless of the general draft-dodge/reopen-reclose gates above -- it is its own
     // independent enforcement, config-gated on settings.reviewEvasionProtection (close by default, #4011).
     if (payload.action === "closed" && installationId) {
@@ -7428,7 +7428,7 @@ export async function runScreenshotTableVisionForAdvisory(
  * pass from -- so a fully-green required CI rollup counts as evidence too. Without this, a fully-automated,
  * CI-green, docs-only regen PR (the #4719 false positive) fails this check merely because its templated
  * body never happens to contain a "tested"/"validated" word. `ciState === "passed"` already excludes
- * gittensory's own Gate/Context check-runs (`BOT_OWNED_CHECK_NAMES`, github/backfill.ts), so this can never
+ * loopover's own Gate/Context check-runs (`BOT_OWNED_CHECK_NAMES`, github/backfill.ts), so this can never
  * be satisfied by the very check-run this signal feeds into.
  */
 async function resolveManifestPassedValidationCount(
@@ -8046,7 +8046,7 @@ async function maybePublishPrPublicSurface(
   }
 
   // Respect the per-repo agent pause: suppress all public surface mutations (label, comment, context
-  // check run) so a paused repo sees no gittensory-authored GitHub content. The review-agent check
+  // check run) so a paused repo sees no loopover-authored GitHub content. The review-agent check
   // run still posts so the required-check status is not broken (#agent-pause).
   if (settings.agentPaused)
     decision = {
@@ -9925,7 +9925,7 @@ async function maybePublishPrPublicSurface(
     };
     let deterministicBody: string;
     // Convergence (Stage D): when the unified-review-comment flag is ON, render the single converged comment
-    // (gittensory shape + reviewbot's review folded in). The gate stays authoritative (passed as `decision`),
+    // (loopover shape + reviewbot's review folded in). The gate stays authoritative (passed as `decision`),
     // and the body carries the SAME panel marker so the upsert updates in place. Flag-OFF (default) keeps the
     // legacy panel byte-identical. Only the comment lane is affected; the gate check-run/labels/audit are not.
     //

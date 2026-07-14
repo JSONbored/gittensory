@@ -98,10 +98,10 @@ export async function refreshScoringModelSnapshot(env: Env): Promise<ScoringMode
     const unmodeled = findUnmodeledUpstreamConstants(constantsResult.value);
     constantsPayload = { parsedConstantCount: Object.keys(parsed).length, sourceBytes: constantsResult.value.length, unmodeledUpstreamConstants: unmodeled };
     warnings.push(...activeModelWarnings(parsed));
-    // Make staleness visible: upstream defines scoring constants gittensory does not yet model.
+    // Make staleness visible: upstream defines scoring constants loopover does not yet model.
     if (unmodeled.length > 0) {
       warnings.push(
-        `Upstream gittensor defines ${unmodeled.length} scoring constant(s) gittensory does not yet model: ${unmodeled.slice(0, 12).join(", ")}${unmodeled.length > 12 ? ", …" : ""}. Scoring may be behind upstream.`,
+        `Upstream gittensor defines ${unmodeled.length} scoring constant(s) loopover does not yet model: ${unmodeled.slice(0, 12).join(", ")}${unmodeled.length > 12 ? ", …" : ""}. Scoring may be behind upstream.`,
       );
     }
   } else {

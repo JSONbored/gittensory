@@ -3551,7 +3551,7 @@ export async function countByokAiEventsForRepoSince(env: Env, repoFullName: stri
 }
 
 /**
- * #hosted-ai-usage-observability: the ONLY AI activity the HOSTED gittensory-api Worker can ever have is a
+ * #hosted-ai-usage-observability: the ONLY AI activity the HOSTED loopover-api Worker can ever have is a
  * maintainer's own BYOK call (the legacy Workers-AI-binding path is retired; `env.AI` is undefined there) --
  * yet nothing previously read back the real token/cost columns migration 0109 added to `ai_usage_events` for
  * the hosted deployment specifically (the one dashboard built for this, orb-ai-usage.json, is wired
@@ -5413,7 +5413,7 @@ export async function getGateBlockOutcome(
   return { headSha: row.headSha, blockerCodes: parseJson<string[]>(row.blockerCodesJson, []), overridden: row.overridden };
 }
 
-// Review-evasion protection (#review-evasion-protection): idempotently mark that gittensory started a fresh
+// Review-evasion protection (#review-evasion-protection): idempotently mark that loopover started a fresh
 // review pass for repoFullName#pullNumber at headSha, BEFORE any cost-bearing AI-review work begins. A
 // redelivery/retry for the SAME headSha while the row is still active is a true no-op (startedAt/deliveryId
 // are preserved); a NEW headSha (a fresh commit) or a previously-terminalized row is overwritten with fresh
@@ -5449,7 +5449,7 @@ export async function startActiveReviewTracking(
     });
 }
 
-// Review-evasion protection: whether gittensory has an ACTIVE review pass recorded for this EXACT
+// Review-evasion protection: whether loopover has an ACTIVE review pass recorded for this EXACT
 // repo/PR/headSha -- the read side the closed/converted_to_draft evasion guards check before treating a
 // contributor's action as evasion. A row for a DIFFERENT headSha (or a terminalized row) does not count --
 // the active window is scoped to the specific commit under review.
@@ -6202,7 +6202,7 @@ function toPullRequestRecordFromRow(row: typeof pullRequests.$inferSelect): Pull
     mergeBlockedSha: row.mergeBlockedSha,
     mergeBlockedReason: row.mergeBlockedReason,
     approvedHeadSha: row.approvedHeadSha,
-    // Read straight from the row, NEVER the GitHub payload — this is a gittensory-internal sweep marker.
+    // Read straight from the row, NEVER the GitHub payload — this is a loopover-internal sweep marker.
     lastRegatedAt: row.lastRegatedAt,
     lastPublishedSurfaceSha: row.lastPublishedSurfaceSha,
     linkedIssueHardRuleViolatedAt: row.linkedIssueHardRuleViolatedAt,
@@ -7593,7 +7593,7 @@ function normalizeReviewNagPolicy(value: string | null | undefined): "off" | "ho
 // #4011: default-ON, the deliberate exception to every other field in this file defaulting conservatively
 // (off/false/advisory). A repo that hasn't discovered and explicitly set this field got ZERO self-close/
 // draft-dodge/repeated-cycling protection under the old "off" default -- a real, already-exploited gaming
-// vector (see gittensory-ai-review-repeat-spend-and-draft-gaming-fix). Any value other than the explicit
+// vector (see loopover-ai-review-repeat-spend-and-draft-gaming-fix). Any value other than the explicit
 // opt-out "off" (including undefined/garbage) now resolves to "close": protected unless a repo deliberately
 // turns it off, not unprotected unless a repo discovers and turns it on. This is the ONLY reachable default
 // for this field -- the raw schema.ts column-level DEFAULT and the SQLite DDL default are never reached by

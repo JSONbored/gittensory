@@ -1,7 +1,7 @@
 // LoopOver Orb central GitHub App (#1255) — inbound webhook receiver (POST /v1/orb/webhook).
 //
 // The central Orb App is a SEPARATE GitHub App that maintainers INSTALL (one shared app, like
-// das-github-mirror's). GitHub delivers its install + PR/review events here, to gittensory-api. This is the
+// das-github-mirror's). GitHub delivers its install + PR/review events here, to loopover-api. This is the
 // data spine for the homepage fleet metrics (reviews initiated / merged / closed / reversals).
 //
 // PR1 scope: receive + verify (the Orb App's OWN webhook secret) + dedup + record. NO processing yet — the
