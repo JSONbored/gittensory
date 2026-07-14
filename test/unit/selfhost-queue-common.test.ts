@@ -929,6 +929,18 @@ describe("self-host queue common helpers", () => {
     parse.mockRestore();
   });
 
+  it("uses each job type's missing-field fallback tokens when optional fields are absent (#5850)", () => {
+    // A payload carrying only `type` (no repo/mode/segment/cursor/login/day) must coalesce to the type's
+    // literal fallback key rather than null-ing or duplicating — the normalizers return null on a missing
+    // field, so the `?? "<fallback>"` arm is taken. boolFlag(undefined) === "0".
+    expect(jobCoalesceKey(payload({ type: "backfill-registered-repos" }))).toBe("backfill-registered-repos:all:default:0");
+    expect(jobCoalesceKey(payload({ type: "backfill-repo-segment" }))).toBe("backfill-repo-segment:unknown:unknown:default:0:start");
+    expect(jobCoalesceKey(payload({ type: "backfill-pr-details" }))).toBe("backfill-pr-details:unknown:default:start");
+    expect(jobCoalesceKey(payload({ type: "generate-review-recap" }))).toBe("generate-review-recap:all");
+    expect(jobCoalesceKey(payload({ type: "refresh-contributor-activity" }))).toBe("refresh-contributor-activity:unknown:all");
+    expect(jobCoalesceKey(payload({ type: "rollup-product-usage" }))).toBe("rollup-product-usage:latest:default");
+  });
+
   it("coalesces CI-completion webhooks with sorted pull numbers", () => {
     expect(jobCoalesceKey(payload({ type: "agent-regate-pr", repoFullName: "JSONbored/Gittensory", prNumber: 7 }))).toBe("agent-regate-pr:jsonbored/gittensory#7");
     expect(jobCoalesceKey(payload({ type: "agent-regate-pr", repoFullName: "JSONbored/Gittensory" }))).toBeNull();
