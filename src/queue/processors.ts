@@ -1900,6 +1900,71 @@ export async function regatePullRequest(
   }
 }
 
+/** The merge/disposition facts the public PR comment renders, derived from the live CI + merge-state refresh
+ *  (#4607). Extracted out of `maybePublishPrPublicSurface`'s inline body: it is pure, and its output IS the
+ *  renderer's input contract (`buildUnifiedCommentBody`'s ciState/mergeStateLabel/mergeReadiness/heldForReview/
+ *  neverClosed arguments), so the seam is a real step rather than an arbitrary cut. */
+export type PublicCommentMergeFacts = {
+  ciState: MergeReadiness["ciState"];
+  mergeStateLabel: string | undefined;
+  mergeReadiness: MergeReadiness;
+  heldForReview: boolean;
+  neverClosed: boolean;
+};
+
+/** Public-safe projection of one failing check: name + short reason only, dropping absent optionals so the
+ *  rendered chip never carries an `undefined` summary/url. */
+function publicCheckFailureDetails(details: LiveCiAggregate["failingDetails"]): CheckFailureDetail[] {
+  return details.map((detail) => ({
+    name: detail.name,
+    ...(detail.summary ? { summary: detail.summary } : {}),
+    ...(detail.detailsUrl ? { detailsUrl: detail.detailsUrl } : {}),
+  }));
+}
+
+/**
+ * Derive the public comment's merge-readiness + disposition flags (#4607). Pure: no D1, no GitHub client, no
+ * metrics — the caller keeps the `incr()` emit, which reads the gate conclusion this function never sees.
+ *
+ * The two flags exist so the COMMENT agrees with the ACTION the disposition planner will take:
+ * - `heldForReview` — a clean, green PR whose diff touches a hard-guardrail path is held for owner review by
+ *   `planAgentMaintenanceActions`, never auto-merged, so the comment must not headline "safe to merge"
+ *   (#guarded-hold-comment). Uses the same shared `isGuardrailHit` the planner uses, not a second copy.
+ * - `neverClosed` — the disposition never auto-closes a repo-owner or protected-automation PR, so a gate
+ *   "close" verdict on one must headline "held", not "Closed" (#8/#9).
+ */
+export function derivePublicCommentMergeFacts(args: {
+  liveMergeState: string | undefined;
+  mergeableState: string | null | undefined;
+  authorLogin: string | null | undefined;
+  liveCi: Pick<LiveCiAggregate, "ciState" | "failingDetails" | "nonRequiredFailingDetails">;
+  settings: Pick<RepositorySettings, "hardGuardrailGlobs" | "hardGuardrailGlobsOverridesInvariants">;
+  unifiedFiles: Awaited<ReturnType<typeof listPullRequestFiles>>;
+  repoFullName: string;
+}): PublicCommentMergeFacts {
+  const mergeStateLabel = args.liveMergeState ?? args.mergeableState ?? undefined; // fail-safe to the stored value
+  const ciState: MergeReadiness["ciState"] =
+    args.liveCi.ciState === "passed" ? "passed" : args.liveCi.ciState === "failed" ? "failed" : "unverified";
+  // Per-failed-check WHY (codecov %/test/lint reason) from each check-run output or commit-status description.
+  const failingDetails = publicCheckFailureDetails(args.liveCi.failingDetails);
+  // Non-required-but-red checks (#4414-class advisory holds): surfaced so a flagged check is never silently
+  // invisible, but never folded into failingChecks/failingDetails -- those two drive ciState/close.
+  const nonRequiredFailingDetails = publicCheckFailureDetails(args.liveCi.nonRequiredFailingDetails);
+  const mergeReadiness: MergeReadiness = {
+    ciState,
+    ...(mergeStateLabel ? { mergeStateLabel } : {}),
+    ...(failingDetails.length > 0 ? { failingChecks: failingDetails.map((detail) => detail.name) } : {}),
+    ...(failingDetails.length > 0 ? { failingDetails } : {}),
+    ...(nonRequiredFailingDetails.length > 0 ? { nonRequiredFailingDetails } : {}),
+  };
+  const heldForReview = isGuardrailHit(changedPathsForGuardrail(args.unifiedFiles), resolveHardGuardrailGlobs(args.settings));
+  const repoOwner = args.repoFullName.includes("/") ? args.repoFullName.slice(0, args.repoFullName.indexOf("/")) : "";
+  const authorLogin = args.authorLogin ?? "";
+  const neverClosed =
+    (authorLogin.length > 0 && authorLogin.toLowerCase() === repoOwner.toLowerCase()) || isProtectedAutomationAuthor(args.authorLogin);
+  return { ciState, mergeStateLabel, mergeReadiness, heldForReview, neverClosed };
+}
+
 export function changedPathsForGuardrail(
   files: Awaited<ReturnType<typeof listPullRequestFiles>>,
 ): string[] {
@@ -9833,40 +9898,15 @@ async function maybePublishPrPublicSurface(
       // The stored pr.mergeableState lags GitHub's async recompute, and the gate's own check/review publication can
       // also advance mergeability after readiness ran, so refresh at this post-publish boundary.
       const liveMergeState = await refreshLiveMergeState(env, repoFullName, webhook.liveFacts, pr.number, token, admissionKey).catch(() => undefined);
-      const mergeStateLabel = liveMergeState ?? pr.mergeableState; // fail-safe to the stored value
-      const ciState: MergeReadiness["ciState"] =
-        liveCi.ciState === "passed"
-          ? "passed"
-          : liveCi.ciState === "failed"
-            ? "failed"
-            : "unverified";
-      // Per-failed-check WHY (codecov %/test/lint reason) from each check-run output or commit-status
-      // description — capped + public-safe (name + short reason only). The renderer lists these under the CI chip.
-      const failingDetails: CheckFailureDetail[] = liveCi.failingDetails.map(
-        (detail) => ({
-          name: detail.name,
-          ...(detail.summary ? { summary: detail.summary } : {}),
-          ...(detail.detailsUrl ? { detailsUrl: detail.detailsUrl } : {}),
-        }),
-      );
-      // Non-required-but-red checks (#4414-class advisory holds): surfaced so a flagged check is never silently
-      // invisible, but never folded into failingChecks/failingDetails -- those two drive ciState/close.
-      const nonRequiredFailingDetails: CheckFailureDetail[] = liveCi.nonRequiredFailingDetails.map(
-        (detail) => ({
-          name: detail.name,
-          ...(detail.summary ? { summary: detail.summary } : {}),
-          ...(detail.detailsUrl ? { detailsUrl: detail.detailsUrl } : {}),
-        }),
-      );
-      const mergeReadiness: MergeReadiness = {
-        ciState,
-        ...(mergeStateLabel ? { mergeStateLabel } : {}),
-        ...(failingDetails.length > 0
-          ? { failingChecks: failingDetails.map((detail) => detail.name) }
-          : {}),
-        ...(failingDetails.length > 0 ? { failingDetails } : {}),
-        ...(nonRequiredFailingDetails.length > 0 ? { nonRequiredFailingDetails } : {}),
-      };
+      const { ciState, mergeStateLabel, mergeReadiness, heldForReview, neverClosed } = derivePublicCommentMergeFacts({
+        liveMergeState,
+        mergeableState: pr.mergeableState,
+        authorLogin: pr.authorLogin,
+        liveCi,
+        settings,
+        unifiedFiles,
+        repoFullName,
+      });
       // The public comment must match the authoritative Gate check-run conclusion.
       const commentGate = gateEvaluation;
       // Observability (#reviews-dashboard): record the would-be gate verdict so the Grafana panel shows the
@@ -9875,27 +9915,6 @@ async function maybePublishPrPublicSurface(
         repo: repoFullName,
         conclusion: commentGate.conclusion,
       });
-      // Guarded-hold (#guarded-hold-comment): a clean+green PR whose diff touches a hard-guardrail path is HELD
-      // for owner review by the disposition (planAgentMaintenanceActions), never auto-merged — so the comment
-      // must render "held for review", not "✅ safe to merge". Compute the SAME guardrail-hit the disposition uses
-      // (shared isGuardrailHit) and thread it so the signal and the action agree (the #4220 class, clean variant).
-      const commentHardGuardrailGlobs = resolveHardGuardrailGlobs(settings);
-      const heldForReview = isGuardrailHit(
-        changedPathsForGuardrail(unifiedFiles),
-        commentHardGuardrailGlobs,
-      );
-      // Held-vs-closed parity (#8/#9): the disposition NEVER auto-closes an owner / automation-bot PR, so a gate
-      // "close" verdict on one must headline "held", not "Closed". Compute the same author classification the
-      // planner uses (repo-owner login match + protected automation author) and thread it to the comment.
-      const commentRepoOwner = repoFullName.includes("/")
-        ? repoFullName.slice(0, repoFullName.indexOf("/"))
-        : "";
-      const commentAuthorLogin = pr.authorLogin ?? "";
-      const neverClosed =
-        (commentAuthorLogin.length > 0 &&
-          commentAuthorLogin.toLowerCase() ===
-            commentRepoOwner.toLowerCase()) ||
-        isProtectedAutomationAuthor(pr.authorLogin);
       const { rows, readinessTotal } = buildPublicPrPanelSignalRows({
         repo,
         pr,
