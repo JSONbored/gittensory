@@ -79,3 +79,27 @@ describe("worktree pool allocator (#4297)", () => {
     expect(availableWorktreeSlots(s, { maxConcurrency: 1 })).toBe(0);
   });
 });
+
+describe("worktree pool maxConcurrency normalization (#5828)", () => {
+  it("treats a NaN cap as zero — allocates nothing instead of unbounded", () => {
+    expect(availableWorktreeSlots(EMPTY_WORKTREE_POOL, { maxConcurrency: Number.NaN })).toBe(0);
+    const r = acquireWorktree(EMPTY_WORKTREE_POOL, { maxConcurrency: Number.NaN }, { attemptId: "a", repoPath: REPO });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("at_capacity");
+  });
+
+  it("treats a negative cap as zero", () => {
+    expect(availableWorktreeSlots(EMPTY_WORKTREE_POOL, { maxConcurrency: -3 })).toBe(0);
+    expect(acquireWorktree(EMPTY_WORKTREE_POOL, { maxConcurrency: -3 }, { attemptId: "a", repoPath: REPO }).ok).toBe(false);
+  });
+
+  it("floors a fractional cap to a whole number of slots", () => {
+    const cfg = { maxConcurrency: 2.7 };
+    expect(availableWorktreeSlots(EMPTY_WORKTREE_POOL, cfg)).toBe(2);
+    const s1 = acquireWorktree(EMPTY_WORKTREE_POOL, cfg, { attemptId: "a", repoPath: REPO });
+    const s2 = s1.ok ? acquireWorktree(s1.state, cfg, { attemptId: "b", repoPath: REPO }) : s1;
+    const s3 = s2.ok ? acquireWorktree(s2.state, cfg, { attemptId: "c", repoPath: REPO }) : s2;
+    expect(s1.ok && s2.ok).toBe(true);
+    expect(s3.ok).toBe(false); // floor(2.7) = 2, so the third slot is at capacity
+  });
+});
