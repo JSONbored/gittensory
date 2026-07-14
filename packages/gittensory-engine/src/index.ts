@@ -294,7 +294,7 @@ export {
   type WorktreeExecResult,
   type WorktreePlan,
   type WorktreeRemoveResult,
-} from "./miner/worktree-allocator.js";
+} from "./miner/worktree-plan.js";
 export * from "./miner/worktree-pool.js";
 export {
   invokeCodingAgentDriver,

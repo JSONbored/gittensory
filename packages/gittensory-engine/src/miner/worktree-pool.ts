@@ -1,6 +1,6 @@
 // Git-worktree POOL allocator (#4297): the pure, in-memory scheduling logic for a POOL of per-attempt git
 // worktrees across concurrent fleet attempts — acquire/release under a concurrency cap, plus orphan
-// reclamation. Complementary to the isolation PRIMITIVE (worktree-allocator.ts, #4269), which plans/creates/
+// reclamation. Complementary to the isolation PRIMITIVE (worktree-plan.ts, #4269), which plans/creates/
 // tears down ONE worktree; this manages the SET of them so two concurrent attempts never collide and a crash
 // can't leak worktree slots forever.
 //
@@ -10,7 +10,7 @@
 // calls these pure transitions, and writes the result back. No IO here: every function takes state in and
 // returns new state out.
 
-import { planWorktree, type WorktreePlan } from "./worktree-allocator.js";
+import { planWorktree, type WorktreePlan } from "./worktree-plan.js";
 
 /** One live allocation: which attempt holds which planned worktree. */
 export type WorktreeAllocation = {

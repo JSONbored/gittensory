@@ -73,7 +73,7 @@ export type IterateLoopInput = {
   linkedIssues?: number[] | undefined;
   authorAssociation?: string | undefined;
   /** Optional branch ref for the attempt's worktree, threaded through to a passing {@link HandoffPacket}
-   *  unchanged -- this loop does not itself manage worktrees/branches (worktree-allocator.ts's job). */
+   *  unchanged -- this loop does not itself manage worktrees/branches (worktree-plan.ts's job). */
   branchRef?: string | undefined;
 
   /** Repo-level self-review context (manifest, repo record, issues, pull requests, ...) -- passed through to
