@@ -67,11 +67,17 @@ describe("deriveUnifiedStatus", () => {
     expect(deriveUnifiedStatus({ ...base, recommendations: [], blockers: ["leaks a secret"] })).toBe("blocked");
   });
 
-  it("a non-mergeable merge state is advisory — dirty/behind hold, but never block a merge verdict (#4220)", () => {
+  it("a non-mergeable merge state is advisory — dirty/behind/unstable hold, but never block a merge verdict (#4220, #pr-5288-confusing-verdict)", () => {
     // The reported bug: green CI + merge verdict but a `dirty` base conflict rendered "safe to merge".
     expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "dirty" } })).toBe("held");
     expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "DIRTY" } })).toBe("held"); // case-insensitive
     expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "behind" } })).toBe("held");
+    // The PR #5288 bug: green CI + merge verdict but a non-required third-party check (e.g. a Superagent
+    // "Contributor trust" ACTION_REQUIRED) leaves GitHub's mergeable_state "unstable" -- the disposition planner
+    // (agentHoldAuditDetail, processors.ts) already withholds the merge for ANY non-"clean" state, so the comment
+    // must not say "safe to merge" here either, or it directly contradicts the bot's own held merge action.
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "unstable" } })).toBe("held");
+    expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "UNSTABLE" } })).toBe("held"); // case-insensitive
     // A clean (or not-yet-computed / pending-bot-approval) merge state still renders ready.
     expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "clean" } })).toBe("ready");
     expect(deriveUnifiedStatus({ ...base, decision: "merge", readiness: { ciState: "passed", mergeStateLabel: "unknown" } })).toBe("ready");

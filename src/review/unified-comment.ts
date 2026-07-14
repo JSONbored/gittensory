@@ -340,12 +340,16 @@ export function deriveUnifiedStatus(input: UnifiedReviewInput, ctx: UnifiedComme
     return "held";
   }
   // Merge-state readiness follows the same rule: do not claim "safe to merge" while GitHub says the branch is
-  // dirty/behind, but keep the comment in a held/advisory tone instead of turning readiness into a blocker.
-  // Other states — clean, a not-yet-computed `unknown`, or a `blocked` that the bot's own pending approval will clear — do not downgrade.
-  // (#ready-needs-mergeable)
+  // dirty/behind/unstable, but keep the comment in a held/advisory tone instead of turning readiness into a
+  // blocker. `unstable` (#pr-5288-confusing-verdict) covers a non-required check reporting non-success (e.g. a
+  // third-party App's own check) — exactly the state agentHoldAuditDetail (processors.ts) already treats as a
+  // real merge-withhold reason (`mergeableState !== "clean"`), so without this the comment could say "safe to
+  // merge" on the SAME PR the disposition planner is actively holding, which is the contradiction #5288 reported.
+  // Other states — clean, a not-yet-computed `unknown`, or a `blocked` that the bot's own pending approval will
+  // clear — do not downgrade. (#ready-needs-mergeable)
   if (status === "ready" && input.readiness?.mergeStateLabel) {
     const mergeState = input.readiness.mergeStateLabel.toLowerCase();
-    if (mergeState === "dirty" || mergeState === "behind") return "held";
+    if (mergeState === "dirty" || mergeState === "behind" || mergeState === "unstable") return "held";
   }
   // Guarded-hold gate — a clean + green PR whose diff touches a hard-guardrail path (CI config, the review
   // engine, visuals) is HELD for owner review by the disposition, never auto-merged. The comment must then say
