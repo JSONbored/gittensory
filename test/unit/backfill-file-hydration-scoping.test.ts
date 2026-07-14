@@ -7,8 +7,10 @@ import {
   upsertPullRequestDetailSyncState,
   upsertPullRequestFile,
   upsertPullRequestFromGitHub,
+  upsertRepositoryFromGitHub,
 } from "../../src/db/repositories";
 import { backfillOpenPullRequestDetails, backfillRegisteredRepositories, backfillRepositorySegment, refreshPullRequestDetails } from "../../src/github/backfill";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import { clearGitHubResponseCacheForTest } from "../../src/github/client";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
@@ -18,6 +20,7 @@ import { createTestEnv } from "../helpers/d1";
 describe("GitHub PR file hydration scoping (#audit-rate-headroom)", () => {
   afterEach(() => {
     clearGitHubResponseCacheForTest();
+    clearInstallationTokenCacheForTest();
     resetMetrics();
     vi.unstubAllGlobals();
   });
@@ -462,6 +465,8 @@ describe("GitHub PR file hydration scoping (#audit-rate-headroom)", () => {
   it("populates the head-SHA snapshot from the monolithic backfillRegisteredRepositories path so a later run reuses it (regression: the /run admin endpoint's PR-detail loop must WRITE the cache it reads)", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     await seedRegisteredRepo(env);
+    // backfillRegisteredRepositories now gates on isInstalled, not isRegistered (#5021).
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 456);
     let filesCallCount = 0;
     stubFetchTracking((url) => {
       if (url.endsWith("/repos/JSONbored/gittensory")) return Response.json({ name: "gittensory", full_name: "JSONbored/gittensory", default_branch: "main", owner: { login: "JSONbored" } });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import {
   getInstallationHealth,
   listCheckSummaries,
@@ -202,6 +203,19 @@ async function seedRegisteredRepo(env: Env) {
   );
 }
 
+// Seeds a repo that is BOTH gittensor-registered and app-installed. #5021 retargeted
+// backfillRegisteredRepositories/enqueueRepositoryOpenDataBackfill's eligibility gate from
+// isRegistered to isInstalled; a handful of tests exercise those two specific entry points and need
+// the seeded repo to stay backfill-eligible under the new gate. Deliberately separate from
+// seedRegisteredRepo (registered-only, no installationId) rather than folding installation into it:
+// many other tests call backfillRepositorySegment/tokenForRepo-adjacent paths directly and rely on
+// seedRegisteredRepo's repo having NO installationId to exercise the public-token/unauthenticated
+// fallback path.
+async function seedInstalledAndRegisteredRepo(env: Env) {
+  await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
+  await seedRegisteredRepo(env);
+}
+
 async function generatePrivateKeyPem(): Promise<string> {
   const key = (await crypto.subtle.generateKey(
     {
@@ -263,6 +277,10 @@ describe("GitHub backfill", () => {
   afterEach(() => {
     vi.useRealTimers();
     clearGitHubResponseCacheForTest();
+    // #5021: seedInstalledAndRegisteredRepo hardcodes installationId 123, and createInstallationToken's
+    // module-level cache is keyed by installationId alone -- without this, whichever test first mints a
+    // token for 123 poisons every later test that reuses it, regardless of that later test's own fetch mock.
+    clearInstallationTokenCacheForTest();
     vi.unstubAllGlobals();
   });
 
@@ -297,7 +315,7 @@ describe("GitHub backfill", () => {
 
   it("stores bounded repo metadata, labels, issues, PR details, recent merges, and contributor stats", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     const authHeaders: Array<string | null> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -404,7 +422,7 @@ describe("GitHub backfill", () => {
 
   it("paginates past the first 100 labels in the monolithic backfill path", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 0, mergedPullRequests: 0, closedPullRequests: 0, labels: 150 });
@@ -1393,7 +1411,7 @@ describe("GitHub backfill", () => {
 
   it("skips repositories with backfill disabled", async () => {
     const env = createTestEnv();
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "off",
@@ -1410,7 +1428,7 @@ describe("GitHub backfill", () => {
 
   it("REGRESSION (#2912): honors a .loopover.yml-only backfillEnabled: false override (DB row left at its true default)", async () => {
     const env = createTestEnv();
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     // No upsertRepositorySettings call: the DB row stays at its default (backfillEnabled: true). Only the
     // yml manifest disables it, so this only passes if the resolver (not the raw DB accessor) is consulted.
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -1424,18 +1442,15 @@ describe("GitHub backfill", () => {
     expect(result.repos[0]).toMatchObject({ status: "skipped", warnings: ["Backfill is disabled for this repository."] });
   });
 
-  it("skips public repo backfill without a service token and backs off fresh sync states", async () => {
-    const missingTokenEnv = createTestEnv();
-    await seedRegisteredRepo(missingTokenEnv);
-    const missingToken = await backfillRegisteredRepositories(missingTokenEnv);
-    expect(missingToken.repos[0]).toMatchObject({
-      status: "skipped",
-      warnings: [expect.stringContaining("GITHUB_PUBLIC_TOKEN")],
-    });
-    expect(await listRepoSyncStates(missingTokenEnv)).toMatchObject([{ repoFullName: "JSONbored/gittensory", status: "skipped" }]);
-
+  it("backs off fresh sync states", async () => {
+    // The "no installationId and no GITHUB_PUBLIC_TOKEN" skip branch in backfillRegisteredRepositories
+    // (src/github/backfill.ts:329) is unreachable through this function's real call path as of #5021:
+    // its own repo filter now requires isInstalled, and isInstalled is only ever true when installationId
+    // is set (upsertRepositoryFromGitHub ties them together, and uninstall clears both in lockstep), so a
+    // repo that reaches this per-repo loop always has an installationId. Left as defensive dead code rather
+    // than removed, since #5021's own scope is the eligibility filter, not this unrelated branch.
     const freshEnv = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(freshEnv);
+    await seedInstalledAndRegisteredRepo(freshEnv);
     await upsertRepoSyncState(freshEnv, {
       repoFullName: "JSONbored/gittensory",
       status: "success",
@@ -1464,9 +1479,55 @@ describe("GitHub backfill", () => {
     expect(backedOff.repos[0]).toMatchObject({ status: "skipped", errorSummary: "rate limited", warnings: [expect.stringContaining("backing off")] });
   });
 
+  it("#5021: only backfills isInstalled repos, regardless of gittensor-subnet registration status", async () => {
+    // Reproduces the live incident shape: a repo installed via the GitHub App but never
+    // gittensor-subnet-registered now gets backfilled; a repo that's subnet-registered but never
+    // installed (the edge-nl-01 shape: 15 of 18 subnet repos were unrelated, uninstalled miner repos)
+    // no longer does, regardless of GITHUB_PUBLIC_TOKEN being configured as a fallback.
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await upsertRepositoryFromGitHub(env, { name: "installed-only", full_name: "JSONbored/installed-only", private: false, owner: { login: "JSONbored" } }, 999);
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/registered-only": { emission_share: 0.01, issue_discovery_share: 0, trusted_label_pipeline: true, label_multipliers: {} } },
+        { kind: "raw-github", url: "https://example.test/master_repositories.json" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/repos/JSONbored/installed-only")) {
+        return Response.json({ name: "installed-only", full_name: "JSONbored/installed-only", private: false, default_branch: "main", language: null, owner: { login: "JSONbored" } });
+      }
+      if (url.includes("/labels?") || url.includes("/issues?") || url.includes("/pulls?")) return Response.json([]);
+      return new Response(`unexpected request to ${url}`, { status: 404 });
+    });
+
+    const result = await backfillRegisteredRepositories(env);
+
+    expect(result.repos.map((repo) => repo.repoFullName)).toEqual(["JSONbored/installed-only"]);
+  });
+
+  it("#5021: enqueueRepositoryOpenDataBackfill skips a registered-but-not-installed repo instead of proceeding", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/registered-only": { emission_share: 0.01, issue_discovery_share: 0, trusted_label_pipeline: true, label_multipliers: {} } },
+        { kind: "raw-github", url: "https://example.test/master_repositories.json" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+
+    const result = await enqueueRepositoryOpenDataBackfill(env, { repoFullName: "JSONbored/registered-only", requestedBy: "api" });
+
+    expect(result).toMatchObject({ status: "skipped", warnings: ["Repository is not installed for Gittensory backfill."] });
+  });
+
   it("records partial sync warnings from caps and GitHub detail failures", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.endsWith("/repos/JSONbored/gittensory")) {
@@ -1518,7 +1579,7 @@ describe("GitHub backfill", () => {
 
   it("reports a repo with exactly the page limit and no next page as complete, not capped", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.endsWith("/repos/JSONbored/gittensory")) {
@@ -1833,7 +1894,7 @@ describe("GitHub backfill", () => {
 
   it("paginates beyond the first GitHub page and stores complete segment fidelity", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.endsWith("/repos/JSONbored/gittensory")) {
@@ -1904,7 +1965,7 @@ describe("GitHub backfill", () => {
 
   it("fetches every page when the limit is not a multiple of 100 (stable per_page offsets)", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", issuesOffsetFetch(150));
 
     const result = await backfillRegisteredRepositories(env, {
@@ -1918,7 +1979,7 @@ describe("GitHub backfill", () => {
 
   it("advances the resume cursor for a sub-100 cap instead of replaying the first page", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", issuesOffsetFetch(5));
 
     // Cap at 2 (< 100) against a repo with 5 issues. The segment must resume from the NEXT page (cursor "2"),
@@ -1937,7 +1998,7 @@ describe("GitHub backfill", () => {
 
   it("consumes a whole final page instead of saving a same-page resume cursor", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", issuesOffsetFetch(200));
 
     // Cap at 150 against a repo with 200 issues: page 1 (per_page=100) yields 1-100, page 2 yields 101-200.
@@ -1956,7 +2017,7 @@ describe("GitHub backfill", () => {
 
   it("advances to the next page when a whole-page cap still has more results", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", issuesOffsetFetch(250));
 
     const result = await backfillRegisteredRepositories(env, {
@@ -1972,7 +2033,7 @@ describe("GitHub backfill", () => {
 
   it("REGRESSION: resuming from a whole-page cap fetches exactly the remaining items, never replaying an already-consumed page", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", issuesOffsetFetch(250));
 
     // First pass caps mid-crawl at cursor "3" (see the previous test) having consumed pages 1-2 (issues 1-200).
@@ -2320,7 +2381,7 @@ describe("GitHub backfill", () => {
 
   it("resumes paginated segments from stored cursors instead of restarting from page one", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await upsertRepoSyncSegment(env, {
       repoFullName: "JSONbored/gittensory",
       segment: "open_issues",
@@ -2371,7 +2432,7 @@ describe("GitHub backfill", () => {
 
   it("records rate-limited segments and sanitized rate-limit observations", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.endsWith("/repos/JSONbored/gittensory")) {
@@ -2412,7 +2473,7 @@ describe("GitHub backfill", () => {
 
   it("treats a permission 403 (x-ratelimit-remaining > 0, no Retry-After) as an error, not a rate-limit wait (#1746)", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.endsWith("/repos/JSONbored/gittensory")) {
@@ -2457,7 +2518,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await upsertRepoSyncState(env, {
       repoFullName: "JSONbored/gittensory",
       status: "success",
@@ -2495,7 +2556,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await upsertRepoSyncState(env, {
       repoFullName: "JSONbored/gittensory",
       status: "success",
@@ -2526,7 +2587,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     // A row EXISTS (unlike the "no prior state at all" case above) but its status is the placeholder
     // "never_synced" -- e.g. stamped by an unrelated write that only carries over display fields (see
     // fetchAndCachePrStateFields-style callers) before any real sync ever completed. This must never be
@@ -2562,7 +2623,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     // 7 hours ago: past FRESH_SYNC_MS (6h) for a success AND past ERROR_BACKOFF_MS (1h) were this an error --
     // stale enough that the backfill must proceed normally rather than skip.
     await upsertRepoSyncState(env, {
@@ -2596,7 +2657,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await upsertRepoSyncState(env, {
       repoFullName: "JSONbored/gittensory",
       status: "error",
@@ -2626,7 +2687,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (input.toString() === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 4, openPullRequests: 2, mergedPullRequests: 9, closedPullRequests: 1, labels: 1 });
       return Response.json([]);
@@ -2673,7 +2734,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await persistTotalsSnapshot(env, {
       fetchedAt: "2026-05-25T00:00:00.000Z",
       openIssuesTotal: 3,
@@ -2719,7 +2780,7 @@ describe("GitHub backfill", () => {
           },
         } as unknown as Queue,
       });
-      await seedRegisteredRepo(env);
+      await seedInstalledAndRegisteredRepo(env);
       await persistTotalsSnapshot(env, { fetchedAt: "2026-05-25T00:00:00.000Z", openIssuesTotal: 4, openPullRequestsTotal: 1 });
       let graphQlFetches = 0;
       vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -2782,7 +2843,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     let releaseGraphQl!: () => void;
     const graphQlGate = new Promise<void>((resolve) => {
       releaseGraphQl = resolve;
@@ -2823,7 +2884,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(noSnapshotEnv);
+    await seedInstalledAndRegisteredRepo(noSnapshotEnv);
     vi.stubGlobal("fetch", async () => new Response("network should not be used without a token", { status: 500 }));
 
     const noSnapshot = await enqueueRepositoryOpenDataBackfill(noSnapshotEnv, { repoFullName: "JSONbored/gittensory", requestedBy: "api", mode: "resume", force: true });
@@ -2843,7 +2904,7 @@ describe("GitHub backfill", () => {
         },
       } as unknown as Queue,
     });
-    await seedRegisteredRepo(staleSnapshotEnv);
+    await seedInstalledAndRegisteredRepo(staleSnapshotEnv);
     await persistTotalsSnapshot(staleSnapshotEnv, { fetchedAt: "2026-05-25T00:00:00.000Z", openIssuesTotal: 6, openPullRequestsTotal: 4 });
 
     const staleSnapshot = await enqueueRepositoryOpenDataBackfill(staleSnapshotEnv, { repoFullName: "JSONbored/gittensory", requestedBy: "api", mode: "resume", force: true });
@@ -4465,7 +4526,7 @@ describe("GitHub backfill", () => {
 
   it("records label rate limits, in-loop page caps, and expired rate observations", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
-    await seedRegisteredRepo(env);
+    await seedInstalledAndRegisteredRepo(env);
     await recordGitHubRateLimitObservation(env, {
       repoFullName: "JSONbored/gittensory",
       resource: "rest",

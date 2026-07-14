@@ -3082,8 +3082,11 @@ describe("queue processors", () => {
         "2026-05-25T00:00:00.000Z",
       ),
     );
+    // backfill-registered-repos now gates on isInstalled, not isRegistered (#5021).
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 9002);
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url === "https://api.github.com/graphql") {
         return Response.json({
           data: {

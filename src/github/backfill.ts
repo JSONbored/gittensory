@@ -399,7 +399,7 @@ export async function backfillRegisteredRepositories(
   env: Env,
   options: { repoFullName?: string; limits?: Partial<BackfillLimits>; requestedBy?: string; force?: boolean; mode?: BackfillMode } = {},
 ): Promise<BackfillRegisteredReposResult> {
-  const repositories = (await listRepositories(env)).filter((repo) => repo.isRegistered && (!options.repoFullName || repo.fullName === options.repoFullName));
+  const repositories = (await listRepositories(env)).filter((repo) => repo.isInstalled && (!options.repoFullName || repo.fullName === options.repoFullName));
   const mode = options.mode ?? "light";
   const limits = { ...DEFAULT_LIMITS, ...MODE_LIMITS[mode], ...(options.limits ?? {}) };
   const repoResults = await mapWithConcurrency(repositories, limits.repoConcurrency, async (repo): Promise<RepoBackfillResult> => {
@@ -470,7 +470,7 @@ export async function enqueueRepositoryOpenDataBackfill(
   options: { repoFullName: string; requestedBy: "schedule" | "api" | "test"; mode?: BackfillMode; force?: boolean },
 ): Promise<{ ok: true; repoFullName: string; status: "queued" | "skipped"; totals?: RepoGithubTotalsSnapshotRecord; warnings: string[] }> {
   const repo = await getRepository(env, options.repoFullName);
-  if (!repo?.isRegistered) return { ok: true, repoFullName: options.repoFullName, status: "skipped", warnings: ["Repository is not registered for Gittensory backfill."] };
+  if (!repo?.isInstalled) return { ok: true, repoFullName: options.repoFullName, status: "skipped", warnings: ["Repository is not installed for Gittensory backfill."] };
   const mode = options.mode ?? "light";
   const settings = await resolveRepositorySettings(env, repo.fullName);
   if (!settings.backfillEnabled) return { ok: true, repoFullName: repo.fullName, status: "skipped", warnings: ["Backfill is disabled for this repository."] };

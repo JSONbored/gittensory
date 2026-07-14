@@ -349,6 +349,7 @@ describe("queue processors", () => {
       if (url.includes("api.gittensor.io") || url.includes("mirror.gittensor.io")) {
         return new Response("missing", { status: 404 });
       }
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("master_repositories.json")) {
         return Response.json({
           "JSONbored/gittensory": {
@@ -391,6 +392,8 @@ describe("queue processors", () => {
     await processJob(env, { type: "refresh-registry", requestedBy: "test" });
     await processJob(env, { type: "sync-brokered-installed-repos", requestedBy: "test" });
     await processJob(env, { type: "refresh-scoring-model", requestedBy: "test" });
+    // backfill-registered-repos now gates on isInstalled, not isRegistered (#5021).
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 9401);
     await processJob(env, { type: "backfill-registered-repos", requestedBy: "test", repoFullName: "JSONbored/gittensory", force: true });
     await processJob(env, { type: "generate-signal-snapshots", requestedBy: "test", repoFullName: "JSONbored/gittensory" });
     await processJob(env, { type: "build-contributor-evidence", requestedBy: "test", login: "oktofeesh1" });
@@ -699,6 +702,8 @@ describe("queue processors", () => {
         "2026-05-25T00:00:00.000Z",
       ),
     );
+    // backfill-registered-repos now gates on isInstalled, not isRegistered (#5021).
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 9402);
     await processJob(env, { type: "backfill-registered-repos", requestedBy: "api", repoFullName: "JSONbored/gittensory", force: false, mode: "resume" });
 
     expect(sent).toEqual(
