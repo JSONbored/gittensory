@@ -14,7 +14,7 @@ import {
   type LinkedIssueHardRulesConfig,
 } from "../../src/review/linked-issue-hard-rules";
 import type { LinkedIssueFactsFetch } from "../../src/github/backfill";
-import { normalizeLinkedIssueHardRulesConfig } from "../../src/review/linked-issue-hard-rules-config";
+import { isLinkedIssueHardRuleMode, normalizeLinkedIssueHardRulesConfig } from "../../src/review/linked-issue-hard-rules-config";
 import { parseFocusManifest, resolveEffectiveSettings } from "../../src/signals/focus-manifest";
 import { setLocalManifestReader } from "../../src/signals/focus-manifest-loader";
 import type { RepositorySettings } from "../../src/types";
@@ -369,6 +369,94 @@ describe("evaluateLinkedIssueHardRules with explicit config", () => {
 
     expect(normalizeLinkedIssueHardRulesConfig([], warnings)).toEqual(DEFAULT_LINKED_ISSUE_HARD_RULES);
     expect(warnings).toEqual(["settings.linkedIssueHardRules must be an object; using the default all-off policy."]);
+  });
+
+  // The src/ twin's own normalizer branches (#5845): the engine copy has full coverage via
+  // linked-issue-hard-rules-config-engine.test.ts; these mirror the still-uncovered src-side arms.
+  it("isLinkedIssueHardRuleMode accepts the valid modes and rejects everything else", () => {
+    expect(isLinkedIssueHardRuleMode("block")).toBe(true);
+    expect(isLinkedIssueHardRuleMode("off")).toBe(true);
+    expect(isLinkedIssueHardRuleMode("warn")).toBe(false);
+    expect(isLinkedIssueHardRuleMode(123)).toBe(false);
+    expect(isLinkedIssueHardRuleMode(undefined)).toBe(false);
+  });
+
+  it("returns the all-off default (no warning) for undefined input, and warns for string/null input", () => {
+    const undefWarnings: string[] = [];
+    expect(normalizeLinkedIssueHardRulesConfig(undefined, undefWarnings)).toEqual({
+      ...DEFAULT_LINKED_ISSUE_HARD_RULES,
+      pointBearingLabels: [],
+      maintainerOnlyLabels: [],
+    });
+    expect(undefWarnings).toEqual([]);
+
+    for (const bad of ["nope", null as unknown]) {
+      const warnings: string[] = [];
+      expect(normalizeLinkedIssueHardRulesConfig(bad, warnings)).toEqual({
+        ...DEFAULT_LINKED_ISSUE_HARD_RULES,
+        pointBearingLabels: [],
+        maintainerOnlyLabels: [],
+      });
+      expect(warnings.some((w) => w.includes("must be an object"))).toBe(true);
+    }
+  });
+
+  it("parses a fully valid object, trimming labels and keeping every provided value", () => {
+    const warnings: string[] = [];
+    const result = normalizeLinkedIssueHardRulesConfig(
+      {
+        ownerAssignedClose: "block",
+        assignedIssueClose: "off",
+        missingPointLabelClose: "block",
+        maintainerOnlyLabelClose: "block",
+        pointBearingLabels: ["  points  ", "size"],
+        maintainerOnlyLabels: ["maintainer"],
+        defaultLabelRepo: true,
+        verifyBeforeClose: false,
+        closeDelaySeconds: 90,
+      },
+      warnings,
+    );
+    expect(result).toEqual({
+      ownerAssignedClose: "block",
+      assignedIssueClose: "off",
+      missingPointLabelClose: "block",
+      maintainerOnlyLabelClose: "block",
+      pointBearingLabels: ["points", "size"],
+      maintainerOnlyLabels: ["maintainer"],
+      defaultLabelRepo: true,
+      verifyBeforeClose: false,
+      closeDelaySeconds: 90,
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns on an invalid mode and falls back to the field default", () => {
+    const warnings: string[] = [];
+    const result = normalizeLinkedIssueHardRulesConfig({ ownerAssignedClose: "sometimes" }, warnings);
+    expect(result.ownerAssignedClose).toBe("off");
+    expect(warnings.some((w) => w.includes("ownerAssignedClose"))).toBe(true);
+  });
+
+  it("warns on a non-boolean flag and falls back to the field default", () => {
+    const warnings: string[] = [];
+    const result = normalizeLinkedIssueHardRulesConfig({ defaultLabelRepo: "yes", verifyBeforeClose: 0 }, warnings);
+    expect(result.defaultLabelRepo).toBe(false);
+    expect(result.verifyBeforeClose).toBe(true);
+    expect(warnings.filter((w) => w.includes("must be a boolean")).length).toBe(2);
+  });
+
+  it("floors and clamps a valid closeDelaySeconds, and warns + defaults on invalid values", () => {
+    expect(normalizeLinkedIssueHardRulesConfig({ closeDelaySeconds: 10.9 }, []).closeDelaySeconds).toBe(10);
+    expect(normalizeLinkedIssueHardRulesConfig({ closeDelaySeconds: 5000 }, []).closeDelaySeconds).toBe(300);
+
+    const negative: string[] = [];
+    expect(normalizeLinkedIssueHardRulesConfig({ closeDelaySeconds: -1 }, negative).closeDelaySeconds).toBe(30);
+    expect(negative.some((w) => w.includes("closeDelaySeconds"))).toBe(true);
+
+    const nan: string[] = [];
+    expect(normalizeLinkedIssueHardRulesConfig({ closeDelaySeconds: Number.NaN }, nan).closeDelaySeconds).toBe(30);
+    expect(nan.some((w) => w.includes("closeDelaySeconds"))).toBe(true);
   });
 });
 
