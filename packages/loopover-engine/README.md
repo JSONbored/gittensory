@@ -676,6 +676,45 @@ chokepoint's returned ledger event feeds.
 The vocabulary is fixed (`allowed`, `denied`, `throttled`, `kill_switch`) and unknown event types fail closed. This
 module defines the storage contract only — it does not wire into live governor enforcement yet. (#2328)
 
+## Tenant quota
+
+`evaluateTenantQuota(usage, quota)` (`tenant-quota.ts`) is the pure per-tenant resource-quota evaluator for
+Rent-a-Loop hosting: given a tenant's metered `TenantUsage` and its allocated `TenantQuota`, it decides
+whether the tenant may run more work and, if not, which dimension is exhausted and why. Like the governor
+modules above it is decision-only — it does not store usage, meter compute, or stop a loop; that enforcement
+wiring is separate and maintainer-owned.
+
+- `TenantQuota` — the allocation ceilings: `computeUnits`, `wallClockMs`, `maxConcurrentLoops`.
+- `TenantUsage` — the tenant's metered consumption: `computeUnitsUsed`, `wallClockMsUsed`, `activeLoops`.
+- `QuotaDimension` — `"compute" | "time" | "concurrency"`.
+- `TenantQuotaDecision` — `{ allowed, exceeded, reason, remaining }`, where `exceeded` is the first exhausted
+  `QuotaDimension` (or `null`), `reason` is a user-facing message (or `null` when allowed), and `remaining` is
+  the per-dimension headroom (`computeUnits` / `wallClockMs` / `concurrentLoops`, never negative).
+
+Dimensions are checked in a fixed precedence — compute, then time, then concurrency — and the FIRST exhausted
+one is reported, so the tenant gets a single actionable message. A dimension counts as exhausted at `>=` its
+cap (a tenant that has consumed its whole allocation is stopped, not allowed one more over the line), and every
+input is normalized to a non-negative integer so a non-finite or negative value can never make a decision
+`NaN`, fractional, or negative. It reads only the given tenant's numbers, so one tenant hitting quota never
+affects another's decision.
+
+```ts
+import { evaluateTenantQuota } from "@loopover/engine";
+
+const quota = { computeUnits: 1000, wallClockMs: 3_600_000, maxConcurrentLoops: 3 };
+
+// Within quota -> allowed
+evaluateTenantQuota({ computeUnitsUsed: 200, wallClockMsUsed: 60_000, activeLoops: 1 }, quota);
+// { allowed: true, exceeded: null, reason: null,
+//   remaining: { computeUnits: 800, wallClockMs: 3_540_000, concurrentLoops: 2 } }
+
+// Compute exhausted -> blocked (compute is reported first, ahead of time and concurrency)
+evaluateTenantQuota({ computeUnitsUsed: 1000, wallClockMsUsed: 60_000, activeLoops: 1 }, quota);
+// { allowed: false, exceeded: "compute",
+//   reason: "Quota exceeded: you have used all 1000 compute units in your current allocation. Increase your allocation or wait for the next period before running more.",
+//   remaining: { computeUnits: 0, wallClockMs: 3_540_000, concurrentLoops: 2 } }
+```
+
 ## MinerGoalSpec
 
 `MinerGoalSpec` is the type surface for a repo's `.loopover-miner.yml` (miner-side analogue of `.loopover.yml`).
