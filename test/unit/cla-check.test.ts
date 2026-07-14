@@ -113,4 +113,24 @@ describe("evaluateClaCheck (#2564)", () => {
       expect(out[0]?.code).toBe(CLA_CHECK_UNRESOLVED_CODE);
     });
   });
+
+  // Regression: an empty-string consentPhrase (distinct from null) must NOT unconditionally satisfy consent —
+  // `"".includes("")`/any `body.includes("")` is always true, which previously bypassed CLA for every PR. An
+  // empty phrase is treated as "phrase detection not configured" (same as null).
+  describe("empty-string consentPhrase is treated as not configured (regression)", () => {
+    it("does NOT satisfy consent: an empty phrase alongside a failing check-run still fails, and never lists a nonsensical empty phrase", () => {
+      const out = evaluateClaCheck(config({ consentPhrase: "", checkRunName: "CLA Assistant Lite" }), {
+        body: "any body at all",
+        checkRunConclusion: "failure",
+      });
+      expect(out).toHaveLength(1);
+      expect(out[0]?.code).toBe(CLA_CONSENT_MISSING_CODE);
+      expect(out[0]?.detail).toContain('the "CLA Assistant Lite" check must pass');
+      expect(out[0]?.detail).not.toContain('must contain ""');
+    });
+
+    it("with no other method configured, an empty phrase is 'nothing configured' → no finding (not a silent bypass, not a nonsensical failure)", () => {
+      expect(evaluateClaCheck(config({ consentPhrase: "" }), { body: "anything" })).toEqual([]);
+    });
+  });
 });
