@@ -1,4 +1,4 @@
--- Gittensory Orb (#1219): tracks which repos have the Orb GitHub App installed.
+-- Loopover Orb (#1219): tracks which repos have the Orb GitHub App installed.
 -- `removed_at IS NULL` = currently installed; set on uninstall/removal events.
 CREATE TABLE IF NOT EXISTS orb_installations (
   id              INTEGER PRIMARY KEY,

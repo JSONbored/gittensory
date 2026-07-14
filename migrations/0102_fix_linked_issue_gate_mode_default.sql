@@ -3,7 +3,7 @@
 -- backfill that flipped any 'advisory' row to 'block' for repos with gate_check_mode='enabled'), even
 -- though missing a linked issue is only ever supposed to be advisory unless a maintainer explicitly opts
 -- into blocking. The application-level fallback (src/db/repositories.ts) and every documented default
--- (.gittensory.yml.example, docs.tuning.tsx, the settings API schema) already say 'advisory' -- only the
+-- (.loopover.yml.example, docs.tuning.tsx, the settings API schema) already say 'advisory' -- only the
 -- persisted column value drifted.
 --
 -- #gate-review-2727 round 1: require_linked_issue = 0 alone does NOT prove drift. linkedIssueGateMode and

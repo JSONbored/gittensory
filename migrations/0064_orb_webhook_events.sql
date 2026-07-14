@@ -1,4 +1,4 @@
--- Gittensory Orb central GitHub App (#1255) — webhook delivery dedup + audit for POST /v1/orb/webhook.
+-- Loopover Orb central GitHub App (#1255) — webhook delivery dedup + audit for POST /v1/orb/webhook.
 -- The central Orb App is a SEPARATE GitHub App from the review app, with its OWN webhook secret and its OWN
 -- delivery IDs, so it gets its OWN dedup table (not webhook_events) — a GitHub delivery_id is only unique per
 -- App, so sharing one table across two Apps could collide. This receiver just verifies + records (PR1);

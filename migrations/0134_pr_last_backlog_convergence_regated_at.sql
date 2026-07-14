@@ -11,6 +11,6 @@
 -- #audit-sweep-dispatch-stamp), and fanOutBacklogConvergenceSweepJobs's resolution loop skips a repo whose
 -- freshest stamp is within the sweep's own draining window (isRegateSweepDraining, BACKLOG_CONVERGENCE_SWEEP_FRESHNESS_MS).
 --
--- gittensory-computed (sweep-written), keyed to the PR, omitted from upsertPullRequestFromGitHub's SET clause so
+-- loopover-computed (sweep-written), keyed to the PR, omitted from upsertPullRequestFromGitHub's SET clause so
 -- a later GitHub sync cannot clobber it. Nullable / no default -> backward-compatible.
 ALTER TABLE pull_requests ADD COLUMN last_backlog_convergence_regated_at TEXT;

@@ -16,7 +16,7 @@
 -- (ON CONFLICT(id) target; vector ids and the storage PK are GLOBAL — the chunk id already embeds the
 -- namespace, see chunkId() in rag.ts), and `updated_at` carries the conflict touch.
 --
--- The vector EMBEDDING itself lives in Vectorize (the `gittensory-review-rag` index), NOT here — this table is
+-- The vector EMBEDDING itself lives in Vectorize (the `loopover-review-rag` index), NOT here — this table is
 -- only the chunk text + light addressing metadata. Vectorize is the index; repo_chunks is the source-of-truth
 -- text the retrieved vector ids resolve back to.
 --

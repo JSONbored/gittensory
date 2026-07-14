@@ -1,4 +1,4 @@
--- Gittensory Orb (#1219): central collector store. Receives anonymized outcome signal batches
+-- Loopover Orb (#1219): central collector store. Receives anonymized outcome signal batches
 -- from self-hosted instances running exportOrbBatch. repo_hash and pr_hash are HMAC-anonymized
 -- by the sender — no repo names, owner identifiers, or PR content is stored here.
 CREATE TABLE IF NOT EXISTS orb_signals (

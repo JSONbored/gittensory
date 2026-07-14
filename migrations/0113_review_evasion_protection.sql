@@ -1,5 +1,5 @@
 -- Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN PR
--- to draft while gittensory has an ACTIVE review pass running against it is dodging the one-shot review
+-- to draft while loopover has an ACTIVE review pass running against it is dodging the one-shot review
 -- process, not making an ordinary close. active_review_tracking durably records that a fresh review pass
 -- started for a specific repo/PR/headSha BEFORE any cost-bearing AI-review work begins, so the closed/
 -- converted_to_draft webhook handlers can tell evasion (a close during an active pass) apart from an
@@ -22,7 +22,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS active_review_tracking_pr_unique ON active_rev
 -- Per-repo review-evasion settings, layered the same way as every other anti-abuse mechanism in this file
 -- (contributorCap/blacklist/reviewNag): reviewEvasionProtection is off by default (zero behavior change for
 -- an install that hasn't opted in); reviewEvasionLabel is NOT NULL with a string default (mirrors
--- blacklist_label/review_nag_label -- the "no label" case is a `.gittensory.yml`-only override, never
+-- blacklist_label/review_nag_label -- the "no label" case is a `.loopover.yml`-only override, never
 -- persisted); reviewEvasionComment defaults to posting the explanation comment, matching the existing
 -- draft-dodge/reopen-reclose guards' unconditional explanation comment.
 ALTER TABLE repository_settings ADD COLUMN review_evasion_protection TEXT NOT NULL DEFAULT 'off';

@@ -1,6 +1,6 @@
 -- #preconv-state (convergence prep): the review-target state machine + DECISION CACHE.
 --
--- This is the single missing stateful table in the reviewbot → gittensory state migration (#1025). gittensory
+-- This is the single missing stateful table in the reviewbot → loopover state migration (#1025). loopover
 -- already provisioned submitter_stats (0046), tunables_overrides/_shadow + override_audit (0047), and
 -- review_audit (0049) — but had no review_targets, even though already-ported code reads it:
 --   - src/review/ops.ts (computeAgentHealth: SELECT ... FROM review_targets; reversal join
@@ -19,7 +19,7 @@
 -- Schema = reviewbot's full accumulated review_targets (its 0001 + 0003/0005/0006/0007/0010 ALTERs folded into
 -- one CREATE). Natural key (project, kind, repo, number) == the PK id `${project}:${kind}:${repo}#${number}`.
 -- Kept raw-SQL-only (matching the 0046–0049 parity-store convention); deliberately NOT added to the Drizzle
--- schema, and the reviewbot FK review_audit.target_id → review_targets(id) is OMITTED (gittensory's review_audit
+-- schema, and the reviewbot FK review_audit.target_id → review_targets(id) is OMITTED (loopover's review_audit
 -- already dropped it, so the two tables stay decoupled and bulk copy needs no ordering FK).
 --
 -- Privacy: internal review state only — no PR content, no trust/reward internals beyond the gate verdict.

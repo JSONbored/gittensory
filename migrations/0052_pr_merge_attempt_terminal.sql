@@ -4,7 +4,7 @@
 -- (method not allowed) / 409 (required check absent) / conflict throws, the action is recorded as an `error`
 -- audit row, but the pull_requests row stays plannable — so EVERY webhook + every scheduled re-gate sweep
 -- re-plans the same merge and it fails again, with no cap and no backoff. (reviewbot parity: review_targets'
--- attempt_count + terminal_at, which gittensory's normalized planner path never had.)
+-- attempt_count + terminal_at, which loopover's normalized planner path never had.)
 --
 -- AFTER: a non-transient merge failure marks the PR terminally merge-blocked FOR THE CURRENT HEAD SHA. The
 -- planner skips planning a merge while merge_blocked_sha == headSha, and the executor caps retries via

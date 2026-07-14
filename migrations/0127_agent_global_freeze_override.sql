@@ -3,8 +3,8 @@
 -- has no per-repo scoping today -- flipping it affects every repo at once, which is what caused a real
 -- multi-repo incident (live merges/closes fired for repos that were meant to stay paused). This column lets an
 -- operator keep the global DB kill-switch ON as the safe default while opting ONE repo at a time back into live
--- execution via that repo's `.gittensory.yml` (`settings.agentGlobalFreezeOverride: true`), the same
--- global-default + per-repo-override shape every other gittensory setting already uses.
+-- execution via that repo's `.loopover.yml` (`settings.agentGlobalFreezeOverride: true`), the same
+-- global-default + per-repo-override shape every other loopover setting already uses.
 --
 -- Deliberately does NOT touch `AGENT_ACTIONS_PAUSED` (isGlobalAgentPause): that env-var hard stop is checked
 -- independently and remains absolute -- no per-repo setting may ever bypass it. A repo's own `agent_paused =

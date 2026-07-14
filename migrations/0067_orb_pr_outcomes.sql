@@ -1,4 +1,4 @@
--- Gittensory Orb central GitHub App (#1255) — terminal pull-request outcomes (merged | closed) observed via
+-- Loopover Orb central GitHub App (#1255) — terminal pull-request outcomes (merged | closed) observed via
 -- the central App's webhook. The raw material for the global "proof of power" homepage counter (total merged /
 -- closed across ALL registered maintainer repos, das-github-mirror style). Aggregated only over REGISTERED
 -- installations. Idempotent on (repo, pr_number): a redelivery or a reopen→close cycle overwrites the latest

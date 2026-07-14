@@ -1,4 +1,4 @@
--- Gittensory Orb (#1255): turn Orb into the central fleet-calibration collector.
+-- Loopover Orb (#1255): turn Orb into the central fleet-calibration collector.
 --
 -- Retire the per-instance Orb GitHub App pipeline (orb_events / orb_installations were written by the
 -- now-removed /orb/webhook handler). Each self-hosted instance already records de-noised ground truth in

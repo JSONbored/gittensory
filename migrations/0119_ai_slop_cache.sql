@@ -1,4 +1,4 @@
--- AI slop advisory cache (mirrors ai_review_cache, #74/#98/#112): runGittensoryAiSlopAdvisory makes a real
+-- AI slop advisory cache (mirrors ai_review_cache, #74/#98/#112): runLoopoverAiSlopAdvisory makes a real
 -- LLM call (up to 6 free-tier attempts, or one BYOK call) with NO caching, so every scheduled re-gate sweep
 -- tick re-spends it for every open PR with slopAiAdvisory on, even at an unchanged head SHA -- confirmed in
 -- production: 1,469 ai_slop_pr calls in 24h across 3 repos, 110 of them on a single PR. Unlike ai_review_cache,

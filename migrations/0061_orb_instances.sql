@@ -1,4 +1,4 @@
--- Gittensory Orb (#1255) — instance registration gate, modeled on das-github-mirror's `registered=false`
+-- Loopover Orb (#1255) — instance registration gate, modeled on das-github-mirror's `registered=false`
 -- default. Every self-host instance that POSTs anonymized batches to /v1/orb/ingest is recorded here on
 -- first contact, but its signals only count toward fleet calibration once an operator REGISTERS it
 -- (registered=1). This is the fleet's trust anchor: ingest stays open + frictionless (no shared secret —

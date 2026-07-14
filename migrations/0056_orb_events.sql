@@ -1,4 +1,4 @@
--- Gittensory Orb (#1219): local outcome-signal store. Records the gate verdict and
+-- Loopover Orb (#1219): local outcome-signal store. Records the gate verdict and
 -- final outcome (merged / closed) for every PR the engine reviewed. Used by the Orb
 -- export job to batch-send calibration signals to the central collector (opt-in) or
 -- to keep them local for operator-only analysis (ORB_AIR_GAP=true).

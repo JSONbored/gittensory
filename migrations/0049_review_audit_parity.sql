@@ -4,7 +4,7 @@
 -- cutover from reviewbot to the gittensory-native review, we must PROVE the gittensory-native gate decision
 -- matches reviewbot's on the SAME PR at the SAME COMMIT. computeGateParity / computeGateEval read this table.
 --
--- gittensory has no `review_audit` table of its own (the ported parity.ts reads reviewbot's schema — see the
+-- loopover has no `review_audit` table of its own (the ported parity.ts reads reviewbot's schema — see the
 -- LIVE-USE PREREQUISITE note in parity.ts). This migration introduces exactly the columns those pure functions
 -- read, with the two LATER-migration columns parity.ts called out — `source` (which writer made the decision)
 -- and `head_sha` (which commit it was made on) — present from the start so the self-join works:
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS review_audit (
   -- the authoritative writer added during the deploy-time dual-run. The parity self-join is per-source.
   source TEXT NOT NULL DEFAULT 'gittensory-native',
   -- The commit the decision was made on. computeGateParity REQUIRES this non-null and joins on it so
-  -- reviewbot@shaA is never compared to gittensory@shaB. Nullable in the schema (a decision with no head_sha
+  -- reviewbot@shaA is never compared to loopover@shaB. Nullable in the schema (a decision with no head_sha
   -- is recorded but excluded from pairing), matching parity's `head_sha IS NOT NULL` filter.
   head_sha TEXT,
   -- The reasonCode for this decision (computeGateParity reads it as `summary` for the per-reasonCode breakdown).

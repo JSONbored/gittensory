@@ -12,7 +12,7 @@
 --   • override_audit            — recordOverrideAudit / listOverrideAudit
 -- (mirrors the reviewbot canonical tables; the columns + names match the bound queries exactly.)
 --
--- NOTE (config-application DEFERRED): gittensory's gate has NO confidenceFloor / scopeCap tunable and its
+-- NOTE (config-application DEFERRED): loopover's gate has NO confidenceFloor / scopeCap tunable and its
 -- native outcome signal measures gate FALSE POSITIVES (a loosening direction), so a promoted override here is
 -- NOT YET read by the live gate-config resolution — see src/review/selftune-wire.ts. These tables back the
 -- shadow-soak + audit + recommendation recording; reading a promoted override into the live gate is a noted

@@ -1,4 +1,4 @@
--- Gittensory Orb central GitHub App (#1255) — installation registry. One row per install of the shared Orb
+-- Loopover Orb central GitHub App (#1255) — installation registry. One row per install of the shared Orb
 -- App, maintained from the verified /v1/orb/webhook installation events. This is what onboarding + the
 -- token-broker (later PRs) read to know which installations exist, who owns them, and whether an operator has
 -- registered them. registered=0 by default — the Mirror-style manual-onboarding gate (an install is RECORDED

@@ -1,4 +1,4 @@
--- Gittensory AMS (#5681) — central telemetry collector store, mirroring orb_signals' pattern for the miner
+-- Loopover AMS (#5681) — central telemetry collector store, mirroring orb_signals' pattern for the miner
 -- product. Receives anonymized PR-outcome batches from opt-in AMS instances (orb-export.js). repo_hash and
 -- pr_hash are HMAC-anonymized by the sender before this table ever sees them — no repo names, owner
 -- identifiers, or PR content is stored here. A separate table from orb_signals rather than a shared

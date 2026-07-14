@@ -1,5 +1,5 @@
 -- #predicted-live-gate-agreement (maintainer review-stack x AMS integration audit, 2026-07-09): the data
--- substrate for measuring how often the MCP `gittensory_predict_gate`/`gittensory_explain_gate_disposition`
+-- substrate for measuring how often the MCP `loopover_predict_gate`/`loopover_explain_gate_disposition`
 -- verdict agrees with the REAL gate decision the same contributor's PR later receives.
 --
 -- WHY A NEW TABLE, NOT A `review_audit` ROW: `predictGateShape` has no PR-number field (it is an explicit

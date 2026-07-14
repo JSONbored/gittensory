@@ -13,7 +13,7 @@
 -- the next-stalest — full coverage of all open PRs in ceil(open/SWEEP_MAX_PRS) sweeps, convergent regardless of
 -- suppression. The GitHub-updatedAt freshness window is kept ONLY as the "don't race an in-flight webhook" guard.
 --
--- last_regated_at is gittensory-computed (sweep-written), keyed to the PR (not the head SHA), and OMITTED from
+-- last_regated_at is loopover-computed (sweep-written), keyed to the PR (not the head SHA), and OMITTED from
 -- the upsertPullRequestFromGitHub SET clause so a later GitHub sync cannot clobber it. Mirrors approved_head_sha
 -- (0053) / merge_blocked_sha (0052). Nullable / no default → backward-compatible (existing rows = NULL = never
 -- swept = maximally stale = picked first).

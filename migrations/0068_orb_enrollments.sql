@@ -1,4 +1,4 @@
--- Gittensory Orb central GitHub App (#1255) — the token-broker enrollment ledger. A maintainer authorizes the
+-- Loopover Orb central GitHub App (#1255) — the token-broker enrollment ledger. A maintainer authorizes the
 -- Orb App (OAuth) and is bound, server-side, to a SPECIFIC installation they administer; their self-hosted
 -- container is then issued a one-time enrollment secret (stored HASHED, never plaintext) which it exchanges for
 -- short-lived installation tokens. installation_id is written here at the OAuth callback after an authority
