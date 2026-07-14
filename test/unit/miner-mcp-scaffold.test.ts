@@ -8,7 +8,7 @@ import {
 } from "../../packages/loopover-miner/bin/loopover-miner-mcp.js";
 import { collectPortfolioDashboard } from "../../packages/loopover-miner/lib/portfolio-dashboard.js";
 
-// Tests for the gittensory-miner MCP server: the #5153 ping scaffold and the #5155 read-only
+// Tests for the loopover-miner MCP server: the #5153 ping scaffold and the #5155 read-only
 // portfolio-dashboard tool. Drives the real server over an in-memory transport (no child process); the
 // dashboard tool's store opener and clock are injected so no on-disk AMS state is required.
 
@@ -86,7 +86,7 @@ function fakeLedger(rows: Array<{ repoFullName: string; status: string }>): Fake
   };
 }
 
-describe("gittensory-miner MCP server (#5153 scaffold)", () => {
+describe("loopover-miner MCP server (#5153 scaffold)", () => {
   it("exposes the ping, portfolio-dashboard, and list-claims tools", async () => {
     const client = await connectedClient();
     const { tools } = await client.listTools();

@@ -15,7 +15,7 @@ const roots: string[] = [];
 const closeables: Array<{ close(): void }> = [];
 
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-chokepoint-persisted-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-chokepoint-persisted-"));
   roots.push(root);
   const governorState = openGovernorState(join(root, "governor-state.sqlite3"));
   const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));

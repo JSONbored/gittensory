@@ -20,7 +20,7 @@ afterEach(() => {
 
 describe("evaluateOpenPrSelfPlagiarism (#2345)", () => {
   it("records a throttled open_pr denial to the governor ledger with the matched prior submission", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-open-pr-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-open-pr-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -57,7 +57,7 @@ describe("evaluateOpenPrSelfPlagiarism (#2345)", () => {
   });
 
   it("accepts a bare numeric selfPlagiarismConfig threshold", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-open-pr-num-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-open-pr-num-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);

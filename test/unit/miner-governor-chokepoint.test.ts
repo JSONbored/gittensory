@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 function openLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-chokepoint-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-chokepoint-"));
   roots.push(root);
   const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
   ledgers.push(ledger);

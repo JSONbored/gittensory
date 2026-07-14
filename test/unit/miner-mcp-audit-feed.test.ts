@@ -22,7 +22,7 @@ const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
 
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-mcp-audit-feed-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-mcp-audit-feed-"));
   roots.push(root);
   const ledger = initEventLedger(join(root, "event-ledger.sqlite3"));
   ledgers.push(ledger);

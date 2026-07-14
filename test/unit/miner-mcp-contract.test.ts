@@ -74,7 +74,7 @@ const PLANTED_SECRET = "EXAMPLE_TOKEN=not-a-real-secret";
 // like miner-mcp-governor-decisions.test.ts — the exclusion assertion then exercises the actual named-column SQL.
 const governorRoots: string[] = [];
 function seededGovernorLedger(): ReturnType<typeof initGovernorLedger> {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-mcp-contract-governor-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-mcp-contract-governor-"));
   governorRoots.push(root);
   const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
   ledger.appendGovernorEvent({

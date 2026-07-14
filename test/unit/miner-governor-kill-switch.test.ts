@@ -49,7 +49,7 @@ describe("checkMinerKillSwitch (#2341)", () => {
 
 describe("recordMinerKillSwitchTransition (#2341)", () => {
   it("records a tripped transition to the governor ledger and resuming records a second row", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-kill-switch-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-kill-switch-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -73,7 +73,7 @@ describe("recordMinerKillSwitchTransition (#2341)", () => {
   });
 
   it("a transition with no repoFullName supplied records a null repoFullName, not an omitted or undefined one", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-kill-switch-no-repo-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-kill-switch-no-repo-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -90,7 +90,7 @@ describe("recordMinerKillSwitchTransition (#2341)", () => {
   });
 
   it("is a no-op and appends nothing when the scope has not changed", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-kill-switch-noop-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-kill-switch-noop-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);

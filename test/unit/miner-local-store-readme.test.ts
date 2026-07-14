@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const readmePath = join(process.cwd(), "packages/loopover-miner/README.md");
 
-describe("gittensory-miner local storage README (#4272, #4876)", () => {
+describe("loopover-miner local storage README (#4272, #4876)", () => {
   it("documents every local SQLite store with file/table/module/env-var", () => {
     const readme = readFileSync(readmePath, "utf8");
     expect(readme).toContain("## Local storage");

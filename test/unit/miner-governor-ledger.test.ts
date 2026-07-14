@@ -20,7 +20,7 @@ const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
 
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-ledger-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-ledger-"));
   roots.push(root);
   const ledger = initGovernorLedger(join(root, "nested", "governor-ledger.sqlite3"));
   ledgers.push(ledger);
@@ -33,7 +33,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner governor ledger (#2328)", () => {
+describe("loopover-miner governor ledger (#2328)", () => {
   it("resolves the DB path from env override, miner config dir, XDG config, then the home default", () => {
     expect(resolveGovernorLedgerDbPath({ LOOPOVER_MINER_GOVERNOR_LEDGER_DB: "/custom/g.sqlite3" })).toBe(
       "/custom/g.sqlite3",
@@ -195,7 +195,7 @@ describe("gittensory-miner governor ledger (#2328)", () => {
   });
 
   it("uses the default singleton ledger helpers and closes cleanly", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-default-"));
     roots.push(root);
     const previousConfigDir = process.env.LOOPOVER_MINER_CONFIG_DIR;
     process.env.LOOPOVER_MINER_CONFIG_DIR = root;

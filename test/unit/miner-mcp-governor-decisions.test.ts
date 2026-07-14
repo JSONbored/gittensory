@@ -16,7 +16,7 @@ type GovernorLedgerHandle = ReturnType<typeof initGovernorLedger>;
 
 const roots: string[] = [];
 function tempGovernorLedger(): GovernorLedgerHandle {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-mcp-governor-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-mcp-governor-"));
   roots.push(root);
   return initGovernorLedger(join(root, "governor-ledger.sqlite3"));
 }

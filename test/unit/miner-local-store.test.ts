@@ -26,7 +26,7 @@ const roots: string[] = [];
 const dbs: Array<{ close(): void }> = [];
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-local-store-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-local-store-"));
   roots.push(root);
   return root;
 }
@@ -40,7 +40,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner shared local-store helper (#4272)", () => {
+describe("loopover-miner shared local-store helper (#4272)", () => {
   it("resolveLocalStoreDbPath prefers the explicit env var, then config dir, then XDG, then the home default", () => {
     expect(
       resolveLocalStoreDbPath("thing.sqlite3", "LOOPOVER_MINER_THING_DB", {

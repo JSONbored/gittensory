@@ -21,7 +21,7 @@ const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
 
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-ledger-cli-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-ledger-cli-"));
   roots.push(root);
   const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
   ledgers.push(ledger);
@@ -35,7 +35,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner governor ledger CLI (#2328)", () => {
+describe("loopover-miner governor ledger CLI (#2328)", () => {
   it("parseGovernorListArgs validates argv", () => {
     expect(parseGovernorListArgs([])).toEqual({
       json: false,
@@ -157,7 +157,7 @@ describe("gittensory-miner governor ledger CLI (#2328)", () => {
   });
 
   it("runGovernorCli dispatches pause, resume, and status to governor-pause-cli.js (#4851)", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-ledger-cli-pause-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-ledger-cli-pause-"));
     roots.push(root);
     const { openGovernorState } = await import("../../packages/loopover-miner/lib/governor-state.js");
     const governorState = openGovernorState(join(root, "governor-state.sqlite3"));

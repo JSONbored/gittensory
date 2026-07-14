@@ -23,7 +23,7 @@ const mockQueue = (entries: Array<{ status?: unknown }>): { listQueue: () => typ
 const roots: string[] = [];
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-loop-closure-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-loop-closure-"));
   roots.push(root);
   return root;
 }

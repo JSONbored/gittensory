@@ -19,7 +19,7 @@ const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];
 
 function tempEventLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-harness-trigger-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-harness-trigger-"));
   roots.push(root);
   const ledger = initEventLedger(join(root, "db.sqlite3"));
   closers.push(ledger);

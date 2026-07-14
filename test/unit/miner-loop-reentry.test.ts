@@ -17,7 +17,7 @@ const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];
 
 function tempPath(prefix: string) {
-  const root = mkdtempSync(join(tmpdir(), `gittensory-miner-${prefix}-`));
+  const root = mkdtempSync(join(tmpdir(), `loopover-miner-${prefix}-`));
   roots.push(root);
   return join(root, "db.sqlite3");
 }

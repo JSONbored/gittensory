@@ -78,7 +78,7 @@ describe("resolveMinerActionModeGate (#2342)", () => {
 
 describe("recordMinerDryRunShadow (#2342)", () => {
   it("records the would-be action to the governor ledger without executing anything", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-action-mode-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-action-mode-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);

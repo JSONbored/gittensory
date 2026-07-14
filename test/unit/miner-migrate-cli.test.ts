@@ -10,7 +10,7 @@ import { resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/even
 const roots: string[] = [];
 
 function tempEnv() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-migrate-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-migrate-"));
   roots.push(root);
   return { LOOPOVER_MINER_CONFIG_DIR: join(root, "state") };
 }
@@ -30,7 +30,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner migrate (#4871)", () => {
+describe("loopover-miner migrate (#4871)", () => {
   it("covers the exact same seven stores doctor's store-integrity sweep covers, in the same order, and skips every one when nothing has been created yet", () => {
     const env = tempEnv();
     const results = runMigrateChecks(env);

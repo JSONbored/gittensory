@@ -17,7 +17,7 @@ import { runCliResult } from "./support/miner-cli-harness";
 const roots: string[] = [];
 
 function tempRoot() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-init-wizard-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-init-wizard-"));
   roots.push(root);
   return root;
 }
@@ -65,7 +65,7 @@ async function typeLine(inStream: Readable, text: string) {
   inStream.emit("data", Buffer.from("\n"));
 }
 
-describe("gittensory-miner init --interactive wizard (#5176)", () => {
+describe("loopover-miner init --interactive wizard (#5176)", () => {
   it("renderWizardEnvFile renders sourceable KEY=value lines in insertion order, or empty for no entries", () => {
     expect(renderWizardEnvFile([])).toBe("");
     expect(renderWizardEnvFile([["GITHUB_TOKEN", "ghp_x"]])).toBe("GITHUB_TOKEN=ghp_x\n");
@@ -315,7 +315,7 @@ describe("gittensory-miner init --interactive wizard (#5176)", () => {
     });
   });
 
-  it("e2e: `gittensory-miner init --interactive` dispatches to the wizard, not the non-interactive path", () => {
+  it("e2e: `loopover-miner init --interactive` dispatches to the wizard, not the non-interactive path", () => {
     // No stdin input is piped, so the wizard blocks on its first prompt and the process is torn down once
     // Node detects the unsettled top-level await -- this only asserts the CLI routes `--interactive` to the
     // wizard (distinct prompt text, distinct code path) without hanging; the full multi-turn prompt flow is

@@ -21,7 +21,7 @@ import {
 const roots: string[] = [];
 
 function tempRoot() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-init-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-init-"));
   roots.push(root);
   return root;
 }
@@ -32,7 +32,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner laptop init (#2329)", () => {
+describe("loopover-miner laptop init (#2329)", () => {
   it("resolves the laptop SQLite path from the state-dir override and XDG fallback", () => {
     expect(resolveLaptopStateDbPath({ LOOPOVER_MINER_CONFIG_DIR: "/custom/state" }))
       .toBe("/custom/state/laptop-state.sqlite3");
@@ -78,7 +78,7 @@ describe("gittensory-miner laptop init (#2329)", () => {
     const env = { LOOPOVER_MINER_CONFIG_DIR: join(root, "state") };
     const check = checkLaptopStateSqlite(env);
     expect(check.ok).toBe(false);
-    expect(check.detail).toContain("gittensory-miner init");
+    expect(check.detail).toContain("loopover-miner init");
   });
 
   it("doctor sqlite check reports unreadable files", () => {

@@ -58,7 +58,7 @@ export function checkLaptopStateSqlite(env = process.env) {
     return {
       name: "laptop-state-sqlite",
       ok: false,
-      detail: `${dbPath}: not found (run gittensory-miner init)`,
+      detail: `${dbPath}: not found (run loopover-miner init)`,
     };
   }
   try {

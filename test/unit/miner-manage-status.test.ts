@@ -32,7 +32,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempStores() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-manage-status-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-manage-status-"));
   roots.push(root);
   const portfolioQueue = initPortfolioQueueStore(join(root, "portfolio-queue.sqlite3"));
   const eventLedger = initEventLedger(join(root, "event-ledger.sqlite3"));
@@ -50,7 +50,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner manage status (#2325)", () => {
+describe("loopover-miner manage status (#2325)", () => {
   it("parses and formats managed PR identifiers", () => {
     expect(parseManagedPrIdentifier("pr:42")).toBe(42);
     expect(parseManagedPrIdentifier("issue:42")).toBeNull();
@@ -222,7 +222,7 @@ describe("gittensory-miner manage status (#2325)", () => {
   });
 
   it("runManageStatus prints the PR table + run portfolio table, and JSON output additive to the existing rows key (#4279)", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-manage-status-cli-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-manage-status-cli-"));
     roots.push(root);
     const portfolioQueue = initPortfolioQueueStore(join(root, "portfolio-queue.sqlite3"));
     const eventLedger = initEventLedger(join(root, "event-ledger.sqlite3"));

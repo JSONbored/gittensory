@@ -28,7 +28,7 @@ const HEALTHY_CONVERGENCE = { attempts: 1, consecutiveFailures: 0, reenqueues: 0
 
 describe("evaluateRunLoopBoundaryGate (#2347)", () => {
   it("releases an in-flight portfolio item and records a halt when a flapping run is detected", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-run-halt-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-run-halt-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -72,7 +72,7 @@ describe("evaluateRunLoopBoundaryGate (#2347)", () => {
   });
 
   it("halts immediately on a budget-cap breach at the next iteration boundary", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-run-halt-budget-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-run-halt-budget-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -93,7 +93,7 @@ describe("evaluateRunLoopBoundaryGate (#2347)", () => {
   });
 
   it("never halts or records a halt for a healthy run under both signals", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-run-halt-healthy-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-run-halt-healthy-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -115,7 +115,7 @@ describe("evaluateRunLoopBoundaryGate (#2347)", () => {
   });
 
   it("does not re-append ledger rows while a prior halt remains latched", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-run-halt-latched-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-run-halt-latched-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);

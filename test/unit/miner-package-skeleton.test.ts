@@ -67,9 +67,9 @@ describe("loopover-miner package skeleton (#2287)", () => {
     expect(runCapture(["--version", "--no-update-check"])).toContain("@loopover/miner/");
     expect(
       runCapture(["--version", "--no-update-check"], {
-        LOOPOVER_MINER_VERSION: "gittensory-miner-fleet@abc1234",
+        LOOPOVER_MINER_VERSION: "loopover-miner-fleet@abc1234",
       }),
-    ).toContain("gittensory-miner-fleet@abc1234");
+    ).toContain("loopover-miner-fleet@abc1234");
   });
 
   it("documents foundation scope and local checkout install paths in the README", () => {

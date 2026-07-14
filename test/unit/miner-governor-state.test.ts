@@ -16,7 +16,7 @@ const roots: string[] = [];
 const states: Array<{ close(): void }> = [];
 
 function tempState() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-"));
   roots.push(root);
   const state = openGovernorState(join(root, "governor-state.sqlite3"));
   states.push(state);
@@ -132,7 +132,7 @@ describe("governor-state pause/resume control surface (#4851)", () => {
   });
 
   it("migrates an on-disk file created before the pause columns existed", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-premigration-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-premigration-"));
     roots.push(root);
     const dbPath = join(root, "governor-state.sqlite3");
 
@@ -164,7 +164,7 @@ describe("governor-state pause/resume control surface (#4851)", () => {
   });
 
   it("reopening an already-migrated file is a safe no-op (column-presence guard)", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-remigrate-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-remigrate-"));
     roots.push(root);
     const dbPath = join(root, "governor-state.sqlite3");
     const first = openGovernorState(dbPath);
@@ -178,7 +178,7 @@ describe("governor-state pause/resume control surface (#4851)", () => {
   });
 
   it("REGRESSION: adds each missing pause column independently, not just when `paused` alone is absent", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-partial-migration-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-partial-migration-"));
     roots.push(root);
     const dbPath = join(root, "governor-state.sqlite3");
 
@@ -269,7 +269,7 @@ describe("governor-state reputation history (#5134)", () => {
     });
 
     it("migrates an existing pre-#5563 file, backfilling api_base_url and preserving every row", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-legacy-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-legacy-"));
       roots.push(root);
       const dbPath = join(root, "legacy.sqlite3");
       const legacy = new DatabaseSync(dbPath);
@@ -305,7 +305,7 @@ describe("governor-state reputation history (#5134)", () => {
     });
 
     it("REGRESSION: a legacy row violating the rebuilt table's NOT NULL columns is dropped, not a migration-aborting crash", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-legacy-corrupt-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-legacy-corrupt-"));
       roots.push(root);
       const dbPath = join(root, "legacy-corrupt.sqlite3");
       const legacy = new DatabaseSync(dbPath);
@@ -345,7 +345,7 @@ describe("governor-state reputation history (#5134)", () => {
     });
 
     it("migration is idempotent: reopening an already-migrated file doesn't rebuild the table again", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-idempotent-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-idempotent-"));
       roots.push(root);
       const dbPath = join(root, "state.sqlite3");
       const first = openGovernorState(dbPath);
@@ -411,7 +411,7 @@ describe("governor-state module-level default singleton (#5134)", () => {
   });
 
   it("loadPauseState/savePauseState module-level wrappers round-trip through the default singleton (#4851)", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-singleton-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-singleton-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
     expect(loadPauseState()).toEqual({ paused: false, reason: null, pausedAt: null });
@@ -421,7 +421,7 @@ describe("governor-state module-level default singleton (#5134)", () => {
   });
 
   it("loadReputationHistory/saveReputationHistory module-level wrappers round-trip through the default singleton, forwarding apiBaseUrl (#5563)", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-state-singleton-reputation-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-state-singleton-reputation-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
     expect(loadReputationHistory("acme/widgets", "https://ghe.example.com/api/v3")).toEqual({

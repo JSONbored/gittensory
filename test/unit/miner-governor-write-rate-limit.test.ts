@@ -20,7 +20,7 @@ afterEach(() => {
 
 describe("evaluateWriteRateLimitGate (#2344)", () => {
   it("records an allowed write to the governor ledger and advances both buckets", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-write-rate-limit-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-write-rate-limit-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);
@@ -49,7 +49,7 @@ describe("evaluateWriteRateLimitGate (#2344)", () => {
   });
 
   it("schedules a jittered retry and records a throttled denial without advancing buckets", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-write-rate-limit-deny-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-write-rate-limit-deny-"));
     roots.push(root);
     const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
     ledgers.push(ledger);

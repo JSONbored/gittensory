@@ -7,7 +7,7 @@ import { runInit, verifyGithubToken } from "../../packages/loopover-miner/lib/la
 const tempDirs = new Set<string>();
 
 function makeTempEnv() {
-  const configDir = mkdtempSync(join(tmpdir(), "gittensory-miner-init-"));
+  const configDir = mkdtempSync(join(tmpdir(), "loopover-miner-init-"));
   tempDirs.add(configDir);
   return {
     env: {
