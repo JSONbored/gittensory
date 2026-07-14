@@ -15,7 +15,8 @@
 // No diffs, no code, no comments, no logins, no commit SHAs — only verdict + outcome + reversal + a bucketed
 // reason category + cycle time, with repo/PR identifiers HMAC'd by a key the collector never holds (so it
 // can never de-anonymize).
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { generateAnonSecret, hmacAnonymize } from "../../packages/gittensory-engine/src/telemetry/anonymize.js";
 import { incr } from "./metrics";
 
 /** Key under which the per-instance anonymization secret is persisted in system_flags. */
@@ -60,11 +61,6 @@ function instanceId(anonSecret: string): string {
   return createHash("sha256").update(seed).digest("hex").slice(0, 16);
 }
 
-/** HMAC a string with the instance's own secret for anonymized export. */
-function hmacField(value: string, secret: string): string {
-  return createHmac("sha256", secret).update(value).digest("hex").slice(0, 24);
-}
-
 /**
  * The instance's DEDICATED anonymization secret: a 256-bit random key generated once and persisted in
  * system_flags, then reused on every export. Stable across restarts so a repo/PR always hashes the same
@@ -81,7 +77,7 @@ export async function getOrCreateAnonSecret(db: D1Database): Promise<string> {
   };
   const existing = await read();
   if (existing) return existing;
-  const generated = randomBytes(32).toString("hex"); // 256-bit, 64 hex chars
+  const generated = generateAnonSecret(); // 256-bit, 64 hex chars
   // Race-safe across instances sharing a Postgres DB: OR IGNORE keeps the first writer's key; the re-read
   // returns whichever value won, so every instance converges on the same secret.
   await db
@@ -188,8 +184,8 @@ export async function exportOrbBatch(db: D1Database, batchSize = 200, fetchFn: t
   const payload: OrbExportPayload = {
     instance_id: instance,
     events: results.map((r) => ({
-      repo_hash: anonymize ? hmacField(r.project, secret) : r.project,
-      pr_hash: anonymize ? hmacField(r.target_id, secret) : r.target_id,
+      repo_hash: anonymize ? hmacAnonymize(r.project, secret) : r.project,
+      pr_hash: anonymize ? hmacAnonymize(r.target_id, secret) : r.target_id,
       gate_verdict: r.verdict,
       outcome: r.outcome,
       reversal_flag: r.reverted ? "reverted" : r.reopened ? "reopened" : "none",

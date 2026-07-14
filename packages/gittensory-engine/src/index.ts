@@ -672,3 +672,8 @@ export {
   SECRET_PATTERNS,
   redactSecrets,
 } from "./subprocess-env.js";
+
+// Shared telemetry-anonymization primitive (#5680) — one source of truth for the per-instance-secret HMAC
+// hashing both Orb's self-host collector and AMS's export path use before repo/PR identifiers leave the
+// instance.
+export { generateAnonSecret, hmacAnonymize } from "./telemetry/anonymize.js";
