@@ -236,6 +236,33 @@ describe("createAgentSdkCodingAgentDriver", () => {
     expect((await nonNumericFields.run(task)).tokensUsed).toBeUndefined();
   });
 
+  it("drops malformed negative / non-finite numeric result fields to undefined so they can't crash attempt metering (#5827)", async () => {
+    // A buggy or malformed SDK result message (num_turns: -1, total_cost_usd: NaN, a negative/Infinite token
+    // count) must never reach attempt-metering's accumulateAttemptUsage -- it throws a RangeError on a
+    // non-finite/negative field, which would reject the whole iterate loop with the attempt's outcome never
+    // logged. Each field is normalized to undefined instead, exactly as a well-formed absent field would be.
+    const driver = driverWith({
+      query: queryYielding([
+        {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          num_turns: -1,
+          total_cost_usd: Number.NaN,
+          result: "done",
+          usage: { input_tokens: -5, output_tokens: Number.POSITIVE_INFINITY },
+        },
+      ]),
+    });
+
+    const result = await driver.run(task);
+
+    expect(result.ok).toBe(true);
+    expect(result.turnsUsed).toBeUndefined();
+    expect(result.costUsd).toBeUndefined();
+    expect(result.tokensUsed).toBeUndefined();
+  });
+
   it("tokensUsed sums whichever of input/output tokens IS a real number, when only input is present", async () => {
     const driver = driverWith({
       query: queryYielding([
