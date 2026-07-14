@@ -3,11 +3,11 @@
 _Formerly LoopOver._
 
 <p align="center">
-  <a href="https://github.com/JSONbored/gittensory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JSONbored/gittensory/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/JSONbored/loopover/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JSONbored/loopover/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://www.npmjs.com/package/@loopover/mcp"><img alt="MCP package" src="https://img.shields.io/npm/v/@loopover/mcp?label=mcp" /></a>
-  <a href="https://github.com/JSONbored/gittensory/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/JSONbored/gittensory" /></a>
+  <a href="https://github.com/JSONbored/loopover/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/JSONbored/loopover" /></a>
   <a href="https://gittensory.aethereal.dev/docs"><img alt="Docs" src="https://img.shields.io/badge/docs-gittensory.aethereal.dev-0b6bcb" /></a>
-  <a href="https://gittensor.io/miners/repository?name=JSONbored/gittensory"><img alt="Gittensor impact" src="https://api.gittensor.io/repos/JSONbored%2Fgittensory/badge.svg" /></a>
+  <a href="https://gittensor.io/miners/repository?name=JSONbored/loopover"><img alt="Gittensor impact" src="https://api.gittensor.io/repos/JSONbored%2Floopover/badge.svg" /></a>
 </p>
 
 LoopOver is a deterministic control plane for Gittensor OSS contribution work.
@@ -127,8 +127,8 @@ npm run ui:build
 ## Gittensor Contributor Impact
 
 <p align="center">
-  <a href="https://gittensor.io/miners/repository?name=JSONbored/gittensory">
-    <img src="https://raw.githubusercontent.com/JSONbored/gittensory/gittensor-impact-assets/gittensor-impact-dark.svg" alt="Gittensor contributor impact" width="600">
+  <a href="https://gittensor.io/miners/repository?name=JSONbored/loopover">
+    <img src="https://raw.githubusercontent.com/JSONbored/loopover/gittensor-impact-assets/gittensor-impact-dark.svg" alt="Gittensor contributor impact" width="600">
   </a>
 </p>
 
