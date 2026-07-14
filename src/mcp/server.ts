@@ -155,6 +155,7 @@ import { loadPublicRepoFocusManifest, loadRepoFocusManifest } from "../signals/f
 import { buildPredictedGateVerdict, type PredictedGateVerdict } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment } from "../signals/issue-slop";
 import { buildSlopAssessment } from "../signals/slop";
+import { validateIdeaSubmission, buildTaskGraph } from "../idea-intake";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
 import { buildRepoDataQuality } from "../signals/data-quality";
@@ -921,6 +922,31 @@ const checkSlopRiskOutputSchema = {
   rubric: z.string().optional(),
 };
 
+// Idea-intake bridge input (#4798, spec #4779). Fields are loose here so the engine's validateIdeaSubmission
+// owns the real bounds/format checks and returns the actionable error list — an empty/malformed submission
+// reaches the handler rather than being rejected upstream by the schema. `decomposition` is the optional
+// renter-reviewed idea→issues split (the one fuzzy step, supplied in); omit it for the single-issue baseline.
+const intakeIdeaShape = {
+  id: z.string().optional(),
+  title: z.string().optional(),
+  body: z.string().optional(),
+  targetRepo: z.string().optional(),
+  constraints: z.array(z.string()).max(50).optional(),
+  acceptanceHints: z.array(z.string()).max(50).optional(),
+  priority: z.string().optional(),
+  decomposition: z
+    .array(z.object({ key: z.string(), title: z.string(), body: z.string(), dependsOn: z.array(z.string()).max(50).optional() }))
+    .max(50)
+    .optional(),
+};
+
+const intakeIdeaOutputSchema = {
+  ok: z.boolean(),
+  verdict: z.enum(["go", "raise", "avoid"]).optional(),
+  taskGraph: z.unknown().optional(),
+  errors: z.array(z.string()).optional(),
+};
+
 // Deterministic structural-improvement counterpart to checkSlopRiskShape (#4746, sub-issue I of epic #4737):
 // the positive-axis mirror of checkSlopRisk, same pure local-metadata contract. changedFiles/tests/testFiles
 // are reused verbatim (same shape as checkSlopRiskShape) so the two signals never disagree about what counts
@@ -1669,6 +1695,17 @@ export class LoopoverMcp {
         outputSchema: explainGateDispositionOutputSchema,
       },
       async (input) => this.toolResult(await this.explainGateDisposition(input)),
+    );
+
+    server.registerTool(
+      "loopover_intake_idea",
+      {
+        description:
+          "Turn a freeform renter idea into a strict, claimable task-graph (spec #4779) and score it against the same feasibility gate the loop runs on. Deterministic and source-free: validates the submission, assembles constituent issues (an optional caller-supplied decomposition, else a single-issue baseline), and returns the graph plus its go/raise/avoid verdict. A malformed or empty submission returns an actionable error list, not a silent failure.",
+        inputSchema: intakeIdeaShape,
+        outputSchema: intakeIdeaOutputSchema,
+      },
+      async (input) => this.toolResult(await this.intakeIdea(input)),
     );
 
     server.registerTool(
@@ -2940,6 +2977,22 @@ export class LoopoverMcp {
       const body = (await response.json().catch(() => ({}))) as { retryAfterSeconds?: number };
       throw new Error(`Rate limit exceeded. Retry after ${body.retryAfterSeconds ?? 60}s.`);
     }
+  }
+
+  private async intakeIdea(input: z.infer<z.ZodObject<typeof intakeIdeaShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("loopover_intake_idea");
+    const validated = validateIdeaSubmission(input);
+    if (!validated.ok) {
+      return {
+        summary: `Invalid idea submission: ${validated.errors.join(", ")}.`,
+        data: { ok: false, errors: validated.errors } as unknown as Record<string, unknown>,
+      };
+    }
+    const taskGraph = buildTaskGraph(validated.idea, input.decomposition);
+    return {
+      summary: `Task-graph verdict: ${taskGraph.rubric.verdict} across ${taskGraph.issues.length} issue(s).`,
+      data: { ok: true, verdict: taskGraph.rubric.verdict, taskGraph } as unknown as Record<string, unknown>,
+    };
   }
 
   private async checkSlopRisk(input: z.infer<z.ZodObject<typeof checkSlopRiskShape>>): Promise<ToolPayload> {

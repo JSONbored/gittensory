@@ -564,6 +564,24 @@ export {
   type FeasibilityVerdict,
 } from "./feasibility.js";
 export {
+  buildTaskGraph,
+  scoreTaskGraph,
+  validateIdeaSubmission,
+  IDEA_TITLE_MAX_CHARS,
+  IDEA_BODY_MAX_CHARS,
+  IDEA_CONSTRAINT_MAX_CHARS,
+  type AcceptanceCriterion,
+  type AcceptanceCriterionKind,
+  type ConstituentIssue,
+  type ConstituentIssueDraft,
+  type IdeaPriority,
+  type IdeaSubmission,
+  type IdeaValidationResult,
+  type TaskGraph,
+  type TaskGraphIssueScore,
+  type TaskGraphScore,
+} from "./idea-intake.js";
+export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
   computeMetadataFeasibility,
