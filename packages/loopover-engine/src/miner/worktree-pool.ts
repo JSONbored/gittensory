@@ -36,6 +36,15 @@ export type AcquireWorktreeResult =
   | { ok: true; state: WorktreePoolState; allocation: WorktreeAllocation }
   | { ok: false; reason: "already_allocated" | "at_capacity"; state: WorktreePoolState };
 
+// Normalize the concurrency cap the same way the sibling limit calculators do (governor/rate-limit.ts,
+// governor/budget-cap.ts, tenant-quota.ts): a NaN/non-finite/negative/fractional `maxConcurrency` arriving from a
+// loosely-typed or untrusted source becomes a non-negative integer, so it can never make a `>=`/subtraction
+// comparison silently fail — a `NaN` cap would otherwise make `length >= NaN` always false and allocate without
+// bound, contradicting the type's "A non-positive cap allocates nothing" contract (#5828).
+function finiteNonNegativeInt(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 /** True when `attemptId` currently holds an allocation. Pure. */
 export function isWorktreeAllocated(state: WorktreePoolState, attemptId: string): boolean {
   return state.allocations.some((allocation) => allocation.attemptId === attemptId);
@@ -43,7 +52,7 @@ export function isWorktreeAllocated(state: WorktreePoolState, attemptId: string)
 
 /** Slots still available before the concurrency cap (never negative). Pure. */
 export function availableWorktreeSlots(state: WorktreePoolState, config: WorktreePoolConfig): number {
-  return Math.max(0, config.maxConcurrency - state.allocations.length);
+  return Math.max(0, finiteNonNegativeInt(config.maxConcurrency) - state.allocations.length);
 }
 
 /**
@@ -60,7 +69,7 @@ export function acquireWorktree(
   if (isWorktreeAllocated(state, input.attemptId)) {
     return { ok: false, reason: "already_allocated", state };
   }
-  if (state.allocations.length >= config.maxConcurrency) {
+  if (state.allocations.length >= finiteNonNegativeInt(config.maxConcurrency)) {
     return { ok: false, reason: "at_capacity", state };
   }
   const allocation: WorktreeAllocation = {
