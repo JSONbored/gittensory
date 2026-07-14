@@ -20,6 +20,7 @@
     "miner:env-reference": "node packages/loopover-miner/scripts/generate-env-reference.mjs",
     "miner:env-reference:check": "node packages/loopover-miner/scripts/generate-env-reference.mjs --check",
     "benchmark:miner": "node packages/loopover-miner/scripts/benchmark.mjs",
+    "loadtest:iterate-loop": "npm run build --workspace @loopover/engine && node packages/loopover-engine/scripts/load-test-iterate-loop.mjs",
     "command-reference": "node scripts/gen-command-reference.mjs",
     "command-reference:check": "node scripts/gen-command-reference.mjs --check",
     "selfhost:validate-observability": "node scripts/validate-observability-configs.mjs",
