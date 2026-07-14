@@ -1,3 +1,21 @@
+// Gate-decision advisory logic — HOST copy. This is an intentionally-divergent twin of the engine's
+// packages/loopover-engine/src/advisory/gate-advisory.ts (#4518; keep-divergent decision recorded for #4881). The
+// two are deliberately NOT converged to a single source.
+//
+// Why kept divergent: this host copy reaches into the full signals subsystem — `isCodeFile`
+// (../signals/local-branch, which transitively pulls the whole review-scoring / GitHub-API graph), `isTestPath`
+// (../signals/test-evidence), `labelMatchesPattern` (../scoring/preview), and the CollisionCluster/CollisionReport
+// types from the ~5,800-line ../signals/engine. The engine twin is a slimmed re-implementation (slim
+// predicted-gate-types + ../scoring/label-match, importing none of signals/engine) precisely so @loopover/engine —
+// and the CLI packages that depend on it (packages/loopover-miner, packages/loopover-mcp) — never drag
+// signals/engine and its subsystem into their dependency graph.
+//
+// What keeps this safe: scripts/check-engine-parity.ts (GATE_DECISION_CORE_MARKERS) asserts BOTH files still export
+// the core gate-decision functions (evaluateGateCheck / evaluateGateCheckCore / isConfiguredGateBlocker /
+// buildPullRequestAdvisory), so the gate *decision* stays in lock-step even though the surrounding types and
+// imports diverge. Do NOT converge these into a single shim until the dependency-graph-size constraint is solved
+// (e.g. a shared type-only module carrying CollisionReport without dragging the signals implementation along) — see
+// #4881.
 import type {
   Advisory,
   AdvisoryConclusion,

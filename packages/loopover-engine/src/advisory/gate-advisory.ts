@@ -1,3 +1,11 @@
+// Gate-decision advisory logic — ENGINE copy. This is an intentionally-divergent twin of the host
+// src/rules/advisory.ts (#4518; keep-divergent decision recorded for #4881). This slimmed re-implementation uses
+// predicted-gate-types + ../scoring/label-match and deliberately imports none of ../signals/engine, isCodeFile, or
+// isTestPath, so @loopover/engine — and the CLI packages that consume it (packages/loopover-miner,
+// packages/loopover-mcp) — never pull the ~5,800-line signals/engine subsystem into their dependency graph. The
+// core gate-decision functions are kept structurally in lock-step with the host copy by
+// scripts/check-engine-parity.ts (GATE_DECISION_CORE_MARKERS); do NOT converge to a single source until that
+// dependency-graph constraint is solved — see #4881.
 import { randomUUID } from "node:crypto";
 import type {
   Advisory,
