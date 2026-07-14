@@ -61,6 +61,8 @@ describe("operator dashboard payload", () => {
       overallMergeRate: null,
       discriminates: null,
     });
+    // #1967/#5213: no review_audit signal → the acceptance card's zero-flagged (null-rate) branch.
+    expect(payload.acceptance).toEqual({ windowDays: 90, accepted: 0, total: 0, rate: null });
     // Empty fleet → instanceCount 0, null precision card ("—"), no-outlier delta.
     expect(payload.fleetMetrics.instanceCount).toBe(0);
     expect(payload.metrics).toEqual(
@@ -187,6 +189,21 @@ describe("operator dashboard payload", () => {
     const payload = await buildOperatorDashboardPayload(env);
     expect(payload.fleetMetrics.gamingPatternFlags.map((f) => f.instanceId)).toEqual(["farmer"]);
     expect(payload.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Fleet gaming-pattern flags", value: "1", delta: "farmer" })]));
+  });
+
+  it("wires computeFindingAcceptance into the dashboard's acceptance card shape (#1967/#5213)", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      `INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES
+        ('gd1', 'owner/repo', 'owner/repo#1', 'gate_decision', 'close', 'test', '2026-06-10T10:00:00Z'),
+        ('po1', 'owner/repo', 'owner/repo#1', 'pr_outcome', 'merged', 'test', '2026-06-10T12:00:00Z'),
+        ('gd2', 'owner/repo', 'owner/repo#2', 'gate_decision', 'hold', 'test', '2026-06-11T10:00:00Z'),
+        ('po2', 'owner/repo', 'owner/repo#2', 'pr_outcome', 'closed', 'test', '2026-06-11T12:00:00Z')`,
+    ).run();
+    const payload = await buildOperatorDashboardPayload(env);
+    // 2 flagged (hold|close), 1 addressed (merged) → mapped to the card's windowDays/accepted/total/rate shape,
+    // not the raw aggregate's flagged/addressed/unaddressed/acceptanceRate field names.
+    expect(payload.acceptance).toEqual({ windowDays: 90, accepted: 1, total: 2, rate: 0.5 });
   });
 
   it("clamps unsupported window values to the default 7d lookback (#2199)", () => {

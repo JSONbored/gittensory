@@ -29,7 +29,7 @@ import type {
 import { computeFleetAnalytics, type FleetAnalytics } from "../orb/analytics";
 import { computeAgentHealth, computeCalibration, type AgentHealth, type Calibration } from "../review/ops";
 import { computeGateEval, type GateEvalReport } from "../review/parity";
-import { computeCycleTimeAggregate, type CycleTimeAggregate } from "../review/stats";
+import { computeCycleTimeAggregate, computeFindingAcceptance, type CycleTimeAggregate } from "../review/stats";
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
 import { buildRecommendationQualityReport, type RecommendationQualityReport } from "./recommendation-quality-report";
@@ -46,6 +46,17 @@ export type OperatorDashboardNoiseMetric = {
   label: string;
   value: number;
   spark: number[];
+};
+
+/** Finding acceptance rate (#1967), reshaped for the dashboard's `AcceptanceRateCard` (see
+ *  apps/gittensory-ui/src/components/site/app-panels/acceptance-rate-card.tsx). The card's field names
+ *  (windowDays/accepted/total/rate) intentionally differ from `FindingAcceptanceAggregate`'s
+ *  (flagged/addressed/unaddressed/acceptanceRate) — this is the UI-facing shape, mapped in buildOperatorDashboardPayload. */
+export type OperatorDashboardFindingAcceptance = {
+  windowDays: number;
+  accepted: number;
+  total: number;
+  rate: number | null;
 };
 
 export type OperatorDashboardPayload = {
@@ -76,6 +87,9 @@ export type OperatorDashboardPayload = {
   // Slop-band calibration (#2196): org-wide per-band merge/close rates over resolved PRs carrying a persisted
   // slop band — is the deterministic slop score predictive? Bands only, never raw scores. Fails safe to empty.
   slopCalibration: SlopOutcomeCalibration;
+  // Finding acceptance rate (#1967): share of gate-flagged (hold|close) PRs later merged, reshaped to the
+  // AcceptanceRateCard's field names. Fails safe to an empty aggregate (rate: null) on any read error.
+  acceptance: OperatorDashboardFindingAcceptance;
 };
 
 const USAGE_WINDOW_DAYS = 7;
@@ -111,6 +125,7 @@ export async function buildOperatorDashboardPayload(
     calibration,
     agentHealth,
     slopCalibration,
+    findingAcceptance,
   ] = await Promise.all([
     listRepositories(env),
     listInstallations(env),
@@ -135,6 +150,9 @@ export async function buildOperatorDashboardPayload(
     computeCalibration(env, operatorAgentConfig(env)),
     computeAgentHealth(env, operatorAgentConfig(env)),
     buildOrgSlopCalibration(env),
+    // #1967: reuse the existing finding-acceptance aggregate (no new compute); fails safe to an empty
+    // aggregate on any read error.
+    computeFindingAcceptance(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
   ]);
   const weeklyValueReport = buildWeeklyValueReport({
     generatedAt: nowIso(),
@@ -154,6 +172,13 @@ export async function buildOperatorDashboardPayload(
   });
   const installedRepos = repositories.filter((repo: RepositoryRecord) => repo.isInstalled).length;
   const registeredRepos = repositories.filter((repo: RepositoryRecord) => repo.isRegistered).length;
+  // #1967: map FindingAcceptanceAggregate's field names onto the AcceptanceRateCard's expected shape.
+  const acceptance: OperatorDashboardFindingAcceptance = {
+    windowDays: GATE_ANALYTICS_WINDOW_DAYS,
+    accepted: findingAcceptance.addressed,
+    total: findingAcceptance.flagged,
+    rate: findingAcceptance.acceptanceRate,
+  };
   return {
     generatedAt: nowIso(),
     metrics: [
@@ -239,6 +264,7 @@ export async function buildOperatorDashboardPayload(
     calibration,
     agentHealth,
     slopCalibration,
+    acceptance,
   };
 }
 
