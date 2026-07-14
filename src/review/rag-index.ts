@@ -1,6 +1,6 @@
 // Convergence (RAG / codebase index — Layer C, flag LOOPOVER_REVIEW_RAG): the INDEX-POPULATION driver. This is
 // the population half (rag-wire.ts wires RETRIEVAL only):
-// it fetches a repo's CODE tree, chunks + embeds it, and upserts vectors+text into the `gittensory-review-rag`
+// it fetches a repo's CODE tree, chunks + embeds it, and upserts vectors+text into the `loopover-review-rag`
 // Vectorize index + the `repo_chunks` table (migration 0051) — so retrieval has a warm index to read from instead
 // of always seeing a cold namespace and returning "".
 //
@@ -56,7 +56,7 @@ type TreeEntry = { path: string; size?: number | undefined; sha?: string | undef
  * AHEAD of filePriority's code/doc split. On a repo whose file count exceeds MAX_CHUNKS_PER_REPO,
  * `indexRepo`'s per-file loop stops once the cap is hit — with only `filePriority` (code=0, doc=1)
  * as the sort key, a manifest file ties every other source file at priority 0 and then loses on the
- * alphabetical tiebreaker, so it can be starved out entirely by volume (verified in prod: gittensory's
+ * alphabetical tiebreaker, so it can be starved out entirely by volume (verified in prod: loopover's
  * own package.json never got indexed). These files are already indexable code (JSON/TOML/YAML all
  * match CODE_EXT_RE in `./rag`) — this only reorders them, it does not change what's included.
  * Reuses the same "manifest-like filename" classifiers signals/path-matchers.ts already exports for

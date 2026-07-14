@@ -38,11 +38,11 @@ const MAX_QUERY_DIFF_CHARS = 4000;
 const RAG_TOP_K = 12;
 /** Relevance floor for the cosine matches — drops low-relevance "neighbours" that are noise, not real context
  *  (bge-m3 scores relevant code ~0.5-0.7 and clear noise <0.35; 0.4 is a conservative floor). Matches reviewbot's
- *  core config (`rag: { minScore: 0.4 }`); gittensory previously used 0 (off), which kept that noise as
+ *  core config (`rag: { minScore: 0.4 }`); loopover previously used 0 (off), which kept that noise as
  *  "relevant code" and itself drove false positives. (#GAP-2) */
 const RAG_MIN_SCORE = 0.4;
 /** Rerank the cosine top-K by exact-term overlap before injecting, to demote vector-accident matches (high
- *  cosine, no real term overlap). Matches reviewbot's core config (`rag: { reranker: "bm25" }`); gittensory
+ *  cosine, no real term overlap). Matches reviewbot's core config (`rag: { reranker: "bm25" }`); loopover
  *  previously left this off. (#283 / #GAP-2) */
 const RAG_RERANKER = "bm25" as const;
 

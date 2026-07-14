@@ -7,9 +7,9 @@
 // features.fullFileContext (default OFF — wire once here, flip on per chain from its config). Fully
 // fail-safe: any fetch error degrades to "no grounding" and the review proceeds on the diff alone.
 //
-// SELF-CONTAINED NATIVE PORT (reviewbot→gittensory convergence): every type + helper this module needs is
+// SELF-CONTAINED NATIVE PORT (reviewbot→loopover convergence): every type + helper this module needs is
 // defined HERE. No imports from reviewbot. The logic is byte-faithful to the reviewbot source
-// (src/core/review-grounding.ts); the only deltas are (1) mechanical guards for gittensory's stricter
+// (src/core/review-grounding.ts); the only deltas are (1) mechanical guards for loopover's stricter
 // tsconfig (noUncheckedIndexedAccess + exactOptionalPropertyTypes), which do not change behavior, and
 // (2) the one I/O dependency (GitHub file fetch) is INJECTED via the FileFetcher interface + explicit
 // params instead of reviewbot's RunContext/ReviewTarget/github helpers, so fetchFullFileContents is

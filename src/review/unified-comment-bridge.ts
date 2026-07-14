@@ -171,7 +171,7 @@ function gateVerdictReason(gate: GateCheckEvaluation): string | undefined {
   // joined string (title + action per finding) -- and buildDualReviewNotes folds those SAME `gate.blockers`
   // into the reviewer notes that render as the "Why this is blocked" section a few lines below. Falling back
   // to `gate.summary`/`gate.title` here would print the identical blocker text TWICE in one comment (the
-  // real-world bug behind gittensory PR #5347's screenshot). Only reachable when gate.blockers is non-empty,
+  // real-world bug behind loopover PR #5347's screenshot). Only reachable when gate.blockers is non-empty,
   // since evaluateGateCheckCore only sets `blockers: []` on a neutral/success conclusion -- so this never
   // affects the held/neutral case above, which has no "Why this is blocked" section to duplicate against.
   if (gate.blockers.length > 0) return undefined;

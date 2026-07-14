@@ -1,11 +1,11 @@
-// Screenshot endpoint for the realtime before/after capture (reviewbot→gittensory convergence — visual port).
+// Screenshot endpoint for the realtime before/after capture (reviewbot→loopover convergence — visual port).
 //
-// PORTED from reviewbot's src/agents/gittensory/shot.ts. CHANGES for gittensory:
+// PORTED from reviewbot's src/agents/loopover/shot.ts. CHANGES for loopover:
 //   • puppeteer import unchanged (@cloudflare/puppeteer), SSRF guard now isSafeHttpUrl from ../content-lane/safe-url
-//   • bindings: env.BROWSER (Browser Rendering) + env.REVIEW_AUDIT (R2) — gittensory's R2 binding is
+//   • bindings: env.BROWSER (Browser Rendering) + env.REVIEW_AUDIT (R2) — loopover's R2 binding is
 //     REVIEW_AUDIT, NOT reviewbot's env.AUDIT.
 //   • r2 key prefix default 'loopover/shots/'; on-demand render allowlist's production host = PUBLIC_SITE_ORIGIN.
-//   • no reviewbot REVIEWBOT_* secrets / REST fallback — gittensory renders via the BROWSER binding only.
+//   • no reviewbot REVIEWBOT_* secrets / REST fallback — loopover renders via the BROWSER binding only.
 //
 // Two modes:
 //   GET /loopover/shot?key=<r2key>  -> stream a pre-rendered PNG from R2 (fast; GitHub's image proxy
@@ -30,9 +30,9 @@ export interface CaptureShotOptions {
    *  VERIFIED (#4109): `emulateMediaFeatures` maps to CDP's `Emulation.setEmulatedMedia`, which only changes
    *  what CSS media queries and `window.matchMedia` report — it cannot write `localStorage` and has NO effect
    *  on any theme mechanism that reads an explicit stored preference instead of consulting
-   *  `prefers-color-scheme`. This is reproducible today against gittensory's own UI: `apps/loopover-ui`
+   *  `prefers-color-scheme`. This is reproducible today against loopover's own UI: `apps/loopover-ui`
    *  forces dark mode unconditionally in its no-flash script (`components/site/theme-toggle.tsx`), never
-   *  consulting the media feature at all, so a `light` vs `dark` capture of gittensory's own site renders
+   *  consulting the media feature at all, so a `light` vs `dark` capture of loopover's own site renders
    *  byte-identical regardless of this option. `themeStorageKey` below is the fallback for exactly that class
    *  of app. */
   theme?: ShotTheme;
@@ -59,7 +59,7 @@ type ScreenshotPage = {
 // free to run. This pipeline's cost is Browser Rendering wall-clock: every route already renders up to 4 PNGs
 // (before+after × desktop+mobile), multiplied again by `review.visual.themes` when configured -- a 3rd
 // viewport would raise that to 6 (a 50% jump) for every repo, every review, forever, not just the reviewer
-// who wants tablet coverage. gittensory's own pair already straddles a real breakpoint on each side (1440 is
+// who wants tablet coverage. loopover's own pair already straddles a real breakpoint on each side (1440 is
 // past a typical Tailwind `lg`; 390 is an iPhone-class portrait well under `sm`), so it is not an arbitrary
 // choice either. If a repo genuinely needs tablet coverage, that is a `review.visual` opt-in follow-up
 // (mirroring `routes.maxRoutes`'s per-repo override precedent) -- not a default-on cost increase for repos

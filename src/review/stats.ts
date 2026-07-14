@@ -1,4 +1,4 @@
-// Cross-project stats endpoint (reviewbot→gittensory convergence — ADDITIVE, NATIVE port of reviewbot
+// Cross-project stats endpoint (reviewbot→loopover convergence — ADDITIVE, NATIVE port of reviewbot
 // src/core/stats.ts). Read-only feed powering a local dashboard: per-project, per-verdict decision counts
 // bucketed over time, plus human-reversal counts + non-content gate-decision counts — all from D1 (the
 // source of truth; full history, no Analytics sampling cap). Returns ONLY aggregate counts, never PR
@@ -6,10 +6,10 @@
 // token (the token is the gate, not the origin).
 //
 // SELF-CONTAINED: every type + helper this module needs is defined HERE. No imports from reviewbot. The
-// logic is byte-faithful to the reviewbot source; the only deltas are mechanical guards for gittensory's
+// logic is byte-faithful to the reviewbot source; the only deltas are mechanical guards for loopover's
 // stricter tsconfig + an INJECTED-DEPS seam.
 //
-// STORAGE: gittensory has no platform/access adapter — `Env` is a global ambient interface with `DB`.
+// STORAGE: loopover has no platform/access adapter — `Env` is a global ambient interface with `DB`.
 //
 // EVAL / PARITY / TUNING are the runtime gate's eval engine (reviewbot src/core/{eval,tuning}.ts) — they
 // are NOT part of this aggregation and are heavily entangled with the gate. They are taken as INJECTED
@@ -120,7 +120,7 @@ export const defaultStatsEvalDeps: StatsEvalDeps = {
 
 // ── Inlined helpers (byte-faithful from reviewbot src/core/{crypto,util}.ts) ─────────────────────
 
-/** Storage seam: gittensory's `Env` is a global ambient interface with `DB`. */
+/** Storage seam: loopover's `Env` is a global ambient interface with `DB`. */
 function storage(env: Env): D1Database {
   return env.DB;
 }
@@ -481,7 +481,7 @@ export async function computeStats(
   };
 }
 
-/** GET /<slug>/internal/parity?days=90&shadow=gittensory — bearer-gated, CORS-open cross-system gate
+/** GET /<slug>/internal/parity?days=90&shadow=loopover — bearer-gated, CORS-open cross-system gate
  *  parity feed (the per-repo cutover gate). Scoped to the agent's own project. Mirrors handleStats. */
 export async function handleParity(
   request: Request,

@@ -5,16 +5,16 @@
 //                      GROUND TRUTH (the PR's real `pr_outcome` — merged vs closed). The human's normal
 //                      merge/close IS the answer key, so accuracy is measurable with zero manual labeling.
 //   computeGateParity — compares TWO systems (an authoritative writer vs a shadow writer) against EACH
-//                      OTHER on the SAME PR at the SAME COMMIT, to prove the gittensory-app gate matches
+//                      OTHER on the SAME PR at the SAME COMMIT, to prove the loopover-app gate matches
 //                      reviewbot's before a per-repo cutover. isParityCutoverReady is the hard gate.
 //
-// SELF-CONTAINED NATIVE PORT (reviewbot→gittensory convergence): every type + helper this module needs is
+// SELF-CONTAINED NATIVE PORT (reviewbot→loopover convergence): every type + helper this module needs is
 // defined HERE. No imports from reviewbot — the reviewbot `storage(env)` adapter is inlined as `env.DB`, and
-// `Env` is gittensory's global ambient interface (referenced directly). The FOLD logic + SQL are byte-faithful
-// to the reviewbot source (src/core/eval.ts); the only deltas are mechanical guards for gittensory's stricter
+// `Env` is loopover's global ambient interface (referenced directly). The FOLD logic + SQL are byte-faithful
+// to the reviewbot source (src/core/eval.ts); the only deltas are mechanical guards for loopover's stricter
 // tsconfig (noUncheckedIndexedAccess / exactOptionalPropertyTypes), which don't change behavior.
 //
-// ⚠ LIVE-USE PREREQUISITE (OUT OF SCOPE here): using this live requires gittensory's gate-decision audit rows
+// ⚠ LIVE-USE PREREQUISITE (OUT OF SCOPE here): using this live requires loopover's gate-decision audit rows
 // to carry a `source` (which writer) + `head_sha` (which commit) column — computeGateParity self-joins on
 // (project, target_id, head_sha) per source, and computeGateEval can scope predictions by source. Those
 // columns land in a LATER D1 migration. This port is the PURE functions + their tests; the reads degrade
@@ -22,7 +22,7 @@
 
 // ── Inlined minimal deps (no reviewbot imports) ─────────────────────────────────────────────────────────
 
-/** The D1 binding this module reads. `Env` is gittensory's global ambient interface (env.DB: D1Database); it is
+/** The D1 binding this module reads. `Env` is loopover's global ambient interface (env.DB: D1Database); it is
  *  referenced directly. The reviewbot `storage(env)` adapter maps to `env.DB` here. */
 function storage(env: Env): D1Database {
   return env.DB;
@@ -174,13 +174,13 @@ export async function computeGateEval(env: Env, opts: { days: number; nowMs: num
 }
 
 // ── Cross-system gate-decision PARITY (#preconv-parity) ───────────────────────────────────────────────
-// Phase-2 of the gittensory convergence proves the gittensory-app's gate decisions MATCH reviewbot's on
+// Phase-2 of the loopover convergence proves the loopover-app's gate decisions MATCH reviewbot's on
 // the SAME PR at the SAME COMMIT before a per-repo cutover. computeGateEval scores ONE system vs the
 // realized human outcome (accuracy); this compares TWO systems against EACH OTHER. The two never live in
 // the same gate_decision row — they're distinct `source` writers in the SAME review_audit store — so we
 // join the latest gate_decision per (project, target_id, head_sha) for the authoritative source vs a
 // shadow source. The head_sha is in the join key precisely so reviewbot@shaA is never compared to
-// gittensory@shaB (a different commit = a different decision; comparing across commits is meaningless).
+// loopover@shaB (a different commit = a different decision; comparing across commits is meaningless).
 
 /** The canonical gate actions a decision can take. Anything else (or a missing head_sha) is excluded from
  *  the parity pairing — only a clean merge/close/hold on a known commit is comparable. */

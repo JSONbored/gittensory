@@ -1,5 +1,5 @@
 // Bounded, source-first, hunk-aware unified-diff builder for the AI reviewers.
-// Ported from reviewbot (the source-of-truth engine, src/core/diff.ts). The previous gittensory builder
+// Ported from reviewbot (the source-of-truth engine, src/core/diff.ts). The previous loopover builder
 // was a blind head-slice that `break`-DROPPED whole files on overflow with no priority ordering — so on a
 // multi-file PR the file that DEFINES a symbol could be dropped while another file references it, and the
 // model then hallucinated "missing import / undefined symbol" (the metagraphed #1528 false-positive class,

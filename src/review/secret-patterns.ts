@@ -33,7 +33,7 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     re: /\bAKIA[0-9A-Z]{16}\b/,
     // AWS's own officially published documentation placeholder (used across the AWS SDK's own docs and
     // countless tutorials specifically so it reads as inert) -- confirmed to have caused 4 false-positive PR
-    // closes in gittensory's own #4284 subprocess-env-redaction-helper epic (a PR building a REDACTION
+    // closes in loopover's own #4284 subprocess-env-redaction-helper epic (a PR building a REDACTION
     // feature needed this exact literal as a realistic-looking non-secret test fixture). Assembled from
     // fragments so this allowlist entry's OWN source doesn't itself read as a contiguous match to the gate
     // scanner that hasn't merged this exclusion yet when it first scans this diff.

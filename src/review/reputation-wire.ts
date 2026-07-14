@@ -1,5 +1,5 @@
 // Convergence (reputation) wiring: feeds the ported, INTERNAL-only submitter-reputation signal
-// (`./submitter-reputation`) into gittensory's review path as an anti-abuse extension of the existing
+// (`./submitter-reputation`) into loopover's review path as an anti-abuse extension of the existing
 // AI-spend gate. A new / burst / low-reputation submitter is downgraded to a DETERMINISTIC-ONLY review
 // (the AI neurons are skipped); a good-reputation submitter proceeds normally. After the gate decides, the
 // terminal outcome is recorded so the signal stays current.
@@ -96,7 +96,7 @@ export async function getEffectiveSubmitterReputation(
  * see {@link getEffectiveSubmitterReputation}) and report whether the AI-spend gate should downgrade to a
  * deterministic-only review. When the flag is OFF this returns false IMMEDIATELY — no DB read — so the
  * AI-spend gate is byte-identical to today. `project` namespaces the per-(project, submitter) rows
- * (gittensory uses the repo full name). NEVER throws: the ported module already degrades to neutral on error.
+ * (loopover uses the repo full name). NEVER throws: the ported module already degrades to neutral on error.
  *
  * Also checks submission CADENCE (#4514): every quality-based signal above only tells you whether a
  * submitter's outcomes were good or bad, never how FAST they arrived -- a fast, well-formed, strategically

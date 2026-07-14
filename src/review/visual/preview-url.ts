@@ -1,4 +1,4 @@
-// Preview-URL discovery (reviewbot→gittensory convergence — visual capture port).
+// Preview-URL discovery (reviewbot→loopover convergence — visual capture port).
 //
 // PORTED from reviewbot's src/core/github.ts (getLatestDeploymentStatus, extractPreviewUrl,
 // findPreviewUrlFromChecks, findPreviewUrlFromPrComments, getPreviewBuildState) + the
@@ -10,7 +10,7 @@
 //   3. the Cloudflare Workers Builds bot's PR comment (where 2026-era Cloudflare publishes the link).
 // getPreviewBuildState distinguishes "still building" (keep polling) from "failed" / "no build".
 //
-// gittensory has no fetch-based GitHub JSON helper of its own (its src/github layer uses Octokit), so
+// loopover has no fetch-based GitHub JSON helper of its own (its src/github layer uses Octokit), so
 // this module carries a small fetch helper mirroring reviewbot's. Callers pass an installation token
 // (resolved via createInstallationToken). Every helper degrades to null/absent on failure — preview
 // discovery must NEVER sink a review.

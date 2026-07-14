@@ -15,19 +15,19 @@
 // out of the window and trapped contributors auto-correct with no migration. recordSubmissionOutcome still
 // maintains submitter_stats for /stats, but the SIGNAL is now derived from review_targets.
 //
-// SELF-CONTAINED NATIVE PORT (reviewbot→gittensory convergence): every type + helper this module needs is
+// SELF-CONTAINED NATIVE PORT (reviewbot→loopover convergence): every type + helper this module needs is
 // defined HERE. No imports from reviewbot — the reviewbot `storage(env)` adapter is inlined as `env.DB`, and
 // the `Env` / `ReputationConfig` types are declared locally. The CLASSIFY/SIGNAL/COUNT logic is byte-faithful
 // to the reviewbot source (src/core/submitter-reputation.ts); the only deltas are mechanical guards for
-// gittensory's stricter tsconfig (noUncheckedIndexedAccess / exactOptionalPropertyTypes), which don't change
+// loopover's stricter tsconfig (noUncheckedIndexedAccess / exactOptionalPropertyTypes), which don't change
 // behavior. ADDITIVE + DORMANT: the DB-touching reads/writes assume the reviewbot D1 tables (review_targets,
-// submitter_stats) — gittensory does not yet have them, so getSubmitterReputation / recordSubmissionOutcome
+// submitter_stats) — loopover does not yet have them, so getSubmitterReputation / recordSubmissionOutcome
 // degrade fail-safe (neutral / no-op) until a later migration lands them. The PURE classifiers
 // (classifyOutcome / countOutcomes / signalFromCounts) are usable immediately.
 
 // ── Inlined minimal deps (no reviewbot imports) ─────────────────────────────────────────────────────────
 
-/** The D1 binding this module reads/writes. `Env` is gittensory's global ambient interface (env.DB: D1Database);
+/** The D1 binding this module reads/writes. `Env` is loopover's global ambient interface (env.DB: D1Database);
  *  it is referenced directly. The reviewbot `storage(env)` adapter maps to `env.DB` here. */
 function storage(env: Env): D1Database {
   return env.DB;

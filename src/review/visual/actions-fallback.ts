@@ -4,7 +4,7 @@
 // preview-url.ts's discovery chain (Deployments API -> commit-check scan -> bot PR-comment scan) only ever
 // finds a preview that SOME OTHER CI already produced. This module is the trusted half of a fork-safe,
 // two-sided pipeline whose untrusted half is .github/workflows/visual-capture-fallback.yml:
-//   1. gittensory DISPATCHES that workflow (`workflow_dispatch`, always resolved against the repo's default
+//   1. loopover DISPATCHES that workflow (`workflow_dispatch`, always resolved against the repo's default
 //      branch) with the PR number + head SHA as inputs. A `workflow_dispatch` call always runs the DISPATCHED
 //      ref's copy of the workflow file, so a contributor can never smuggle a modified workflow definition
 //      through their own PR branch -- unlike a `pull_request`-triggered workflow, which runs the version
@@ -15,7 +15,7 @@
 //      GitHub Actions artifact. It never holds a credential of any kind, and it never needs one: the untrusted
 //      code's network reach never leaves the runner's own localhost, so GitHub's stock per-job isolation is
 //      already the full sandbox this needs -- no bespoke Firecracker/gVisor sandbox to build or maintain.
-//   3. On completion, GitHub delivers a `workflow_run` webhook. The caller (queue processor) uses gittensory's
+//   3. On completion, GitHub delivers a `workflow_run` webhook. The caller (queue processor) uses loopover's
 //      OWN, already-trusted installation token -- NEVER a token that passed through step 2's untrusted job --
 //      to list and download that run's artifact via `fetchFallbackArtifactShots` below.
 //
@@ -24,7 +24,7 @@
 // every other fetch in this codebase, which only ever talks to api.github.com or a *.workers.dev/*.pages.dev
 // preview host. isGithubArtifactStorageUrl is the SSRF allowlist extension this genuinely new source needs:
 // isSafeHttpUrl's general public-https safety, PLUS a closed host-suffix allowlist (mirrors preview-url.ts's
-// own PREVIEW_HOST_SUFFIXES pattern), so a malformed or unexpected API response can never make gittensory's
+// own PREVIEW_HOST_SUFFIXES pattern), so a malformed or unexpected API response can never make loopover's
 // backend fetch an attacker-influenced or internal address.
 //
 // A `workflow_dispatch` run carries no natural PR association (unlike a `pull_request`-triggered run), so the
@@ -76,7 +76,7 @@ export function isGithubArtifactStorageUrl(raw: string): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Dispatch: gittensory -> GitHub (workflow_dispatch), pinned to the default branch.
+// Dispatch: loopover -> GitHub (workflow_dispatch), pinned to the default branch.
 // ---------------------------------------------------------------------------------------------------------
 
 /** Dispatch the fallback capture workflow for one PR. `ref` MUST be the repo's default branch (never the PR's

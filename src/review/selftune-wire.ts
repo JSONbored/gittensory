@@ -1,10 +1,10 @@
 // Convergence (#self-improve) — wires the ported self-improvement loop (src/review/auto-tune.ts +
-// src/review/auto-apply.ts) into gittensory's cron behind the default-OFF `LOOPOVER_REVIEW_SELFTUNE` flag.
+// src/review/auto-apply.ts) into loopover's cron behind the default-OFF `LOOPOVER_REVIEW_SELFTUNE` flag.
 //
 // SAFETY CONTRACT (must hold under every path):
 //   • flag-OFF (default) → the cron enqueues NO selftune job and this module is never reached; ZERO tuning
 //     work, NO override read/written, the worker is byte-identical to today.
-//   • flag-ON → the loop can ONLY EVER TIGHTEN the gate. It computes tuning recommendations from gittensory's
+//   • flag-ON → the loop can ONLY EVER TIGHTEN the gate. It computes tuning recommendations from loopover's
 //     OWN outcome data, SHADOW-SOAKS only STRICTLY-TIGHTENING recommendations, and AUTO-PROMOTES a soaked
 //     shadow override to live ONLY after the soak window passes the gate (tightening + evidence + soaked).
 //     Every action is recorded to override_audit. A loosening change is NEVER applied — the ported
@@ -12,13 +12,13 @@
 //     loosening directive into the apply path (closeFalse is held at 0, so the one loosening branch of
 //     `computeTuningRecommendations` is unreachable and carries no payload anyway).
 //
-// EVAL INPUT — ADAPTED TO GITTENSORY'S OWN OUTCOME DATA (NOT reviewbot's review_audit, which does not exist in
-// gittensory's migrations — parity.computeGateEval would read an empty table here). The ported auto-tune
-// advisor consumes a GateEvalReport (per-project confusion matrix). We build that report from gittensory's
+// EVAL INPUT — ADAPTED TO LOOPOVER'S OWN OUTCOME DATA (NOT reviewbot's review_audit, which does not exist in
+// loopover's migrations — parity.computeGateEval would read an empty table here). The ported auto-tune
+// advisor consumes a GateEvalReport (per-project confusion matrix). We build that report from loopover's
 // NATIVE outcome sources via the SAME aggregation services ops-wire already reuses (no new queries / schema):
 //   • agent_recommendation_outcomes (#543) — the positive/negative resolved split (buildRepoOutcomeCalibration).
 //     Only maintainer-lane outcomes are authoritative enough for live self-tune policy changes; contributor-lane
-//     closures can be self-authored and stay reporting-only. A maintainer-lane NEGATIVE outcome (gittensory
+//     closures can be self-authored and stay reporting-only. A maintainer-lane NEGATIVE outcome (loopover
 //     recommended "proceed", the human CLOSED) is the gittensory-native analogue of reviewbot's "would-merge
 //     BUT human closed" (mergeFalse) — the dangerous error a TIGHTENING fixes.
 // The mapping is deliberately conservative: it only ever populates the would-MERGE side of the matrix, so the
@@ -27,7 +27,7 @@
 // CONFIG-APPLICATION — WIRED (live read-back, tightening-only):
 //   The ported override model is `confidenceFloor` (a proceed-confidence floor in [0,1]) + `scopeCap`. The live
 //   read-back lives in resolveRepositorySettings → `applySelfTuneOverrideToSettings`, gated by the SAME default-OFF
-//   LOOPOVER_REVIEW_SELFTUNE flag: it translates a promoted `confidenceFloor` into gittensory's NATIVE readiness
+//   LOOPOVER_REVIEW_SELFTUNE flag: it translates a promoted `confidenceFloor` into loopover's NATIVE readiness
 //   tunable by RAISING an EXISTING `qualityGateMinScore` to `round(confidenceFloor * 100)` via a `max()`. By
 //   construction this can ONLY tighten — it never CREATES a readiness gate the operator didn't set, and never
 //   LOWERS one — so the always-tightening recommendation (this module only ever populates the would-merge error
@@ -59,8 +59,8 @@ export function isSelfTuneEnabled(env: {
 export const SELFTUNE_BASE_CONFIDENCE_FLOOR = 0;
 
 /**
- * PURE: build the ported GateEvalReport from gittensory's NATIVE recommendation-outcome calibration. The
- * recommendation NEGATIVE outcomes (gittensory said proceed, the human CLOSED) map to the would-merge ERROR
+ * PURE: build the ported GateEvalReport from loopover's NATIVE recommendation-outcome calibration. The
+ * recommendation NEGATIVE outcomes (loopover said proceed, the human CLOSED) map to the would-merge ERROR
  * (`mergeFalse`); POSITIVE outcomes map to `mergeConfirmed`. ONLY the would-merge side is populated, so the
  * advisor can ONLY produce a TIGHTENING (raise the floor) or no recommendation — never a loosening (the
  * close-side counters stay 0, so `computeTuningRecommendations`' one loosening branch is unreachable).
@@ -93,7 +93,7 @@ export function evalRowFromCalibration(project: string, positive: number, negati
   };
 }
 
-/** Build the per-project GateEvalReport from gittensory's recommendation-outcome calibration for one repo. */
+/** Build the per-project GateEvalReport from loopover's recommendation-outcome calibration for one repo. */
 async function buildEvalRow(env: Env, repoFullName: string): Promise<GateEvalRow> {
   const calibration = await buildRepoOutcomeCalibration(env, repoFullName, undefined, { maintainerOnly: true });
   return evalRowFromCalibration(repoFullName, calibration.recommendations.positive, calibration.recommendations.negative);
@@ -138,7 +138,7 @@ async function selfTuneRepos(env: Env): Promise<string[]> {
 /**
  * One self-improvement tick, run on the cron. FAILS SAFE: a per-repo error is logged and the pass continues; a
  * top-level error is swallowed (tuning must never break the cron). For each agent-configured repo it: (1) builds
- * the GateEvalReport from gittensory's own outcome data; (2) computes tuning recommendations; (3) SHADOW-SOAKS
+ * the GateEvalReport from loopover's own outcome data; (2) computes tuning recommendations; (3) SHADOW-SOAKS
  * any strictly-tightening recommendation; (4) PROMOTES a soaked shadow override to live ONLY when the gate
  * passes (tightening + evidence + soaked) — all via the ported runAutoApplyRecommendations, which records every
  * action to override_audit and NEVER applies a loosening change.

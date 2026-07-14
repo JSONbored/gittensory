@@ -4,7 +4,7 @@
 // we both flag it (a strong negative signal) and redact the literal manipulation so it can't be obeyed
 // verbatim.
 //
-// SELF-CONTAINED NATIVE PORT (reviewbot→gittensory convergence): every type + pattern this module needs
+// SELF-CONTAINED NATIVE PORT (reviewbot→loopover convergence): every type + pattern this module needs
 // is defined HERE. No imports from reviewbot. The logic is byte-faithful to the reviewbot source
 // (src/core/prompt-injection.ts); there are no stricter-tsconfig deltas — the module is already total.
 

@@ -1,19 +1,19 @@
-// Operational endpoints (the ops capability — reviewbot→gittensory convergence, ADDITIVE, NATIVE port of
+// Operational endpoints (the ops capability — reviewbot→loopover convergence, ADDITIVE, NATIVE port of
 // reviewbot src/core/ops.ts). Bearer-protected per agent. Surfaces enough to answer "is this agent
 // behaving?": health snapshot (status/verdict breakdown, manual-rate, stuck/failed/DLQ targets, reversals),
 // confidence-vs-outcome calibration + a recommended floor, and the decision trail for one target.
 //
 // SELF-CONTAINED: every type + helper this module needs is defined HERE. No imports from reviewbot. The
-// logic is byte-faithful to the reviewbot source; the only deltas are mechanical guards for gittensory's
+// logic is byte-faithful to the reviewbot source; the only deltas are mechanical guards for loopover's
 // stricter tsconfig + an INJECTED-DEPS seam for the runtime-gate-specific pieces.
 //
-// STORAGE: gittensory has no platform/access adapter — `Env` is a global ambient interface with `DB`.
+// STORAGE: loopover has no platform/access adapter — `Env` is a global ambient interface with `DB`.
 //
 // SCOPE (deferred): reviewbot's ops.ts ALSO exposes the auto-tune override handlers
 // (handleApplyRecommendation / handleClearOverride / handleOverrideAudit). Those are HEAVILY entangled with
 // reviewbot's runtime override store (src/core/tunables.ts — a 257-line shadow-soak/sanitize/tighten-only
 // engine) and are intentionally NOT ported here — porting them would drag the auto-tune engine into the
-// gittensory tree. Likewise handleInternalStatus's account-wide AI-error count is the runtime AI-health
+// loopover tree. Likewise handleInternalStatus's account-wide AI-error count is the runtime AI-health
 // pacer (src/core/ai-health.ts) and is taken as an INJECTED dep (default 0). What IS ported is the clean,
 // D1-only / pure surface: computeAgentHealth, computeCalibration, the bearer gate, and the status / decision
 // / calibration read endpoints.
@@ -126,7 +126,7 @@ export interface OpsAgentConfig {
 
 // ── Inlined helpers (byte-faithful from reviewbot src/core/{crypto,util,db}.ts) ──────────────────
 
-/** Storage seam: gittensory's `Env` is a global ambient interface with `DB`. */
+/** Storage seam: loopover's `Env` is a global ambient interface with `DB`. */
 function storage(env: Env): D1Database {
   return env.DB;
 }

@@ -375,7 +375,7 @@ export async function recordPrOutcome(
 
 // ── 2) reversals — a human undid a bot action ────────────────────────────────────────────────────────────────
 
-/** Was the last GITTENSORY action on this PR a CLOSE? Reads the agent-action audit ledger (audit_events,
+/** Was the last LOOPOVER action on this PR a CLOSE? Reads the agent-action audit ledger (audit_events,
  *  eventType `agent.action.<class>`, written by buildAgentActionAudit) — the most-recent SUCCESSFUL action for
  *  this target. A reopen of a bot-CLOSED PR is the high-value "human disagreed with the close" reversal signal.
  *  Fail-safe: a read error → false (record nothing rather than a false reversal). */
@@ -419,7 +419,7 @@ async function wasMergeRecorded(env: Env, targetId: string): Promise<boolean> {
 }
 
 /**
- * Record a REVERSAL — a human overriding a gittensory auto-action — into the eval/audit stores (the
+ * Record a REVERSAL — a human overriding a loopover auto-action — into the eval/audit stores (the
  * ground-truth accuracy signal). Mirrors reviewbot recordReversalSignals (runtime.ts ~157/274):
  *   • REOPEN of a bot-CLOSED PR by a CONTRIBUTOR → `reversal_reopened` (the high-value case). Reopens by the
  *     repo OWNER (administrative re-queue) or by a BOT are NOT contributor disputes and are skipped, so the
@@ -507,7 +507,7 @@ const BREAKER_EVAL_WINDOW_DAYS = 90;
 
 /**
  * One precision-circuit-breaker tick, run on the scheduled (selftune) cron. Reads the gate-eval confusion
- * matrix over gittensory's OWN recorded pr_outcome/gate_decision rows -- SCOPED to `source: 'gittensory-native'`
+ * matrix over loopover's OWN recorded pr_outcome/gate_decision rows -- SCOPED to `source: 'gittensory-native'`
  * (#autoclear-deadlock / stale-source): review_audit can also carry historical `gate_decision` rows from the
  * pre-convergence reviewbot engine (source='reviewbot'), which stopped running once a repo converged and so
  * never grows. Reading across ALL sources (the pre-fix behavior) let a permanently-frozen legacy prediction set

@@ -6,9 +6,9 @@
 //      code), bge-m3 embeds ~1 vector per file, and a hard MAX_CHUNKS_PER_REPO cap bounds stored
 //      vectors. Queries are ~1 vector/review.
 //
-// SELF-CONTAINED NATIVE PORT (reviewbot→gittensory convergence): every type + helper this module needs is
+// SELF-CONTAINED NATIVE PORT (reviewbot→loopover convergence): every type + helper this module needs is
 // defined HERE. No imports from reviewbot. The logic is byte-faithful to the reviewbot source
-// (src/core/rag.ts); the only deltas are (1) mechanical guards for gittensory's stricter tsconfig
+// (src/core/rag.ts); the only deltas are (1) mechanical guards for loopover's stricter tsconfig
 // (noUncheckedIndexedAccess + exactOptionalPropertyTypes), which do not change behavior, and (2) the infra
 // it needs — the vector index, the AI embedding model, and the chunk-text store — is INJECTED via the
 // VectorAdapter / InferenceAdapter / StorageAdapter interfaces (passed as params) instead of reviewbot's
@@ -102,7 +102,7 @@ const CHUNK_CHARS = 16000; // per-file chunk budget; only files larger than this
 const CHUNK_OVERLAP = 1500;
 /** Hard per-repo stored-vector cap — bounds a repo-controlled, unboundedly-growable store. Source is
  *  prioritized so it survives the cap. Raised from 1500 (2026-07-09): all 3 currently-gated repos were
- *  sitting AT the old cap (confirmed live), and gittensory's own indexable tree alone is within range of
+ *  sitting AT the old cap (confirmed live), and loopover's own indexable tree alone is within range of
  *  it before accounting for large files splitting into multiple chunks -- meaning real code was silently
  *  never indexed. Storage/search cost at this scale is trivial for Qdrant regardless of cap size (the
  *  bound exists to protect against a pathological future repo, not because 4000 vectors is expensive);

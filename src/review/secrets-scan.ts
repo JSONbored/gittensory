@@ -1,7 +1,7 @@
 // Reusable secret-pattern scanner (the `secretsScan` capability). Deterministic, no deps.
 // Callers run scanForSecrets() on submitted diff/text; a hit typically forces a close/manual verdict.
 //
-// SELF-CONTAINED NATIVE PORT (reviewbot→gittensory convergence): byte-faithful to the reviewbot source
+// SELF-CONTAINED NATIVE PORT (reviewbot→loopover convergence): byte-faithful to the reviewbot source
 // (src/core/secrets-scan.ts); there are no stricter-tsconfig deltas — the module is already total. No
 // imports from reviewbot.
 //

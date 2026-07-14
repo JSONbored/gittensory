@@ -27,7 +27,7 @@ export function isPrReconciliationEnabled(env: { LOOPOVER_PR_RECONCILIATION?: st
 }
 
 /** The same acting-autonomy repo set fanOutAgentRegateSweepJobs sweeps (mirrors sweep-watchdog.ts's own copy of
- *  this selection) — this reconciliation only makes sense for repos gittensory is actually reviewing. */
+ *  this selection) — this reconciliation only makes sense for repos loopover is actually reviewing. */
 async function watchedRepos(env: Env): Promise<Array<{ fullName: string; installationId?: number }>> {
   const repositoriesByKey = new Map((await listRepositories(env)).map((repo) => [repo.fullName.toLowerCase(), repo]));
   const byKey = new Map<string, { fullName: string; installationId?: number }>();

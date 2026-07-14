@@ -1,4 +1,4 @@
-// Realtime visual capture (reviewbot→gittensory convergence — visual port). taopedia-style before/after.
+// Realtime visual capture (reviewbot→loopover convergence — visual port). taopedia-style before/after.
 //
 // before = production (review.visual.production_url, falling back to the global PUBLIC_SITE_ORIGIN env var);
 // after = the PR's preview-deploy URL, discovered the
@@ -10,9 +10,9 @@
 // bucket's own public URL — see resolveShotUrl below. Either way, GitHub's image proxy fetches a fast
 // static object instead of waiting on a live browser render.
 //
-// PORTED from reviewbot's src/agents/gittensory/capture.ts (mapFilesToRoutes / routeForFile / capturePage /
-// buildCapture), adapted to gittensory bindings + origins. The agent-config-driven route rules, authed-route
-// preview session, and explicit-route override are intentionally dropped here — gittensory's UI uses the
+// PORTED from reviewbot's src/agents/loopover/capture.ts (mapFilesToRoutes / routeForFile / capturePage /
+// buildCapture), adapted to loopover bindings + origins. The agent-config-driven route rules, authed-route
+// preview session, and explicit-route override are intentionally dropped here — loopover's UI uses the
 // default TanStack route convention; those hooks can return if a per-repo visual config is added.
 import { base64Encode, sha256Hex } from "../../utils/crypto";
 import type { AiContentBlock } from "../../types";
@@ -33,7 +33,7 @@ import { encodeScrollGif, isScrollGifAvailable } from "./scroll-gif";
 
 const NAMESPACE = "loopover";
 const DEFAULT_ROUTES = ["/"];
-// The app-folder segment is a wildcard, not hardcoded to gittensory-ui: metagraphed's UI (apps/ui/src/routes/)
+// The app-folder segment is a wildcard, not hardcoded to loopover-ui: metagraphed's UI (apps/ui/src/routes/)
 // uses the identical TanStack flat-file convention `routeForFile` below implements, just under a different app
 // folder name. Only ever matched against the CURRENT repo's own changed-file paths (see mapFilesToRoutes'
 // caller), so widening this carries no cross-repo ambiguity risk.
@@ -202,7 +202,7 @@ export async function fetchExternalScreenshotContentBlock(url: string): Promise<
   }
 }
 
-/** Inputs the capture pipeline needs about the PR under review (resolved by the caller from gittensory data). */
+/** Inputs the capture pipeline needs about the PR under review (resolved by the caller from loopover data). */
 export interface CaptureTarget {
   repoFullName: string;
   prNumber: number;
@@ -268,7 +268,7 @@ export type VisualRoutesInput = { paths?: readonly string[] | null | undefined; 
 /**
  * Resolve which routes to screenshot for this PR: an explicit, always-screenshotted `paths` list from
  * `review.visual.routes` REPLACES automatic file-to-route inference entirely when non-empty (simpler and
- * more robust for a repo whose routing convention isn't gittensory-ui's TanStack file-based one); absent/
+ * more robust for a repo whose routing convention isn't loopover-ui's TanStack file-based one); absent/
  * empty config falls through to `mapFilesToRoutes` unchanged, so this is byte-identical to today by default.
  * `maxRoutes` applies to either path — an explicit list is capped too, not just inferred routes.
  */

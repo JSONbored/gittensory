@@ -1,5 +1,5 @@
 // Convergence (safety) feature flag + helpers that wire the ported safety modules
-// (`./prompt-injection` + `./secrets-scan`) into gittensory's review path.
+// (`./prompt-injection` + `./secrets-scan`) into loopover's review path.
 //
 // Single env switch: LOOPOVER_REVIEW_SAFETY. Default OFF (unset/"false") — when OFF none of the helpers here
 // alter inputs or findings, so the review path is byte-identical to today. Truthy follows the codebase
@@ -92,7 +92,7 @@ function locationSummaryFor(hits: SecretScanLocationMatch[]): string {
 
 /**
  * Scan the PR diff for leaked secrets and, on a hit, return ONE `AdvisoryFinding` (else null). Mapped to
- * gittensory's {@link AdvisoryFinding} shape.
+ * loopover's {@link AdvisoryFinding} shape.
  *
  * Only CONCRETE credential formats ({@link HARD_SECRET_KINDS}) produce the critical `secret_leak` code that
  * `rules/advisory.ts`'s `isConfiguredGateBlocker` treats as an unconditional hard blocker — the weak

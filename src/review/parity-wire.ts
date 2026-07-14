@@ -77,13 +77,13 @@ export const LOOPOVER_NATIVE_SOURCE = "gittensory-native";
 const PARITY_WINDOW_DAYS = 90;
 
 /**
- * PURE: map a gittensory gate-check conclusion to the parity-comparable {@link GateAction}, or `null` when the
+ * PURE: map a loopover gate-check conclusion to the parity-comparable {@link GateAction}, or `null` when the
  * conclusion carries no comparable terminal decision.
  *
- * The gittensory gate is a CHECK that passes or blocks a merge — it NEVER auto-closes a PR. So the honest,
+ * The loopover gate is a CHECK that passes or blocks a merge — it NEVER auto-closes a PR. So the honest,
  * safe mapping is:
  *   • 'success'                        → 'merge' — the gate would ALLOW the merge.
- *   • 'failure' | 'action_required'    → 'hold'  — the gate BLOCKS the merge (holds it for a human); gittensory
+ *   • 'failure' | 'action_required'    → 'hold'  — the gate BLOCKS the merge (holds it for a human); loopover
  *                                                  does not close, so this is 'hold', not 'close'. This also
  *                                                  keeps the parity SAFETY metric honest: a shadow 'hold' is
  *                                                  never the dangerous "shadow merges where authoritative
@@ -189,7 +189,7 @@ export interface ParityReadinessRow extends GateParityRow {
 }
 
 export interface ParityReadinessReport {
-  /** The authoritative writer (default 'reviewbot') and the shadow writer ('gittensory') being compared. */
+  /** The authoritative writer (default 'reviewbot') and the shadow writer ('loopover') being compared. */
   authoritative: string;
   shadow: string;
   /** Whether enough paired evidence exists anywhere to read parity meaningfully (>= MIN_PARITY_SAMPLE). */
@@ -215,7 +215,7 @@ export async function computeParityReadiness(
     days: opts.days ?? PARITY_WINDOW_DAYS,
     nowMs: opts.nowMs ?? Date.now(),
     // The shadow source MUST match what recordNativeGateDecision stamps ('gittensory-native'); computeGateParity
-    // defaults `shadow` to 'gittensory', so pass it explicitly or the self-join would find no shadow rows. The
+    // defaults `shadow` to 'loopover', so pass it explicitly or the self-join would find no shadow rows. The
     // authoritative side stays the default 'reviewbot' (the deploy-time dual-run writer).
     shadow: LOOPOVER_NATIVE_SOURCE,
     ...(opts.project ? { project: opts.project } : {}),

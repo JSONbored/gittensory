@@ -1,10 +1,10 @@
-// Public "proof of power" stats (#1059) — a small, public-safe aggregate of what gittensory's REVIEW SYSTEM has
+// Public "proof of power" stats (#1059) — a small, public-safe aggregate of what loopover's REVIEW SYSTEM has
 // done, powering the above-the-fold homepage counter. Flag-gated by LOOPOVER_PUBLIC_STATS (default OFF): when
 // off the public endpoint 404s, so the deploy is byte-identical to today until the flag is deliberately set.
 //
 // REALTIME: queries the live ledger directly (no rollup/cron) so a new review shows up within the 60s HTTP cache
 // window. "reviewed" = a distinct PR for which the review system published a public review surface (audit_events
-// `github_app.pr_public_surface_published`, scoped to the repos it handles: gittensory, awesome-claude,
+// `github_app.pr_public_surface_published`, scoped to the repos it handles: loopover, awesome-claude,
 // metagraphed); each PR's terminal DISPOSITION is read from the pull_requests cache. (The legacy review_targets
 // ledger this used to read was orphaned by the convergence cutover — nothing writes it anymore.)
 //
@@ -23,7 +23,7 @@
 // PRIVACY: counts only — no PR content, authors, scores, or reward internals. Safe to serve publicly.
 //
 // GLOBAL: the homepage total folds in every REGISTERED Orb installation's outcomes (getOrbGlobalStats) on top of
-// the own-ledger side, so the counter reflects the whole fleet, not just gittensory's own repos. The own-ledger
+// the own-ledger side, so the counter reflects the whole fleet, not just loopover's own repos. The own-ledger
 // side (audit_events) is a FROZEN snapshot as of the self-host cutover -- it stops growing the day each repo's
 // live processing moved off this worker, and can never grow again now that the old App has been fully deleted --
 // while orb_pr_outcomes keeps growing in realtime for any repo with the central Orb App installed (including
@@ -50,7 +50,7 @@ export function isPublicStatsEnabled(env: {
   return /^(1|true|yes|on)$/i.test(env.LOOPOVER_PUBLIC_STATS ?? "");
 }
 
-/** Storage seam: gittensory's `Env` is a global ambient interface with `DB` (mirrors src/review/stats.ts). */
+/** Storage seam: loopover's `Env` is a global ambient interface with `DB` (mirrors src/review/stats.ts). */
 function storage(env: Env): D1Database {
   return env.DB;
 }
@@ -71,7 +71,7 @@ export async function safeAll<T>(
   }
 }
 
-/** reviewed = the PRs gittensory actually reviewed (excludes ignored drafts/bots + errors). */
+/** reviewed = the PRs loopover actually reviewed (excludes ignored drafts/bots + errors). */
 function reviewedOf(d: {
   merged: number;
   closed: number;
@@ -105,7 +105,7 @@ function accuracyPct(
 /** The own-ledger side of public stats is intentionally constrained to an explicit allowlist (privacy: publish
  *  only what's deliberately opted in). Deliberately reads LOOPOVER_PUBLIC_STATS_REPOS, NOT
  *  LOOPOVER_REVIEW_REPOS (the live per-PR-feature cutover allowlist) -- the two once held the same value, but
- *  diverged once gittensory/awesome-claude/metagraphed moved their LIVE processing to self-host: the cutover
+ *  diverged once loopover/awesome-claude/metagraphed moved their LIVE processing to self-host: the cutover
  *  allowlist correctly went empty, while the historical rows this worker already wrote for them remain real and
  *  safe to publish. Empty allowlist => the own-ledger side reports zero (still fails safe), but does NOT
  *  suppress the separately-gated Orb cross-fleet aggregate (see getPublicStats below). */
