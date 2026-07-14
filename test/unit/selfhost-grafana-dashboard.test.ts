@@ -65,7 +65,7 @@ function grafanaSqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function expandGrafanaRange(query: string, repo = "$__all"): string {
+function expandGrafanaRange(query: string, repo = "__ALL__"): string {
   const from = Math.floor(Date.parse("2026-06-29T20:00:00Z") / 1000);
   const to = Math.floor(Date.parse("2026-06-29T22:00:00Z") / 1000);
   // Every panel's repo variable also needs expanding for a real sqlite3 CLI run, same as the time
@@ -340,7 +340,7 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
       expect(target?.queryType).toBe("table");
       expect(target?.rawQueryText).toBe(target?.queryText);
       expect(target?.queryText).toContain("FROM issues");
-      expect(target?.queryText).toContain("(${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})");
+      expect(target?.queryText).toContain("(${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring})");
       expect(panel?.description?.length ?? 0).toBeGreaterThan(0);
     }
 
@@ -358,7 +358,7 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
 
   it("scopes the issue-activity panels to the selected $repo, same as the PR panels", () => {
     for (const id of [12, 13, 14] as const) {
-      expect(targetForPanel(id).queryText).toContain("(${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})");
+      expect(targetForPanel(id).queryText).toContain("(${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring})");
     }
   });
 
@@ -381,7 +381,7 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
 
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) {
-      expect(target.queryText).toContain("(${repo:sqlstring} = '$__all' OR repo = ${repo:sqlstring})");
+      expect(target.queryText).toContain("(${repo:sqlstring} = '__ALL__' OR repo = ${repo:sqlstring})");
       expect(target.queryText).not.toContain("'$repo'");
     }
   });
@@ -471,7 +471,7 @@ describe("maintainer Reviews & PRs Grafana dashboard", () => {
     const trackedQuery = targetForPanel(2).queryText!;
     const allRepos = sqlite(db, expandGrafanaRange(trackedQuery));
     // A specific repo selection substitutes BOTH repo occurrences with the same SQL-escaped repo value (never
-    // the literal "$__all" sentinel, which only appears when "All" is selected).
+    // the literal "__ALL__" sentinel, which only appears when "All" is selected).
     const repoAOnly = sqlite(db, expandGrafanaRange(trackedQuery, "owner/repo-a"));
     const repoBOnly = sqlite(db, expandGrafanaRange(trackedQuery, "owner/repo-b"));
 
