@@ -1213,7 +1213,7 @@ describe("queue processors", () => {
     expect(seen.comments.some((c) => c.includes("blocked from contributing"))).toBe(true);
   });
 
-  it("screenshot-table gate (#2006): an in-scope contributor PR missing a before/after table is closed deterministically with NO AI call and no merit merge", async () => {
+  it("screenshot-table gate (#2006): an in-scope contributor PR missing a before/after table is closed deterministically regardless of the (unrelated, still-running) AI review and no merit merge", async () => {
     let aiCalls = 0;
     const env = createTestEnv({
       GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
@@ -1269,8 +1269,11 @@ describe("queue processors", () => {
       },
     });
 
-    // Deterministic gate: closed, and the AI was NEVER called for the disposition.
-    expect(aiCalls).toBe(0);
+    // Deterministic gate: closed regardless of the AI review's own (unrelated, advisory-only) verdict --
+    // AI review runs for this author too (#orb-ai-review-always-review: it is no longer gated on
+    // confirmed-contributor status), but the screenshot-table gate's close decision doesn't wait on or
+    // depend on it either way.
+    expect(aiCalls).toBe(1);
     expect(seen.closed).toBe(true);
     const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();
     expect(closeAudit?.n).toBeGreaterThanOrEqual(1);
@@ -2378,8 +2381,10 @@ describe("queue processors", () => {
       },
     });
 
-    // Deterministic gate: closed + labeled (with the configured label), and the AI was NEVER called.
-    expect(aiCalls).toBe(0);
+    // Deterministic gate: closed + labeled (with the configured label) regardless of the AI review's own
+    // (unrelated, advisory-only) verdict -- AI review runs for this author too (#orb-ai-review-always-review:
+    // it is no longer gated on confirmed-contributor status), but the cap's close decision doesn't wait on it.
+    expect(aiCalls).toBe(1);
     expect(seen.closed).toBe(true);
     expect(seen.labels).toContain("spam-cap");
     const closeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = 'agent.action.close'").first<{ n: number }>();

@@ -194,6 +194,35 @@ export async function shouldStartAiReviewForAdvisory(
   return !reputationSkip;
 }
 
+/** Whether a PR's author is eligible for AI review, given the repo's config (#orb-ai-review-always-review).
+ *
+ * INVARIANT: AI review runs for EVERY author by default once a maintainer has opted the repo into AI
+ * review at all (`aiReviewMode !== "off"`) -- security/quality review is not a privilege reserved for
+ * confirmed Gittensor miners. The original `confirmedContributor` gate here (#644) was about not
+ * applying MINER-SPECIFIC gate rules (e.g. a required linked issue) to a non-miner contributor's PR --
+ * it was never meant to exempt a whole class of authors from AI-driven defect detection, and doing so
+ * by default left a real gap: an unconfirmed/new contributor's PR got LESS scrutiny than an established
+ * one's, backwards from what a security posture should look like. Only when a maintainer EXPLICITLY sets
+ * `aiReviewConfirmedContributorsOnly: true` (opt-in, never the default) does this narrow back down to
+ * the original confirmed-contributor-only behavior, for a self-host operator who deliberately wants to
+ * bound AI spend to registered miners. `aiReviewAllAuthors` keeps its original meaning as the
+ * widen-back-out lever *within* that narrowed mode, unchanged.
+ *
+ * Shared by both the "should we even start a review" check (shouldRequirePublicAiReviewForAdvisory) and
+ * runAiReviewForAdvisory's own execution-time guard, so the two can never drift out of sync the way two
+ * independently hand-duplicated copies of this same condition previously could.
+ */
+export function resolveAiReviewableAuthor(
+  settings: Pick<RepositorySettings, "gatePack" | "aiReviewMode" | "aiReviewConfirmedContributorsOnly"> & {
+    aiReviewAllAuthors?: boolean | null | undefined;
+  },
+  confirmedContributor: boolean,
+): boolean {
+  if (!settings.aiReviewConfirmedContributorsOnly) return true;
+  const packAllowsAnyAuthorBlockingReview = settings.gatePack === "oss-anti-slop" && settings.aiReviewMode === "block";
+  return confirmedContributor || packAllowsAnyAuthorBlockingReview || Boolean(settings.aiReviewAllAuthors);
+}
+
 export function shouldRequirePublicAiReviewForAdvisory(
   env: Env,
   args: {
@@ -205,13 +234,7 @@ export function shouldRequirePublicAiReviewForAdvisory(
     skipAiReview?: boolean | undefined;
   },
 ): boolean {
-  const packAllowsAnyAuthorBlockingReview =
-    args.settings.gatePack === "oss-anti-slop" &&
-    args.settings.aiReviewMode === "block";
-  const reviewableAuthor =
-    args.confirmedContributor ||
-    packAllowsAnyAuthorBlockingReview ||
-    args.settings.aiReviewAllAuthors;
+  const reviewableAuthor = resolveAiReviewableAuthor(args.settings, args.confirmedContributor);
   if (
     args.skipAiReview ||
     args.settings.aiReviewMode === "off" ||
@@ -392,16 +415,11 @@ export async function runAiReviewForAdvisory(
     }
   | undefined
 > {
-  const packAllowsAnyAuthorBlockingReview =
-    args.settings.gatePack === "oss-anti-slop" &&
-    args.settings.aiReviewMode === "block";
-  // `aiReviewAllAuthors` (per-repo opt-in, default false) widens the AI-spend gate to EVERY author — a self-host
-  // operator who wants real reviews on all PRs (incl. their own / unconfirmed contributors) and pays for the AI
-  // themselves. Default false ⇒ the confirmed-contributor gate is byte-identical to today.
-  const reviewableAuthor =
-    args.confirmedContributor ||
-    packAllowsAnyAuthorBlockingReview ||
-    args.settings.aiReviewAllAuthors;
+  // See resolveAiReviewableAuthor's own doc comment for the full invariant: AI review runs for every
+  // author by default once aiReviewMode !== "off"; only an explicit aiReviewConfirmedContributorsOnly
+  // opt-in narrows this back down to confirmed-contributor-or-widened, for a self-host operator who
+  // deliberately wants to bound AI spend to registered miners.
+  const reviewableAuthor = resolveAiReviewableAuthor(args.settings, args.confirmedContributor);
   if (
     args.mode === "paused" ||
     args.settings.aiReviewMode === "off" ||

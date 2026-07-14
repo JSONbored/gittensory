@@ -706,6 +706,7 @@ export const RepositorySettingsSchema = z
     aiReviewProvider: z.enum(["anthropic", "openai"]).nullable().optional(),
     aiReviewModel: z.string().nullable().optional(),
     aiReviewAllAuthors: z.boolean(),
+    aiReviewConfirmedContributorsOnly: z.boolean().nullable().optional(),
     aiReviewCloseConfidence: z.number().nullable().optional(),
     aiReviewLowConfidenceDisposition: z.enum(["one_shot", "hold_for_review", "advisory_only"]).nullable().optional(),
     aiReviewCombine: z.enum(["single", "consensus", "synthesis"]).nullable().optional(),
@@ -917,6 +918,7 @@ export const RepoSettingsPreviewSchema = z
       aiReviewProvider: z.string().nullable(),
       aiReviewModel: z.string().nullable(),
       aiReviewAllAuthors: z.boolean(),
+      aiReviewConfirmedContributorsOnly: z.boolean().nullable(),
       commandAuthorization: z.object({
         defaultAllowed: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])),
         commandOverrides: z.array(

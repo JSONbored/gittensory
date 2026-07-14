@@ -387,6 +387,7 @@ export type FocusManifestSettings = Partial<
     | "aiReviewProvider"
     | "aiReviewModel"
     | "aiReviewAllAuthors"
+    | "aiReviewConfirmedContributorsOnly"
     | "closeOwnerAuthors"
     | "autoLabelEnabled"
     | "typeLabelsEnabled"
@@ -1857,7 +1858,7 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[],
   }
   const publicSurface = normalizeOptionalEnum(r.publicSurface, "settings.publicSurface", ["off", "comment_and_label", "comment_only", "label_only"] as const, warnings);
   if (publicSurface !== null) out.publicSurface = publicSurface;
-  for (const key of ["aiReviewByok", "aiReviewAllAuthors", "closeOwnerAuthors", "autoLabelEnabled", "typeLabelsEnabled", "badgeEnabled", "publicQualityMetrics", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "agentPaused", "agentDryRun", "hardGuardrailGlobsOverridesInvariants"] as const) {
+  for (const key of ["aiReviewByok", "aiReviewAllAuthors", "aiReviewConfirmedContributorsOnly", "closeOwnerAuthors", "autoLabelEnabled", "typeLabelsEnabled", "badgeEnabled", "publicQualityMetrics", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "agentPaused", "agentDryRun", "hardGuardrailGlobsOverridesInvariants"] as const) {
     const flag = normalizeOptionalBoolean(r[key], `settings.${key}`, warnings);
     if (flag !== null) out[key] = flag;
   }

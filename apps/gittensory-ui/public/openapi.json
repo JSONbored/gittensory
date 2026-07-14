@@ -9639,6 +9639,10 @@
           "hardGuardrailGlobsOverridesInvariants": {
             "type": "boolean",
             "nullable": true
+          },
+          "aiReviewConfirmedContributorsOnly": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "required": [
@@ -10362,6 +10366,10 @@
                   "defaultAllowed",
                   "commandOverrides"
                 ]
+              },
+              "aiReviewConfirmedContributorsOnly": {
+                "type": "boolean",
+                "nullable": true
               }
             },
             "required": [
@@ -10397,6 +10405,7 @@
               "aiReviewProvider",
               "aiReviewModel",
               "aiReviewAllAuthors",
+              "aiReviewConfirmedContributorsOnly",
               "commandAuthorization"
             ]
           },

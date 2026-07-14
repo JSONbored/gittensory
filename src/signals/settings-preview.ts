@@ -219,6 +219,7 @@ export type RepoSettingsPreview = {
     aiReviewProvider: string | null;
     aiReviewModel: string | null;
     aiReviewAllAuthors: boolean;
+    aiReviewConfirmedContributorsOnly: boolean;
     commandAuthorization: {
       defaultAllowed: CommandAuthorizationRole[];
       commandOverrides: Array<{ command: string; allowedRoles: CommandAuthorizationRole[] }>;
@@ -353,6 +354,7 @@ export function buildRepoSettingsPreview(args: {
       aiReviewProvider: settings.aiReviewProvider ?? null,
       aiReviewModel: settings.aiReviewModel ?? null,
       aiReviewAllAuthors: settings.aiReviewAllAuthors,
+      aiReviewConfirmedContributorsOnly: settings.aiReviewConfirmedContributorsOnly ?? false,
       commandAuthorization: summarizeCommandAuthorizationPolicy(settings.commandAuthorization),
     },
     commandAuthorizationPreview,

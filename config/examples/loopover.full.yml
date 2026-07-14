@@ -350,15 +350,16 @@ gate:
     # off | advisory | block. Default: off.
     #   advisory — posts AI review notes only.
     #   block    — a dual-model high-confidence consensus defect may become a
-    #              blocker (confirmed-contributors only).
+    #              blocker.
     mode: off
     # Use the maintainer's frontier model for the *advisory* write-up when a
     # provider key is configured. The consensus blocker always uses the free
     # Workers-AI pair, so BYOK never changes who can be blocked.
     # Bool. Default: false.
     byok: false
-    # Review every PR author when AI review is enabled. Keep false to spend
-    # model calls only on the engine's default eligible authors.
+    # Review every PR author when AI review is enabled. Only has an effect
+    # when `settings.aiReviewConfirmedContributorsOnly` (below) is also true --
+    # otherwise every author is already reviewed by default.
     # Bool. Default: false.
     allAuthors: false
     # BYOK provider. anthropic | openai | null. Default: null (use the stored
@@ -693,6 +694,13 @@ settings:
   # decision — only set this if you specifically want full control over your own guardrail list instead of
   # the safe-by-default add-only behavior. Bool. Default: false.
   hardGuardrailGlobsOverridesInvariants: false
+
+  # Restrict AI review (gate.aiReview.mode above) to confirmed Gittensor contributors only. Default:
+  # false -- AI review runs for EVERY PR author once aiReview.mode is not off, since security/quality
+  # review should not be weaker for a new or unconfirmed contributor's PR than for an established one's.
+  # Set true only if you deliberately want to bound AI spend to registered miners; gate.aiReview.allAuthors
+  # above can then still widen back out to every author within that narrowed mode. Bool. Default: false.
+  aiReviewConfirmedContributorsOnly: false
 
   # Require a linked issue on every PR (dashboard equivalent of the toggle that
   # can auto-promote gate.linkedIssue to block). Bool. Default: false.

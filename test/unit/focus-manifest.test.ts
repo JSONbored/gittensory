@@ -343,6 +343,7 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
     autoCloseExemptLogins: "autoCloseExemptLogins:",
     hardGuardrailGlobs: "hardGuardrailGlobs:",
     hardGuardrailGlobsOverridesInvariants: "hardGuardrailGlobsOverridesInvariants:",
+    aiReviewConfirmedContributorsOnly: "aiReviewConfirmedContributorsOnly:",
     manualReviewLabel: "manualReviewLabel:",
     readyToMergeLabel: "readyToMergeLabel:",
     changesRequestedLabel: "changesRequestedLabel:",

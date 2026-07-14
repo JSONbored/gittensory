@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAiReviewDiff, claimAiReviewLock, runAiReviewForAdvisory, shouldStartAiReviewForAdvisory } from "../../src/queue/processors";
+import { resolveAiReviewableAuthor } from "../../src/queue/ai-review-orchestration";
 import { BEST_REVIEW_MODELS, INCOHERENT_DIFF_ASSESSMENT } from "../../src/services/ai-review";
 import * as sentryModule from "../../src/selfhost/sentry";
 import { upsertRepositoryAiKey } from "../../src/db/repositories";
@@ -82,6 +83,52 @@ function aiEnv(run: () => Promise<unknown>, flags = true) {
   });
 }
 
+// INVARIANT (#orb-ai-review-always-review): AI review must be eligible to run for every author by
+// default. This was the wrong way around before 2026-07-14 — an unconfirmed/new contributor's PR got
+// LESS scrutiny than an established contributor's, backwards from a sane security posture. Only an
+// explicit, opt-in `aiReviewConfirmedContributorsOnly: true` (a self-host operator's own deliberate
+// choice to bound paid AI-review spend) may narrow this back down — and even then, `aiReviewAllAuthors`
+// and the `oss-anti-slop`+`block` pack combo still widen it back out, exactly as before.
+describe("resolveAiReviewableAuthor invariant (#orb-ai-review-always-review)", () => {
+  const gittensorAdvisory = { gatePack: "gittensor", aiReviewMode: "advisory" } as const;
+
+  it("DEFAULT (no aiReviewConfirmedContributorsOnly set): every author is reviewable, confirmed or not", () => {
+    expect(resolveAiReviewableAuthor(gittensorAdvisory, true)).toBe(true);
+    expect(resolveAiReviewableAuthor(gittensorAdvisory, false)).toBe(true);
+  });
+
+  it("DEFAULT holds even under the strictest pack/mode combo (oss-anti-slop + off) and explicit aiReviewAllAuthors: false", () => {
+    expect(resolveAiReviewableAuthor({ gatePack: "oss-anti-slop", aiReviewMode: "off", aiReviewAllAuthors: false }, false)).toBe(true);
+  });
+
+  it("REGRESSION: aiReviewConfirmedContributorsOnly: null/undefined behaves exactly like false (never narrows)", () => {
+    expect(resolveAiReviewableAuthor({ ...gittensorAdvisory, aiReviewConfirmedContributorsOnly: null }, false)).toBe(true);
+    expect(resolveAiReviewableAuthor({ ...gittensorAdvisory, aiReviewConfirmedContributorsOnly: undefined }, false)).toBe(true);
+  });
+
+  it("opt-in narrowing (aiReviewConfirmedContributorsOnly: true): unconfirmed author with no widening is NOT reviewable", () => {
+    expect(resolveAiReviewableAuthor({ ...gittensorAdvisory, aiReviewConfirmedContributorsOnly: true }, false)).toBe(false);
+  });
+
+  it("opt-in narrowing: a confirmed contributor is always reviewable regardless of pack/mode", () => {
+    expect(resolveAiReviewableAuthor({ ...gittensorAdvisory, aiReviewConfirmedContributorsOnly: true }, true)).toBe(true);
+    expect(resolveAiReviewableAuthor({ gatePack: "oss-anti-slop", aiReviewMode: "off", aiReviewConfirmedContributorsOnly: true }, true)).toBe(true);
+  });
+
+  it("opt-in narrowing: aiReviewAllAuthors still widens back out to every author", () => {
+    expect(resolveAiReviewableAuthor({ ...gittensorAdvisory, aiReviewConfirmedContributorsOnly: true, aiReviewAllAuthors: true }, false)).toBe(true);
+  });
+
+  it("opt-in narrowing: the oss-anti-slop + block pack combo still widens back out to every author", () => {
+    expect(resolveAiReviewableAuthor({ gatePack: "oss-anti-slop", aiReviewMode: "block", aiReviewConfirmedContributorsOnly: true }, false)).toBe(true);
+  });
+
+  it("opt-in narrowing: the pack-widen requires BOTH oss-anti-slop AND block — either alone stays narrowed", () => {
+    expect(resolveAiReviewableAuthor({ gatePack: "oss-anti-slop", aiReviewMode: "advisory", aiReviewConfirmedContributorsOnly: true }, false)).toBe(false);
+    expect(resolveAiReviewableAuthor({ gatePack: "gittensor", aiReviewMode: "block", aiReviewConfirmedContributorsOnly: true }, false)).toBe(false);
+  });
+});
+
 describe("shouldStartAiReviewForAdvisory", () => {
   const enabledEnv = () => aiEnv(async () => ({ response: notesOnlyJson() }));
   const base = { settings: { aiReviewMode: "advisory", gatePack: "gittensor" } as RepositorySettings, advisory: advisory(), repoFullName: "acme/widgets", author: "alice", confirmedContributor: true };
@@ -90,15 +137,32 @@ describe("shouldStartAiReviewForAdvisory", () => {
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), base)).resolves.toBe(true);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, skipAiReview: true })).resolves.toBe(false);
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "off" } as RepositorySettings })).resolves.toBe(false);
-    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, confirmedContributor: false })).resolves.toBe(false);
+    // INVARIANT (#orb-ai-review-always-review): an unconfirmed contributor is reviewable by DEFAULT --
+    // see the dedicated resolveAiReviewableAuthor describe block above for the exhaustive branch coverage.
+    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, confirmedContributor: false })).resolves.toBe(true);
+    // Opt-in narrowing end to end: aiReviewConfirmedContributorsOnly: true with no widening blocks an
+    // unconfirmed author through the REAL shouldStartAiReviewForAdvisory path, not just the pure helper.
     await expect(
       shouldStartAiReviewForAdvisory(enabledEnv(), {
         ...base,
-        settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewAllAuthors: true } as RepositorySettings,
+        settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewConfirmedContributorsOnly: true } as RepositorySettings,
+        confirmedContributor: false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      shouldStartAiReviewForAdvisory(enabledEnv(), {
+        ...base,
+        settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewConfirmedContributorsOnly: true, aiReviewAllAuthors: true } as RepositorySettings,
         confirmedContributor: false,
       }),
     ).resolves.toBe(true);
-    await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, settings: { aiReviewMode: "block", gatePack: "oss-anti-slop" } as RepositorySettings, confirmedContributor: false })).resolves.toBe(true);
+    await expect(
+      shouldStartAiReviewForAdvisory(enabledEnv(), {
+        ...base,
+        settings: { aiReviewMode: "block", gatePack: "oss-anti-slop", aiReviewConfirmedContributorsOnly: true } as RepositorySettings,
+        confirmedContributor: false,
+      }),
+    ).resolves.toBe(true);
     const noSha = advisory();
     delete (noSha as Partial<Advisory>).headSha;
     await expect(shouldStartAiReviewForAdvisory(enabledEnv(), { ...base, advisory: noSha })).resolves.toBe(false);
@@ -232,20 +296,26 @@ describe("runAiReviewForAdvisory", () => {
     expect(usage?.model).toBe("anthropic:claude-sonnet-4-6->ollama:llama3.1");
   });
 
-  it("no-ops for a non-confirmed contributor under the gittensor pack and when there is no head SHA", async () => {
+  it("runs for a non-confirmed contributor by DEFAULT (#orb-ai-review-always-review), no-ops only when there is no head SHA", async () => {
     const env = aiEnv(async () => ({ response: defectJson() }));
     const base = { mode: "live" as const, settings: { aiReviewMode: "block", gatePack: "gittensor" } as RepositorySettings, repoFullName: "acme/widgets", pr, author: "alice" };
-    expect(await runAiReviewForAdvisory(env, { ...base, advisory: advisory(), confirmedContributor: false })).toBeUndefined();
+    expect(await runAiReviewForAdvisory(env, { ...base, advisory: advisory(), confirmedContributor: false })).not.toBeUndefined();
     const noSha = advisory();
     delete (noSha as Partial<Advisory>).headSha;
     expect(await runAiReviewForAdvisory(env, { ...base, advisory: noSha, confirmedContributor: true })).toBeUndefined();
   });
 
-  it("runs a blocking AI review for a non-confirmed contributor under oss-anti-slop", async () => {
+  it("opt-in narrowing (aiReviewConfirmedContributorsOnly: true): no-ops for a non-confirmed contributor under the gittensor pack", async () => {
+    const env = aiEnv(async () => ({ response: defectJson() }));
+    const base = { mode: "live" as const, settings: { aiReviewMode: "block", gatePack: "gittensor", aiReviewConfirmedContributorsOnly: true } as RepositorySettings, repoFullName: "acme/widgets", pr, author: "alice" };
+    expect(await runAiReviewForAdvisory(env, { ...base, advisory: advisory(), confirmedContributor: false })).toBeUndefined();
+  });
+
+  it("opt-in narrowing: a blocking AI review still runs for a non-confirmed contributor under oss-anti-slop + block (pack-widen)", async () => {
     const adv = advisory();
     const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: defectJson() })), {
       mode: "live",
-      settings: { aiReviewMode: "block", gatePack: "oss-anti-slop" } as RepositorySettings,
+      settings: { aiReviewMode: "block", gatePack: "oss-anti-slop", aiReviewConfirmedContributorsOnly: true } as RepositorySettings,
       advisory: adv,
       repoFullName: "acme/widgets",
       pr,
@@ -256,15 +326,13 @@ describe("runAiReviewForAdvisory", () => {
     expect(result?.notes).toContain("Likely crash.");
   });
 
-  it("runs the review for a non-confirmed contributor when aiReviewAllAuthors is on (per-repo opt-in)", async () => {
-    // The default confirmed-contributor AI-spend gate (line 87 above) returns undefined for an unconfirmed
-    // author; aiReviewAllAuthors flips that to run the review for EVERY author (a self-host operator paying for
-    // their own AI). gittensor pack + advisory mode, so neither packAllowsAnyAuthorBlockingReview nor confirmation
-    // is what lets it through — only the new flag.
+  it("opt-in narrowing: aiReviewAllAuthors still widens the review back to a non-confirmed contributor (per-repo opt-in)", async () => {
+    // With aiReviewConfirmedContributorsOnly: true, gittensor pack + advisory mode means neither
+    // packAllowsAnyAuthorBlockingReview nor confirmation is what lets this through — only aiReviewAllAuthors.
     const adv = advisory();
     const result = await runAiReviewForAdvisory(aiEnv(async () => ({ response: notesOnlyJson() })), {
       mode: "live",
-      settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewAllAuthors: true , closeOwnerAuthors: false} as RepositorySettings,
+      settings: { aiReviewMode: "advisory", gatePack: "gittensor", aiReviewConfirmedContributorsOnly: true, aiReviewAllAuthors: true, closeOwnerAuthors: false } as RepositorySettings,
       advisory: adv,
       repoFullName: "acme/widgets",
       pr,

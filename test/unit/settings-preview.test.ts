@@ -190,6 +190,18 @@ describe("buildRepoSettingsPreview", () => {
     expect(() => RepoSettingsPreviewSchema.parse(preview)).not.toThrow();
   });
 
+  it("passes through an explicit aiReviewConfirmedContributorsOnly instead of falling back to false", () => {
+    const preview = buildRepoSettingsPreview({env: {},
+      ...base,
+      settings: settings({ aiReviewConfirmedContributorsOnly: true }),
+      installation: healthyInstall,
+      sample: { authorLogin: "miner", minerStatus: "confirmed" },
+    });
+
+    expect(preview.settings.aiReviewConfirmedContributorsOnly).toBe(true);
+    expect(() => RepoSettingsPreviewSchema.parse(preview)).not.toThrow();
+  });
+
   it("uses safe defaults for an empty sample preview", () => {
     const preview = buildRepoSettingsPreview({env: {}, ...base, settings: settings(), installation: healthyInstall, sample: {} });
     expect(preview.sample).toMatchObject({ authorLogin: "sample-contributor", authorType: "User", authorAssociation: "NONE", minerStatus: "confirmed", title: "Sample pull request" });

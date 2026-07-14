@@ -859,12 +859,23 @@ export type RepositorySettings = {
   /** Config-as-code model override for the BYOK advisory write-up (e.g. "claude-3-5-sonnet-latest").
    *  `null` = use the key record's model, else a conservative per-provider default. */
   aiReviewModel?: string | null | undefined;
-  /** Review EVERY PR's author, not only confirmed Gittensor contributors. The AI maintainer review is
-   *  confirmed-contributor-gated by default (an AI-spend guard). When true the review runs for any author —
-   *  intended for a self-host operator who wants real reviews on all PRs (incl. their own) and pays for the
-   *  AI themselves. Default false — opt-in via `.gittensory.yml gate.aiReview.allAuthors`. Independent of
-   *  `aiReviewMode`: `off` still means no AI; this only widens WHO an enabled review covers. */
+  /** Review EVERY PR's author, not only confirmed Gittensor contributors. Only meaningful when
+   *  {@link aiReviewConfirmedContributorsOnly} is also `true` (that field opts INTO confirmed-only
+   *  scoping in the first place — see its own doc comment for the full invariant: AI review runs for
+   *  every author by default, this pair of fields exists purely for a self-host operator who
+   *  deliberately wants to bound AI spend to registered miners). Default false — opt-in via
+   *  `.gittensory.yml gate.aiReview.allAuthors`. Independent of `aiReviewMode`: `off` still means no AI;
+   *  this only widens WHO an enabled review covers, and only within confirmed-contributors-only mode. */
   aiReviewAllAuthors: boolean;
+  /** Opt-in narrowing (config-as-code, self-host operator's own choice — see resolveAiReviewableAuthor
+   *  in src/queue/ai-review-orchestration.ts for the full invariant and history, #orb-ai-review-always-
+   *  review): by default (false/absent) AI review runs for EVERY author once `aiReviewMode !== "off"` —
+   *  security/quality review is not a privilege reserved for confirmed Gittensor miners. Set this `true`
+   *  only if you deliberately want to bound (paid) AI-review spend to confirmed contributors + whatever
+   *  {@link aiReviewAllAuthors}/the `oss-anti-slop`+`block` pack combo widens back in — the ORIGINAL,
+   *  pre-2026-07-14 default behavior, preserved here as an explicit opt-in rather than silently applied
+   *  to everyone. */
+  aiReviewConfirmedContributorsOnly?: boolean | null | undefined;
   /** Configured AI-reviewer confidence floor (0-1) for close calibration (#7). Under `aiReviewMode: block`, AI
    *  defect findings remain BLOCKERS even when their confidence is below this floor — the floor never turns a
    *  real defect into a non-blocker on its own. What DOES vary below the floor is governed by the separate
