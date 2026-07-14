@@ -5,14 +5,12 @@
 // tsconfig path / vitest alias / root dependency is introduced.
 //
 // This is a WRAPPING shim rather than the usual pure `export *` re-export. reward-risk depends on the
-// maintainer signal stack in `src/signals/engine.ts` (`buildRoleContext`, `buildLaneAdvice`,
-// `buildCollisionReport`, `buildQueueHealth`, `buildRepoFitRecommendation`, `buildContributorIntakeHealth`,
-// `buildPullRequestReviewIntelligence`) — none of which are extracted yet (and are far too large to port
-// under the size cap). `isFailingCheckSummary` now lives in `@loopover/engine` (#4256). The
-// engine module takes the remaining builders as an
-// injected `RewardRiskEngineDeps`; this shim binds the real `src` builders and threads them in, so every
-// existing importer keeps calling the four builders with their original signatures. Once those builders gain
-// engine homes, a follow-up can drop the injection and collapse this back to a plain re-export.
+// maintainer signal stack (`buildRoleContext`, `buildLaneAdvice`, `buildCollisionReport`, `buildQueueHealth`,
+// `buildRepoFitRecommendation`, `buildContributorIntakeHealth`, `buildPullRequestReviewIntelligence`) which
+// now lives in `@loopover/engine` (#4884). `isFailingCheckSummary` also lives in `@loopover/engine` (#4256).
+// The engine module still takes the builders as an injected `RewardRiskEngineDeps`; this shim binds the real
+// engine implementations and threads them in, so every existing importer keeps calling the four builders with
+// their original signatures.
 import {
   buildContributorRewardRiskStrategy as engineBuildContributorRewardRiskStrategy,
   buildMaintainerNoiseReport as engineBuildMaintainerNoiseReport,
@@ -28,7 +26,7 @@ import {
   buildQueueHealth,
   buildRepoFitRecommendation,
   buildRoleContext,
-} from "./engine";
+} from "../../packages/loopover-engine/src/signals/engine";
 export type {
   ContributorRewardRiskStrategy,
   EligibilityGapEntry,

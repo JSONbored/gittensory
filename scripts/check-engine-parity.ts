@@ -78,7 +78,7 @@ export const DIFF_FILE_PRIORITY_MARKERS = Object.freeze([
  *  It lives inside much larger files on both sides, so it's invisible to the file-level scan too. */
 export const SHARES_MEANINGFUL_FILE_TWIN_PAIR: NamedTwinPair = Object.freeze({
   area: "shares-meaningful-file",
-  hostRelative: "src/signals/engine.ts",
+  hostRelative: "packages/loopover-engine/src/signals/engine.ts",
   engineRelative: "packages/loopover-engine/src/signals/predicted-gate-engine.ts",
   hostFileName: "engine.ts",
   engineFileName: "predicted-gate-engine.ts",

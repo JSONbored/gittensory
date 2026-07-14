@@ -14,12 +14,9 @@ import type { AdvisoryFinding } from "../types/predicted-gate-types.js";
 // self-review path and was never part of this issue's scope.
 //
 // GENERIC_COMMIT_PATTERN / hasClearNoIssueRationale below are a HAND-KEPT MIRROR of the same-named
-// exports in `src/signals/engine.ts` — that file is not extracted (it is 5700+ lines, deeply
-// interconnected with the live app's DB/Workers/scoring subsystems, and used by many call sites beyond
-// slop.ts), so these two small, fully self-contained pieces are duplicated here instead, matching the
-// established discipline already used by `packages/loopover-engine/src/miner/self-review-adapter.ts`'s
-// own header comment ("hand-kept structural mirror... keep in sync by hand"). Keep both copies in sync by
-// hand if either changes.
+// exports in `packages/loopover-engine/src/signals/engine.ts` (#4884) — the full engine still carries
+// host-bound imports and is consumed via `src/signals/engine.ts`'s shim, so these two small, fully
+// self-contained pieces stay duplicated here instead.
 export const GENERIC_COMMIT_PATTERN =
   /^(?:(?:wip|fix(?:es|ed|ing)?|updat(?:e|es|ed|ing)|change[sd]?|edit[sd]?|patch|minor|tweak[sd]?|misc|cleanup|chore|stuff|temp|tmp|test|final|done|commit|asdf+)\b|\.+)[\s.!]*$/i;
 

@@ -2,13 +2,10 @@
 // gittensory-miner can rank candidate work locally with the same logic the maintainer-side gate computes.
 //
 // Unlike the earlier self-contained extractions, reward-risk sits on top of the maintainer signal stack in
-// `src/signals/engine.ts` (`buildRoleContext`, `buildLaneAdvice`, `buildCollisionReport`, `buildQueueHealth`,
-// `buildRepoFitRecommendation`, `buildContributorIntakeHealth`, `buildPullRequestReviewIntelligence`) from
-// `src/signals/engine.ts`. Those builders are not yet extracted (and are far too large to port under the
-// per-issue size cap), so — rather than reach back into `src/`, which this package must never do — they are
-// DEPENDENCY-INJECTED via `RewardRiskEngineDeps`. `isFailingCheckSummary` now lives in
-// `./signals/check-summary.js` (#4256). The `src/signals/reward-risk.ts` shim binds the real `src` builders;
-// a follow-up issue can drop the injection once they have engine homes.
+// `packages/loopover-engine/src/signals/engine.ts` (#4884; monorepo shim at `src/signals/engine.ts`).
+// Those builders still arrive via injected `RewardRiskEngineDeps` — `src/signals/reward-risk.ts` binds the
+// real engine implementations. `isFailingCheckSummary` is imported directly from `./signals/check-summary.js`
+// (#4256).
 import type { ScorePreviewResult } from "./scoring/preview.js";
 import { buildScorePreview } from "./scoring/preview.js";
 import { isFailingCheckSummary } from "./signals/check-summary.js";
@@ -61,8 +58,8 @@ export type PullRequestReviewabilityInput = {
 };
 
 /**
- * The `src/signals/engine.ts` builders reward-risk depends on, injected so this package stays free of any
- * `src/` import. The real `src`-typed builders bind cleanly: their argument records are wider than (assignable
+ * The `packages/loopover-engine/src/signals/engine.ts` builders reward-risk depends on, injected so this
+ * package stays free of any direct import of the host-only modules those builders still reach into (#4884). their argument records are wider than (assignable
  * from) these engine mirrors, and their richer return types are covariantly assignable to the narrowed views
  * above. `isFailingCheckSummary` is imported directly from `./signals/check-summary.js` (#4256).
  */

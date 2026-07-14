@@ -304,7 +304,7 @@ describe("check-engine-parity script", () => {
     it("safe-url and shares-meaningful-file marker sets are non-empty and pair-specific", () => {
       expect(SAFE_URL_MARKERS.length).toBeGreaterThan(0);
       expect(SHARES_MEANINGFUL_FILE_MARKERS.length).toBeGreaterThan(0);
-      expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.hostRelative).toBe("src/signals/engine.ts");
+      expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.hostRelative).toBe("packages/loopover-engine/src/signals/engine.ts");
       expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.engineRelative).toBe(
         "packages/loopover-engine/src/signals/predicted-gate-engine.ts",
       );
