@@ -6,9 +6,11 @@ import { isGlobalMinerKillSwitch, isGlobalMinerLiveModeOptIn } from "@loopover/e
 // same discipline as coding-task-spec.js's own composers.
 //
 // KNOWN, DOCUMENTED GAPS (not fabricated -- explicitly left as real, narrow follow-ups):
-//   - governor.reputationHistory/selfPlagiarismCandidate/selfPlagiarismRecentSubmissions are omitted, which
-//     chokepoint.ts's own design treats as "skip that stage entirely" -- an honest absence, not a fabricated
-//     "clean" verdict.
+//   - governor.reputationHistory is omitted, which chokepoint.ts's own design treats as "skip that stage
+//     entirely" -- an honest absence, not a fabricated "clean" verdict.
+//   - governor.selfPlagiarismCandidate/selfPlagiarismRecentSubmissions are deliberately omitted here -- they
+//     depend on the handoff packet's real changedFiles, which only exist after runIterateLoop inside
+//     attempt-runner.js. That module late-augments both fields immediately before the chokepoint call (#5676).
 //
 // governor.convergenceInput is now a REAL per-issue attempt-history query (#5654): the caller (attempt-cli.js)
 // reads it from portfolio-queue.js's own getAttemptHistory and passes it in here, this composer staying pure

@@ -9,8 +9,10 @@
 // checkSubmissionFreshness cannot see (two miners submitting almost simultaneously).
 //
 // KNOWN, DOCUMENTED GAPS (not fabricated -- see attempt-input-builder.js's own header for the full list):
-// governor.reputationHistory/selfPlagiarismCandidate/selfPlagiarismRecentSubmissions are omitted (chokepoint.ts's
-// own design treats that as "skip that stage entirely"). governor.convergenceInput is now a real per-issue
+// governor.reputationHistory is omitted (chokepoint.ts's own design treats that as "skip that stage entirely").
+// governor.selfPlagiarismCandidate/selfPlagiarismRecentSubmissions are also omitted here -- attempt-runner.js
+// late-augments both from the real handoff packet + governor-state.js immediately before the chokepoint call
+// (#5676). governor.convergenceInput is now a real per-issue
 // portfolio-queue.js read (#5654), not a placeholder.
 
 import { fingerprintFromChangedFiles, resolveCodingAgentModeFromConfig, resolveFirstConfiguredCodingAgentDriverName } from "@loopover/engine";

@@ -150,6 +150,7 @@ test("handoff: a clean predicted-gate pass on the first iteration hands off, wit
   assert.equal(result.handoffPacket?.selfReviewVerdict.predictedGateVerdict.conclusion, "success");
   assert.equal(result.handoffPacket?.selfReviewVerdict.passesPredictedGate, true);
   assert.equal(result.handoffPacket?.attemptLogReference, "attempt-1");
+  assert.deepEqual(result.handoffPacket?.changedFiles, [{ path: "src/upload.ts" }]);
 
   assert.equal(events.filter((event) => event.eventType === "attempt_started").length, 1);
   assert.equal(events.filter((event) => event.eventType === "attempt_succeeded").length, 1);

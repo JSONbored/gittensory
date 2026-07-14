@@ -52,6 +52,7 @@ function handoffPacket(verdictOverrides: Partial<SelfReviewVerdict> = {}): Hando
     diffSummary: "added retry logic",
     selfReviewVerdict: selfReviewVerdict(verdictOverrides),
     attemptLogReference: "attempt-1",
+    changedFiles: [{ path: "src/upload.ts" }],
   };
 }
 

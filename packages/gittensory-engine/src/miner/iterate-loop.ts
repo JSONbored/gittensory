@@ -245,6 +245,7 @@ function buildHandoffPacket(input: IterateLoopInput, verdict: SelfReviewVerdict,
     diffSummary: driverResult.summary,
     selfReviewVerdict: verdict,
     attemptLogReference: input.attemptId,
+    changedFiles: driverResult.changedFiles.map((path) => ({ path })),
   };
 }
 

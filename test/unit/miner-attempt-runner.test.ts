@@ -293,6 +293,67 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
     vi.unstubAllEnvs();
   });
 
+  it("REGRESSION (#5676): a near-duplicate submission (same changed-files fingerprint as a prior own submission) is throttled at the Governor chokepoint", async () => {
+    const deps = baseDeps({ nowMs: 20_000 });
+    deps.governorState.recordOwnSubmission({
+      repoFullName: "acme/widgets",
+      fingerprint: "src/a.ts,src/b.ts",
+      submittedAt: new Date(10_000).toISOString(),
+      pullRequestNumber: 41,
+      issueNumber: 6,
+    });
+
+    const result = await runMinerAttempt(
+      baseAttemptInput({
+        loopInput: passingLoopInput({ attemptId: "attempt-dup" }),
+      }),
+      {
+        ...deps,
+        driver: driverReturning(okDriverResult(["src/b.ts", "src/a.ts"])),
+      },
+    );
+
+    expect(result.outcome).toBe("governed");
+    if (result.outcome !== "governed") throw new Error("expected governed");
+    expect(result.decision.stage).toBe("self_plagiarism");
+    expect(result.decision.allowed).toBe(false);
+  });
+
+  it("REGRESSION (#5676): a genuinely distinct submission passes self-plagiarism and reaches submitted", async () => {
+    const deps = baseDeps({ nowMs: 20_000 });
+    deps.governorState.recordOwnSubmission({
+      repoFullName: "acme/widgets",
+      fingerprint: "src/a.ts,src/b.ts",
+      submittedAt: new Date(10_000).toISOString(),
+      pullRequestNumber: 41,
+      issueNumber: 6,
+    });
+
+    const result = await runMinerAttempt(
+      baseAttemptInput({
+        loopInput: passingLoopInput({ attemptId: "attempt-distinct" }),
+      }),
+      {
+        ...deps,
+        driver: driverReturning(okDriverResult(["src/x.ts", "src/y.ts"])),
+      },
+    );
+
+    expect(result.outcome).toBe("submitted");
+    if (result.outcome !== "submitted") throw new Error("expected submitted");
+  });
+
+  it("REGRESSION (#5676): an empty changed-files set omits selfPlagiarismCandidate so the stage is skipped, not fail-closed", async () => {
+    const deps = baseDeps();
+    const result = await runMinerAttempt(baseAttemptInput(), {
+      ...deps,
+      driver: driverReturning(okDriverResult([])),
+    });
+
+    expect(result.outcome).toBe("submitted");
+    if (result.outcome !== "submitted") throw new Error("expected submitted");
+  });
+
   it("REGRESSION (#5134/#5203): a rate limit consumed by one runMinerAttempt call is honored by the next, via the shared governor-state store -- this is what the missing wiring bug looked like", async () => {
     const deps = baseDeps();
     const policies = {

@@ -20,7 +20,7 @@
 // once `.gittensory-miner.yml` defines autonomy fields -- that wiring is explicitly left to a later phase; this
 // module's `decideNextAction` is autonomy-level-agnostic today.
 
-import type { SelfReviewVerdict } from "./self-review-adapter.js";
+import type { SelfReviewChangedFile, SelfReviewVerdict } from "./self-review-adapter.js";
 
 /** The three outcomes `decideNextAction` may reach. */
 export type IterateLoopAction = "continue" | "handoff" | "abandon";
@@ -94,6 +94,10 @@ export type HandoffPacket = {
   /** Reference into the attempt-log primitive (`packages/gittensory-engine/src/miner/attempt-log.ts`) for this
    *  attempt's full decision trail. */
   attemptLogReference: string;
+  /** Real changed-file paths from the passing iteration's driver result -- the honest fingerprint source for
+   *  self-plagiarism (#5676) and post-submission own-submission history (#5655). Same shape as
+   *  `AttemptDiffState.changedFiles` (self-review-adapter.ts). */
+  changedFiles: readonly SelfReviewChangedFile[];
 };
 
 export type IterateLoopDecision = {
