@@ -184,7 +184,13 @@ export async function buildOperatorDashboardPayload(
     metrics: [
       { label: "Active sessions", value: String(activeSessions), delta: "browser + CLI/MCP" },
       { label: "Installations", value: String(installations.length), delta: `${installedRepos} installed repos` },
-      { label: "Registered repos", value: String(registeredRepos), delta: registry ? `${registry.repoCount} in latest registry` : "registry missing" },
+      {
+        label: "Registered repos",
+        value: String(registeredRepos),
+        // A null registry is the normal, expected state for any operator who hasn't opted into the
+        // gittensor plugin (see gittensor-wire.ts) -- "missing" reads as broken when it isn't (#5026).
+        delta: registry ? `${registry.repoCount} in latest registry` : "gittensor plugin not enabled",
+      },
       { label: "Digest subscriptions", value: String(digestSubscriptions), delta: "store-only" },
       { label: "Product events", value: String(usageSummary.totalEvents), delta: `last ${windowDays} days` },
       { label: "Active users", value: String(usageSummary.activeActors), delta: `hashed, last ${windowDays} days` },

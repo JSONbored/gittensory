@@ -509,6 +509,72 @@ describe("api routes", () => {
     expect(legacyPerRepoDrift.status).toBe(404);
   });
 
+  it("reads registered-repo copy as an honest, non-alarming state whether or not the gittensor plugin is opted into (#5026)", async () => {
+    const app = createApp();
+
+    // No registry snapshot ever persisted: the normal, expected state for an operator who hasn't opted
+    // into the gittensor plugin. "registered: 0" must not read as broken.
+    const unregisteredEnv = createTestEnv();
+    await upsertRepositoryFromGitHub(
+      unregisteredEnv,
+      { name: "installed-only", full_name: "acme/installed-only", private: false, owner: { login: "acme" }, default_branch: "main" },
+      321,
+    );
+    const unregisteredOperator = await app.request("/v1/app/operator-dashboard", { headers: apiHeaders(unregisteredEnv) }, unregisteredEnv);
+    expect(unregisteredOperator.status).toBe(200);
+    await expect(unregisteredOperator.json()).resolves.toMatchObject({
+      metrics: expect.arrayContaining([
+        expect.objectContaining({ label: "Registered repos", value: "0", delta: "gittensor plugin not enabled" }),
+      ]),
+    });
+    const unregisteredDigest = await app.request("/v1/app/digest", { headers: apiHeaders(unregisteredEnv) }, unregisteredEnv);
+    expect(unregisteredDigest.status).toBe(200);
+    await expect(unregisteredDigest.json()).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "summary",
+          title: "1 installed repositories tracked",
+          detail: "1 repositories are present in the local LoopOver data cache.",
+        }),
+      ]),
+    });
+
+    // A registry snapshot IS persisted (gittensor plugin opted in somewhere): both copy surfaces should
+    // report the registered count honestly instead of the unregistered-branch wording.
+    const registeredEnv = createTestEnv();
+    await upsertRepositoryFromGitHub(
+      registeredEnv,
+      { name: "installed-and-registered", full_name: "acme/installed-and-registered", private: false, owner: { login: "acme" }, default_branch: "main" },
+      654,
+    );
+    await persistRegistrySnapshot(
+      registeredEnv,
+      normalizeRegistryPayload(
+        { "acme/installed-and-registered": { emission_share: 0.01, issue_discovery_share: 0, label_multipliers: {}, trusted_label_pipeline: false } },
+        { kind: "raw-github", url: "fixture://registered-registry" },
+        "2026-06-01T00:00:00.000Z",
+      ),
+    );
+    const registeredOperator = await app.request("/v1/app/operator-dashboard", { headers: apiHeaders(registeredEnv) }, registeredEnv);
+    expect(registeredOperator.status).toBe(200);
+    await expect(registeredOperator.json()).resolves.toMatchObject({
+      metrics: expect.arrayContaining([
+        expect.objectContaining({ label: "Registered repos", value: "1", delta: "1 in latest registry" }),
+      ]),
+    });
+    const registeredDigest = await app.request("/v1/app/digest", { headers: apiHeaders(registeredEnv) }, registeredEnv);
+    expect(registeredDigest.status).toBe(200);
+    await expect(registeredDigest.json()).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "summary",
+          title: "1 installed repositories tracked",
+          detail: "1 repositories are present in the local LoopOver data cache; 1 registered with the gittensor plugin.",
+        }),
+      ]),
+    });
+  });
+
   it("serves upstream ruleset status, ruleset snapshots, and drift reports through private APIs", async () => {
     const app = createApp();
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
@@ -2351,7 +2417,7 @@ describe("api routes", () => {
     const emptyOperator = await app.request("/v1/app/operator-dashboard", { headers: apiHeaders(emptyEnv) }, emptyEnv);
     expect(emptyOperator.status).toBe(200);
     await expect(emptyOperator.json()).resolves.toMatchObject({
-      metrics: expect.arrayContaining([expect.objectContaining({ label: "Registered repos", delta: "registry missing" })]),
+      metrics: expect.arrayContaining([expect.objectContaining({ label: "Registered repos", delta: "gittensor plugin not enabled" })]),
       recommendationQuality: expect.objectContaining({
         empty: true,
         sparse: false,

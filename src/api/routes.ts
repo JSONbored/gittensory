@@ -4748,11 +4748,18 @@ function buildDigestItems(args: {
   rateLimits: Awaited<ReturnType<typeof listLatestGitHubRateLimitObservations>>;
 }) {
   const items: Array<{ kind: "summary" | "review-now" | "queue" | "drift" | "install"; title: string; detail: string; meta?: string }> = [];
+  // Lead with `installed` (repos this instance actually operates on) rather than `registered` (gittensor-subnet
+  // membership, an opt-in plugin -- see gittensor-wire.ts). "0 registered" is the normal, expected headline for
+  // any operator who hasn't opted into the gittensor plugin and must not read as broken (#5026).
+  const installed = args.repositories.filter((repo) => repo.isInstalled).length;
   const registered = args.repositories.filter((repo) => repo.isRegistered).length;
   items.push({
     kind: "summary",
-    title: `${registered} registered repositories tracked`,
-    detail: `${args.repositories.length} repositories are present in the local LoopOver data cache.`,
+    title: `${installed} installed repositories tracked`,
+    detail:
+      registered > 0
+        ? `${args.repositories.length} repositories are present in the local LoopOver data cache; ${registered} registered with the gittensor plugin.`
+        : `${args.repositories.length} repositories are present in the local LoopOver data cache.`,
     meta: "registry",
   });
   const unhealthy = args.health.filter((record) => record.status !== "healthy");
