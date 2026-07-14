@@ -10,6 +10,7 @@
 #   SENTRY_RELEASE=gittensory-selfhost@edge-abc123 ./scripts/deploy-selfhost-prebuilt.sh
 #   SELFHOST_COMPOSE_FILES="docker-compose.yml docker-compose.override.yml" ./scripts/deploy-selfhost-prebuilt.sh
 #   SELFHOST_SKIP_SENTRY_UPLOAD=1 ./scripts/deploy-selfhost-prebuilt.sh
+#   SELFHOST_USE_INFISICAL=1 ./scripts/deploy-selfhost-prebuilt.sh   # opt-in Infisical secrets (#5120), see docs
 set -euo pipefail
 
 ENV_FILE="${SELFHOST_ENV_FILE:-.env}"
@@ -110,7 +111,7 @@ YAML
   docker compose "${compose_args[@]}" build "$SERVICE"
 
   echo "selfhost deploy: restarting $SERVICE"
-  docker compose "${compose_args[@]}" up -d --no-deps "$SERVICE"
+  maybe_infisical_run docker compose "${compose_args[@]}" up -d --no-deps "$SERVICE"
 }
 
 require_cmd docker

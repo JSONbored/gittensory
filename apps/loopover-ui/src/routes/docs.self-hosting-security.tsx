@@ -70,6 +70,92 @@ printf '%s' 'your-real-secret-value' > secrets/github_webhook_secret.txt
 docker compose up -d --no-deps loopover`}
       />
 
+      <h2>Optional: Infisical secrets management</h2>
+      <p>
+        The hardened default above — <code>.env</code> plus Docker Compose <code>secrets:</code> —
+        has no rotation, audit trail, or RBAC. If you want secrets-manager-grade rotation, audit
+        logging, and access control on top of that default, you can opt into{" "}
+        <a href="https://infisical.com" target="_blank" rel="noreferrer">
+          Infisical
+        </a>{" "}
+        — an open-source, self-hostable secrets manager. This is{" "}
+        <strong>strictly optional and additive</strong>: skip this section entirely and the hardened{" "}
+        <code>.env</code>/Docker secrets default keeps working unchanged.
+      </p>
+      <Callout variant="note" title="No application code changes">
+        Infisical wires in at the deploy-script level via its own{" "}
+        <code>infisical run -- &lt;command&gt;</code> wrapper, which injects secrets as real process
+        environment variables at container launch. Nothing under <code>src/</code> knows or cares
+        whether a given <code>env.SOMETHING</code> value came from Infisical, <code>.env</code>, or
+        a Docker secret file.
+      </Callout>
+
+      <h3>Setup: cloud or self-hosted</h3>
+      <ol>
+        <li>
+          Install the{" "}
+          <a href="https://infisical.com/docs/cli/overview" target="_blank" rel="noreferrer">
+            Infisical CLI
+          </a>{" "}
+          on the machine that runs the deploy script (not inside the app container).
+        </li>
+        <li>
+          Pick where your secrets live: Infisical Cloud (the default, zero infrastructure of your
+          own) or a self-hosted Infisical instance — if you're already self-hosting LoopOver, you
+          can self-host Infisical alongside it. Either way, run <code>infisical login</code> once,
+          then <code>infisical init</code> from the repo root to link a local{" "}
+          <code>.infisical.json</code> to an Infisical project.
+        </li>
+        <li>
+          Create an environment inside that project (e.g. <code>prod</code>) matching how you think
+          about this deployment, and add the secrets you want Infisical to manage — same variable
+          names your <code>.env</code>/<code>docker-compose.yml</code> already use (
+          <code>GITHUB_APP_PRIVATE_KEY</code>, <code>GITHUB_WEBHOOK_SECRET</code>, provider API
+          keys, and so on).
+        </li>
+        <li>Opt in when deploying:</li>
+      </ol>
+      <CodeBlock
+        filename="shell"
+        code={`SELFHOST_USE_INFISICAL=1 ./scripts/deploy-selfhost-image.sh
+# or
+SELFHOST_USE_INFISICAL=1 ./scripts/deploy-selfhost-prebuilt.sh`}
+      />
+      <p>
+        With the flag unset (the default), neither script touches Infisical at all — not even a
+        presence check — so an operator who has never heard of Infisical is completely unaffected.
+        With it set, the restart step (the one that actually launches the container) runs through{" "}
+        <code>infisical run --</code>; a missing <code>infisical</code> binary fails the deploy
+        immediately with a clear error rather than silently deploying without the secrets you asked
+        for.
+      </p>
+
+      <h3>Interaction with .env and Docker secrets — do not mix the same variable</h3>
+      <Callout
+        variant="warn"
+        title="Infisical only reaches variables interpolated in docker-compose.yml"
+      >
+        <code>infisical run --</code> injects secrets into its own child process's environment — in
+        this case, the <code>docker compose up</code> invocation. Docker Compose only lets a host
+        shell variable reach the container for an <code>environment:</code> entry written as{" "}
+        <code>{`SOMEVAR: "\${SOMEVAR}"`}</code>. It does <strong>not</strong> reach a plain{" "}
+        <code>env_file: .env</code> block, which reads that file's literal contents at container
+        runtime and is never affected by the deploying shell's environment. The GitHub App private
+        key, webhook secret, API/MCP tokens, and the rest of the native-secrets list above are wired
+        through the <code>_FILE</code> convention and <code>env_file: .env</code>, not through{" "}
+        <code>environment:</code> interpolation — an Infisical value for one of those exact names,
+        by itself, will <strong>not</strong> reach the container today. Infisical is the right fit
+        for <em>other</em> variables you reference via <code>{`"\${VAR}"`}</code> interpolation in
+        your own <code>docker-compose.override.yml</code> (a provider API key you add yourself, for
+        example) — not a drop-in override for the pre-wired native-secrets list.
+      </Callout>
+      <p>
+        The safest rule of thumb: for any given variable, pick <em>one</em> source — Infisical or a
+        plain <code>.env</code>/Docker secret file, never both for the same name. Setting the same
+        name in both places doesn't error; whichever mechanism the container actually reads for that
+        variable (see the callout above) wins silently, which is easy to misdiagnose later.
+      </p>
+
       <h2>Private policy</h2>
       <p>
         Keep sensitive review thresholds, autonomy, maintainer notes, and repo-specific rules in

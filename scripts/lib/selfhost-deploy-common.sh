@@ -79,6 +79,27 @@ env_put() {
   rm -f "$tmp"
 }
 
+# Optional Infisical wrapper (#5120): when SELFHOST_USE_INFISICAL=1 (opt-in, off by default), prefixes the
+# given command with `infisical run --` so Infisical-sourced secrets are injected as real process env vars at
+# launch -- Infisical's own intended integration shape, requiring zero changes to how src/ reads env.SOMETHING.
+# Strictly additive: with the flag unset/0, this is a transparent passthrough and the existing .env/Docker
+# Compose secrets: path is completely unaffected.
+#
+# `infisical run --` only injects vars into ITS OWN child process's environment, so this must wrap the compose
+# `up` invocation directly (the container's actual process launch), not some earlier step -- a var it injects
+# is visible to `docker compose up` for interpolating `${VAR}` in docker-compose.yml's own `environment:`
+# blocks, but NOT to a blanket `env_file: .env` passthrough (that reads the FILE's literal contents at
+# container-runtime, unaffected by the calling shell's environment). See the self-hosting docs for which
+# variables can actually be Infisical-sourced today given that distinction.
+maybe_infisical_run() {
+  if [ "${SELFHOST_USE_INFISICAL:-0}" = "1" ]; then
+    require_cmd infisical
+    infisical run -- "$@"
+  else
+    "$@"
+  fi
+}
+
 compose_file_args() {
   local files=()
   local file

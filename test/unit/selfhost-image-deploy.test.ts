@@ -32,6 +32,7 @@ function createHarness() {
   const binDir = join(dir, "bin");
   const dockerCalls = join(dir, "docker-calls.log");
   const dockerImages = join(dir, "docker-images.log");
+  const infisicalCalls = join(dir, "infisical-calls.log");
   const envPath = join(dir, ".env");
 
   mkdirSync(binDir);
@@ -83,12 +84,29 @@ exit 1
   );
   chmodSync(join(binDir, "docker"), 0o755);
 
+  function writeFakeInfisical() {
+    writeFileSync(
+      join(binDir, "infisical"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$INFISICAL_CALLS"
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "--" ]; then
+  shift 2
+  exec "$@"
+fi
+exit 1
+`,
+    );
+    chmodSync(join(binDir, "infisical"), 0o755);
+  }
+
   return {
     dir,
     envPath,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
     readCalls: () => readOptional(dockerCalls),
     readImages: () => readOptional(dockerImages),
+    readInfisicalCalls: () => readOptional(infisicalCalls),
+    writeFakeInfisical,
     run(options: RunOptions = {}) {
       if (options.envFile !== undefined) writeFileSync(envPath, options.envFile);
       const result = spawnSync("bash", [scriptPath, ...(options.args ?? [])], {
@@ -102,6 +120,7 @@ exit 1
           DOCKER_CALLS: dockerCalls,
           DOCKER_IMAGES: dockerImages,
           DOCKER_INSPECT_STATUS: options.dockerStatus ?? "healthy",
+          INFISICAL_CALLS: infisicalCalls,
           ...(options.env ?? {}),
         },
       });
@@ -234,5 +253,47 @@ describe("self-host image deploy script", () => {
     } finally {
       harness.cleanup();
     }
+  });
+
+  describe("optional Infisical wrapper (#5120)", () => {
+    it("does not invoke infisical by default -- the restart step runs docker compose directly", () => {
+      const { harness, result } = runHarness();
+      try {
+        expect(result.status, result.stderr).toBe(0);
+        expect(harness.readCalls()).toContain("up -d --no-build --no-deps loopover");
+        expect(harness.readInfisicalCalls()).toBe("");
+      } finally {
+        harness.cleanup();
+      }
+    });
+
+    it("wraps only the restart (up) step with `infisical run --` when SELFHOST_USE_INFISICAL=1", () => {
+      const harness = createHarness();
+      harness.writeFakeInfisical();
+      try {
+        const result = harness.run({ env: { SELFHOST_USE_INFISICAL: "1" } });
+        expect(result.status, result.stderr).toBe(0);
+        // The real docker compose invocation still happened (infisical's fake execs through to it)...
+        expect(harness.readCalls()).toContain("up -d --no-build --no-deps loopover");
+        // ...but only the restart step went through infisical -- pull is a plain image fetch, not a process
+        // launch that needs injected secrets, so it must NOT be wrapped.
+        const infisicalCalls = harness.readInfisicalCalls();
+        expect(infisicalCalls).toContain("run -- docker compose");
+        expect(infisicalCalls).toContain("up -d --no-build --no-deps loopover");
+        expect(infisicalCalls).not.toContain("pull --policy always");
+      } finally {
+        harness.cleanup();
+      }
+    });
+
+    it("fails closed with a clear error when SELFHOST_USE_INFISICAL=1 but infisical is not installed", () => {
+      const { harness, result } = runHarness({ env: { SELFHOST_USE_INFISICAL: "1" } });
+      try {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("required command not found: infisical");
+      } finally {
+        harness.cleanup();
+      }
+    });
   });
 });

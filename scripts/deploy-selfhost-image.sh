@@ -12,6 +12,9 @@
 #
 # The image itself carries official release metadata. Set SENTRY_RELEASE only for custom images whose
 # source maps were uploaded under that exact id.
+#
+# Optional Infisical secrets (#5120), see docs:
+#   SELFHOST_USE_INFISICAL=1 ./scripts/deploy-selfhost-image.sh
 set -euo pipefail
 
 ENV_FILE="${SELFHOST_ENV_FILE:-.env}"
@@ -115,7 +118,7 @@ echo "selfhost image deploy: pulling $IMAGE"
 docker compose "${compose_args[@]}" pull --policy always "$SERVICE"
 
 echo "selfhost image deploy: restarting $SERVICE"
-docker compose "${compose_args[@]}" up -d --no-build --no-deps "$SERVICE"
+maybe_infisical_run docker compose "${compose_args[@]}" up -d --no-build --no-deps "$SERVICE"
 
 wait_for_healthy
 env_put LOOPOVER_IMAGE "$IMAGE"
