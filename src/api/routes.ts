@@ -53,6 +53,7 @@ import {
   listAuditEventsForTarget,
   listPendingAgentActions,
   recordAuditEvent,
+  recordPostMergeIncidentReport,
   getContributorEvidence,
   getProductUsageRollupStatus,
   listAllPullRequestDetailSyncStates,
@@ -890,6 +891,32 @@ const digestSubscriptionSchema = z
   })
   .strict();
 
+const postMergeIncidentSeveritySchema = z.enum(["low", "medium", "high", "critical"]);
+
+const postMergeIncidentReportSchema = z
+  .object({
+    description: z.string().min(1).max(4000),
+    severity: postMergeIncidentSeveritySchema,
+    mergedSha: z
+      .string()
+      .regex(/^[0-9a-f]{7,40}$/i)
+      .optional(),
+  })
+  .strict();
+
+const operatorPostMergeIncidentReportSchema = z
+  .object({
+    repoFullName: z.string().min(3).max(200),
+    pullNumber: z.number().int().positive(),
+    description: z.string().min(1).max(4000),
+    severity: postMergeIncidentSeveritySchema,
+    mergedSha: z
+      .string()
+      .regex(/^[0-9a-f]{7,40}$/i)
+      .optional(),
+  })
+  .strict();
+
 function contributorOpenIssueCount(issues: Array<{ repoFullName: string; state: string }>, repoFullName: string): number {
   const targetRepo = repoFullName.toLowerCase();
   return issues.filter((issue) => issue.repoFullName.toLowerCase() === targetRepo && issue.state === "open").length;
@@ -1653,6 +1680,34 @@ export function createApp() {
       metadata: { frozen: verified.frozen, identityKind: identity.kind },
     });
     return c.json({ ok: true, ...verified });
+  });
+
+  // #5672 post-merge incident report, internal-operator side: same reporting path as the repo-scoped customer
+  // route (POST /v1/repos/:owner/:repo/pulls/:number/incident-reports), for an operator filing on a customer's
+  // behalf. Not scoped to one repo's session, so repoFullName/pullNumber travel in the body instead of the path.
+  app.post("/v1/app/incident-reports", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- requireAppRole already rejects an unauthenticated caller before this handler runs. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const body = await c.req.json().catch(() => null);
+    const parsed = operatorPostMergeIncidentReportSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_incident_report", issues: parsed.error.issues }, 400);
+    const pullRequest = await getPullRequest(c.env, parsed.data.repoFullName, parsed.data.pullNumber);
+    if (!pullRequest) return c.json({ error: "pull_request_not_found" }, 404);
+    if (!pullRequest.mergedAt) return c.json({ error: "pull_request_not_merged" }, 409);
+    const report = await recordPostMergeIncidentReport(c.env, {
+      repoFullName: parsed.data.repoFullName,
+      pullNumber: parsed.data.pullNumber,
+      description: parsed.data.description,
+      severity: parsed.data.severity,
+      mergedSha: parsed.data.mergedSha,
+      reporterKind: "operator",
+      actor: identity.actor,
+      route: c.req.path,
+    });
+    return c.json({ ok: true, repoFullName: parsed.data.repoFullName, pullNumber: parsed.data.pullNumber, ...report });
   });
 
   app.get("/v1/app/notification-model", async (c) => {
@@ -2515,6 +2570,36 @@ export function createApp() {
     });
     // Defense-in-depth: the free-form `detail` is the only unbounded string — scrub it before it leaves on a public surface.
     return c.json({ repoFullName: fullName, events: events.map((event) => ({ ...event, detail: event.detail === null ? null : sanitizePublicComment(event.detail) })) });
+  });
+
+  // #5672 post-merge incident report, customer-facing side: a repo maintainer reports that an already-merged
+  // rented-loop PR was found harmful. Persists as an audit_events row keyed to this PR (same targetKey the
+  // audit-feed route above reads back via ?pull=N), so no separate incident table/read-route is needed here.
+  app.post("/v1/repos/:owner/:repo/pulls/:number/incident-reports", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    const pullNumber = Number(c.req.param("number"));
+    if (!Number.isInteger(pullNumber) || pullNumber <= 0) return c.json({ error: "invalid_pull_number" }, 400);
+    const body = await c.req.json().catch(() => null);
+    const parsed = postMergeIncidentReportSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_incident_report", issues: parsed.error.issues }, 400);
+    const pullRequest = await getPullRequest(c.env, fullName, pullNumber);
+    if (!pullRequest) return c.json({ error: "pull_request_not_found" }, 404);
+    if (!pullRequest.mergedAt) return c.json({ error: "pull_request_not_merged" }, 409);
+    const actor = gate.identity?.kind === "session" ? gate.identity.actor : "maintainer";
+    const report = await recordPostMergeIncidentReport(c.env, {
+      repoFullName: fullName,
+      pullNumber,
+      description: parsed.data.description,
+      severity: parsed.data.severity,
+      mergedSha: parsed.data.mergedSha,
+      reporterKind: "customer",
+      actor,
+      route: c.req.path,
+    });
+    return c.json({ ok: true, repoFullName: fullName, pullNumber, ...report });
   });
 
   // Maintainer activation demo (#701): a repo-specific "here's what LoopOver would have surfaced" preview
@@ -5416,6 +5501,7 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoValidateLinkedIssuePath(path)) return true;
   if (isRepoAgentAuditFeedPath(path)) return true; // route's requireRepoMaintainer enforces per-repo authority (contributors → 403)
   if (isRepoAgentPendingActionsPath(path)) return true; // list-only: requireRepoMaintainer; decision POSTs require server tokens
+  if (isRepoIncidentReportsPath(path)) return true; // #5672: route's requireRepoMaintainer enforces per-repo authority (contributors → 403)
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
   if (path === OPPORTUNITIES_FIND_PATH) return true;
   if (path === ISSUE_RAG_RETRIEVE_PATH) return true;
@@ -5469,6 +5555,10 @@ function isRepoValidateLinkedIssuePath(path: string): boolean {
 
 function isRepoAgentAuditFeedPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/agent\/audit-feed$/.test(path);
+}
+
+function isRepoIncidentReportsPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/pulls\/[^/]+\/incident-reports$/.test(path);
 }
 
 function isRepoAgentPendingActionsPath(path: string): boolean { return /^\/v1\/repos\/[^/]+\/[^/]+\/agent\/pending-actions$/.test(path); }

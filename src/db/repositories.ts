@@ -2640,6 +2640,40 @@ export async function recordAuditEvent(env: Env, event: AuditEventRecord): Promi
   });
 }
 
+export type PostMergeIncidentReportSeverity = "low" | "medium" | "high" | "critical";
+
+export type PostMergeIncidentReport = {
+  repoFullName: string;
+  pullNumber: number;
+  description: string;
+  severity: PostMergeIncidentReportSeverity;
+  mergedSha?: string | undefined;
+  reporterKind: "customer" | "operator";
+  actor: string;
+  route: string;
+};
+
+/** #5672 post-merge incident reporting: records that an already-merged rented-loop PR was reported harmful,
+ *  as a queryable `audit_events` row (no separate table -- this event type is the sole persistence layer for
+ *  the reporting path, readable back via {@link listAuditEventsForTarget}). Callable from either the
+ *  customer (repo-maintainer) or the internal-operator route -- `reporterKind` distinguishes which. */
+export async function recordPostMergeIncidentReport(env: Env, report: PostMergeIncidentReport): Promise<{ id: string; createdAt: string }> {
+  const id = crypto.randomUUID();
+  const createdAt = nowIso();
+  await recordAuditEvent(env, {
+    id,
+    eventType: "agent.post_merge_incident_reported",
+    actor: report.actor,
+    route: report.route,
+    targetKey: `${report.repoFullName}#${report.pullNumber}`,
+    outcome: "completed",
+    detail: report.description,
+    metadata: { severity: report.severity, mergedSha: report.mergedSha ?? null, reporterKind: report.reporterKind },
+    createdAt,
+  });
+  return { id, createdAt };
+}
+
 export async function hasRecentAuditEvent(env: Env, actor: string, eventType: string, sinceIso: string): Promise<boolean> {
   const db = getDb(env.DB);
   const rows = await db

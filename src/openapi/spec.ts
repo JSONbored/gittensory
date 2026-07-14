@@ -496,6 +496,65 @@ export function buildOpenApiSpec() {
     },
   });
   registry.registerPath({
+    method: "post",
+    path: "/v1/repos/{owner}/{repo}/pulls/{number}/incident-reports",
+    request: {
+      params: z.object({ owner: z.string(), repo: z.string(), number: z.string() }),
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              description: z.string().min(1).max(4000),
+              severity: z.enum(["low", "medium", "high", "critical"]),
+              mergedSha: z.string().optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Post-merge incident report recorded as an audit_events row (#5672), customer-facing (repo maintainer) side",
+        content: { "application/json": { schema: z.object({ ok: z.literal(true), repoFullName: z.string(), pullNumber: z.number(), id: z.string(), createdAt: z.string() }) } },
+      },
+      400: { description: "Invalid pull number or incident report body" },
+      401: { description: "Unauthorized" },
+      403: { description: "Insufficient role" },
+      404: { description: "Pull request not found" },
+      409: { description: "Pull request has not been merged" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/app/incident-reports",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              repoFullName: z.string().min(3).max(200),
+              pullNumber: z.number().int().positive(),
+              description: z.string().min(1).max(4000),
+              severity: z.enum(["low", "medium", "high", "critical"]),
+              mergedSha: z.string().optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Post-merge incident report recorded as an audit_events row (#5672), internal-operator side",
+        content: { "application/json": { schema: z.object({ ok: z.literal(true), repoFullName: z.string(), pullNumber: z.number(), id: z.string(), createdAt: z.string() }) } },
+      },
+      400: { description: "Invalid incident report body" },
+      401: { description: "Unauthorized" },
+      403: { description: "Insufficient app role (operator only)" },
+      404: { description: "Pull request not found" },
+      409: { description: "Pull request has not been merged" },
+    },
+  });
+  registry.registerPath({
     method: "get",
     path: "/v1/app/self-dogfood/registration-pack",
     responses: {

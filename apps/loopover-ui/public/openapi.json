@@ -17522,6 +17522,240 @@
           }
         ]
       }
+    },
+    "/v1/repos/{owner}/{repo}/pulls/{number}/incident-reports": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "number",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "critical"
+                    ]
+                  },
+                  "mergedSha": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "description",
+                  "severity"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Post-merge incident report recorded as an audit_events row (#5672), customer-facing (repo maintainer) side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "repoFullName": {
+                      "type": "string"
+                    },
+                    "pullNumber": {
+                      "type": "number"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "repoFullName",
+                    "pullNumber",
+                    "id",
+                    "createdAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pull number or incident report body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient role"
+          },
+          "404": {
+            "description": "Pull request not found"
+          },
+          "409": {
+            "description": "Pull request has not been merged"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/app/incident-reports": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "repoFullName": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 200
+                  },
+                  "pullNumber": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "critical"
+                    ]
+                  },
+                  "mergedSha": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repoFullName",
+                  "pullNumber",
+                  "description",
+                  "severity"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Post-merge incident report recorded as an audit_events row (#5672), internal-operator side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "repoFullName": {
+                      "type": "string"
+                    },
+                    "pullNumber": {
+                      "type": "number"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "repoFullName",
+                    "pullNumber",
+                    "id",
+                    "createdAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid incident report body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient app role (operator only)"
+          },
+          "404": {
+            "description": "Pull request not found"
+          },
+          "409": {
+            "description": "Pull request has not been merged"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
     }
   },
   "servers": [
