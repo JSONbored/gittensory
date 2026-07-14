@@ -215,7 +215,11 @@ export async function runOpsAlerts(env: Env): Promise<Record<string, string[]>> 
       try {
         const [gatePrecision, calibration, reviewBurst, reviewFailureBurst] = await Promise.all([
           loadGatePrecisionReport(env, repoFullName),
-          buildRepoOutcomeCalibration(env, repoFullName),
+          // #orb-anomaly-slop-false-positive: exclude maintainer-authored PRs from the slop half -- they merge
+          // by human judgment regardless of score, so pooling them with contributor PRs can invert the
+          // merge-rate-by-band comparison detectOutcomeAnomalies reads below, in any repo the maintainer is
+          // heavily active in, without the deterministic score itself being wrong.
+          buildRepoOutcomeCalibration(env, repoFullName, undefined, { excludeMaintainerAuthors: true }),
           findHottestReviewTargetForRepo(env, repoFullName, reviewBurstSinceIso),
           findHottestInconclusiveReviewTargetForRepo(env, repoFullName, reviewBurstSinceIso),
         ]);
@@ -303,7 +307,9 @@ export async function computeOpsStats(env: Env): Promise<OpsStatsPayload> {
     try {
       const [gatePrecision, calibration, reviewBurst, reviewFailureBurst, byokUsage] = await Promise.all([
         loadGatePrecisionReport(env, repoFullName),
-        buildRepoOutcomeCalibration(env, repoFullName),
+        // #orb-anomaly-slop-false-positive: same maintainer exclusion as runOpsAlerts above, so this row's
+        // `slop`/`anomalies` fields stay consistent with each other and with the cron alert.
+        buildRepoOutcomeCalibration(env, repoFullName, undefined, { excludeMaintainerAuthors: true }),
         findHottestReviewTargetForRepo(env, repoFullName, reviewBurstSinceIso),
         findHottestInconclusiveReviewTargetForRepo(env, repoFullName, reviewBurstSinceIso),
         sumByokAiUsageForRepoSince(env, repoFullName, byokUsageSinceIso),

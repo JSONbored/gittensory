@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
-import { recordAiUsageEvent, recordAuditEvent, recordGateBlockOutcome, upsertPullRequestFromGitHub } from "../../src/db/repositories";
+import { recordAiUsageEvent, recordAuditEvent, recordGateBlockOutcome, updatePullRequestSlopAssessment, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import {
   classifyAnomalySeverity,
   computeOpsStats,
@@ -221,6 +221,27 @@ async function seedAgentConfiguredRepo(env: Env, fullName: string, installationI
     .run();
 }
 
+// Seed a slop-band population where contributor PRs alone discriminate correctly (clean 0.667 > high 0.167),
+// but `maintainerHighCount` maintainer-authored "high" PRs that ALL merge anyway (real maintainer behavior --
+// merged by human judgment, not the score) are also present. With maintainerHighCount=10 the blended high-band
+// rate (11/16=0.6875) edges just over the contributor-only clean rate (0.667), inverting the BLENDED signal
+// without either population's own signal actually being inverted -- the #orb-anomaly-slop-false-positive confound.
+async function seedSlopMaintainerConfound(env: Env, repoFullName: string, maintainerHighCount: number): Promise<void> {
+  let number = 1;
+  for (let i = 0; i < 6; i += 1, number += 1) {
+    await upsertPullRequestFromGitHub(env, repoFullName, { number, title: `contributor clean ${number}`, state: "closed", user: { login: "contributor" }, author_association: "CONTRIBUTOR", merged_at: i < 4 ? "2026-06-01T00:00:00.000Z" : null } as never);
+    await updatePullRequestSlopAssessment(env, repoFullName, number, { slopRisk: 0, slopBand: "clean" });
+  }
+  for (let i = 0; i < 6; i += 1, number += 1) {
+    await upsertPullRequestFromGitHub(env, repoFullName, { number, title: `contributor high ${number}`, state: "closed", user: { login: "contributor" }, author_association: "CONTRIBUTOR", merged_at: i < 1 ? "2026-06-01T00:00:00.000Z" : null } as never);
+    await updatePullRequestSlopAssessment(env, repoFullName, number, { slopRisk: 70, slopBand: "high" });
+  }
+  for (let i = 0; i < maintainerHighCount; i += 1, number += 1) {
+    await upsertPullRequestFromGitHub(env, repoFullName, { number, title: `maintainer high ${number}`, state: "closed", user: { login: "owner" }, author_association: "OWNER", merged_at: "2026-06-01T00:00:00.000Z" } as never);
+    await updatePullRequestSlopAssessment(env, repoFullName, number, { slopRisk: 70, slopBand: "high" });
+  }
+}
+
 // Seed a gate-block ledger anomaly: blocked PRs that later MERGED (false positives) over the min sample.
 async function seedGateFalsePositiveAnomaly(env: Env, repoFullName: string): Promise<void> {
   for (let i = 1; i <= 6; i += 1) {
@@ -274,6 +295,40 @@ describe("runOpsAlerts — cron path over gittensory's outcome data", () => {
 
     expect(found["owner/clean"]).toBeUndefined();
     expect(errors.mock.calls.map((c) => String(c[0])).some((line) => line.includes("ops_anomaly\""))).toBe(false);
+  });
+
+  it("REGRESSION (#orb-anomaly-slop-false-positive): does NOT flag 'slop score NOT discriminating' when the inversion is purely a maintainer-PR confound", async () => {
+    const env = createTestEnv();
+    await seedRegisteredRepo(env, "owner/repo");
+    await seedSlopMaintainerConfound(env, "owner/repo", 10); // blended would invert (verified in outcome-calibration.test.ts); contributor-only signal does not
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const found = await runOpsAlerts(env);
+
+    expect(found["owner/repo"]?.some((a) => /slop score NOT discriminating/.test(a))).not.toBe(true);
+    const logged = errors.mock.calls.map((c) => String(c[0])).find((line) => line.includes("ops_anomaly") && line.includes("owner/repo"));
+    expect(logged).toBeUndefined();
+  });
+
+  it("REGRESSION (#orb-anomaly-slop-false-positive): still flags a GENUINE non-discriminating score among contributor PRs alone (not a blanket suppression)", async () => {
+    const env = createTestEnv();
+    await seedRegisteredRepo(env, "owner/repo");
+    // Contributor-only population where a higher band genuinely merges more -- no maintainer PRs involved at all.
+    for (let i = 1; i <= 6; i += 1) {
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number: i, title: `contributor clean ${i}`, state: "closed", user: { login: "contributor" }, author_association: "CONTRIBUTOR", merged_at: i <= 1 ? "2026-06-01T00:00:00.000Z" : null } as never);
+      await updatePullRequestSlopAssessment(env, "owner/repo", i, { slopRisk: 0, slopBand: "clean" });
+    }
+    for (let i = 7; i <= 12; i += 1) {
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number: i, title: `contributor high ${i}`, state: "closed", user: { login: "contributor" }, author_association: "CONTRIBUTOR", merged_at: i <= 11 ? "2026-06-01T00:00:00.000Z" : null } as never);
+      await updatePullRequestSlopAssessment(env, "owner/repo", i, { slopRisk: 70, slopBand: "high" });
+    }
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const found = await runOpsAlerts(env);
+
+    expect(found["owner/repo"]?.some((a) => /slop score NOT discriminating/.test(a))).toBe(true);
+    const logged = errors.mock.calls.map((c) => String(c[0])).find((line) => line.includes("ops_anomaly") && line.includes("owner/repo"));
+    expect(logged).toBeDefined();
   });
 
   it("REGRESSION (#sweep-requires-installation): prefers the agent-configured repo and never scans an uninstalled registered repo when a configured one exists", async () => {
@@ -531,6 +586,18 @@ describe("computeOpsStats — cross-repo outcome aggregate", () => {
     const payload = await computeOpsStats(env);
     const row = payload.repos.find((r) => r.repoFullName === "owner/repo");
     expect(row?.byokUsage).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });
+  });
+
+  it("REGRESSION (#orb-anomaly-slop-false-positive): the row's slop.discriminates and anomalies stay consistent -- both exclude the maintainer-PR confound", async () => {
+    const env = createTestEnv();
+    await seedRegisteredRepo(env, "owner/repo");
+    await seedSlopMaintainerConfound(env, "owner/repo", 10);
+
+    const payload = await computeOpsStats(env);
+    const row = payload.repos.find((r) => r.repoFullName === "owner/repo");
+    expect(row?.slop.discriminates).toBe(true); // contributor-only signal, not the inverted blended one
+    expect(row?.slop.totalResolved).toBe(12); // only the 12 contributor PRs, not the 10 maintainer PRs too
+    expect(row?.anomalies.some((a) => /slop score NOT discriminating/.test(a))).toBe(false);
   });
 });
 

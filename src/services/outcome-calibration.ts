@@ -34,6 +34,15 @@ export type RecommendationOutcomeCalibration = { total: number; positive: number
 export type RecommendationOutcomeCalibrationOptions = {
   /** Only maintainer-lane outcomes are authoritative enough for live self-tune policy changes. */
   maintainerOnly?: boolean | undefined;
+  /** Exclude maintainer-authored PRs (author_association OWNER/MEMBER/COLLABORATOR) from the SLOP half of the
+   *  report. Maintainer PRs merge by human judgment regardless of score (the same population
+   *  settings-preview.ts's `includeMaintainerAuthors` already excludes from the public surface by default), so
+   *  pooling them with contributor PRs can invert a merge-rate-by-band comparison in any repo the maintainer is
+   *  heavily active in without the deterministic score itself being wrong. Off by default so every existing
+   *  caller (dashboards, the MCP tool, the public API route) stays byte-identical; mirrors the miner/human
+   *  `cohorts` split gate-precision.ts already applies to the sibling #554 false-positive measurement, for the
+   *  same reason. */
+  excludeMaintainerAuthors?: boolean | undefined;
 };
 
 export type OutcomeCalibration = {
@@ -57,12 +66,21 @@ function terminalOutcome(pr: PullRequestRecord): "merged" | "closed" | null {
   return null;
 }
 
+// Same OWNER/MEMBER/COLLABORATOR classification settings-preview.ts's includeMaintainerAuthors check already
+// uses to exclude this population from the public surface by default.
+const MAINTAINER_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+function isMaintainerAuthoredPr(pr: PullRequestRecord): boolean {
+  return pr.authorAssociation != null && MAINTAINER_AUTHOR_ASSOCIATIONS.has(pr.authorAssociation);
+}
+
 /** Per-slop-band merge/close calibration over the resolved PRs that carry a slop assessment. Pure. */
-export function buildSlopOutcomeCalibration(pullRequests: PullRequestRecord[]): SlopOutcomeCalibration {
+export function buildSlopOutcomeCalibration(pullRequests: PullRequestRecord[], options: RecommendationOutcomeCalibrationOptions = {}): SlopOutcomeCalibration {
+  const scoped = options.excludeMaintainerAuthors ? pullRequests.filter((pr) => !isMaintainerAuthoredPr(pr)) : pullRequests;
   const counts = new Map<SlopBand, { merged: number; closed: number }>();
   let totalMerged = 0;
   let totalResolved = 0;
-  for (const pr of pullRequests) {
+  for (const pr of scoped) {
     if (typeof pr.slopRisk !== "number" || !pr.slopBand) continue; // never assessed
     const band = pr.slopBand as SlopBand;
     if (!SLOP_BAND_ORDER.includes(band)) continue;
@@ -158,7 +176,7 @@ export async function buildRepoOutcomeCalibration(
     listPullRequests(env, repoFullName),
     listAgentRecommendationOutcomes(env, windowDays !== undefined ? { repoFullName, windowDays } : { repoFullName }),
   ]);
-  const slop = buildSlopOutcomeCalibration(pullRequests);
+  const slop = buildSlopOutcomeCalibration(pullRequests, options);
   const recommendations = buildRecommendationOutcomeCalibration(outcomes, repoFullName, options);
   return { repoFullName, generatedAt: nowIso(), windowDays: windowDays ?? null, slop, recommendations, signals: buildOutcomeCalibrationSignals(slop, recommendations) };
 }
