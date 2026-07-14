@@ -415,7 +415,7 @@ describe("runMinerAttempt — real self-plagiarism wiring into the chokepoint (#
     // augmentation read the same env-pointed store; a matching prior submission there throttles.
     const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-default-gs-"));
     roots.push(root);
-    vi.stubEnv("GITTENSORY_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
+    vi.stubEnv("LOOPOVER_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
     recordOwnSubmission({
       repoFullName: "acme/widgets",
       fingerprint: fingerprintFromChangedFiles(FILES),

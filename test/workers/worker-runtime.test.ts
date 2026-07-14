@@ -12,7 +12,7 @@ describe("worker runtime", () => {
 
     const openApi = await worker.fetch(new Request("https://gittensory.test/openapi.json"), {} as Env, createExecutionContext());
     expect(openApi.status).toBe(200);
-    await expect(openApi.json()).resolves.toMatchObject({ info: { title: "Gittensory API" } });
+    await expect(openApi.json()).resolves.toMatchObject({ info: { title: "LoopOver API" } });
 
     const mcp = await worker.fetch(new Request("https://gittensory.test/mcp", { method: "POST" }), {} as Env, createExecutionContext());
     expect(mcp.status).toBe(401);
