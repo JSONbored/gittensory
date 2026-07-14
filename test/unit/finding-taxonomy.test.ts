@@ -23,6 +23,6 @@ describe("finding taxonomy document", () => {
   });
 
   it("uses the stable MCP resource URI", () => {
-    expect(FINDING_TAXONOMY_URI).toBe("gittensory://finding-taxonomy");
+    expect(FINDING_TAXONOMY_URI).toBe("loopover://finding-taxonomy");
   });
 });
