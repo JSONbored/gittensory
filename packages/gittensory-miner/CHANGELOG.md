@@ -139,10 +139,3 @@
 * **miner:** wire recordOwnSubmission's write side into the real attempt pipeline ([#5678](https://github.com/JSONbored/gittensory/issues/5678)) ([ebb540d](https://github.com/JSONbored/gittensory/commit/ebb540d51c5ffa67581fb7e018e2ce9d439b8a30))
 * **miner:** write acceptance criteria safely ([#5322](https://github.com/JSONbored/gittensory/issues/5322)) ([dada3ec](https://github.com/JSONbored/gittensory/commit/dada3ecb39fde4f6bd43ba01ca4ee080e642caca))
 * **observability:** avoid exposing live AMS ledgers ([#5471](https://github.com/JSONbored/gittensory/issues/5471)) ([2fd9196](https://github.com/JSONbored/gittensory/commit/2fd91962aff3cd43d2afa0f6fcbf51383c524ec5))
-
-
-### Dependencies
-
-* The following workspace dependencies were updated
-  * dependencies
-    * @loopover/engine bumped from * to 2.0.0
