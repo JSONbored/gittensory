@@ -53,9 +53,24 @@ export function shouldAttemptPatchLessSecretScan(
   baseSha?: string | null | undefined,
 ): boolean {
   if (status === "removed") return false;
-  if (status === "modified") return Boolean(baseSha?.trim());
+  if (status === "added") return true;
   if (status === "renamed") return Boolean(baseSha?.trim() && file.previousFilename?.trim());
-  return status === "added";
+  // GitHub's Pull Request Files API `status` can also be `copied` | `changed` | `unchanged`
+  // (diff_entry OpenAPI schema). `copied`/`changed` can introduce new committed content relative
+  // to base; `unchanged` is still usable in merge-commit contexts where content can differ from
+  // what a local diff assumes. Treat all three like `modified`: attempt the base/head multiset
+  // scan when `baseSha` is known. Falling through to "never scan" for these statuses used to
+  // silently bypass both the content-fetch fallback and the fail-closed `secretScanIncomplete`
+  // advisory (#5947).
+  if (
+    status === "modified" ||
+    status === "copied" ||
+    status === "changed" ||
+    status === "unchanged"
+  ) {
+    return Boolean(baseSha?.trim());
+  }
+  return false;
 }
 
 export function hasPatchLessSecretScanCandidates(
@@ -159,9 +174,11 @@ async function mapPatchLessSecretScanFilesWithConcurrency<T, R>(
 
 /** When GitHub omits inline `patch` (binary/large files), fetch post-change content and synthesize `+` lines so
  *  the unconditional `secret_leak` hard blocker can still inspect committed credentials. Added files scan only
- *  genuinely new lines; modified/renamed files multiset-diff against base when `baseSha` is known. Unfetchable
- *  or baseline-unknown content leaves the file header-only so pre-existing secrets are not mis-flagged; content
- *  over the per-file cap is marked incomplete so the gate fails closed instead of scanning a truncated prefix.
+ *  genuinely new lines; modified/copied/changed/unchanged/renamed files multiset-diff against base when `baseSha`
+ *  is known (`copied`/`changed`/`unchanged` are treated like `modified` — #5947 — so they are never silently
+ *  skipped). Unfetchable or baseline-unknown content leaves the file header-only so pre-existing secrets are not
+ *  mis-flagged; content over the per-file cap is marked incomplete so the gate fails closed instead of scanning a
+ *  truncated prefix.
  */
 export async function enrichSecretScanFilesWithPatchFallback(
   files: PullRequestFileRecord[],

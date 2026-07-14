@@ -105,6 +105,69 @@ describe("enrichSecretScanFilesWithPatchFallback", () => {
     expect(secretLeakFinding(buildSecretScanDiff(enriched))?.code).toBe("secret_leak");
   });
 
+  it.each(["copied", "changed", "unchanged"] as const)(
+    "scans patch-less %s-status files via the modified-style base/head fallback (#5947)",
+    async (status) => {
+      const fetcher: FileFetcher = {
+        async getFileContent(path, ref) {
+          if (path !== "src/config.ts") return null;
+          if (ref === "base-sha") return "const existing = 1;\n";
+          if (ref === "head-sha") return `const existing = 1;\nconst token = "${fakeToken}";\n`;
+          return null;
+        },
+      };
+      const files = [
+        {
+          repoFullName: "acme/widgets",
+          pullNumber: 7,
+          path: "src/config.ts",
+          status,
+          additions: 1,
+          deletions: 0,
+          changes: 1,
+          payload: {},
+        },
+      ];
+      const enriched = await enrichSecretScanFilesWithPatchFallback(files, {
+        headSha: "head-sha",
+        baseSha: "base-sha",
+        fetcher,
+      });
+      expect(secretLeakFinding(buildSecretScanDiff(enriched))?.code).toBe("secret_leak");
+      expect(enriched[0]?.payload?.patch).toContain(`+const token = "${fakeToken}";`);
+    },
+  );
+
+  it.each(["copied", "changed", "unchanged"] as const)(
+    "leaves a patch-less %s-status file unscannable when baseSha is unknown (#5947)",
+    async (status) => {
+      const fetcher: FileFetcher = {
+        async getFileContent() {
+          return `const token = "${fakeToken}";\n`;
+        },
+      };
+      const files = [
+        {
+          repoFullName: "acme/widgets",
+          pullNumber: 7,
+          path: "src/config.ts",
+          status,
+          additions: 1,
+          deletions: 0,
+          changes: 1,
+          payload: {},
+        },
+      ];
+      const enriched = await enrichSecretScanFilesWithPatchFallback(files, {
+        headSha: "head-sha",
+        fetcher,
+      });
+      expect(secretLeakFinding(buildSecretScanDiff(enriched))).toBeNull();
+      expect(enriched[0]?.payload?.patch).toBeUndefined();
+      expect(enriched[0]?.payload?.secretScanIncomplete).toBeUndefined();
+    },
+  );
+
   it("leaves a patch-less modified file unscannable when baseSha is unknown", async () => {
     const fetcher: FileFetcher = {
       async getFileContent() {
@@ -969,7 +1032,16 @@ describe("patchlessSecretScanInternals", () => {
     expect(shouldAttemptPatchLessSecretScan({}, "modified", null)).toBe(false);
     expect(shouldAttemptPatchLessSecretScan({}, "modified", "   ")).toBe(false);
     expect(shouldAttemptPatchLessSecretScan({}, "removed", "base-sha")).toBe(false);
-    expect(shouldAttemptPatchLessSecretScan({}, "copied", "base-sha")).toBe(false);
+    // copied/changed/unchanged are attemptable like modified when baseSha is known (#5947) —
+    // previously they fell through to `status === "added"` and were silently skipped.
+    expect(shouldAttemptPatchLessSecretScan({}, "copied", "base-sha")).toBe(true);
+    expect(shouldAttemptPatchLessSecretScan({}, "copied", null)).toBe(false);
+    expect(shouldAttemptPatchLessSecretScan({}, "copied", "   ")).toBe(false);
+    expect(shouldAttemptPatchLessSecretScan({}, "changed", "base-sha")).toBe(true);
+    expect(shouldAttemptPatchLessSecretScan({}, "changed", null)).toBe(false);
+    expect(shouldAttemptPatchLessSecretScan({}, "unchanged", "base-sha")).toBe(true);
+    expect(shouldAttemptPatchLessSecretScan({}, "unchanged", null)).toBe(false);
+    expect(shouldAttemptPatchLessSecretScan({}, "unknown-status", "base-sha")).toBe(false);
     expect(shouldAttemptPatchLessSecretScan({}, "added", "base-sha")).toBe(true);
     expect(
       shouldAttemptPatchLessSecretScan({ previousFilename: "old.env" }, "renamed", "base-sha"),
@@ -1008,11 +1080,18 @@ describe("patchlessSecretScanInternals", () => {
       payload: {},
     };
     const modified = { ...added, path: "modified.env", status: "modified" };
+    const copied = { ...added, path: "copied.env", status: "copied" };
+    const changed = { ...added, path: "changed.env", status: "changed" };
+    const unchanged = { ...added, path: "unchanged.env", status: "unchanged" };
     const inline = { ...added, path: "inline.env", payload: { patch: "+ok" } };
     const removed = { ...added, path: "removed.env", status: "removed" };
     expect(patchLessSecretScanFetchCost(added, null)).toBe(1);
     expect(patchLessSecretScanFetchCost(modified, "base-sha")).toBe(2);
     expect(patchLessSecretScanFetchCost(modified, null)).toBe(0);
+    expect(patchLessSecretScanFetchCost(copied, "base-sha")).toBe(2);
+    expect(patchLessSecretScanFetchCost(copied, null)).toBe(0);
+    expect(patchLessSecretScanFetchCost(changed, "base-sha")).toBe(2);
+    expect(patchLessSecretScanFetchCost(unchanged, "base-sha")).toBe(2);
     expect(patchLessSecretScanFetchCost(inline, null)).toBe(0);
     expect(patchLessSecretScanFetchCost(removed, "base-sha")).toBe(0);
     expect(patchLessSecretScanFetchCostExceedsBudget([added], null)).toBe(false);
@@ -1131,6 +1210,45 @@ describe("maybeAddSecretLeakFinding patch-less fallback wiring", () => {
     });
     spy.mockRestore();
     expect(adv.findings.map((f) => f.code)).toContain("secret_leak");
+  });
+
+  it("scans a patch-less copied-status file with a committed secret (#5947)", async () => {
+    const env = createTestEnv();
+    const adv = advisory();
+    const files = [
+      {
+        repoFullName: "acme/widgets",
+        pullNumber: 7,
+        path: "copied.env",
+        status: "copied",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        payload: {},
+      },
+    ];
+    const groundingWire = await import("../../src/review/grounding-wire");
+    const fetcher: FileFetcher = {
+      async getFileContent(path, ref) {
+        if (path !== "copied.env") return null;
+        if (ref === "base-sha") return "EXISTING_VALUE=1\n";
+        if (ref === "head-sha") return `EXISTING_VALUE=1\nTOKEN=${fakeToken}\n`;
+        return null;
+      },
+    };
+    const spy = vi.spyOn(groundingWire, "makeGithubFileFetcher").mockResolvedValue(fetcher);
+    await maybeAddSecretLeakFinding(env, {
+      advisory: adv,
+      repoFullName: "acme/widgets",
+      pullNumber: 7,
+      files,
+      installationId: 1,
+      headSha: "head-sha",
+      baseSha: "base-sha",
+    });
+    spy.mockRestore();
+    expect(adv.findings.map((f) => f.code)).toContain("secret_leak");
+    expect(adv.findings.some((f) => f.title.includes("could not be fully scanned"))).toBe(false);
   });
 
   it("falls back to inline patches when patch-less enrichment rejects", async () => {
