@@ -415,6 +415,16 @@ export {
 // live gate does), not this file's full internal surface.
 export { buildCollisionReport, type CollisionCluster, type CollisionReport } from "./signals/predicted-gate-engine.js";
 export type { CollisionItem } from "./types/predicted-gate-types.js";
+// Unlinked-issue candidate pre-filter (#4883), extracted out of src/signals/unlinked-issue-candidates.ts so the
+// miner's self-review can run the SAME deterministic recall pass the maintainer gate uses to flag a PR's
+// likely-but-unlinked issue, instead of a driftable copy. PURE — no IO, no AI call.
+export {
+  findUnlinkedIssueCandidates,
+  MAX_CANDIDATES,
+  type CandidateOpenIssue,
+  type FindUnlinkedIssueCandidatesInput,
+  type UnlinkedIssueCandidateMatch,
+} from "./signals/unlinked-issue-candidates.js";
 export * from "./plan-export.js";
 export { countPlanStepsByStatus } from "./plan-step-stats.js";
 export { countPlanSteps } from "./plan-step-count.js";
