@@ -594,6 +594,13 @@ export {
   type ResultsPayload,
 } from "./results-payload.js";
 export {
+  evaluateTenantQuota,
+  type QuotaDimension,
+  type TenantQuota,
+  type TenantQuotaDecision,
+  type TenantUsage,
+} from "./tenant-quota.js";
+export {
   buildProgressSnapshot,
   progressChanged,
   MAX_PROGRESS_ACTIVITY,
