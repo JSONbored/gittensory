@@ -258,4 +258,152 @@ describe("buildCodingTaskSpec (#5132)", () => {
     if (!result.ready) throw new Error("expected ready");
     expect(result.body).toBeUndefined();
   });
+
+  it("REGRESSION (#4786): embeds a detected Node stack's real test/build/lint commands in the coding-agent instructions", () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "widgets",
+        scripts: { test: "vitest run", build: "tsc -b", lint: "eslint .", format: "prettier --write ." },
+      }),
+    );
+    const target = issue();
+    const result = buildCodingTaskSpec({
+      repoFullName: "acme/widgets",
+      issue: target,
+      context: { issues: [target], pullRequests: [] },
+      claimLedger: claimLedger(),
+      workingDirectory: dir,
+    });
+
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready");
+    expect(result.instructions).toContain("Detected target-repo stack:");
+    expect(result.instructions).toMatch(/javascript|typescript/i);
+    expect(result.instructions).toContain("npm");
+    expect(result.instructions).toContain("Do not assume LoopOver/gittensory CI conventions");
+    expect(result.instructions).toContain("- test: `");
+    expect(result.instructions).toContain("- build: `");
+    expect(result.instructions).toContain("- lint: `");
+    expect(result.instructions).toContain("- format: `");
+    expect(result.instructions).not.toContain("No build/test/lint/format commands were confidently inferred");
+  });
+
+  it("REGRESSION (#4786): a fail-closed undetected stack still reaches the prompt (no silent gittensory default)", () => {
+    const dir = tempDir();
+    const target = issue();
+    const result = buildCodingTaskSpec({
+      repoFullName: "acme/widgets",
+      issue: target,
+      context: { issues: [target], pullRequests: [] },
+      claimLedger: claimLedger(),
+      workingDirectory: dir,
+    });
+
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready");
+    expect(result.instructions).toContain("Detected target-repo stack: stack not detected:");
+    expect(result.instructions).toContain("Do not assume LoopOver/gittensory CI conventions");
+    expect(result.instructions).not.toContain("Run these commands before finishing:");
+  });
+
+  it("REGRESSION (#4786): a detected stack with no confidently-inferred commands tells the agent not to guess", () => {
+    const dir = tempDir();
+    const target = issue();
+    const result = buildCodingTaskSpec({
+      repoFullName: "acme/widgets",
+      issue: target,
+      context: { issues: [target], pullRequests: [] },
+      claimLedger: claimLedger(),
+      workingDirectory: dir,
+      detectRepoStack: () => ({
+        detected: true,
+        language: "python",
+        packageManager: "pip",
+        buildCommand: null,
+        testCommand: null,
+        lintCommand: null,
+        formatCommand: null,
+        evidence: { manifest: "requirements.txt", lockfile: null },
+      }),
+    });
+
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready");
+    expect(result.instructions).toContain("python via pip");
+    expect(result.instructions).toContain("no validation commands detected");
+    expect(result.instructions).toContain("No build/test/lint/format commands were confidently inferred");
+    expect(result.instructions).not.toContain("Run these commands before finishing:");
+  });
+
+  it("REGRESSION (#4786): when input.detectRepoStack is omitted, uses the REAL stack-detection.js default against the worktree", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "Cargo.toml"), '[package]\nname = "widgets"\nversion = "0.1.0"\n');
+    const target = issue();
+    const result = buildCodingTaskSpec({
+      repoFullName: "acme/widgets",
+      issue: target,
+      context: { issues: [target], pullRequests: [] },
+      claimLedger: claimLedger(),
+      workingDirectory: dir,
+    });
+
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error("expected ready");
+    expect(result.instructions).toContain("rust via cargo");
+    expect(result.instructions).toContain("- test: `cargo test`");
+    expect(result.instructions).toContain("- build: `cargo build`");
+  });
+
+  it("REGRESSION (#4786): includes only the non-null commands from a partial injected stack (both sides of each command ternary)", () => {
+    const target = issue();
+    const withBuildAndTest = buildCodingTaskSpec({
+      repoFullName: "acme/widgets",
+      issue: target,
+      context: { issues: [target], pullRequests: [] },
+      claimLedger: claimLedger(),
+      workingDirectory: tempDir(),
+      detectRepoStack: () => ({
+        detected: true,
+        language: "go",
+        packageManager: "go",
+        buildCommand: "go build ./...",
+        testCommand: "go test ./...",
+        lintCommand: null,
+        formatCommand: null,
+        evidence: { manifest: "go.mod", lockfile: null },
+      }),
+    });
+    expect(withBuildAndTest.ready).toBe(true);
+    if (!withBuildAndTest.ready) throw new Error("expected ready");
+    expect(withBuildAndTest.instructions).toContain("- test: `go test ./...`");
+    expect(withBuildAndTest.instructions).toContain("- build: `go build ./...`");
+    expect(withBuildAndTest.instructions).not.toContain("- lint:");
+    expect(withBuildAndTest.instructions).not.toContain("- format:");
+
+    const withLintAndFormat = buildCodingTaskSpec({
+      repoFullName: "acme/widgets",
+      issue: target,
+      context: { issues: [target], pullRequests: [] },
+      claimLedger: claimLedger(),
+      workingDirectory: tempDir(),
+      detectRepoStack: () => ({
+        detected: true,
+        language: "javascript",
+        packageManager: "npm",
+        buildCommand: null,
+        testCommand: null,
+        lintCommand: "npm run lint",
+        formatCommand: "npm run format",
+        evidence: { manifest: "package.json", lockfile: null },
+      }),
+    });
+    expect(withLintAndFormat.ready).toBe(true);
+    if (!withLintAndFormat.ready) throw new Error("expected ready");
+    expect(withLintAndFormat.instructions).toContain("- lint: `npm run lint`");
+    expect(withLintAndFormat.instructions).toContain("- format: `npm run format`");
+    expect(withLintAndFormat.instructions).not.toContain("- test:");
+    expect(withLintAndFormat.instructions).not.toContain("- build:");
+  });
 });

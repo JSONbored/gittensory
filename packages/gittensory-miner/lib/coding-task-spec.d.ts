@@ -1,4 +1,5 @@
 import type { AcceptanceCriteria, FeasibilityGateResult, FeasibilityVerdict, IssueRecord, PullRequestRecord } from "@loopover/engine";
+import type { RepoStackResult } from "./stack-detection.js";
 
 export type CodingTaskIssue = { number: number; title: string; body?: string | null | undefined; labels?: string[] | undefined };
 
@@ -25,6 +26,8 @@ export type CodingTaskSpecInput = {
   context: CodingTaskContext;
   claimLedger: CodingTaskClaimLedger;
   workingDirectory: string;
+  /** Injectable stack detector (#4786); omitted falls back to stack-detection.js's real `detectRepoStack`. */
+  detectRepoStack?: (repoPath: string) => RepoStackResult;
 };
 
 export type CodingTaskSpecResult =

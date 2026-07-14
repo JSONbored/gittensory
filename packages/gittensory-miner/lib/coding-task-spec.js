@@ -10,6 +10,7 @@ import {
   serializeAcceptanceCriteria,
   shouldWriteAcceptanceCriteria,
 } from "@loopover/engine";
+import { detectRepoStack, renderStackSummary } from "./stack-detection.js";
 
 // Coding-task-spec builder (#5132, Wave 3.5 follow-up). The second gap discovered alongside #5132's CLI
 // wiring: `IterateLoopInput.title`/`instructions`/`acceptanceCriteriaPath` had no builder anywhere in this
@@ -24,6 +25,12 @@ import {
 // @loopover/engine (same gap #5145's own header documents for `issueQuality`). This is not a
 // fabrication -- feasibilityInputFromPreStartCheck's OWN documented default for a missing
 // issueQualityStatus/lifecycle is "ready", the same honest-default precedent already established.
+//
+// Target-repo stack detection (#4786 / #4785 follow-up): `detectRepoStack` already returned a structured
+// language/package-manager/command description, but nothing in the attempt path consumed it -- instructions
+// were issue text + an acceptance-criteria path only. This module now appends that real stack summary (and
+// any confidently-inferred validation commands) to the coding-agent prompt so the agent validates against
+// THIS repository's tooling rather than assuming LoopOver/gittensory CI, Codecov, or `npm run test:ci`.
 
 function buildTaskBrief(issue) {
   const body = (issue.body ?? "").trim();
@@ -132,31 +139,77 @@ export function writeAcceptanceCriteriaFile(workingDirectory, acceptanceCriteria
 }
 
 /**
+ * Prompt guidance derived from a real `detectRepoStack` result (#4786). Lists only commands the detector
+ * confidently inferred -- a `null` command stays omitted rather than guessed -- and always tells the agent
+ * not to assume LoopOver/gittensory's own CI/coverage conventions.
+ *
+ * @param {import("./stack-detection.js").RepoStackResult} stack
+ * @returns {string}
+ */
+function buildValidationGuidance(stack) {
+  const lines = [
+    `Detected target-repo stack: ${renderStackSummary(stack)}`,
+    "",
+    "Validate your change with THIS repository's own build/test/lint tooling from the stack summary above.",
+    "Do not assume LoopOver/gittensory CI conventions, Codecov patch coverage, or `npm run test:ci` unless those commands appear in the detected stack.",
+  ];
+  if (stack?.detected === true) {
+    const commands = [
+      stack.testCommand ? `- test: \`${stack.testCommand}\`` : null,
+      stack.lintCommand ? `- lint: \`${stack.lintCommand}\`` : null,
+      stack.buildCommand ? `- build: \`${stack.buildCommand}\`` : null,
+      stack.formatCommand ? `- format: \`${stack.formatCommand}\`` : null,
+    ].filter((entry) => entry !== null);
+    if (commands.length > 0) {
+      lines.push("", "Run these commands before finishing:", ...commands);
+    } else {
+      lines.push(
+        "",
+        "No build/test/lint/format commands were confidently inferred — discover and use this repo's own tooling rather than guessing.",
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
  * The coding-agent driver's own prompt text (agent-sdk-driver.ts's header: "forwarded verbatim as the
  * prompt -- the acceptance-criteria document already lives inside the worktree", so this points to it
- * rather than repeating its content).
+ * rather than repeating its content). Also carries the target repo's detected stack + validation commands
+ * (#4786) so the agent does not default to gittensory-specific CI assumptions.
+ *
+ * @param {{ number: number, title: string, body?: string | null }} issue
+ * @param {string} acceptanceCriteriaPath
+ * @param {import("./stack-detection.js").RepoStackResult} stack
  */
-function buildInstructions(issue, acceptanceCriteriaPath) {
+function buildInstructions(issue, acceptanceCriteriaPath, stack) {
   return [
     `Resolve the following GitHub issue in this repository: #${issue.number} -- ${issue.title}`,
     "",
     (issue.body ?? "").trim(),
     "",
     `A structured acceptance-criteria document describing what "done" means for this attempt is at ${acceptanceCriteriaPath} -- read it and ensure your change satisfies every criterion before finishing.`,
+    "",
+    buildValidationGuidance(stack),
   ].join("\n");
 }
 
 /**
- * Full composition: feasibility -> acceptance criteria -> (if authorized) write the file -> instructions.
- * Returns `ready: false` (with the computed feasibility verdict, for the caller to report) when the
- * verdict is `raise`/`avoid` -- the caller should abandon the attempt rather than proceed with no real
- * acceptance-criteria file on disk.
+ * Full composition: feasibility -> acceptance criteria -> (if authorized) write the file -> detect the
+ * target-repo stack (#4786) -> instructions. Returns `ready: false` (with the computed feasibility verdict,
+ * for the caller to report) when the verdict is `raise`/`avoid` -- the caller should abandon the attempt
+ * rather than proceed with no real acceptance-criteria file on disk.
+ *
+ * `detectRepoStack` is injectable so tests can assert both the detected and fail-closed undiscovered stack
+ * branches without depending on real filesystem probes; omitted falls back to stack-detection.js's real
+ * `detectRepoStack` (the production default).
  *
  * @param {{
  *   repoFullName: string, issue: { number: number, title: string, body?: string | null, labels?: string[] },
  *   context: { issues: Array<{ number: number }>, pullRequests: unknown[] },
  *   claimLedger: { listClaims: (filter: { repoFullName: string, status: string }) => Array<{ issueNumber: number }> },
  *   workingDirectory: string,
+ *   detectRepoStack?: (repoPath: string) => import("./stack-detection.js").RepoStackResult,
  * }} input
  * @returns {import("./coding-task-spec.js").CodingTaskSpecResult}
  */
@@ -169,12 +222,18 @@ export function buildCodingTaskSpec(input) {
     return { ready: false, verdict: feasibility.verdict, feasibility };
   }
 
+  // Real target-repo stack (#4786): detected from the prepared worktree's own manifests, not guessed from
+  // gittensory conventions. Fail-closed `{ detected: false }` results still reach the prompt (via
+  // renderStackSummary) so the agent is told detection failed rather than silently defaulting to npm/Codecov.
+  const detect = input.detectRepoStack ?? detectRepoStack;
+  const stack = detect(input.workingDirectory);
+
   return {
     ready: true,
     verdict: feasibility.verdict,
     feasibility,
     acceptanceCriteriaPath: writeResult.path,
-    instructions: buildInstructions(input.issue, writeResult.path),
+    instructions: buildInstructions(input.issue, writeResult.path, stack),
     title: input.issue.title,
     body: input.issue.body ?? undefined,
     labels: input.issue.labels,
