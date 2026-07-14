@@ -13,11 +13,21 @@ import {
   runFindOpportunities,
   validateFindOpportunitiesInput,
 } from "../../src/mcp/find-opportunities";
+import { createInstallationToken } from "../../src/github/app";
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { rankCandidateIssuesWithSummary } from "../../packages/loopover-miner/lib/opportunity-ranker.js";
 import { createTestEnv } from "../helpers/d1";
 
 vi.mock("@loopover/engine", async () => {
   return import("../../packages/loopover-engine/src/index");
+});
+vi.mock("../../src/github/app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/github/app")>()),
+  createInstallationToken: vi.fn(),
+}));
+vi.mock("../../packages/loopover-miner/lib/opportunity-ranker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/loopover-miner/lib/opportunity-ranker.js")>();
+  return { ...actual, rankCandidateIssuesWithSummary: vi.fn(actual.rankCandidateIssuesWithSummary) };
 });
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/ai-policy");
@@ -57,6 +67,8 @@ const issue = (number: number) => ({
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.mocked(createInstallationToken).mockReset();
+  vi.mocked(rankCandidateIssuesWithSummary).mockClear();
 });
 
 describe("validateFindOpportunitiesInput", () => {
@@ -274,5 +286,232 @@ describe("runFindOpportunities", () => {
     const allowed = await runFindOpportunities(env, { targets: [{ owner: "acme", repo: "allowed" }] }, { canAccessRepo: async () => true });
     expect(allowed.status).toBe("ok");
     expect(allowed.ranked).toHaveLength(1);
+  });
+
+  it("resolves the searchQuery path and applies the post-search canAccessRepo filter", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    const searchIssue = (number: number, repo: string) => ({
+      number,
+      title: `Issue ${number}`,
+      labels: ["good first issue"],
+      comments: 1,
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T01:00:00Z",
+      html_url: `https://github.com/acme/${repo}/issues/${number}`,
+      repository_url: `https://api.github.com/repos/acme/${repo}`,
+    });
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/search/issues?")) return jsonResponse({ items: [searchIssue(51, "searched"), searchIssue(52, "blocked")] });
+      if (url.includes("/repos/acme/searched/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/searched/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/blocked/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/blocked/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(
+      env,
+      { searchQuery: "test coverage" },
+      { canAccessRepo: async (repoFullName) => repoFullName === "acme/searched" },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.totalCandidates).toBe(1);
+    expect(result.ranked.map((entry) => `${entry.owner}/${entry.repo}#${entry.issueNumber}`)).toEqual(["acme/searched#51"]);
+  });
+
+  it("applies goalSpec.lane and languages to the ranker and reports appliedLane", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/allowed/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/allowed/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/allowed/issues?")) return jsonResponse([issue(31)]);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(env, {
+      targets: [{ owner: "acme", repo: "allowed" }],
+      goalSpec: { lane: "docs", languages: ["TS", " js "] },
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.appliedLane).toBe("docs");
+    const lastCall = vi.mocked(rankCandidateIssuesWithSummary).mock.calls.at(-1);
+    expect(lastCall?.[1]?.goalSpecsByRepo).toEqual({
+      "acme/allowed": expect.objectContaining({
+        preferredLabels: ["docs"],
+        wantedPaths: ["**/*.ts", "**/*.js"],
+      }),
+    });
+  });
+
+  it("builds a goal spec from lane alone, with no wantedPaths when languages are absent", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/allowed/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/allowed/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/allowed/issues?")) return jsonResponse([issue(32)]);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(env, {
+      targets: [{ owner: "acme", repo: "allowed" }],
+      goalSpec: { lane: "docs" },
+    });
+
+    expect(result.appliedLane).toBe("docs");
+    const lastCall = vi.mocked(rankCandidateIssuesWithSummary).mock.calls.at(-1);
+    expect(lastCall?.[1]?.goalSpecsByRepo).toEqual({
+      "acme/allowed": expect.objectContaining({ preferredLabels: ["docs"], wantedPaths: [] }),
+    });
+  });
+
+  it("builds a goal spec from languages alone, with no preferredLabels when lane is absent", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/allowed/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/allowed/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/allowed/issues?")) return jsonResponse([issue(33)]);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(env, {
+      targets: [{ owner: "acme", repo: "allowed" }],
+      goalSpec: { languages: ["go"] },
+    });
+
+    expect(result.appliedLane).toBeUndefined();
+    const lastCall = vi.mocked(rankCandidateIssuesWithSummary).mock.calls.at(-1);
+    expect(lastCall?.[1]?.goalSpecsByRepo).toEqual({
+      "acme/allowed": expect.objectContaining({ preferredLabels: [], wantedPaths: ["**/*.go"] }),
+    });
+  });
+
+  it("proceeds with an anonymous token when minting never runs but a target repo is still known", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "known", full_name: "acme/known" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/known/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/known/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/known/issues?")) return jsonResponse([issue(71)]);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(env, { targets: [{ owner: "acme", repo: "known" }] });
+
+    expect(createInstallationToken).not.toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.ranked.map((entry) => `${entry.owner}/${entry.repo}#${entry.issueNumber}`)).toEqual(["acme/known#71"]);
+  });
+
+  it("performs an anonymous search when no GitHub token is configured", async () => {
+    const env = createTestEnv();
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/search/issues?")) {
+        return jsonResponse({
+          items: [
+            {
+              number: 81,
+              title: "Issue 81",
+              labels: [],
+              comments: 0,
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T01:00:00Z",
+              html_url: "https://github.com/acme/anon/issues/81",
+              repository_url: "https://api.github.com/repos/acme/anon",
+            },
+          ],
+        });
+      }
+      if (url.includes("/repos/acme/anon/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/anon/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(env, { searchQuery: "anon search" });
+
+    expect(result.status).toBe("ok");
+    expect(result.ranked.map((entry) => `${entry.owner}/${entry.repo}#${entry.issueNumber}`)).toEqual(["acme/anon#81"]);
+  });
+
+  it("reports appliedMinRankScore when set and omits both applied fields when absent", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/allowed/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/allowed/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/allowed/issues?")) return jsonResponse([issue(41)]);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const withMinScore = await runFindOpportunities(env, {
+      targets: [{ owner: "acme", repo: "allowed" }],
+      goalSpec: { minRankScore: 5 },
+    });
+    expect(withMinScore.appliedMinRankScore).toBe(5);
+    expect(withMinScore.appliedLane).toBeUndefined();
+
+    const bare = await runFindOpportunities(env, { targets: [{ owner: "acme", repo: "allowed" }] });
+    expect(bare.appliedMinRankScore).toBeUndefined();
+    expect(bare.appliedLane).toBeUndefined();
+  });
+
+  it("falls back through the installation-token loop, skipping repos with no installation and repos whose mint fails", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "no-install", full_name: "acme/no-install" });
+    await upsertRepositoryFromGitHub(env, { name: "broken", full_name: "acme/broken" }, 111);
+    await upsertRepositoryFromGitHub(env, { name: "allowed", full_name: "acme/allowed" }, 222);
+
+    vi.mocked(createInstallationToken).mockImplementation(async (_env, installationId) => {
+      if (installationId === 111) throw new Error("mint failed");
+      return "resolved-token";
+    });
+
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/allowed/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/allowed/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/allowed/issues?")) return jsonResponse([issue(61)]);
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await runFindOpportunities(env, {
+      targets: [
+        { owner: "acme", repo: "no-install" },
+        { owner: "acme", repo: "broken" },
+        { owner: "acme", repo: "allowed" },
+      ],
+    });
+
+    expect(createInstallationToken).toHaveBeenCalledWith(env, 111);
+    expect(createInstallationToken).toHaveBeenCalledWith(env, 222);
+    expect(result.status).toBe("ok");
+    expect(result.ranked.map((entry) => `${entry.owner}/${entry.repo}#${entry.issueNumber}`)).toEqual(["acme/allowed#61"]);
+  });
+
+  it("returns invalid_request end-to-end when neither targets nor searchQuery are provided", async () => {
+    const env = createTestEnv();
+    const result = await runFindOpportunities(env, {});
+    expect(result).toEqual({
+      status: "invalid_request",
+      ranked: [],
+      totalCandidates: 0,
+      reason: "targets_or_search_query_required",
+    });
   });
 });
