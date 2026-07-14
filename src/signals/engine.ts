@@ -4226,7 +4226,7 @@ function chatBetaBody(args: PublicSafeCollapsibleArgs): string[] {
     "- `@loopover ask <question>` answers contribution-quality Q&A with source citations and freshness.",
     "- `@loopover chat <question>` answers in natural prose from cached decision-pack facts via local inference (maintainer/collaborator; read-only).",
     ...(intentRoutingEnabled
-      ? ["- A plain-language `@loopover` mention with a real question is routed to the closest matching read-only command automatically -- no exact syntax required."]
+      ? ["- A plain-language `@loopover` mention with a real question is routed to the closest matching read-only command automatically — no exact syntax required."]
       : []),
     "",
     `Full command reference: ${commandReferenceUrl(args.env)}`,
@@ -4266,6 +4266,23 @@ function contributorNextStepsBody(nextSteps: string[]): string[] {
   return nextSteps.length > 0 ? [...new Set(nextSteps)].map((step) => `- ${step}`) : ["- Keep the PR focused and include validation evidence before maintainer review."];
 }
 
+/** #5096: one reusable convention for EXPERIMENTAL ("beta") collapsibles in the public PR comment, so a reader
+ *  can tell experimental features from long-shipped ones at a glance — stronger than a bare "[BETA]" text prefix
+ *  that's easy to miss. Any beta feature routes through this so the next one gets the same treatment for free:
+ *  a consistent 🧪 badge on the title, plus a one-line "may change" disclaimer auto-appended to the body. Static
+ *  text only (no author/finding input), so it's public-safe by construction. Degrades cleanly: an empty body
+ *  yields an empty-body collapsible the renderer skips, so a repo with no beta features shows nothing extra —
+ *  never a bare 🧪 header over nothing. */
+const BETA_COLLAPSIBLE_DISCLAIMER = "_🧪 Experimental — new and may change._";
+
+function buildBetaCollapsible(title: string, bodyLines: string[]): UnifiedCollapsible {
+  const badgedTitle = `🧪 ${title}`;
+  // Empty body ⇒ empty-body collapsible (the renderer skips it), so nothing beta-marked is shown for a repo with
+  // no beta features enabled; the badge only ever surfaces alongside real content.
+  if (bodyLines.length === 0) return { title: badgedTitle, body: "" };
+  return { title: badgedTitle, body: [...bodyLines, "", BETA_COLLAPSIBLE_DISCLAIMER].join("\n") };
+}
+
 /**
  * The public-safe collapsibles for the CONVERGED comment, as `UnifiedCollapsible[]`. Built from the SAME
  * bodies the legacy panel renders (above) so the two never diverge. Excludes "Maintainer notes" (PRIVATE) and
@@ -4279,8 +4296,9 @@ export function buildPublicSafeCollapsibles(args: PublicSafeCollapsibleArgs): Un
     // #4589: after Signal definitions -- empty (thus invisible, per the caller's empty-body skip) unless
     // there's an actual coverage gap AND the generate-tests checkbox is available for this repo.
     { title: "Test coverage", body: testCoverageBody(args).join("\n") },
-    // #5078: last -- empty (thus invisible) unless chatQa or intentRouting is enabled for this repo.
-    { title: "[BETA] Chat with LoopOver", body: chatBetaBody(args).join("\n") },
+    // #5078/#5096: last -- routes through the shared beta wrapper (🧪 badge + disclaimer). Empty (thus invisible)
+    // unless chatQa or intentRouting is enabled for this repo.
+    buildBetaCollapsible("Chat with LoopOver", chatBetaBody(args)),
   ];
 }
 
