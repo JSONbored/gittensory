@@ -3,6 +3,7 @@ import type {
   FocusManifestFinding,
   FocusManifestGuidance,
 } from "../types/predicted-gate-types.js";
+import { isCodeFile } from "../signals/path-matchers.js";
 
 const FOCUS_MANIFEST_TERMS = /\b(reward\w*|score\w*|wallets?|hotkeys?|coldkeys?|seed[-\s]?phrases?|mnemonics?|private[-\s]?keys?|farming|payouts?|rankings?|raw[-\s]?trust(?:[-\s]?scores?)?|trust[-\s]?scores?|private[-\s]?reviewability|reviewability(?:[-\s]?internals?)?|private[-\s]?scoreability|scoreability|public[-\s]?score[-\s]?(?:estimate|prediction|claim)s?|estimated[-\s]?scores?|score[-\s]?(?:estimate|prediction|preview)s?)\b/i;
 const FOCUS_MANIFEST_LOCAL_PATH_PATTERN = new RegExp(String.raw`/Users/|/home/|/root/|/var/|/opt/|/tmp/|/private/|[A-Za-z]:[\\/]Users[\\/]|[A-Za-z]:[\\/]Program Files[\\/]`, "i");
@@ -124,6 +125,7 @@ export function buildFocusManifestGuidance(args: {
   const linkedIssueCount = Math.max(0, args.linkedIssueCount ?? 0);
   const testFileCount = Math.max(0, args.testFileCount ?? 0);
   const passedValidationCount = Math.max(0, args.passedValidationCount ?? 0);
+  const codeFileCount = changedPaths.filter(isCodeFile).length;
 
   const matchedWantedPaths = matchedPatterns(changedPaths, manifest.wantedPaths);
   const preferredLabelHits = manifest.preferredLabels.filter((label) => labels.includes(label.toLowerCase()));
@@ -201,7 +203,7 @@ export function buildFocusManifestGuidance(args: {
     publicNextSteps.push("Link a tracked issue if one exists; the maintainer prefers linked issues.");
   }
 
-  if (manifest.testExpectations.length > 0 && testFileCount === 0 && passedValidationCount === 0) {
+  if (manifest.testExpectations.length > 0 && codeFileCount > 0 && testFileCount === 0 && passedValidationCount === 0) {
     const safeExpectations = manifest.testExpectations.filter(isFocusManifestPublicSafe).slice(0, 3);
     const expectationDetail = safeExpectations.length > 0 ? ` Expected evidence: ${safeExpectations.join("; ")}.` : "";
     findings.push({

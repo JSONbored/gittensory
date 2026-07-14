@@ -85,7 +85,7 @@ import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "../review/linked-issue-hard-rul
 import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guardrail-config";
 import { DEFAULT_ADVISORY_AI_ROUTING } from "../review/advisory-ai-routing-config";
 import { DEFAULT_SCREENSHOT_TABLE_GATE } from "../review/screenshot-table-gate";
-import { classifyChangedFile } from "./path-matchers";
+import { classifyChangedFile, isCodeFile } from "./path-matchers";
 import {
   EMPTY_AUTO_REVIEW_CONFIG,
   EMPTY_MAX_FINDINGS_CONFIG,
@@ -658,6 +658,7 @@ export function buildFocusManifestGuidance(args: {
   const hasNoIssueRationale = args.hasNoIssueRationale ?? false;
   const testFileCount = Math.max(0, args.testFileCount ?? 0);
   const passedValidationCount = Math.max(0, args.passedValidationCount ?? 0);
+  const codeFileCount = changedPaths.filter(isCodeFile).length;
 
   const matchedWantedPaths = matchedPatterns(changedPaths, manifest.wantedPaths);
   const preferredLabelHits = manifest.preferredLabels.filter((label) => labels.includes(label.toLowerCase()));
@@ -735,7 +736,7 @@ export function buildFocusManifestGuidance(args: {
     publicNextSteps.push("Link a tracked issue if one exists; the maintainer prefers linked issues.");
   }
 
-  if (manifest.testExpectations.length > 0 && testFileCount === 0 && passedValidationCount === 0) {
+  if (manifest.testExpectations.length > 0 && codeFileCount > 0 && testFileCount === 0 && passedValidationCount === 0) {
     const safeExpectations = manifest.testExpectations.filter(isFocusManifestPublicSafe).slice(0, 3);
     const expectationDetail = safeExpectations.length > 0 ? ` Expected evidence: ${safeExpectations.join("; ")}.` : "";
     findings.push({

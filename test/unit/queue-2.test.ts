@@ -4028,7 +4028,11 @@ describe("queue processors", () => {
     await upsertPullRequestFile(env, {
       repoFullName: "JSONbored/gittensory",
       pullNumber: 47,
-      path: "README.md",
+      // A code file, deliberately -- this test's subject is whether an ignored-bot author still trips the
+      // deterministic manifestPolicyGateMode gate, not manifest_missing_tests' own code-vs-docs trigger
+      // (see the codeFileCount > 0 guard in buildFocusManifestGuidance). A docs-only path would no longer
+      // trip the finding at all and silently stop testing this test's actual subject.
+      path: "src/example.ts",
       status: "modified",
       additions: 1,
       deletions: 1,

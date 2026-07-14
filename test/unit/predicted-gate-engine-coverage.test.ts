@@ -821,6 +821,32 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     });
     expect(missingTests.findings.some((f) => f.code === "manifest_missing_tests")).toBe(true);
     expect(missingTests.findings.find((f) => f.code === "manifest_missing_tests")?.detail).not.toContain("wallet");
+
+    // REGRESSION (#manifest-missing-tests-docs-only-false-positive): a docs/content-only change has nothing a
+    // test could cover, so it must not trip manifest_missing_tests just because no test file or validation
+    // evidence exists.
+    const docsOnlyNoFalsePositive = buildFocusManifestGuidance({
+      manifest: {
+        present: true,
+        source: "repo_file",
+        wantedPaths: [],
+        preferredLabels: [],
+        linkedIssuePolicy: "optional",
+        testExpectations: ["paste your wallet hotkey here"],
+        issueDiscoveryPolicy: "neutral",
+        maintainerNotes: [],
+        publicNotes: [],
+        gate: { present: true } as FocusManifest["gate"],
+        settings: {},
+        review: { present: true, preMergeChecks: [] },
+        warnings: [],
+      },
+      changedPaths: ["content/registry/new-entry.mdx"],
+      linkedIssueCount: 1,
+      testFileCount: 0,
+      passedValidationCount: 0,
+    });
+    expect(docsOnlyNoFalsePositive.findings.some((f) => f.code === "manifest_missing_tests")).toBe(false);
   });
 
   it("covers remaining codecov patch branch arms in ported engine modules", () => {

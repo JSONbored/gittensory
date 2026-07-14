@@ -660,6 +660,25 @@ describe("buildFocusManifestGuidance", () => {
     expect(guidance.findings.some((finding) => finding.code === "manifest_missing_tests")).toBe(false);
   });
 
+  it("REGRESSION (#manifest-missing-tests-docs-only-false-positive): does not require tests when the change touches no code files", () => {
+    // A content/docs-only PR (e.g. a catalog registry .mdx entry) has nothing a test could meaningfully cover,
+    // so it must not trip manifest_missing_tests just because no test file or validation evidence exists --
+    // mirrors the codeFileCount > 0 guard local_diff_missing_tests already applies (predicted-gate-engine.ts).
+    const guidance = buildFocusManifestGuidance({ manifest: wanted, changedPaths: ["docs/readme.md"], linkedIssueCount: 1, testFileCount: 0, passedValidationCount: 0 });
+    expect(guidance.findings.some((finding) => finding.code === "manifest_missing_tests")).toBe(false);
+  });
+
+  it("still requires tests when the change mixes code with docs and neither tests nor validation evidence exist", () => {
+    const guidance = buildFocusManifestGuidance({
+      manifest: wanted,
+      changedPaths: ["docs/readme.md", "src/x.ts"],
+      linkedIssueCount: 1,
+      testFileCount: 0,
+      passedValidationCount: 0,
+    });
+    expect(guidance.findings.some((finding) => finding.code === "manifest_missing_tests")).toBe(true);
+  });
+
   it("notes when issue-discovery is discouraged", () => {
     const guidance = buildFocusManifestGuidance({ manifest: wanted, changedPaths: ["src/x.ts"], labels: ["bug"], linkedIssueCount: 1, testFileCount: 1 });
     expect(guidance.findings.some((finding) => finding.code === "manifest_issue_discovery_discouraged")).toBe(true);
