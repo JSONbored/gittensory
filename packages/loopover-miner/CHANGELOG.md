@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.0.0](https://github.com/JSONbored/loopover/compare/miner-v2.0.0...miner-v3.0.0) (2026-07-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** every GITTENSORY_* environment variable is now LOOPOVER_*. No dual-read/alias, per the epic's full-cutover mandate. Operators must rename these in their .env / secrets before deploying this change.
+* **build:** every gittensory-prefixed directory under apps/ and packages/ is now loopover-prefixed, and the two extension packages' npm names changed from @jsonbored/gittensory-* to @loopover/*. No dual-path/alias, per the epic's full-cutover mandate.
+
+### Features
+
+* **build:** Phase 5 - full-cutover rename all gittensory-* directories to loopover-* ([#5743](https://github.com/JSONbored/loopover/issues/5743)) ([81e4ac3](https://github.com/JSONbored/loopover/commit/81e4ac34dfb4dee9c3cadefcc27a515617462da9))
+* **config:** Phase 6 - full-cutover rename internal GITTENSORY_* constants to LOOPOVER_* ([#5750](https://github.com/JSONbored/loopover/issues/5750)) ([12958f4](https://github.com/JSONbored/loopover/commit/12958f4f36cbf1f9f1ac732e718a4316e91cb103)), closes [#5705](https://github.com/JSONbored/loopover/issues/5705)
+* **miner:** add cross-repo evaluation harness ([#4788](https://github.com/JSONbored/loopover/issues/4788)) ([#5790](https://github.com/JSONbored/loopover/issues/5790)) ([0fff506](https://github.com/JSONbored/loopover/commit/0fff50692dbae856f2dbcc26d7c9cd8225ddf7c9))
+* **miner:** honor kill-switch mid-attempt during iterate-loop ([#5799](https://github.com/JSONbored/loopover/issues/5799)) ([3525e95](https://github.com/JSONbored/loopover/commit/3525e95a4afd0a9827e64fc00a20919d9a222f82))
+* **miner:** pre-execution feasibility check for freeform ideas ([#5789](https://github.com/JSONbored/loopover/issues/5789)) ([0e6f368](https://github.com/JSONbored/loopover/commit/0e6f3681829a76ddddb77484cfc94cea6b5545b1)), closes [#5671](https://github.com/JSONbored/loopover/issues/5671)
+* **selfhost:** bridge fleet-mode miner state to the ams-observability exporter ([#5844](https://github.com/JSONbored/loopover/issues/5844)) ([15f6610](https://github.com/JSONbored/loopover/commit/15f66105ca69a28bf23d7a981b52affabd64b527)), closes [#5805](https://github.com/JSONbored/loopover/issues/5805)
+
+
+### Fixes
+
+* **miner:** list queue dashboard in cli.js help text ([#5853](https://github.com/JSONbored/loopover/issues/5853)) ([cd97822](https://github.com/JSONbored/loopover/commit/cd978226386e29ab2c617b1b3409c7e7724775a0)), closes [#5832](https://github.com/JSONbored/loopover/issues/5832)
+* **rebrand:** full-cutover rename miner/AMS per-repo and operator config filenames ([#5765](https://github.com/JSONbored/loopover/issues/5765)) ([c93569d](https://github.com/JSONbored/loopover/commit/c93569dcd977ec7a6ec78157b6b40374f85f12cc))
+
 ## [2.0.0](https://github.com/JSONbored/gittensory/compare/miner-v1.0.0...miner-v2.0.0) (2026-07-14)
 
 
