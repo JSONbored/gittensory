@@ -21,7 +21,7 @@ describe("self-host activation + onboarding docs (#1574)", () => {
   it("quickstart documents allowlist, private config seed, activation POST, and Checks: write", () => {
     expect(quickstart).toContain("LOOPOVER_REVIEW_REPOS");
     expect(quickstart).toContain("config/examples/global.loopover.yml");
-    expect(quickstart).toContain("gittensory-config/.loopover.yml");
+    expect(quickstart).toContain("loopover-config/.loopover.yml");
     expect(quickstart).toContain("/v1/repos/owner/my-repo/activation");
     expect(quickstart).toContain("Checks: write");
     expect(quickstart).toContain("INSTALL_AI_CLIS");

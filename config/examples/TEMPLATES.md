@@ -39,7 +39,7 @@ for precedence and deep-merge rules.
 
 **Never commit real private policy** (maintainer logins, thresholds, autonomy dials you do not want
 contributors to read) into a public repository. Copy `global.loopover.yml` into your gitignored
-`gittensory-config/` mount and edit there.
+`loopover-config/` mount and edit there.
 
 ## Quick start
 
@@ -53,16 +53,16 @@ cp config/examples/loopover.minimal.yml .loopover.yml
 ### Self-host private mount (operator-only policy)
 
 ```bash
-mkdir -p gittensory-config
-cp config/examples/global.loopover.yml gittensory-config/.loopover.yml
+mkdir -p loopover-config
+cp config/examples/global.loopover.yml loopover-config/.loopover.yml
 # edit your-admin-login placeholders before going live
 # optional per-repo overlay:
-mkdir -p gittensory-config/myorg__myrepo
-cp config/examples/repo-override.loopover.yml gittensory-config/myorg__myrepo/.loopover.yml
+mkdir -p loopover-config/myorg__myrepo
+cp config/examples/repo-override.loopover.yml loopover-config/myorg__myrepo/.loopover.yml
 ```
 
 Point `GITTENSORY_REPO_CONFIG_DIR` at that directory (default `/config` in `docker-compose.yml` maps
-`./gittensory-config`).
+`./loopover-config`).
 
 ## Fleet examples (without committing private policy)
 
@@ -73,7 +73,7 @@ into public git** — use the private mount for anything marked *private* below.
 
 - **Public** `.loopover.yml` in the repo: work-area guardrails, test expectations, gate dimensions
   contributors should understand.
-- **Private** `gittensory-config/` (gitignored locally, operator mount in production): fleet
+- **Private** `loopover-config/` (gitignored locally, operator mount in production): fleet
   autonomy, anti-abuse caps, maintainer exemption lists — the same split described in
   [`global.loopover.yml`](./global.loopover.yml).
 - Start from `loopover.minimal.yml` in the public repo until gate semantics are tuned, then promote
@@ -101,5 +101,5 @@ Every template in this directory is parsed in CI (`test/unit/config-templates.te
 `.loopover.yml.example` from `# WHERE IT LIVES` onward. Lint a local file before deploy:
 
 ```bash
-npx tsx scripts/gittensory-config-lint.ts path/to/.loopover.yml
+npx tsx scripts/loopover-config-lint.ts path/to/.loopover.yml
 ```

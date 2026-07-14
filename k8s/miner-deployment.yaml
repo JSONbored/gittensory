@@ -1,4 +1,4 @@
-# Kubernetes workload for gittensory-miner (AMS) fleet mode (#5181).
+# Kubernetes workload for loopover-miner (AMS) fleet mode (#5181).
 #
 # This is a StatefulSet, NOT a Deployment: the miner keeps all of its state in local SQLite ledgers
 # (claim-ledger.sqlite3, plan-store.sqlite3, …) under LOOPOVER_MINER_CONFIG_DIR, and those stores are NOT
@@ -7,27 +7,27 @@
 # fully isolated state — the safety property this manifest exists to guarantee. See k8s/README.md.
 #
 # Image: build from packages/gittensory-miner/Dockerfile at the monorepo root and push to your registry:
-#   docker build -f packages/gittensory-miner/Dockerfile -t <registry>/gittensory-miner:latest .
+#   docker build -f packages/gittensory-miner/Dockerfile -t <registry>/loopover-miner:latest .
 # Then set `image:` below. Secrets come from k8s/miner-secret.example.yaml (apply that first).
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: gittensory-miner
+  name: loopover-miner
   labels:
-    app.kubernetes.io/name: gittensory-miner
+    app.kubernetes.io/name: loopover-miner
     app.kubernetes.io/component: fleet-worker
 spec:
-  serviceName: gittensory-miner
+  serviceName: loopover-miner
   # Scale the fleet by editing `replicas` (each replica is one isolated worker) or:
-  #   kubectl scale statefulset/gittensory-miner --replicas=<N>
+  #   kubectl scale statefulset/loopover-miner --replicas=<N>
   replicas: 2
   selector:
     matchLabels:
-      app.kubernetes.io/name: gittensory-miner
+      app.kubernetes.io/name: loopover-miner
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: gittensory-miner
+        app.kubernetes.io/name: loopover-miner
         app.kubernetes.io/component: fleet-worker
     spec:
       securityContext:
@@ -41,8 +41,8 @@ spec:
       containers:
         - name: miner
           # Replace with the image you built + pushed from packages/gittensory-miner/Dockerfile.
-          image: gittensory-miner:latest
-          # ENTRYPOINT is `gittensory-miner`; `run` is the continuous fleet-worker loop.
+          image: loopover-miner:latest
+          # ENTRYPOINT is `loopover-miner`; `run` is the continuous fleet-worker loop.
           args: ["run"]
           env:
             - name: LOOPOVER_MINER_CONFIG_DIR
@@ -50,19 +50,19 @@ spec:
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: gittensory-miner-secrets
+                  name: loopover-miner-secrets
                   key: GITHUB_TOKEN
             # Coding-agent provider credentials — optional; present only for the providers you enable.
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gittensory-miner-secrets
+                  name: loopover-miner-secrets
                   key: ANTHROPIC_API_KEY
                   optional: true
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gittensory-miner-secrets
+                  name: loopover-miner-secrets
                   key: OPENAI_API_KEY
                   optional: true
           volumeMounts:

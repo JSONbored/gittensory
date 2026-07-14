@@ -1,25 +1,25 @@
-# Runs `gittensory-miner loop` -- the autonomous discover -> attempt -> manage supervising daemon (#5135) --
+# Runs `loopover-miner loop` -- the autonomous discover -> attempt -> manage supervising daemon (#5135) --
 # continuously on a bare host, no Docker required. This is the non-Docker counterpart to DEPLOYMENT.md's
 # fleet-mode docker-compose invocation.
 #
-# WHY A PERSISTENT SERVICE, NOT A .timer: `gittensory-miner loop` is a long-running daemon that schedules its
+# WHY A PERSISTENT SERVICE, NOT A .timer: `loopover-miner loop` is a long-running daemon that schedules its
 # own cycles internally (kill-switch check -> run-loop boundary gate -> attempt -> loop-closure -> reentry), so
 # it is a Type=simple service supervised by systemd, NOT a oneshot unit fired by a .timer. (Contrast
 # loopover-docker-prune.service.example, which IS a genuine periodic batch and therefore does pair with a
 # .timer.) See DEPLOYMENT.md's "Bare-host (systemd, no Docker)" section.
 #
 # Install (adjust the placeholders below to your host):
-#   npm install -g @loopover/miner        # puts the `gittensory-miner` bin on PATH
-#   gittensory-miner init                              # one-time local state-dir setup
-#   gittensory-miner doctor                            # confirm Node/state-dir/SQLite readiness
-#   sudo cp systemd/gittensory-miner.service.example /etc/systemd/system/gittensory-miner.service
-#   sudo $EDITOR /etc/systemd/system/gittensory-miner.service   # fix User/WorkingDirectory/ExecStart/env
+#   npm install -g @loopover/miner        # puts the `loopover-miner` bin on PATH
+#   loopover-miner init                              # one-time local state-dir setup
+#   loopover-miner doctor                            # confirm Node/state-dir/SQLite readiness
+#   sudo cp systemd/loopover-miner.service.example /etc/systemd/system/loopover-miner.service
+#   sudo $EDITOR /etc/systemd/system/loopover-miner.service   # fix User/WorkingDirectory/ExecStart/env
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now gittensory-miner.service
-#   journalctl -u gittensory-miner -f                  # follow the loop's output
+#   sudo systemctl enable --now loopover-miner.service
+#   journalctl -u loopover-miner -f                  # follow the loop's output
 
 [Unit]
-Description=Gittensory miner autonomous loop (discover -> attempt -> manage)
+Description=LoopOver miner autonomous loop (discover -> attempt -> manage)
 # The loop makes GitHub/API calls, so wait for the network to be routable before starting.
 After=network-online.target
 Wants=network-online.target
@@ -27,20 +27,20 @@ Wants=network-online.target
 [Service]
 Type=simple
 # REQUIRED: run as a dedicated non-root user that owns the state directory below.
-User=gittensory
+User=loopover
 # REQUIRED: point this at a writable working directory for the miner (repo clones, worktrees, local state).
-WorkingDirectory=/var/lib/gittensory-miner
-# REQUIRED: absolute path to the globally-installed bin (see `which gittensory-miner`; typically
+WorkingDirectory=/var/lib/loopover-miner
+# REQUIRED: absolute path to the globally-installed bin (see `which loopover-miner`; typically
 # /usr/bin or /usr/local/bin, or an nvm/asdf shim path).
-ExecStart=/usr/bin/gittensory-miner loop
+ExecStart=/usr/bin/loopover-miner loop
 # A daemon should come back after a transient crash; the loop is idempotent across restarts.
 Restart=on-failure
 RestartSec=30
 # REQUIRED: GITHUB_TOKEN (and any coding-agent credentials) must be present in the service's environment.
 # Keep secrets out of this unit file -- use a root-owned 0600 EnvironmentFile instead:
-#   EnvironmentFile=/etc/gittensory-miner.env
+#   EnvironmentFile=/etc/loopover-miner.env
 # Optional overrides (see the package README for the full list):
-#   Environment=LOOPOVER_MINER_CONFIG_DIR=/var/lib/gittensory-miner/config
+#   Environment=LOOPOVER_MINER_CONFIG_DIR=/var/lib/loopover-miner/config
 #   Environment=MINER_CODING_AGENT_PROVIDER=claude-code
 # Kill switch: `systemctl stop` sends SIGTERM; the loop checks its kill switch each cycle and exits cleanly.
 TimeoutStopSec=120

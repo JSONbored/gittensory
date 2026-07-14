@@ -239,7 +239,7 @@ git push origin orb-v0.1.0`}
               </td>
               <td className="py-2 align-top text-muted-foreground">
                 Only the <code>gittensory</code> service restarts (<code>--no-deps</code>);{" "}
-                <code>.env</code>, data volumes, and <code>gittensory-config/</code> are untouched;{" "}
+                <code>.env</code>, data volumes, and <code>loopover-config/</code> are untouched;{" "}
                 <code>/ready</code> returns 200 after the health-check wait.
               </td>
             </tr>
@@ -538,7 +538,7 @@ docker rm -f gt-qdrant && docker network rm gt-rag-smoke`}
           {
             title: "Private repo config — NOT included",
             description:
-              "gittensory-config and **/gittensory-config are excluded via .dockerignore; only the generic config/examples/ reference templates are copied, and LOOPOVER_REPO_CONFIG_DIR is resolved against an operator-mounted /config at runtime.",
+              "loopover-config and **/loopover-config are excluded via .dockerignore; only the generic config/examples/ reference templates are copied, and LOOPOVER_REPO_CONFIG_DIR is resolved against an operator-mounted /config at runtime.",
           },
           {
             title: "Data volumes — NOT included",
@@ -675,7 +675,7 @@ The \`latest\` tag now points here.
 
 ## Operator-owned
 
-- \`.env\`, \`gittensory-config/\`, and all data volumes (database, Redis, Qdrant, Grafana) — never
+- \`.env\`, \`loopover-config/\`, and all data volumes (database, Redis, Qdrant, Grafana) — never
   overwritten by an update and never baked into the image.
 - GitHub App credentials or \`ORB_ENROLLMENT_SECRET\`, AI-provider credentials, and any \`SENTRY_DSN\`.
 - Resource limits and profile selection — see [Resource profiles](https://gittensory.aethereal.dev/docs/self-hosting-operations)

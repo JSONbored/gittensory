@@ -3,7 +3,7 @@
 # ============================================================================
 #
 # Copy this file to the ROOT of your own GITTENSORY_REPO_CONFIG_DIR mount (e.g.
-# `./gittensory-config/.loopover.yml` for the default docker-compose.yml mount) and edit your
+# `./loopover-config/.loopover.yml` for the default docker-compose.yml mount) and edit your
 # copy — never this one. It applies to every repo that has no per-repo file of its own, and is
 # deep-merged UNDER any per-repo file that does exist (see ../README.md for the precedence chain
 # and merge semantics; see ../../.loopover.yml.example at the repo root for every supported

@@ -241,7 +241,7 @@ describe("loopover-mcp CLI — basics", () => {
   });
 
   it("attributes config values to environment overrides without leaking secrets", () => {
-    const secretDir = mkdtempSync(join(tmpdir(), "gittensory-config-secret-"));
+    const secretDir = mkdtempSync(join(tmpdir(), "loopover-config-secret-"));
     try {
       const out = run(["config"], {
         GITTENSORY_API_URL: "https://example.test",
@@ -272,7 +272,7 @@ describe("loopover-mcp CLI — basics", () => {
   });
 
   it("attributes API URL and token to a named profile from the config file", () => {
-    const configDir = mkdtempSync(join(tmpdir(), "gittensory-config-profile-"));
+    const configDir = mkdtempSync(join(tmpdir(), "loopover-config-profile-"));
     try {
       writeFileSync(
         join(configDir, "config.json"),
@@ -304,7 +304,7 @@ describe("loopover-mcp CLI — basics", () => {
   });
 
   it("attributes API URL to a global config file reached through a config-path override", () => {
-    const dir = mkdtempSync(join(tmpdir(), "gittensory-config-global-"));
+    const dir = mkdtempSync(join(tmpdir(), "loopover-config-global-"));
     const file = join(dir, "custom-config.json");
     try {
       writeFileSync(file, JSON.stringify({ apiUrl: "https://global.example" }), { mode: 0o600 });

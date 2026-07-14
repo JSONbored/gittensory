@@ -135,8 +135,8 @@ function SelfHostingConfiguration() {
 cp config/examples/loopover.minimal.yml .loopover.yml
 
 # Self-host private mount (operator-only policy)
-mkdir -p gittensory-config
-cp config/examples/global.loopover.yml gittensory-config/.loopover.yml`}
+mkdir -p loopover-config
+cp config/examples/global.loopover.yml loopover-config/.loopover.yml`}
       />
       <Callout variant="note">
         Keep anti-abuse thresholds, maintainer allowlists, and autonomy dials in the{" "}
@@ -144,7 +144,7 @@ cp config/examples/global.loopover.yml gittensory-config/.loopover.yml`}
         read. <code>config/examples/TEMPLATES.md</code> documents the public-vs-private split and
         how to apply the templates to <code>gittensory</code>, <code>awesome-claude</code>, and{" "}
         <code>metagraphed</code> without committing private policy. Lint before deploy:{" "}
-        <code>npx tsx scripts/gittensory-config-lint.ts path/to/.loopover.yml</code>.
+        <code>npx tsx scripts/loopover-config-lint.ts path/to/.loopover.yml</code>.
       </Callout>
       <p>Authoritative copies in git:</p>
       <ul>
@@ -459,7 +459,7 @@ LOOPOVER_REVIEW_REPUTATION=false`}
       </p>
       <CodeBlock
         filename="config directory"
-        code={`gittensory-config/
+        code={`loopover-config/
   owner__repo/.loopover.yml
   repo-name/.loopover.yml
   owner__repo.yml

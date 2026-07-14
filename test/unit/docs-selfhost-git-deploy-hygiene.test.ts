@@ -103,7 +103,7 @@ describe("self-host git-deploy hygiene (#1660)", () => {
   });
 
   it("operations docs still name every operator-owned path the script must never touch", () => {
-    expect(operations).toContain("gittensory-config/");
+    expect(operations).toContain("loopover-config/");
     expect(operations).toContain(".deploy-backups/");
     expect(operations).toContain("*.local");
     expect(operations).toContain("docker-compose.local-*.yml");

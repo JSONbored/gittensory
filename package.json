@@ -23,7 +23,7 @@
     "command-reference": "node scripts/gen-command-reference.mjs",
     "command-reference:check": "node scripts/gen-command-reference.mjs --check",
     "selfhost:validate-observability": "node scripts/validate-observability-configs.mjs",
-    "selfhost:config-lint": "tsx scripts/gittensory-config-lint.ts",
+    "selfhost:config-lint": "tsx scripts/loopover-config-lint.ts",
     "cf-typegen": "node scripts/gen-cf-typegen.mjs",
     "cf-typegen:check": "node scripts/gen-cf-typegen.mjs --check",
     "db:migrate:local": "wrangler d1 migrations apply loopover --local",

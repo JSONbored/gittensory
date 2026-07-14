@@ -142,11 +142,11 @@ services:
       # ORB_BROKER_URL: https://api.loopover.ai   # override only for a private Orb deployment
     volumes:
       - loopover-data:/data
-      # Container-private per-repo config dir (read-only). Create ./gittensory-config/{owner}__{repo}/.loopover.yml
-      # locally, optionally alongside a ./gittensory-config/.loopover.yml global default that every per-repo file
+      # Container-private per-repo config dir (read-only). Create ./loopover-config/{owner}__{repo}/.loopover.yml
+      # locally, optionally alongside a ./loopover-config/.loopover.yml global default that every per-repo file
       # is deep-merged over (gitignored — never commit real policy; see config/examples/ for generic templates).
       # Absent ⇒ Docker mounts an empty dir ⇒ defaults apply.
-      - ./gittensory-config:/config:ro
+      - ./loopover-config:/config:ro
     # Mounted read-only at /run/secrets/<name> (Compose's default target). See the top-level `secrets:`
     # block above and secrets/README.md.
     #
@@ -835,7 +835,7 @@ services:
       start_period: 30s
       retries: 3
 
-  # Redacted AMS (gittensory-miner) ledger export -- a DEDICATED profile, not bundled into `observability`: unlike
+  # Redacted AMS (loopover-miner) ledger export -- a DEDICATED profile, not bundled into `observability`: unlike
   # the engine's own reporting-exporter above, this only does anything useful when a miner is ALSO running on this
   # same host with its ledgers under LOOPOVER_MINER_CONFIG_DIR (an engine-only maintainer deployment has nothing
   # for it to read). Grafana must never mount that directory directly -- attempt_log_events.reason/.payload_json
@@ -851,7 +851,7 @@ services:
     volumes:
       # Read-only live-ledger access for the exporter only -- Grafana does not get this mount (mirrors the
       # /appdb:ro pattern above). Point this at the SAME host directory your miner uses as LOOPOVER_MINER_CONFIG_DIR.
-      - "${LOOPOVER_MINER_CONFIG_DIR:-~/.config/gittensory-miner}:/ams-ledgers:ro"
+      - "${LOOPOVER_MINER_CONFIG_DIR:-~/.config/loopover-miner}:/ams-ledgers:ro"
       - grafana-reporting-data:/reporting
       # Directory bind mount, not a single-file one -- see reporting-exporter's own comment above for why
       # (a single-file mount pins to the pre-`git pull` inode and silently never picks up a script update).

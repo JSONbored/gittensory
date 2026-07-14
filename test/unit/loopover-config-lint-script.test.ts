@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatLintReport, readManifestTextForLint } from "../../scripts/gittensory-config-lint";
+import { formatLintReport, readManifestTextForLint } from "../../scripts/loopover-config-lint";
 import { lintManifestText } from "../../src/selfhost/config-lint";
 import { MAX_FOCUS_MANIFEST_BYTES } from "../../src/signals/focus-manifest";
 

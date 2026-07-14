@@ -226,11 +226,11 @@ SELFHOST_DEPLOYMENT_MODE=dry-run   # keep shadowing until you trust output`}
       </p>
       <CodeBlock
         lang="bash"
-        code={`mkdir -p gittensory-config
-cp config/examples/global.loopover.yml gittensory-config/.loopover.yml
+        code={`mkdir -p loopover-config
+cp config/examples/global.loopover.yml loopover-config/.loopover.yml
 # optional per-repo override:
-mkdir -p gittensory-config/owner__my-repo
-cp config/examples/global.loopover.yml gittensory-config/owner__my-repo/.loopover.yml`}
+mkdir -p loopover-config/owner__my-repo
+cp config/examples/global.loopover.yml loopover-config/owner__my-repo/.loopover.yml`}
       />
       <p>
         Sign in to the control panel (<code>ADMIN_GITHUB_LOGINS</code> must include your GitHub

@@ -129,7 +129,7 @@ function SelfHostingDocsAudit() {
           deterministic review are verified; each has explicit enablement switches.
         </li>
         <li>
-          <strong>Operator-owned paths:</strong> <code>gittensory-config/</code>,{" "}
+          <strong>Operator-owned paths:</strong> <code>loopover-config/</code>,{" "}
           <code>loopover-data</code>, and secrets via <code>.env</code> or <code>*_FILE</code>{" "}
           mounts — never baked into images.
         </li>

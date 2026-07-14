@@ -56,7 +56,7 @@ function main(): void {
     text = readManifestTextForLint(path);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`gittensory-config-lint: ${message}\n\n${usage()}`);
+    console.error(`loopover-config-lint: ${message}\n\n${usage()}`);
     process.exit(1);
   }
   const result = lintManifestText(text);

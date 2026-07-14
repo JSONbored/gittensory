@@ -11,7 +11,7 @@
 #
 # What this preserves untouched (all already gitignored -- see .gitignore):
 #   - .env and any *_FILE secret mounts
-#   - gittensory-config/ (private per-repo .loopover.yml policy)
+#   - loopover-config/ (private per-repo .loopover.yml policy)
 #   - .deploy-backups/ (operator deploy-backup snapshots)
 #   - any *.local or docker-compose.local-*.yml compose override, or alertmanager config files
 #   - named data volumes (loopover-data, loopover-pg, qdrant-data, loopover-backups,

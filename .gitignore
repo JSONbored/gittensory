@@ -35,10 +35,10 @@ alertmanager/*_url
 alertmanager/*_url_file
 # Private self-host operator config. Root AGENTS.md/CLAUDE.md are public project docs;
 # repo-scoped review instructions live under this ignored mount.
-gittensory-config/
-gittensory-config.backup-*/
+loopover-config/
+loopover-config.backup-*/
 # Operator deploy-backup snapshots -- contains raw .env/.yml backups and config tarballs, same
-# exposure class as gittensory-config/ above (secrets + private review rules), just under a
+# exposure class as loopover-config/ above (secrets + private review rules), just under a
 # different directory name that the pattern above does not match.
 .deploy-backups/
 # Codex/CLI auth state must only live in runtime volumes or operator home dirs.
@@ -55,7 +55,7 @@ apps/gittensory-ui/public/downloads/loopover-extension.zip
 .worker-configuration.gen-check.d.ts
 # Ad-hoc operator backup files (e.g. `cp file.yml file.yml.bak-notes-20260707`) -- general
 # catch-alls so a stray manual snapshot never dirties `git status` on a Git-backed self-host
-# checkout. Trailing on purpose: the narrower gittensory-config.backup-*/ and .deploy-backups/
+# checkout. Trailing on purpose: the narrower loopover-config.backup-*/ and .deploy-backups/
 # rules above already cover their specific directories, and nothing tracked in the repo matches
 # either pattern (verified via `git ls-files | grep -E '\.bak-|\.backup-'`) (#1660).
 *.bak-*

@@ -1,4 +1,4 @@
-# Kubernetes manifests — gittensory-miner (AMS) fleet mode
+# Kubernetes manifests — loopover-miner (AMS) fleet mode
 
 Example manifests for running **N isolated miner workers** on a small Kubernetes cluster, as an alternative to
 `docker run` / docker-compose on a single host. Built on the existing
@@ -19,8 +19,8 @@ use a StatefulSet.
 
 1. **Build and push the image** from the monorepo root, then set `image:` in `miner-deployment.yaml`:
    ```sh
-   docker build -f packages/gittensory-miner/Dockerfile -t <registry>/gittensory-miner:latest .
-   docker push <registry>/gittensory-miner:latest
+   docker build -f packages/gittensory-miner/Dockerfile -t <registry>/loopover-miner:latest .
+   docker push <registry>/loopover-miner:latest
    ```
 2. **Create the Secret** (fill in real values first — never commit the filled-in copy):
    ```sh
@@ -37,7 +37,7 @@ use a StatefulSet.
 Each replica is one isolated worker with its own volume. Scale the fleet with:
 
 ```sh
-kubectl scale statefulset/gittensory-miner --replicas=<N>
+kubectl scale statefulset/loopover-miner --replicas=<N>
 ```
 
 or by editing `replicas:` in `miner-deployment.yaml` and re-applying. New replicas each get a fresh

@@ -1,4 +1,4 @@
-# Self-host image for gittensory-api (#980). Runs the SAME Worker handlers on Node via src/server.ts —
+# Self-host image for loopover-api (#980). Runs the SAME Worker handlers on Node via src/server.ts —
 # the Cloudflare bindings become self-host adapters (D1 -> node:sqlite, Queue -> in-process). The hosted
 # Cloudflare Worker (wrangler) deploy is unaffected. SECRETS ARE NEVER BAKED: supply them at run time via
 # the .env file or mounted *_FILE secrets (see docker-compose.yml + .env.example).
@@ -13,7 +13,7 @@ WORKDIR /app
 # (workspaces: apps/*, packages/*), and `npm ci` only symlinks node_modules/<pkg> to a workspace whose
 # directory already exists on disk. Copying just the root package*.json first (the usual dependency-layer
 # caching trick) left every workspace package.json missing at `npm ci` time, so npm silently skipped every
-# internal symlink -- @loopover/engine (a workspace dependency of gittensory-miner's checked-in
+# internal symlink -- @loopover/engine (a workspace dependency of loopover-miner's checked-in
 # lib/*.js artifacts, #2281) then couldn't be resolved by esbuild no matter how/when its own dist/ was built.
 COPY . .
 # --ignore-scripts: no native builds are needed (SQLite is the built-in node:sqlite; @hono/node-server is
@@ -32,7 +32,7 @@ ARG LOOPOVER_VERSION=
 ENV NODE_ENV=production \
     PLATFORM=self-hosted \
     PORT=8787 \
-    DATABASE_PATH=/data/gittensory.sqlite \
+    DATABASE_PATH=/data/loopover.sqlite \
     MIGRATIONS_DIR=/app/migrations \
     NPM_CONFIG_PREFIX=/home/node/.npm-global \
     LOOPOVER_VERSION=${LOOPOVER_VERSION}
@@ -96,7 +96,7 @@ FROM runtime-base AS runtime-prebuilt
 COPY --chown=node:node dist/server.mjs ./dist/server.mjs
 COPY --chown=node:node migrations ./migrations
 # Generic, safe self-host private-config templates (config/examples/, #layered-private-config) — reference only.
-# GITTENSORY_REPO_CONFIG_DIR still points at the operator-mounted /config, so shipping these activates nothing.
+# LOOPOVER_REPO_CONFIG_DIR still points at the operator-mounted /config, so shipping these activates nothing.
 COPY --chown=node:node config/examples ./config/examples
 
 # Default local/operator builds still build the bundle inside Docker, but only the JS bundle reaches runtime.

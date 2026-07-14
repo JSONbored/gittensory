@@ -5,7 +5,7 @@
 # `docker compose up -d --no-deps loopover` that ships a new app image.
 #
 # Checks /ready, compose health, .env release metadata, and the running container image.
-# Does not modify .env, volumes, gittensory-config/, or any profile service.
+# Does not modify .env, volumes, loopover-config/, or any profile service.
 set -euo pipefail
 
 ENV_FILE="${SELFHOST_ENV_FILE:-.env}"

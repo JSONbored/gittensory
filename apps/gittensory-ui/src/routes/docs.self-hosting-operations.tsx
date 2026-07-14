@@ -937,7 +937,7 @@ SENTRY_ORG_SLUG=<your-sentry-org-slug>
             <code>LOOPOVER_VERSION</code> (source path).
           </li>
           <li>
-            <code>./gittensory-config/</code> bind mount — private per-repo{" "}
+            <code>./loopover-config/</code> bind mount — private per-repo{" "}
             <code>.loopover.yml</code> policy.
           </li>
           <li>
@@ -984,7 +984,7 @@ SENTRY_ORG_SLUG=<your-sentry-org-slug>
           <code>cp docker-compose.yml docker-compose.yml.bak-notes-20260707</code> does not count
           against this — the trailing <code>*.bak-*</code>/<code>*.backup-*</code> patterns in{" "}
           <code>.gitignore</code> keep stray manual backups out of <code>git status</code> entirely,
-          on top of the narrower <code>gittensory-config.backup-*/</code> and{" "}
+          on top of the narrower <code>loopover-config.backup-*/</code> and{" "}
           <code>.deploy-backups/</code> patterns that already covered those specific directories.
           <code>scripts/selfhost-update.sh</code> (below) checks this for you and refuses to
           continue on a dirty tree.
@@ -1048,7 +1048,7 @@ GITTENSORY_IMAGE=ghcr.io/jsonbored/loopover-selfhost@sha256:... ./scripts/deploy
       </p>
       <p>
         None of this touches operator-owned state: <code>.env</code>, the{" "}
-        <code>gittensory-config/</code> mount, <code>.deploy-backups/</code>, any{" "}
+        <code>loopover-config/</code> mount, <code>.deploy-backups/</code>, any{" "}
         <code>*.local</code> or <code>docker-compose.local-*.yml</code> compose override, or
         Alertmanager file, and every named data volume are already gitignored or outside the source
         tree entirely, so a fetch-and-rebuild never touches them. See the{" "}
@@ -1191,7 +1191,7 @@ docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q loopover)"`}
         <code>docker compose down</code> (without <code>-v</code>) leaves every named volume (
         <code>loopover-data</code>, <code>loopover-pg</code>, <code>qdrant-data</code>,{" "}
         <code>loopover-backups</code>, <code>grafana-data</code>, and the rest declared in{" "}
-        <code>docker-compose.yml</code>) on disk, along with the <code>./gittensory-config</code>{" "}
+        <code>docker-compose.yml</code>) on disk, along with the <code>./loopover-config</code>{" "}
         host directory (a bind mount, not a named volume, so it is never affected by <code>-v</code>{" "}
         either way). Pick one:
       </p>
@@ -1210,7 +1210,7 @@ docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q loopover)"`}
           {
             title: "Delete everything",
             description:
-              "docker compose down -v removes every named volume permanently — the review database, vector index, Grafana dashboards state, and any local backup archives in loopover-backups go with it. This does not touch ./gittensory-config (delete that host directory yourself if it should go too).",
+              "docker compose down -v removes every named volume permanently — the review database, vector index, Grafana dashboards state, and any local backup archives in loopover-backups go with it. This does not touch ./loopover-config (delete that host directory yourself if it should go too).",
           },
         ]}
       />
