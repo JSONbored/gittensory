@@ -22,6 +22,10 @@ Config precedence (`.loopover-miner.yml` vs operator env vs CLI flags) is docume
 A committed micro-benchmark for the discovery-ranking and local-store read/write paths lives at
 [`BENCHMARKS.md`](BENCHMARKS.md) — run it with `npm run benchmark:miner` from the repo root.
 
+The cross-repo evaluation harness (#4788) lives at
+[`docs/cross-repo-evaluation.md`](docs/cross-repo-evaluation.md) — run it with
+`npm run cross-repo-eval --workspace @loopover/miner` after cloning the benchmark repos.
+
 Real miner commands land in follow-up issues.
 
 The package also includes the first metadata-only discovery primitive: `fetchCandidateIssues` lists open issue
