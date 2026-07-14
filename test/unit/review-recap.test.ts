@@ -397,8 +397,8 @@ describe("generateAndSendReviewRecap (#1963, manual-trigger entry point)", () =>
   it("builds the recap and returns both the recap and the delivery result together", async () => {
     vi.stubGlobal("fetch", async () => new Response(null, { status: 204 }));
     const env = envWithWebhook();
-    const { recap, delivery } = await generateAndSendReviewRecap(env, "JSONbored/gittensory", { windowDays: 7, nowIso: NOW });
-    expect(recap.repoFullName).toBe("JSONbored/gittensory");
+    const { recap, delivery } = await generateAndSendReviewRecap(env, "JSONbored/loopover", { windowDays: 7, nowIso: NOW });
+    expect(recap.repoFullName).toBe("JSONbored/loopover");
     expect(delivery.sent).toBe(true);
   });
 
