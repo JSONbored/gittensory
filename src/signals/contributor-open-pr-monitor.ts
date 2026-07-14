@@ -52,7 +52,11 @@ export type ContributorOpenPrMonitor = {
 
 export async function buildContributorOpenPrMonitor(env: Env, login: string): Promise<ContributorOpenPrMonitor> {
   const [pullRequests, repositories] = await Promise.all([listContributorPullRequests(env, login), listRepositories(env)]);
-  const registered = new Set(repositories.filter((repo) => repo.isRegistered).map((repo) => repo.fullName.toLowerCase()));
+  // #5025: scoped to isInstalled, not isRegistered -- every field this monitor produces (classification,
+  // reasons, next steps) is generic PR-hygiene guidance with no gittensor-specific data (no reward-risk, no
+  // decision-pack fields), so it's available to any self-host operator's installed repos regardless of
+  // gittensor-subnet opt-in, consistent with #5021/#5022/#5024's isRegistered->isInstalled migration.
+  const registered = new Set(repositories.filter((repo) => repo.isInstalled).map((repo) => repo.fullName.toLowerCase()));
   const openByContributor = pullRequests.filter(
     (pr) => pr.state === "open" && sameLogin(pr.authorLogin, login) && registered.has(pr.repoFullName.toLowerCase()),
   );

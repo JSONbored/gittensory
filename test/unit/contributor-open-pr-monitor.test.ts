@@ -154,15 +154,15 @@ describe("contributor open PR monitor", () => {
     expect(mapPendingClassToWorkClassification(nativeDraft, { changeRequestCount: 0, checkFailureCount: 0, duplicateProne: false, missingTests: false })).toBe("draft");
   });
 
-  it("builds contributor-wide monitor answer from registered repos only", async () => {
+  it("builds contributor-wide monitor answer from installed repos only", async () => {
     const env = createTestEnv();
     vi.spyOn(repositories, "listRepositories").mockResolvedValue([
       { fullName: "entrius/allways-ui", owner: "entrius", name: "allways-ui", isInstalled: true, isRegistered: true, isPrivate: false },
-      { fullName: "other/unregistered", owner: "other", name: "unregistered", isInstalled: true, isRegistered: false, isPrivate: true },
+      { fullName: "other/uninstalled", owner: "other", name: "uninstalled", isInstalled: false, isRegistered: true, isPrivate: true },
     ] as Awaited<ReturnType<typeof repositories.listRepositories>>);
     vi.spyOn(repositories, "listContributorPullRequests").mockResolvedValue([
       pr({ number: 10 }),
-      pr({ number: 11, repoFullName: "other/unregistered", authorLogin: "miner-a" }),
+      pr({ number: 11, repoFullName: "other/uninstalled", authorLogin: "miner-a" }),
     ]);
     vi.spyOn(repositories, "listPullRequests").mockResolvedValue([pr({ number: 10 }), pr({ number: 11 })]);
     vi.spyOn(repositories, "listPullRequestReviews").mockImplementation(async (_env, _repo, pullNumber) =>
@@ -174,6 +174,8 @@ describe("contributor open PR monitor", () => {
       { repoFullName: "entrius/allways-ui", pullNumber: 10, path: "src/a.test.ts", additions: 5, deletions: 0, changes: 5, status: "added", payload: {} },
     ]);
 
+    // #other/uninstalled is registered on the gittensor subnet but never installed on this self-host
+    // instance -- it must NOT be covered, since the monitor is scoped to repos this instance operates on.
     const monitor = await buildContributorOpenPrMonitor(env, "miner-a");
     expect(monitor.openPrCount).toBe(1);
     expect(monitor.registeredRepoCount).toBe(1);
@@ -182,6 +184,24 @@ describe("contributor open PR monitor", () => {
     expect(monitor.pendingScenarios[0]?.detection.pendingMergedPrCount).toBe(1);
     expect(monitor.summary).toContain("open PR");
     expect(monitor.guidance.length).toBeGreaterThan(0);
+  });
+
+  it("#5025: covers an installed-but-not-subnet-registered repo, since the monitor's guidance is generic and unrelated to gittensor-subnet economics", async () => {
+    const env = createTestEnv();
+    vi.spyOn(repositories, "listRepositories").mockResolvedValue([
+      { fullName: "acme/installed-not-registered", owner: "acme", name: "installed-not-registered", isInstalled: true, isRegistered: false, isPrivate: false },
+    ] as Awaited<ReturnType<typeof repositories.listRepositories>>);
+    vi.spyOn(repositories, "listContributorPullRequests").mockResolvedValue([pr({ number: 20, repoFullName: "acme/installed-not-registered", authorLogin: "miner-a" })]);
+    vi.spyOn(repositories, "listPullRequests").mockResolvedValue([pr({ number: 20, repoFullName: "acme/installed-not-registered" })]);
+    vi.spyOn(repositories, "listPullRequestReviews").mockResolvedValue([approvedReview(20)]);
+    vi.spyOn(repositories, "listCheckSummaries").mockResolvedValue([]);
+    vi.spyOn(repositories, "listPullRequestFiles").mockResolvedValue([]);
+
+    const monitor = await buildContributorOpenPrMonitor(env, "miner-a");
+
+    expect(monitor.openPrCount).toBe(1);
+    expect(monitor.pullRequests).toHaveLength(1);
+    expect(monitor.pullRequests[0]).toMatchObject({ number: 20, repoFullName: "acme/installed-not-registered" });
   });
 
   it("loads signals and files with each PR casing in a case-variant repo group", async () => {
