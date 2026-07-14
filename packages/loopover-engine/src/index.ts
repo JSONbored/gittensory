@@ -594,6 +594,16 @@ export {
   type ResultsPayload,
 } from "./results-payload.js";
 export {
+  buildProgressSnapshot,
+  progressChanged,
+  MAX_PROGRESS_ACTIVITY,
+  type LoopPhase,
+  type LoopProgressActivity,
+  type LoopProgressState,
+  type LoopRunStatus,
+  type ProgressSnapshot,
+} from "./loop-progress.js";
+export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
   computeMetadataFeasibility,

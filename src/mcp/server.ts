@@ -157,6 +157,7 @@ import { buildIssueSlopAssessment } from "../signals/issue-slop";
 import { buildSlopAssessment } from "../signals/slop";
 import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan } from "../idea-intake";
 import { buildResultsPayload } from "../results-payload";
+import { buildProgressSnapshot } from "../loop-progress";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
 import { buildRepoDataQuality } from "../signals/data-quality";
@@ -976,6 +977,28 @@ const buildResultsPayloadOutputSchema = {
   totals: z.unknown().optional(),
 };
 
+// Loop progress-snapshot input (#4800): a running loop's already-computed state.
+const buildProgressSnapshotShape = {
+  iteration: z.number().int(),
+  maxIterations: z.number().int().nullable().optional(),
+  phase: z.enum(["queued", "claiming", "coding", "reviewing", "submitting", "done"]),
+  status: z.enum(["running", "converged", "abandoned", "error"]),
+  recentActivity: z
+    .array(z.object({ step: z.string(), detail: z.string().optional(), at: z.string().optional() }))
+    .max(1000)
+    .optional(),
+};
+
+const buildProgressSnapshotOutputSchema = {
+  phase: z.string().optional(),
+  status: z.string().optional(),
+  iteration: z.number().optional(),
+  maxIterations: z.number().nullable().optional(),
+  percentComplete: z.number().nullable().optional(),
+  recentActivity: z.unknown().optional(),
+  done: z.boolean().optional(),
+};
+
 // Deterministic structural-improvement counterpart to checkSlopRiskShape (#4746, sub-issue I of epic #4737):
 // the positive-axis mirror of checkSlopRisk, same pure local-metadata contract. changedFiles/tests/testFiles
 // are reused verbatim (same shape as checkSlopRiskShape) so the two signals never disagree about what counts
@@ -1757,6 +1780,17 @@ export class LoopoverMcp {
         outputSchema: buildResultsPayloadOutputSchema,
       },
       async (input) => this.toolResult(await this.buildLoopResults(input)),
+    );
+
+    server.registerTool(
+      "loopover_build_progress_snapshot",
+      {
+        description:
+          "Build a near-real-time progress snapshot for a running rented loop (#4800): phase, status, iteration/percent-complete, and a bounded recent-activity tail, from already-computed loop state. Deterministic and source-free; a customer surface pushes it on change (via the engine's progressChanged) rather than polling on a fixed interval.",
+        inputSchema: buildProgressSnapshotShape,
+        outputSchema: buildProgressSnapshotOutputSchema,
+      },
+      async (input) => this.toolResult(await this.buildLoopProgress(input)),
     );
 
     server.registerTool(
@@ -3069,6 +3103,15 @@ export class LoopoverMcp {
     return {
       summary: payload.summary,
       data: payload as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async buildLoopProgress(input: z.infer<z.ZodObject<typeof buildProgressSnapshotShape>>): Promise<ToolPayload> {
+    await this.enforceToolRateLimit("loopover_build_progress_snapshot");
+    const snapshot = buildProgressSnapshot(input);
+    return {
+      summary: `Loop progress: ${snapshot.phase} (${snapshot.status}), iteration ${snapshot.iteration}.`,
+      data: snapshot as unknown as Record<string, unknown>,
     };
   }
 
