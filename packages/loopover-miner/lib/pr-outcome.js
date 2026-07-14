@@ -5,7 +5,7 @@
 //
 // DISTINCT from the server-side `pr_outcome` concept: src/review/outcomes-wire.ts's `recordPrOutcome` writes
 // `pr_outcome` rows to the HOSTED backend's D1 audit tables from the GitHub App's webhook stream — that is the
-// gittensory SERVER recording ground truth for every contributor. THIS is a laptop-mode miner's local record of
+// loopover SERVER recording ground truth for every contributor. THIS is a laptop-mode miner's local record of
 // its own PRs (it may have no webhook relay at all): same concept name, different codebase layer, no shared code.
 // The distinct `MINER_PR_OUTCOME_EVENT` local constant keeps the two from being conflated.
 

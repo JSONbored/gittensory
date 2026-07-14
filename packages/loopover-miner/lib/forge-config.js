@@ -1,8 +1,8 @@
 /** Per-tenant forge configuration (#4784): the GitHub-specific protocol details that discovery used to hardcode,
  * gathered behind one resolver so a non-github.com tenant (GitHub Enterprise, or another GitHub-compatible forge)
- * can override them. gittensory's own github.com conventions survive only as `DEFAULT_FORGE_CONFIG` — calling
+ * can override them. loopover's own github.com conventions survive only as `DEFAULT_FORGE_CONFIG` — calling
  * `resolveForgeConfig()` with no overrides is byte-identical to the pre-#4784 hardcoded fan-out behavior, which is
- * what keeps the existing gittensory discovery path unchanged. Executes the #4780 repo-agnostic-capability-audit
+ * what keeps the existing loopover discovery path unchanged. Executes the #4780 repo-agnostic-capability-audit
  * checklist (forge abstraction, configurable credential env var, configurable user-agent). */
 
 /** The github.com defaults every forge field falls back to. Frozen so a caller can't mutate the shared baseline. */

@@ -162,7 +162,7 @@ export function latestClosedAt(batch) {
   return latest;
 }
 
-/** gittensory's hosted AMS collector — mirrors orb-collector.ts's ORB_COLLECTOR_URL default pattern. */
+/** loopover's hosted AMS collector — mirrors orb-collector.ts's ORB_COLLECTOR_URL default pattern. */
 export const DEFAULT_AMS_COLLECTOR_URL = "https://api.loopover.ai/v1/ams/ingest";
 
 export function resolveAmsCollectorUrl(env = process.env) {

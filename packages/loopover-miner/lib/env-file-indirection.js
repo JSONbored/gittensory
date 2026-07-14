@@ -7,7 +7,7 @@
 // would then fail on anyway, with a far less specific error).
 import { readFileSync } from "node:fs";
 
-// Docker Compose's OWN reserved `_FILE`-suffixed environment variables -- never gittensory's secret-file
+// Docker Compose's OWN reserved `_FILE`-suffixed environment variables -- never loopover's secret-file
 // convention, so they must never be dereferenced below (mirrors src/selfhost/load-file-secrets.ts's own
 // exclusion and rationale: `COMPOSE_FILE` is a colon-delimited list of compose file paths, never a single
 // readable file itself, and `COMPOSE_ENV_FILE` points at an operator's own .env file, not a secret).

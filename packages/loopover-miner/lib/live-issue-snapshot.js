@@ -55,7 +55,7 @@ function normalizeReferencingPr(node) {
   // an ordering signal for the maintainer gate's own duplicate-cluster election (duplicate-winner.ts's own
   // doc explains why: a PR can be backdated by editing an old placeholder to add the linked issue later), but
   // it's the only real, publicly-observable claim-time proxy claim-conflict-resolver.js's own client-side
-  // caller has for a THIRD-PARTY PR -- unlike gittensory's own server, the miner has no continuous observation
+  // caller has for a THIRD-PARTY PR -- unlike loopover's own server, the miner has no continuous observation
   // history to derive a true "first linked" timestamp from.
   const createdAt = typeof node.createdAt === "string" ? node.createdAt : null;
   return { number: node.number, state, authorLogin, createdAt };

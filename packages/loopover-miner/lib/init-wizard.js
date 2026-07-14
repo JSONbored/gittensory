@@ -6,7 +6,7 @@ import { initLaptopState } from "./laptop-init.js";
 import { resolveMinerStateDir, runDoctor } from "./status.js";
 import { DeviceFlowError, resolveAmsOauthClientId, runDeviceFlowAuthorization } from "./oauth-device-flow.js";
 
-// First-run onboarding wizard for `gittensory-miner init --interactive` (#5176): prompts for a GITHUB_TOKEN
+// First-run onboarding wizard for `loopover-miner init --interactive` (#5176): prompts for a GITHUB_TOKEN
 // (masked, never echoed to stdout/logs) and an optional coding-agent provider + its companion vars, writes them
 // to a starter .env in the state dir, then reruns the existing offline `doctor` checks against the collected
 // values so the operator sees pass/fail immediately. `doctor` itself stays offline by contract (status.js), and
@@ -42,7 +42,7 @@ async function promptRequiredMasked(io, question) {
 }
 
 async function promptAuthMethod(io) {
-  io.writeLine("How would you like to authorize gittensory-miner?");
+  io.writeLine("How would you like to authorize loopover-miner?");
   io.writeLine("  1) Authorize with GitHub (recommended -- no token to copy)");
   io.writeLine("  2) Paste a GitHub token (personal access token)");
   for (;;) {

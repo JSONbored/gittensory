@@ -7,7 +7,7 @@
 // resulting composite into the `HistoricalReplayCalibrationInput` shape the engine expects, calls the combine with
 // the existing pr_outcome signal, and PERSISTS the combined snapshot to the local append-only event ledger (a typed
 // event layered on event-ledger.js exactly like pr-outcome.js's MINER_PR_OUTCOME_EVENT), queryable via
-// `gittensory-miner ledger list --type calibration_snapshot`.
+// `loopover-miner ledger list --type calibration_snapshot`.
 //
 // SCOPE: this runner is read/measure-only. It produces and persists the tracked calibration metric; it NEVER acts
 // on it (no autonomy-level bump, no gate-threshold tune) -- that enforcement is maintainer-only and fail-closed

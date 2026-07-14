@@ -72,26 +72,26 @@ export function installCliSignalHandlers(options = {}) {
 
   const runCleanup = () => {
     closeAllCleanupResources({
-      onError: (error) => log(`gittensory-miner: cleanup error while exiting: ${describeError(error)}`),
+      onError: (error) => log(`loopover-miner: cleanup error while exiting: ${describeError(error)}`),
     });
   };
 
   for (const [signal, code] of Object.entries(SIGNAL_EXIT_CODES)) {
     proc.on(signal, () => {
-      log(`gittensory-miner: received ${signal}, closing open resources and exiting.`);
+      log(`loopover-miner: received ${signal}, closing open resources and exiting.`);
       runCleanup();
       exit(code);
     });
   }
 
   proc.on("uncaughtException", (error) => {
-    log(`gittensory-miner: uncaught exception: ${describeError(error)}`);
+    log(`loopover-miner: uncaught exception: ${describeError(error)}`);
     runCleanup();
     exit(1);
   });
 
   proc.on("unhandledRejection", (reason) => {
-    log(`gittensory-miner: unhandled promise rejection: ${describeError(reason)}`);
+    log(`loopover-miner: unhandled promise rejection: ${describeError(reason)}`);
     runCleanup();
     exit(1);
   });

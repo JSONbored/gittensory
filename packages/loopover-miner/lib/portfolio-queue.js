@@ -6,7 +6,7 @@ import { applySchemaMigrations } from "./schema-version.js";
 // items across every repo the miner has been pointed at ("what should I look at next, across everything I'm
 // tracking"). The database only lives on this machine; this module never uploads, syncs, or phones home with its
 // contents. The `priority` field is a PLACEHOLDER numeric input in this foundation phase — later phases populate
-// it from the extracted reward-risk/scoring modules in `gittensory-engine`; it is not invented here.
+// it from the extracted reward-risk/scoring modules in `loopover-engine`; it is not invented here.
 
 export const QUEUE_STATUSES = Object.freeze(["queued", "in_progress", "done"]);
 

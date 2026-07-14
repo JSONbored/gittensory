@@ -323,7 +323,7 @@ export function setupGuidanceForLocalScorer(status) {
       if (safeStatus.stderr) guidance.push(`Last scorer stdout snippet: ${truncateText(safeStatus.stderr, 160)}`);
       break;
     case "non_zero_exit":
-      guidance.push("External scorer exited with a non-zero status; inspect stderr and run gittensory-mcp doctor.");
+      guidance.push("External scorer exited with a non-zero status; inspect stderr and run loopover-mcp doctor.");
       if (safeStatus.stderr) guidance.push(`Scorer stderr: ${truncateText(safeStatus.stderr, 160)}`);
       if (typeof safeStatus.exitCode === "number") guidance.push(`Exit code: ${safeStatus.exitCode}`);
       break;
@@ -340,7 +340,7 @@ export function probeLocalScorer(scorerCommand = resolveScorePreviewCommand()) {
   return sanitizeLocalScorerStatus(
     runExternalScorePreview(
     {
-      repoFullName: "JSONbored/gittensory",
+      repoFullName: "JSONbored/loopover",
       branchName: "doctor-probe",
       changedFiles: [{ path: "src/example.ts", additions: 12, deletions: 2, status: "modified" }],
       repoRoot: process.cwd(),

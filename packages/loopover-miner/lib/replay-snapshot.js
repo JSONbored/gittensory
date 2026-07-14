@@ -58,7 +58,7 @@ function normalizeCommitSha(commitSha) {
 }
 
 /** Worktree exports live under this dir inside the repo, mirroring worktree-allocator.ts's WORKTREE_SUBDIR. */
-export const REPLAY_SNAPSHOT_SUBDIR = ".gittensory-replay-snapshots";
+export const REPLAY_SNAPSHOT_SUBDIR = ".loopover-replay-snapshots";
 
 /** PURE: the deterministic on-disk location for a (repo, commit) replay export -- same pair -> same path. */
 export function planReplaySnapshotPath(input) {

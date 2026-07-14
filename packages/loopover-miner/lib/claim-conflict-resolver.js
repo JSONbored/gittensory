@@ -12,7 +12,7 @@
 //
 // CLAIM-TIME ASYMMETRY (documented, not accidental): `self`'s claimedAt is the miner's OWN real local
 // claim-ledger timestamp (claim-ledger.js, recorded before work even started). A competing PR's claimedAt uses
-// its real GitHub `createdAt` instead -- the maintainer gate's own duplicate-winner election uses gittensory
+// its real GitHub `createdAt` instead -- the maintainer gate's own duplicate-winner election uses loopover
 // server's "first observed this PR's linked-issue set" timestamp, but that requires a continuous, persistent
 // observation history this stateless client-side tool does not have for a PR it doesn't own. `createdAt` is
 // the best real, publicly-observable proxy available for someone else's PR -- live-issue-snapshot.js's own

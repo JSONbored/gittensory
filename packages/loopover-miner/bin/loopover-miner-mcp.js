@@ -57,12 +57,12 @@ export const MINER_PING_STATUS = { status: "ok", tool: "loopover_miner_ping" };
  * store only when invoked and closes any store it opened.
  */
 export function createMinerMcpServer(options = {}) {
-  const server = new McpServer({ name: "gittensory-miner", version: ownPackageJson.version });
+  const server = new McpServer({ name: "loopover-miner", version: ownPackageJson.version });
   server.registerTool(
     "loopover_miner_ping",
     {
       description:
-        "Health check for the gittensory-miner MCP server. Returns a static status object confirming the " +
+        "Health check for the loopover-miner MCP server. Returns a static status object confirming the " +
         "server is reachable. Reads no AMS state and takes no arguments.",
       inputSchema: {},
     },
@@ -74,7 +74,7 @@ export function createMinerMcpServer(options = {}) {
       description:
         "Read-only per-repo portfolio-queue backlog dashboard: status counts (queued/in_progress/done), totals, " +
         "and the oldest-queued age in ms. Wraps the existing collectPortfolioDashboard aggregator (no new logic) " +
-        "-- the same data `gittensory-miner queue dashboard --json` prints locally. Takes no arguments; mutates nothing.",
+        "-- the same data `loopover-miner queue dashboard --json` prints locally. Takes no arguments; mutates nothing.",
       inputSchema: {},
     },
     async () => {
@@ -119,7 +119,7 @@ export function createMinerMcpServer(options = {}) {
       description:
         "Read-only, metadata-only audit feed from the local append-only event ledger: eventType, repoFullName, " +
         "outcome, actor, detail, and createdAt per row. Wraps collectEventLedgerAuditFeed() (no new query logic) — " +
-        "the same read filters as `gittensory-miner ledger list` (--repo, --since, --type). Never returns " +
+        "the same read filters as `loopover-miner ledger list` (--repo, --since, --type). Never returns " +
         "payload_json or other raw ledger columns; never writes to the ledger.",
       inputSchema: auditFeedInputSchema,
     },
@@ -252,7 +252,7 @@ export function createMinerMcpServer(options = {}) {
         "Read-only miner status + doctor diagnostics. Returns { status, doctor }: status = package/engine versions " +
         "(+ skew), node version, state-dir path, config-file path, and the resolved coding-agent driver (provider " +
         "name, the model ENV-VAR NAME -- never its value -- and a CLI-present boolean); doctor = the same checks " +
-        "`gittensory-miner doctor` runs (Docker/CLI presence, config validity, ...) as { name, ok, detail }. Reuses " +
+        "`loopover-miner doctor` runs (Docker/CLI presence, config validity, ...) as { name, ok, detail }. Reuses " +
         "collectStatus/runDoctorChecks so it can never drift from the CLI. Only names / booleans / paths -- never " +
         "any env-var value, token, key, or credential. Read-only; no writes or state changes.",
       inputSchema: {},

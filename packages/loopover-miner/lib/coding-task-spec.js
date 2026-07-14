@@ -30,7 +30,7 @@ import { detectRepoStack, renderStackSummary } from "./stack-detection.js";
 // language/package-manager/command description, but nothing in the attempt path consumed it -- instructions
 // were issue text + an acceptance-criteria path only. This module now appends that real stack summary (and
 // any confidently-inferred validation commands) to the coding-agent prompt so the agent validates against
-// THIS repository's tooling rather than assuming LoopOver/gittensory CI, Codecov, or `npm run test:ci`.
+// THIS repository's tooling rather than assuming LoopOver/loopover CI, Codecov, or `npm run test:ci`.
 
 function buildTaskBrief(issue) {
   const body = (issue.body ?? "").trim();
@@ -141,7 +141,7 @@ export function writeAcceptanceCriteriaFile(workingDirectory, acceptanceCriteria
 /**
  * Prompt guidance derived from a real `detectRepoStack` result (#4786). Lists only commands the detector
  * confidently inferred -- a `null` command stays omitted rather than guessed -- and always tells the agent
- * not to assume LoopOver/gittensory's own CI/coverage conventions.
+ * not to assume LoopOver/loopover's own CI/coverage conventions.
  *
  * @param {import("./stack-detection.js").RepoStackResult} stack
  * @returns {string}
@@ -151,7 +151,7 @@ function buildValidationGuidance(stack) {
     `Detected target-repo stack: ${renderStackSummary(stack)}`,
     "",
     "Validate your change with THIS repository's own build/test/lint tooling from the stack summary above.",
-    "Do not assume LoopOver/gittensory CI conventions, Codecov patch coverage, or `npm run test:ci` unless those commands appear in the detected stack.",
+    "Do not assume LoopOver/loopover CI conventions, Codecov patch coverage, or `npm run test:ci` unless those commands appear in the detected stack.",
   ];
   if (stack?.detected === true) {
     const commands = [
@@ -176,7 +176,7 @@ function buildValidationGuidance(stack) {
  * The coding-agent driver's own prompt text (agent-sdk-driver.ts's header: "forwarded verbatim as the
  * prompt -- the acceptance-criteria document already lives inside the worktree", so this points to it
  * rather than repeating its content). Also carries the target repo's detected stack + validation commands
- * (#4786) so the agent does not default to gittensory-specific CI assumptions.
+ * (#4786) so the agent does not default to loopover-specific CI assumptions.
  *
  * @param {{ number: number, title: string, body?: string | null }} issue
  * @param {string} acceptanceCriteriaPath
@@ -223,7 +223,7 @@ export function buildCodingTaskSpec(input) {
   }
 
   // Real target-repo stack (#4786): detected from the prepared worktree's own manifests, not guessed from
-  // gittensory conventions. Fail-closed `{ detected: false }` results still reach the prompt (via
+  // loopover conventions. Fail-closed `{ detected: false }` results still reach the prompt (via
   // renderStackSummary) so the agent is told detection failed rather than silently defaulting to npm/Codecov.
   const detect = input.detectRepoStack ?? detectRepoStack;
   const stack = detect(input.workingDirectory);

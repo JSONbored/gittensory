@@ -10,7 +10,7 @@
 // READ-ONLY BY CONTRACT: never writes anything except its own abort-reason audit event (on staleness only, not
 // on every check -- mirrors this issue's own "log the abort reason" wording, not a per-decision audit trail).
 // The live-state fetch is an injected dependency so this stays testable without real network I/O and agnostic
-// to HOW the caller sources issue/PR state (raw GitHub API, gittensory's own cached MCP data, etc.).
+// to HOW the caller sources issue/PR state (raw GitHub API, loopover's own cached MCP data, etc.).
 //
 // FAIL CLOSED: an unreachable/failed live-state fetch is treated as stale (aborts), never as "no evidence of
 // staleness, so proceed" -- mirrors this package's fail-closed convention elsewhere (harness-submission-

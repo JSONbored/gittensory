@@ -3,7 +3,7 @@ import type { RepoStackResult } from "./stack-detection.js";
 export const CROSS_REPO_FAILURE_CATEGORY: Readonly<{
   STACK_DETECTION: "stack_detection_gap";
   EXECUTION: "execution_gap";
-  GITTENSOR_ASSUMPTION: "gittensory_assumption";
+  GITTENSOR_ASSUMPTION: "loopover_assumption";
   CLONE_SETUP: "clone_setup";
   OTHER: "other";
 }>;
@@ -46,7 +46,7 @@ export type CrossRepoEvaluationSummary = {
   passed: number;
   failed: number;
   majorityPassed: boolean;
-  withoutGittensoryConfig: number;
+  withoutLoopoverConfig: number;
   failuresByCategory: Record<string, number>;
 };
 
@@ -56,7 +56,7 @@ export function parseCrossRepoEvaluationManifest(
   content: string | null | undefined,
 ): ParsedCrossRepoEvaluationManifest;
 
-export function scanPositiveGittensoryAssumptions(text: string): Array<{ id: string; line: string }>;
+export function scanPositiveLoopoverAssumptions(text: string): Array<{ id: string; line: string }>;
 
 export function evaluateRepoReadiness(
   entry: CrossRepoEvaluationManifestRepo,

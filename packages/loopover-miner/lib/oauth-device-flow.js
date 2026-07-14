@@ -1,5 +1,5 @@
 // GitHub OAuth Device Flow client (#5682) for the centrally-held `loopover-ams` GitHub App -- lets a
-// contributor authorize gittensory-miner by visiting a URL and entering a short code, instead of generating
+// contributor authorize loopover-miner by visiting a URL and entering a short code, instead of generating
 // and pasting a PAT. Uses GitHub's PUBLIC-client device flow
 // (https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow): no
 // client secret is required or ever held by this CLI, only the App's public OAuth client id.

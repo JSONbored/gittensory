@@ -5,7 +5,7 @@
 // packages/loopover-engine/src/miner/local-write-tools.ts's own single-quote escaping), not the
 // cmd/args-array CliSubprocessSpawnFn contract the coding-agent driver itself uses. Runs it via `sh -c` in
 // the given working directory. Per local-write-tools.ts's own boundary comment, this always runs with
-// whatever `gh`/`git` credentials are already configured in that environment -- gittensory never performs
+// whatever `gh`/`git` credentials are already configured in that environment -- loopover never performs
 // the write itself.
 
 import { spawn } from "node:child_process";

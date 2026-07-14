@@ -1,7 +1,7 @@
 // House-rules-enforced coding-agent construction (#2343 follow-up). buildHouseRulesPreToolUseHook
 // (pretooluse-hook.js) is the LIVE PreToolUse interception point, but the engine package's
 // createCodingAgentDriver / runCodingAgentAttempt (driver-factory.ts) cannot import it directly -- the
-// dependency only ever flows gittensory-miner -> @loopover/engine, never the reverse (the engine
+// dependency only ever flows loopover-miner -> @loopover/engine, never the reverse (the engine
 // package is portable and cannot depend on the miner CLI package). This module is the missing miner-side
 // glue: it wraps runCodingAgentAttempt so the `agent-sdk` provider gets house-rule enforcement by DEFAULT --
 // a future real call site does not need to remember to attach it itself, closing the exact gap

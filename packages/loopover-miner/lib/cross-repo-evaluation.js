@@ -1,8 +1,8 @@
 // Cross-repo evaluation harness (#4788): a repeatable, offline-first readiness check that asks whether the miner
-// can approach a diverse benchmark repo set without gittensory-specific target-repo configuration. Each repo is
+// can approach a diverse benchmark repo set without loopover-specific target-repo configuration. Each repo is
 // evaluated through the same stack-detection + coding-task-spec path a real attempt uses (detectRepoStack,
 // resolveMinerGoalSpec, buildCodingTaskSpec) and failures are categorized as stack-detection gaps, execution
-// readiness gaps, leaked gittensory assumptions in agent instructions, clone/setup problems, or other.
+// readiness gaps, leaked loopover assumptions in agent instructions, clone/setup problems, or other.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -15,12 +15,12 @@ import { detectRepoStack } from "./stack-detection.js";
 export const CROSS_REPO_FAILURE_CATEGORY = Object.freeze({
   STACK_DETECTION: "stack_detection_gap",
   EXECUTION: "execution_gap",
-  GITTENSOR_ASSUMPTION: "gittensory_assumption",
+  GITTENSOR_ASSUMPTION: "loopover_assumption",
   CLONE_SETUP: "clone_setup",
   OTHER: "other",
 });
 
-/** Instruction substrings that indicate a POSITIVE gittensory/LoopOver CI assumption leaked into the agent prompt.
+/** Instruction substrings that indicate a POSITIVE loopover/LoopOver CI assumption leaked into the agent prompt.
  *  Lines that explicitly tell the agent *not* to assume these are filtered out before scanning. */
 export const GITTENSOR_POSITIVE_ASSUMPTION_CHECKS = Object.freeze([
   { id: "test_ci_script", pattern: /npm run test:ci/i },
@@ -152,13 +152,13 @@ export function parseCrossRepoEvaluationManifest(content) {
 }
 
 /**
- * Scan agent instructions for positive gittensory/LoopOver assumptions (#4788). Lines that already tell the agent
+ * Scan agent instructions for positive loopover/LoopOver assumptions (#4788). Lines that already tell the agent
  * *not* to assume LoopOver conventions (the negative guidance from buildValidationGuidance) are skipped.
  *
  * @param {string} text
  * @returns {Array<{ id: string, line: string }>}
  */
-export function scanPositiveGittensoryAssumptions(text) {
+export function scanPositiveLoopoverAssumptions(text) {
   if (typeof text !== "string") return [];
   const findings = [];
   for (const line of text.split("\n")) {
@@ -301,12 +301,12 @@ export function evaluateRepoReadiness(entry, options = {}) {
     );
   }
 
-  const assumptionFindings = scanPositiveGittensoryAssumptions(specResult.instructions ?? "");
+  const assumptionFindings = scanPositiveLoopoverAssumptions(specResult.instructions ?? "");
   if (assumptionFindings.length > 0) {
     return buildFailure(
       repoFullName,
       CROSS_REPO_FAILURE_CATEGORY.GITTENSOR_ASSUMPTION,
-      `Agent instructions leak gittensory-specific assumptions (${assumptionFindings.map((f) => f.id).join(", ")}).`,
+      `Agent instructions leak loopover-specific assumptions (${assumptionFindings.map((f) => f.id).join(", ")}).`,
       { stackDetected: true, usedDefaultGoalSpec, stack, assumptionFindings },
     );
   }
@@ -352,13 +352,13 @@ export function summarizeCrossRepoEvaluation(results) {
   }
   const total = passed + failed;
   const majorityPassed = total > 0 ? passed > failed : false;
-  const withoutGittensoryConfig = list.filter((r) => r?.usedDefaultGoalSpec !== false).length;
+  const withoutLoopoverConfig = list.filter((r) => r?.usedDefaultGoalSpec !== false).length;
   return {
     total,
     passed,
     failed,
     majorityPassed,
-    withoutGittensoryConfig,
+    withoutLoopoverConfig,
     failuresByCategory,
   };
 }
@@ -384,7 +384,7 @@ export function formatCrossRepoEvaluationReport(results, summary = summarizeCros
       (summary.majorityPassed ? " (majority passed)" : " (majority failed)"),
   );
   if (summary.total > 0) {
-    lines.push(`without gittensory-specific target config: ${summary.withoutGittensoryConfig}/${summary.total}`);
+    lines.push(`without loopover-specific target config: ${summary.withoutLoopoverConfig}/${summary.total}`);
   }
   const categories = Object.entries(summary.failuresByCategory).sort(([a], [b]) => a.localeCompare(b));
   if (categories.length > 0) {

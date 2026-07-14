@@ -1,6 +1,6 @@
 import type { WorktreeExecFn, WorktreeRemoveResult } from "@loopover/engine";
 
-export const REPLAY_SNAPSHOT_SUBDIR: ".gittensory-replay-snapshots";
+export const REPLAY_SNAPSHOT_SUBDIR: ".loopover-replay-snapshots";
 
 export type ReplaySnapshotCommit = { sha: string; date: string; subject: string };
 export type ReplaySnapshotTag = { name: string; date: string; targetSha: string };

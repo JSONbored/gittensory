@@ -124,8 +124,8 @@ export function renderDiscoverSummary(result) {
   if (result.enqueueSummary.skippedBelowMinRank > 0) {
     lines.push(`skipped (below min rank): ${result.enqueueSummary.skippedBelowMinRank}`);
   }
-  // Make the fall-back to gittensory's built-in rubric explicit instead of silent (#4784): when no per-tenant goal
-  // spec is supplied, lane fit reflects gittensory's defaults, not the target repo's own conventions.
+  // Make the fall-back to loopover's built-in rubric explicit instead of silent (#4784): when no per-tenant goal
+  // spec is supplied, lane fit reflects loopover's defaults, not the target repo's own conventions.
   if (result.usedDefaultGoalSpec) {
     lines.push(
       "note: ranked with the built-in default goal spec (no per-tenant .loopover-miner.yml supplied)",
@@ -266,7 +266,7 @@ export async function runDiscover(args, options = {}) {
         : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
 
     // Pass any caller-supplied per-tenant goal specs through to the ranker so lane fit uses the tenant's
-    // conventions instead of silently falling back to gittensory's defaults (#4784); the fallback is surfaced via
+    // conventions instead of silently falling back to loopover's defaults (#4784); the fallback is surfaced via
     // `usedDefaultGoalSpec` below rather than hidden.
     const rankedSummary = rankIssues(fanOut.issues, {
       nowMs: options.nowMs,
