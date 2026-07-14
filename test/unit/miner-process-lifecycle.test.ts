@@ -5,7 +5,7 @@ import {
   installCliSignalHandlers,
   registerCleanupResource,
   resetProcessLifecycleForTesting,
-} from "../../packages/gittensory-miner/lib/process-lifecycle.js";
+} from "../../packages/loopover-miner/lib/process-lifecycle.js";
 
 type Listener = (...args: unknown[]) => void;
 

@@ -3,9 +3,9 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = resolve(root, "apps/gittensory-extension");
-const outDir = resolve(root, "apps/gittensory-extension/dist/package");
-const zipPath = resolve(root, "apps/gittensory-ui/public/downloads/loopover-extension.zip");
+const source = resolve(root, "apps/loopover-extension");
+const outDir = resolve(root, "apps/loopover-extension/dist/package");
+const zipPath = resolve(root, "apps/loopover-ui/public/downloads/loopover-extension.zip");
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) {

@@ -300,16 +300,16 @@ describe("check-docs-drift script", () => {
         "src/env.d.ts": baseFlags,
         "src/github/commands.ts": baseCommandsSource,
         "src/types.ts": buildRepositorySettingsSource(baseSettingsExtraFields),
-        "packages/gittensory-engine/src/focus-manifest.ts": buildFocusManifestSource(baseFocusManifestReviewFields),
+        "packages/loopover-engine/src/focus-manifest.ts": buildFocusManifestSource(baseFocusManifestReviewFields),
         ".loopover.yml.example": buildYmlExampleText(baseSettingsExtraFields, baseFocusManifestReviewFields),
-        "apps/gittensory-ui/src/routes/docs.tuning.tsx": [buildFlagsPageText(baseFlagNames), buildGateModePageText()].join("\n"),
-        "apps/gittensory-ui/src/routes/docs.privacy-security.tsx": buildFlagsPageText(baseFlagNames),
-        "apps/gittensory-ui/src/routes/docs.maintainer-workflow.tsx": buildDocsPageText(allBaseCommandIds),
-        "apps/gittensory-ui/src/routes/docs.maintainer-install-trust.tsx": buildDocsPageText(allBaseCommandIds),
-        "apps/gittensory-ui/src/routes/docs.gittensory-commands.tsx":
+        "apps/loopover-ui/src/routes/docs.tuning.tsx": [buildFlagsPageText(baseFlagNames), buildGateModePageText()].join("\n"),
+        "apps/loopover-ui/src/routes/docs.privacy-security.tsx": buildFlagsPageText(baseFlagNames),
+        "apps/loopover-ui/src/routes/docs.maintainer-workflow.tsx": buildDocsPageText(allBaseCommandIds),
+        "apps/loopover-ui/src/routes/docs.maintainer-install-trust.tsx": buildDocsPageText(allBaseCommandIds),
+        "apps/loopover-ui/src/routes/docs.gittensory-commands.tsx":
           'import { PUBLIC_COMMAND_ENTRIES, MAINTAINER_COMMAND_ENTRIES, ACTION_COMMAND_ENTRIES } from "@/lib/command-reference";',
-        "apps/gittensory-ui/src/routes/docs.how-reviews-work.tsx": buildGateModePageText(),
-        "apps/gittensory-ui/src/routes/docs.github-app.tsx": buildGateModePageText(),
+        "apps/loopover-ui/src/routes/docs.how-reviews-work.tsx": buildGateModePageText(),
+        "apps/loopover-ui/src/routes/docs.github-app.tsx": buildGateModePageText(),
       };
       return files;
     }
@@ -345,7 +345,7 @@ describe("check-docs-drift script", () => {
     it("catches a docs page missing a known feature flag", () => {
       const files = baseFixtures();
       // Drop one known flag from docs.tuning.tsx.
-      files["apps/gittensory-ui/src/routes/docs.tuning.tsx"] = [
+      files["apps/loopover-ui/src/routes/docs.tuning.tsx"] = [
         buildFlagsPageText(baseFlagNames.filter((flag) => flag !== "LOOPOVER_REVIEW_FLAG_3")),
         buildGateModePageText(),
       ].join("\n");
@@ -357,7 +357,7 @@ describe("check-docs-drift script", () => {
 
     it("catches a docs page missing a known @loopover command", () => {
       const files = baseFixtures();
-      files["apps/gittensory-ui/src/routes/docs.maintainer-workflow.tsx"] = buildDocsPageText(
+      files["apps/loopover-ui/src/routes/docs.maintainer-workflow.tsx"] = buildDocsPageText(
         allBaseCommandIds.filter((id) => id !== "public-5"),
       );
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
@@ -371,7 +371,7 @@ describe("check-docs-drift script", () => {
       // Replace the page's literal @loopover lines with an import marker only -- none of the individual
       // command ids appear in the page's own source anymore, mirroring docs.maintainer-workflow.tsx after
       // it switched to `import { PUBLIC_COMMAND_LIST, MAINTAINER_COMMAND_LIST } from "@/lib/command-reference"`.
-      files["apps/gittensory-ui/src/routes/docs.maintainer-workflow.tsx"] =
+      files["apps/loopover-ui/src/routes/docs.maintainer-workflow.tsx"] =
         'import { PUBLIC_COMMAND_LIST } from "@/lib/command-reference";';
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
@@ -380,7 +380,7 @@ describe("check-docs-drift script", () => {
 
     it("still checks a page for missing commands when it does NOT delegate to the generated command-reference", () => {
       const files = baseFixtures();
-      files["apps/gittensory-ui/src/routes/docs.maintainer-install-trust.tsx"] = buildDocsPageText(
+      files["apps/loopover-ui/src/routes/docs.maintainer-install-trust.tsx"] = buildDocsPageText(
         allBaseCommandIds.filter((id) => id !== "maint-2"),
       );
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
@@ -394,7 +394,7 @@ describe("check-docs-drift script", () => {
       const withoutSlop = GATE_MODE_MANIFEST.filter((row) => row.field !== "slopGateMode")
         .flatMap((row) => row.aliases)
         .join("\n");
-      files["apps/gittensory-ui/src/routes/docs.tuning.tsx"] = [buildFlagsPageText(baseFlagNames), withoutSlop].join("\n");
+      files["apps/loopover-ui/src/routes/docs.tuning.tsx"] = [buildFlagsPageText(baseFlagNames), withoutSlop].join("\n");
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
       const hit = result.failures.find((failure) => failure.includes("docs.tuning.tsx") && failure.includes("slopGateMode"));
@@ -445,12 +445,12 @@ describe("check-docs-drift script", () => {
 
     it("self-defends against a broken FocusManifest-extraction (fewer than 15 leaf fields found, #4617)", () => {
       const files = baseFixtures();
-      files["packages/gittensory-engine/src/focus-manifest.ts"] = "export type FocusManifest = { present: boolean; onlyOneField: string; };";
+      files["packages/loopover-engine/src/focus-manifest.ts"] = "export type FocusManifest = { present: boolean; onlyOneField: string; };";
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
       const hit = result.failures.find(
         (failure) =>
-          failure.includes("packages/gittensory-engine/src/focus-manifest.ts") &&
+          failure.includes("packages/loopover-engine/src/focus-manifest.ts") &&
           failure.includes("FocusManifest leaf fields") &&
           failure.includes("extraction regex may be broken"),
       );
@@ -501,7 +501,7 @@ describe("check-docs-drift script", () => {
     it("catches a FocusManifest field nested inside another config type with zero yml mention -- the exact review.visual.production_url shape (#4617)", () => {
       const files = baseFixtures();
       // A SECOND VisualConfig-shaped leaf that the synthetic .loopover.yml.example never mentions.
-      files["packages/gittensory-engine/src/focus-manifest.ts"] = files["packages/gittensory-engine/src/focus-manifest.ts"]!.replace(
+      files["packages/loopover-engine/src/focus-manifest.ts"] = files["packages/loopover-engine/src/focus-manifest.ts"]!.replace(
         "productionUrl: string | null;",
         "productionUrl: string | null;\n  totallyUndocumentedNestedField: string | null;",
       );
@@ -514,7 +514,7 @@ describe("check-docs-drift script", () => {
       // A check that only enumerated FocusManifest's own TOP-LEVEL fields (never recursing into `review`, let
       // alone `review.visual`) could never have produced this path -- proving the recursion is load-bearing,
       // not just a nice-to-have, for catching #4617's own concrete gap shape.
-      expect(extractFocusManifestFields(files["packages/gittensory-engine/src/focus-manifest.ts"])).toContain(
+      expect(extractFocusManifestFields(files["packages/loopover-engine/src/focus-manifest.ts"])).toContain(
         "review.visual.totallyUndocumentedNestedField",
       );
     });
@@ -525,7 +525,7 @@ describe("check-docs-drift script", () => {
       for (const row of FOCUS_MANIFEST_ALIAS_MANIFEST) {
         const files = baseFixtures();
         const leafName = row.field.split(".").pop();
-        files["packages/gittensory-engine/src/focus-manifest.ts"] = files["packages/gittensory-engine/src/focus-manifest.ts"]!.replace(
+        files["packages/loopover-engine/src/focus-manifest.ts"] = files["packages/loopover-engine/src/focus-manifest.ts"]!.replace(
           "visual: VisualConfig;",
           `${leafName}: string | null;\n  visual: VisualConfig;`,
         );

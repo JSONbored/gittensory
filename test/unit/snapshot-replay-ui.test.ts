@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSnapshotReplayView } from "../../apps/gittensory-ui/src/lib/snapshot-replay";
+import { buildSnapshotReplayView } from "../../apps/loopover-ui/src/lib/snapshot-replay";
 
 describe("buildSnapshotReplayView", () => {
   it("renders a populated replay from fresh, complete provenance", () => {

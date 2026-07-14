@@ -1,7 +1,7 @@
 # Deny-hook fixture corpus (#2296)
 
 A table-driven corpus that stress-tests the deny-hook primitive
-(`packages/gittensory-miner/lib/deny-hooks.js`'s `evaluateDenyHooks`) against realistic tool-call
+(`packages/loopover-miner/lib/deny-hooks.js`'s `evaluateDenyHooks`) against realistic tool-call
 shapes a future coding-agent driver will produce — file writes, shell/git commands, multi-path edits
 — beyond the hand-rolled examples in that module's own unit tests. It is driven by
 `test/unit/deny-hooks-fixtures.test.ts`.

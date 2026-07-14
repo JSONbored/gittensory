@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initPolicyDocCacheStore,
   resolvePolicyDocCacheDbPath,
-} from "../../packages/gittensory-miner/lib/policy-doc-cache.js";
+} from "../../packages/loopover-miner/lib/policy-doc-cache.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

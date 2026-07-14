@@ -7,7 +7,7 @@ import {
   parseLinkedIssues,
   parsePreviewLabels,
   splitRepoFullName,
-} from "../../apps/gittensory-ui/src/lib/maintainer-settings-preview";
+} from "../../apps/loopover-ui/src/lib/maintainer-settings-preview";
 
 describe("maintainer settings preview UI helpers", () => {
   it("derives stable repo options from cached reviewability rows", () => {

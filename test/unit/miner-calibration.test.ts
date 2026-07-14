@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCalibrationReport,
   isCalibrationReport,
-} from "../../packages/gittensory-miner/lib/calibration.js";
+} from "../../packages/loopover-miner/lib/calibration.js";
 import type {
   ObservedOutcomeRecord,
   PredictedVerdictRecord,
-} from "../../packages/gittensory-miner/lib/calibration.js";
+} from "../../packages/loopover-miner/lib/calibration.js";
 
 const TS = "2026-07-12T00:00:00.000Z";
 const pred = (project: string, targetId: string, predictedDecision: string): PredictedVerdictRecord => ({

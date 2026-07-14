@@ -243,7 +243,7 @@ describe("workflow_run webhook -> actions_fallback storage (#4112)", () => {
     await upsertPullRequestFile(env, {
       repoFullName: "owner/fallback-repo",
       pullNumber: 55,
-      path: "apps/gittensory-ui/src/routes/app.index.tsx",
+      path: "apps/loopover-ui/src/routes/app.index.tsx",
       status: "modified",
       additions: 1,
       deletions: 0,

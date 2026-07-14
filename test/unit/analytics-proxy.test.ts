@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleAnalyticsProxy } from "../../apps/gittensory-ui/src/lib/analytics-proxy";
+import { handleAnalyticsProxy } from "../../apps/loopover-ui/src/lib/analytics-proxy";
 
 const UPSTREAM = "https://tasty.aethereal.dev";
 

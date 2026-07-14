@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCalibrationCli } from "../../packages/gittensory-miner/lib/calibration-cli.js";
-import { initEventLedger, resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
+import { runCalibrationCli } from "../../packages/loopover-miner/lib/calibration-cli.js";
+import { initEventLedger, resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
   initPredictionLedger,
   resolvePredictionLedgerDbPath,
-} from "../../packages/gittensory-miner/lib/prediction-ledger.js";
-import * as predictionLedger from "../../packages/gittensory-miner/lib/prediction-ledger.js";
+} from "../../packages/loopover-miner/lib/prediction-ledger.js";
+import * as predictionLedger from "../../packages/loopover-miner/lib/prediction-ledger.js";
 
 const tempDirs: string[] = [];
 afterEach(() => {

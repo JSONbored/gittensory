@@ -6,8 +6,8 @@ import {
   buildPublicReadinessScore,
   buildQueueHealth,
   itemSharesPlannedLinkedIssue,
-} from "../../packages/gittensory-engine/src/signals/predicted-gate-engine";
-import type { CollisionItem, IssueRecord, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../packages/gittensory-engine/src/types/predicted-gate-types";
+} from "../../packages/loopover-engine/src/signals/predicted-gate-engine";
+import type { CollisionItem, IssueRecord, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../packages/loopover-engine/src/types/predicted-gate-types";
 
 describe("predicted-gate engine collision parity (#2283)", () => {
   it("flags possible duplicate work when the planned title overlaps an existing cluster", () => {

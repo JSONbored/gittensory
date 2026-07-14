@@ -7,8 +7,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   createMinerMcpServer,
   type MinerMcpServerOptions,
-} from "../../packages/gittensory-miner/bin/loopover-miner-mcp.js";
-import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
+} from "../../packages/loopover-miner/bin/loopover-miner-mcp.js";
+import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
 // The SAME secret-shape matcher the miner pack validator uses — imported from its single source of truth (rather
 // than hand-duplicated here) so the two stay byte-for-byte in sync instead of relying on manual vigilance.
 import { FORBIDDEN_CONTENT } from "../../scripts/forbidden-content.mjs";

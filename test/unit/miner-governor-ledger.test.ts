@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
@@ -14,7 +14,7 @@ import {
   initGovernorLedger,
   readGovernorEvents,
   resolveGovernorLedgerDbPath,
-} from "../../packages/gittensory-miner/lib/governor-ledger.js";
+} from "../../packages/loopover-miner/lib/governor-ledger.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];

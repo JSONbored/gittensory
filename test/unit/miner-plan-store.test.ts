@@ -8,8 +8,8 @@ import {
   closeDefaultPlanStore,
   openPlanStore,
   resolvePlanStoreDbPath,
-} from "../../packages/gittensory-miner/lib/plan-store.js";
-import type { PlanDag } from "../../packages/gittensory-miner/lib/plan-store.js";
+} from "../../packages/loopover-miner/lib/plan-store.js";
+import type { PlanDag } from "../../packages/loopover-miner/lib/plan-store.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

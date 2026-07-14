@@ -1,10 +1,10 @@
-# Runs the miner-ui dashboard (apps/gittensory-miner-ui) as a persistent local service via `vite preview`
-# (port 4174 by default -- see apps/gittensory-miner-ui/vite.config.ts), so a fleet/bare-host operator gets a
+# Runs the miner-ui dashboard (apps/loopover-miner-ui) as a persistent local service via `vite preview`
+# (port 4174 by default -- see apps/loopover-miner-ui/vite.config.ts), so a fleet/bare-host operator gets a
 # durable dashboard instead of a dev-server-only experience. This is a companion service to
 # loopover-miner.service.example, not a replacement -- the loop daemon still does the actual discover ->
 # attempt -> manage work; this unit only serves the read-only dashboard over it.
 #
-# WHY vite preview, NOT a new CLI subcommand: apps/gittensory-miner-ui is a private workspace app (no
+# WHY vite preview, NOT a new CLI subcommand: apps/loopover-miner-ui is a private workspace app (no
 # published bin), and its Vite plugins (vite-ledgers-api.ts, vite-portfolio-queue-api.ts, vite-run-state-api.ts)
 # already wire their local-SQLite-backed API routes into BOTH `configureServer` (dev) and
 # `configurePreviewServer` (preview), so `npm run preview` already serves the built dashboard AND its data
@@ -26,7 +26,7 @@
 #   journalctl -u loopover-miner-ui -f                # follow the dashboard server's output
 #
 # The dashboard reads the SAME local SQLite stores loopover-miner.service.example's loop daemon writes to
-# (see packages/gittensory-miner/README.md's "Local storage" table) -- point LOOPOVER_MINER_CONFIG_DIR at
+# (see packages/loopover-miner/README.md's "Local storage" table) -- point LOOPOVER_MINER_CONFIG_DIR at
 # the same directory as the loop service's unit if you run both on one host.
 
 [Unit]
@@ -48,7 +48,7 @@ ExecStart=/usr/bin/npm --workspace @loopover/ui-miner run preview
 # A crashed dashboard should come back; it holds no in-memory state of its own to lose.
 Restart=on-failure
 RestartSec=10
-# Optional overrides (see packages/gittensory-miner/README.md's "Local storage" table for the full list):
+# Optional overrides (see packages/loopover-miner/README.md's "Local storage" table for the full list):
 #   Environment=LOOPOVER_MINER_CONFIG_DIR=/var/lib/loopover-miner/config
 TimeoutStopSec=30
 

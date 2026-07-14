@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const README_PATH = join(process.cwd(), "packages/gittensory-miner/README.md");
-const MCP_README_PATH = join(process.cwd(), "packages/gittensory-mcp/README.md");
+const README_PATH = join(process.cwd(), "packages/loopover-miner/README.md");
+const MCP_README_PATH = join(process.cwd(), "packages/loopover-mcp/README.md");
 
 /** Pulls the first ```json fenced block out of a markdown doc. Throws if none is found, so a doc edit that
  *  accidentally drops the fence (rather than its content) fails loudly instead of silently skipping. */

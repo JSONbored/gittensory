@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildCalibrationDashboardView,
   resolveCalibrationDashboardStatus,
-} from "../../packages/gittensory-engine/src/index";
-import type { Phase7CalibrationLoopResult } from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
+import type { Phase7CalibrationLoopResult } from "../../packages/loopover-engine/src/index";
 
 function metric(accuracy: number | null, sampleSize: number, fresh: boolean) {
   return { source: "pr_outcome" as const, accuracy, sampleSize, observedAt: "2026-01-01T00:00:00Z", fresh };

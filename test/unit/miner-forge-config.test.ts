@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FORGE_CONFIG,
   resolveForgeConfig,
-} from "../../packages/gittensory-miner/lib/forge-config.js";
+} from "../../packages/loopover-miner/lib/forge-config.js";
 
 describe("resolveForgeConfig (#4784)", () => {
   it("returns gittensory's github.com defaults when no overrides are supplied", () => {

@@ -26,7 +26,7 @@ type PredictedGateCallEnv = {
 };
 
 /** The minimal verdict shape this recorder needs -- structurally compatible with PredictedGateVerdict
- *  (packages/gittensory-engine), whose `blockers` entries are the public-safe shape (no `severity`), unlike
+ *  (packages/loopover-engine), whose `blockers` entries are the public-safe shape (no `severity`), unlike
  *  the real gate's AdvisoryFinding -- so this reads only `.code`, never reusing neutralHoldReasonCode's
  *  stricter AdvisoryFinding-typed signature (see the reasonCode comment below for why that's an acceptable,
  *  deliberately coarser fallback on the predicted side). */

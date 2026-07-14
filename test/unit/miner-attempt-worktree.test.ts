@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { cleanupAttemptWorktree, createRealWorktreeExec, prepareAttemptWorktree } from "../../packages/gittensory-miner/lib/attempt-worktree.js";
+import { cleanupAttemptWorktree, createRealWorktreeExec, prepareAttemptWorktree } from "../../packages/loopover-miner/lib/attempt-worktree.js";
 
 const roots: string[] = [];
 

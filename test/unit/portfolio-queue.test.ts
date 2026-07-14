@@ -6,7 +6,7 @@ import {
   type PortfolioCaps,
   type PortfolioQueue,
   type PortfolioQueueItem,
-} from "../../packages/gittensory-engine/src/portfolio/queue";
+} from "../../packages/loopover-engine/src/portfolio/queue";
 
 function item(
   id: string,

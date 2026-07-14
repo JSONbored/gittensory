@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jsonbored.dev/schemas/gittensory-miner-goal-spec.json",
+  "title": "MinerGoalSpec",
+  "description": "Per-repo miner configuration parsed from `.gittensory-miner.yml` (see packages/loopover-miner/docs/miner-goal-spec.md).",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "minerEnabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether autonomous miners may target this repo. Default: true."
+    },
+    "wantedPaths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": [],
+      "description": "Work areas a miner should prefer. Glob list. Default: []."
+    },
+    "blockedPaths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": [],
+      "description": "Paths a miner must skip. Glob list. Default: []."
+    },
+    "preferredLabels": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": [],
+      "description": "Issue labels a miner should favor. Default: []."
+    },
+    "blockedLabels": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": [],
+      "description": "Issue labels a miner must skip. Default: []."
+    },
+    "maxConcurrentClaims": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Maximum active claims one miner may hold on this repo. Default: 1."
+    },
+    "issueDiscoveryPolicy": {
+      "type": "string",
+      "enum": ["encouraged", "neutral", "discouraged"],
+      "default": "neutral",
+      "description": "How strongly opening discovery issues is encouraged. Default: neutral."
+    },
+    "feasibilityGate": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": { "enabled": true, "suppressedReasons": [] },
+      "description": "Per-repo tuning for the feasibility gate a miner consults before starting work. Default: { enabled: true, suppressedReasons: [] }.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the feasibility gate is consulted at all before a miner starts work. Default: true."
+        },
+        "suppressedReasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "buildFeasibilityVerdict avoid/raise reason codes this repo wants ignored. Default: []."
+        }
+      }
+    },
+    "selfPlagiarism": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": { "similarityThreshold": 0.85 },
+      "description": "Self-plagiarism throttle consulted before open_pr (#2345). Default: { similarityThreshold: 0.85 }.",
+      "properties": {
+        "similarityThreshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.85,
+          "description": "Jaccard similarity threshold for near-duplicate diff fingerprints. Default: 0.85."
+        }
+      }
+    },
+    "killSwitch": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": { "paused": false },
+      "description": "Per-repo kill-switch consulted by the Governor chokepoint before every write action (#2341). Default: { paused: false }.",
+      "properties": {
+        "paused": {
+          "type": "boolean",
+          "default": false,
+          "description": "Halts all miner WRITE actions for this repo without deregistering it from targeting/discovery. Default: false."
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": { "liveModeOptIn": null },
+      "description": "Per-repo dry-run/live execution opt-in consulted by the Governor chokepoint (#2342). Default: { liveModeOptIn: null }.",
+      "properties": {
+        "liveModeOptIn": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Must equal exactly \"live\" to opt this repo into live write execution; any other value stays dry-run. Also requires the operator's own global opt-in (LOOPOVER_MINER_LIVE_MODE=live) unless the operator's own config already grants it. Default: null."
+        }
+      }
+    }
+  }
+}

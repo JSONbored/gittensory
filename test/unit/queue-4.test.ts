@@ -3410,7 +3410,7 @@ describe("queue processors", () => {
       // A web-visible route file (isVisualPath) — the ONLY difference from the sibling unified-comment fixture —
       // so screenshotsAllowed's file-touch gate opens and buildCapture actually runs for this PR.
       if (url.includes("/pulls/3/files")) {
-        return Response.json([{ filename: "apps/gittensory-ui/src/routes/app.index.tsx", additions: 5, deletions: 1, status: "modified" }]);
+        return Response.json([{ filename: "apps/loopover-ui/src/routes/app.index.tsx", additions: 5, deletions: 1, status: "modified" }]);
       }
       if (/\/pulls\/3(?:\?|$)/.test(url)) return Response.json({ number: 3, mergeable_state: "clean" });
       if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
@@ -3558,7 +3558,7 @@ describe("queue processors", () => {
         return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
       }
       if (url.includes("/pulls/3/files")) {
-        return Response.json([{ filename: "apps/gittensory-ui/src/routes/app.index.tsx", additions: 5, deletions: 1, status: "modified" }]);
+        return Response.json([{ filename: "apps/loopover-ui/src/routes/app.index.tsx", additions: 5, deletions: 1, status: "modified" }]);
       }
       if (/\/pulls\/3(?:\?|$)/.test(url)) return Response.json({ number: 3, mergeable_state: "clean" });
       if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });

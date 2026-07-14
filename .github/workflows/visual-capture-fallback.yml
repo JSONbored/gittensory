@@ -28,7 +28,7 @@ name: LoopOver Visual Capture Fallback
 # delivers a `workflow_run` webhook; gittensory's backend then lists + downloads that run's artifact using its
 # OWN, already-trusted GitHub App installation token -- never a token that passed through this job.
 #
-# Setup (self-hosted repos only -- NOT needed for gittensory-ui / metagraphed, which already have their own
+# Setup (self-hosted repos only -- NOT needed for loopover-ui / metagraphed, which already have their own
 # preview-deploy pipeline): copy this file, unmodified, into the target repo's `.github/workflows/` at this
 # EXACT path and name (`visual-capture-fallback.yml` / "LoopOver Visual Capture Fallback") -- gittensory's
 # dispatch call and workflow_run listener both key off this fixed name. Then set `review.visual.actions_fallback:

@@ -9,7 +9,7 @@ import { createTestEnv } from "../helpers/d1";
 // not just a runtime no-op, so the tests that used to prove "gateCheckMode is ignored as a write input" no
 // longer apply (the type system enforces it more strongly than a runtime assertion ever could). The legacy
 // yml settings.gateCheckMode -> reviewCheckMode dual-write sync still exists one layer up, at
-// packages/gittensory-engine/src/focus-manifest.ts's parse step (tracked separately for removal).
+// packages/loopover-engine/src/focus-manifest.ts's parse step (tracked separately for removal).
 describe("repository_settings: reviewCheckMode default (#2852)", () => {
   it("getRepositorySettings returns disabled for a repo with no DB row at all (conservative, opt-in default)", async () => {
     const env = createTestEnv();

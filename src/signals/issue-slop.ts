@@ -1,5 +1,5 @@
 // Issue-side slop triage (#533). Split out of src/signals/slop.ts (#5133 follow-up) so that file can be a
-// pure re-export shim over packages/gittensory-engine/src/signals/slop.ts — the engine-parity checker
+// pure re-export shim over packages/loopover-engine/src/signals/slop.ts — the engine-parity checker
 // (scripts/check-engine-parity.ts) only recognizes a host file as a shim when it contains NOTHING but the
 // re-export statement, so this issue-side code (never extracted to the engine; not needed by the miner's
 // self-review path) needed its own file. Reuses slop.ts's re-exported clamp/slopBandFor so the two sides

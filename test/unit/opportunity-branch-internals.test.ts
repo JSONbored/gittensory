@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { opportunityFreshnessInternals } from "../../packages/gittensory-engine/src/opportunity-freshness";
-import { opportunityMetadataInternals } from "../../packages/gittensory-engine/src/opportunity-metadata";
-import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
+import { opportunityFreshnessInternals } from "../../packages/loopover-engine/src/opportunity-freshness";
+import { opportunityMetadataInternals } from "../../packages/loopover-engine/src/opportunity-metadata";
+import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/loopover-engine/src/miner-goal-spec";
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 

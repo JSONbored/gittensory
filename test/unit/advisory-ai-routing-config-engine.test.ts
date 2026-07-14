@@ -1,6 +1,6 @@
 // Mirror of the app suite pointed at the gittensory-engine copy so the extracted module owns its branch coverage (#2280).
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ADVISORY_AI_ROUTING, normalizeAdvisoryAiRoutingConfig } from "../../packages/gittensory-engine/src/review/advisory-ai-routing-config";
+import { DEFAULT_ADVISORY_AI_ROUTING, normalizeAdvisoryAiRoutingConfig } from "../../packages/loopover-engine/src/review/advisory-ai-routing-config";
 
 describe("normalizeAdvisoryAiRoutingConfig", () => {
   it("returns the all-off default when input is undefined (no warnings)", () => {

@@ -9,7 +9,7 @@
 #
 # THIS IS A REQUIRED STEP for any deployment you expect to run unattended, not an
 # optional one — see https://gittensory.aethereal.dev/docs/self-hosting-operations
-# (apps/gittensory-ui/src/routes/docs.self-hosting-operations.tsx), "Alerting — required
+# (apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx), "Alerting — required
 # for a 24/7 deployment" section, for the fastest verified path (a Discord webhook via
 # webhook_url_file, uncomment the block below) and for the Grafana "Alerts" row you can
 # check manually until you do. Until a real receiver is wired up, every rule in

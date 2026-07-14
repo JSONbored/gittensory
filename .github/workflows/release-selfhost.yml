@@ -127,7 +127,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       # #ci-engine-build-order (release pipeline): --all bundles EVERYTHING self-contained, including
-      # packages/gittensory-miner/lib/*.js (committed, pre-built) which imports @loopover/engine.
+      # packages/loopover-miner/lib/*.js (committed, pre-built) which imports @loopover/engine.
       # That package's dist/ is gitignored and only exists after this build step -- the regular CI smoke
       # test's narrower (non --all) build never hits this import chain, so it never caught the gap that
       # ci.yml's own validate-code job hit for ordinary backend PRs (fixed there separately).

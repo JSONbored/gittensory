@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const readmePath = join(process.cwd(), "packages/gittensory-miner/README.md");
+const readmePath = join(process.cwd(), "packages/loopover-miner/README.md");
 
 describe("gittensory-miner local storage README (#4272, #4876)", () => {
   it("documents every local SQLite store with file/table/module/env-var", () => {

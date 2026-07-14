@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { pickTopRankedOpportunitiesAtOrAboveScore } from "../../packages/gittensory-engine/src/ranked-opportunity-top-min-score";
-import type { OpportunityRankInput } from "../../packages/gittensory-engine/src/opportunity-ranker";
+import { pickTopRankedOpportunitiesAtOrAboveScore } from "../../packages/loopover-engine/src/ranked-opportunity-top-min-score";
+import type { OpportunityRankInput } from "../../packages/loopover-engine/src/opportunity-ranker";
 
 function input(over: Partial<OpportunityRankInput> = {}): OpportunityRankInput {
   return { potential: 1, feasibility: 1, laneFit: 1, freshness: 1, dupRisk: 0, ...over };
@@ -55,7 +55,7 @@ describe("pickTopRankedOpportunitiesAtOrAboveScore", () => {
   });
 
   it("is exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.pickTopRankedOpportunitiesAtOrAboveScore).toBe("function");
     expect(
       barrel.pickTopRankedOpportunitiesAtOrAboveScore(candidates, 0.5, 1).map((entry: { id: string }) => entry.id),

@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
+import { resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildEngineVersionDisplay,
@@ -17,8 +17,8 @@ import {
   runDoctor,
   runDoctorChecks,
   runStatus,
-} from "../../packages/gittensory-miner/lib/status.js";
-import { initLaptopState } from "../../packages/gittensory-miner/lib/laptop-init.js";
+} from "../../packages/loopover-miner/lib/status.js";
+import { initLaptopState } from "../../packages/loopover-miner/lib/laptop-init.js";
 
 const roots: string[] = [];
 

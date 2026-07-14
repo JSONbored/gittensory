@@ -2,8 +2,8 @@
 
 Example manifests for running **N isolated miner workers** on a small Kubernetes cluster, as an alternative to
 `docker run` / docker-compose on a single host. Built on the existing
-[`packages/gittensory-miner/Dockerfile`](../packages/gittensory-miner/Dockerfile) image (see
-[`DEPLOYMENT.md`](../packages/gittensory-miner/DEPLOYMENT.md) for the fleet-mode overview). These are starting
+[`packages/loopover-miner/Dockerfile`](../packages/loopover-miner/Dockerfile) image (see
+[`DEPLOYMENT.md`](../packages/loopover-miner/DEPLOYMENT.md) for the fleet-mode overview). These are starting
 points — review resource sizing, storage class, and your registry before applying to a real cluster.
 
 ## Why a StatefulSet (not a Deployment)
@@ -19,7 +19,7 @@ use a StatefulSet.
 
 1. **Build and push the image** from the monorepo root, then set `image:` in `miner-deployment.yaml`:
    ```sh
-   docker build -f packages/gittensory-miner/Dockerfile -t <registry>/loopover-miner:latest .
+   docker build -f packages/loopover-miner/Dockerfile -t <registry>/loopover-miner:latest .
    docker push <registry>/loopover-miner:latest
    ```
 2. **Create the Secret** (fill in real values first — never commit the filled-in copy):

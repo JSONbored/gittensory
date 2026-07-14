@@ -34,11 +34,11 @@ describe("ORB image-relevant commit detection", () => {
   });
 
   it("excludes a UI-only commit", () => {
-    expect(selectImageRelevantCommits([commit("feat(ui): add a button", ["apps/gittensory-ui/src/routes/app.index.tsx"])])).toEqual([]);
+    expect(selectImageRelevantCommits([commit("feat(ui): add a button", ["apps/loopover-ui/src/routes/app.index.tsx"])])).toEqual([]);
   });
 
   it("excludes an MCP-package-only commit", () => {
-    expect(selectImageRelevantCommits([commit("feat(mcp): add a tool", ["packages/gittensory-mcp/src/index.ts"])])).toEqual([]);
+    expect(selectImageRelevantCommits([commit("feat(mcp): add a tool", ["packages/loopover-mcp/src/index.ts"])])).toEqual([]);
   });
 
   it("excludes src/mcp/** even though it's under the generally-relevant src/ prefix", () => {
@@ -54,13 +54,13 @@ describe("ORB image-relevant commit detection", () => {
   });
 
   it("includes a mixed commit as long as AT LEAST ONE file is relevant and not excluded", () => {
-    const mixed = commit("feat(review): add a finding and its UI badge", ["src/review/visual-findings.ts", "apps/gittensory-ui/src/routes/app.index.tsx"]);
+    const mixed = commit("feat(review): add a finding and its UI badge", ["src/review/visual-findings.ts", "apps/loopover-ui/src/routes/app.index.tsx"]);
     expect(selectImageRelevantCommits([mixed])).toEqual([mixed]);
   });
 
   it("isImageRelevantCommit is the single-commit form of the same check", () => {
     expect(isImageRelevantCommit(commit("fix(queue): x", ["src/queue/processors.ts"]))).toBe(true);
-    expect(isImageRelevantCommit(commit("feat(ui): x", ["apps/gittensory-ui/src/x.tsx"]))).toBe(false);
+    expect(isImageRelevantCommit(commit("feat(ui): x", ["apps/loopover-ui/src/x.tsx"]))).toBe(false);
   });
 });
 
@@ -161,7 +161,7 @@ describe("buildOrbReleaseReport", () => {
     const report = buildOrbReleaseReport({
       tags: ["orb-v0.3.0", "orb-v0.4.0-beta.5"],
       manifestVersion: "0.4.0",
-      commits: { sinceStable: [], sinceLastTag: [commit("feat(ui): x", ["apps/gittensory-ui/src/x.tsx"])] },
+      commits: { sinceStable: [], sinceLastTag: [commit("feat(ui): x", ["apps/loopover-ui/src/x.tsx"])] },
     });
     expect(report.due).toBe(false);
   });
@@ -208,7 +208,7 @@ describe("buildOrbReleaseReport", () => {
 
   it("also exposes the raw image-relevant commits since the last STABLE tag, independent of the beta-vs-any-tag commits field", () => {
     const relevant = commit("fix(queue): x", ["src/queue/processors.ts"]);
-    const excluded = commit("feat(ui): x", ["apps/gittensory-ui/src/x.tsx"]);
+    const excluded = commit("feat(ui): x", ["apps/loopover-ui/src/x.tsx"]);
     const report = buildOrbReleaseReport({
       tags: ["orb-v0.3.0"],
       manifestVersion: "0.4.0",
@@ -249,7 +249,7 @@ describe("buildOrbStableReleaseReport", () => {
   it("is not due when the only commits since stable are UI/MCP-only (excluded)", () => {
     const report = buildOrbStableReleaseReport({
       tags: ["orb-v0.3.0"],
-      commitsSinceStable: [commit("feat(ui): x", ["apps/gittensory-ui/src/x.tsx"])],
+      commitsSinceStable: [commit("feat(ui): x", ["apps/loopover-ui/src/x.tsx"])],
     });
     expect(report.due).toBe(false);
   });

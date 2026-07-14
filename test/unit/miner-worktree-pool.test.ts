@@ -7,7 +7,7 @@ import {
   isWorktreeAllocated,
   availableWorktreeSlots,
   type WorktreePoolState,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 const config = { maxConcurrency: 2 };
 const REPO = "/home/node/repos/acme";

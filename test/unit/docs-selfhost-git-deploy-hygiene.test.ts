@@ -10,7 +10,7 @@ const GITIGNORE = ".gitignore";
 const UPDATE_SCRIPT = "scripts/selfhost-update.sh";
 const PREBUILT_SCRIPT = "scripts/deploy-selfhost-prebuilt.sh";
 const POST_UPDATE_SCRIPT = "scripts/selfhost-post-update-check.sh";
-const OPERATIONS = "apps/gittensory-ui/src/routes/docs.self-hosting-operations.tsx";
+const OPERATIONS = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
 
 const gitignore = readFileSync(GITIGNORE, "utf8");
 const updateScript = readFileSync(UPDATE_SCRIPT, "utf8");

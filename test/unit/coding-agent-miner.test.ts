@@ -25,7 +25,7 @@ import {
   type CodingAgentDriverResult,
   type CodingAgentDriverTask,
   type LintGuardSpawnFn,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 const task: CodingAgentDriverTask = {
   attemptId: "attempt-1",
@@ -620,18 +620,18 @@ describe("createCodingAgentDriver provider resolution (#4289)", () => {
 
 describe("lint-guarded edit wrapper (#4276)", () => {
   it("classifyLintGuardPackage routes each file to the check that actually governs it", () => {
-    expect(classifyLintGuardPackage("apps/gittensory-ui/src/App.tsx")).toBe("ui");
-    expect(classifyLintGuardPackage("packages/gittensory-engine/src/miner/lint-guard.ts")).toBe("engine");
-    expect(classifyLintGuardPackage("packages/gittensory-miner/lib/cli.js")).toBe("miner-js");
-    expect(classifyLintGuardPackage("packages/gittensory-mcp/bin/loopover-mcp.js")).toBe("mcp-js");
+    expect(classifyLintGuardPackage("apps/loopover-ui/src/App.tsx")).toBe("ui");
+    expect(classifyLintGuardPackage("packages/loopover-engine/src/miner/lint-guard.ts")).toBe("engine");
+    expect(classifyLintGuardPackage("packages/loopover-miner/lib/cli.js")).toBe("miner-js");
+    expect(classifyLintGuardPackage("packages/loopover-mcp/bin/loopover-mcp.js")).toBe("mcp-js");
     expect(classifyLintGuardPackage("src/review/ops-wire.ts")).toBe("root");
     // A hand-written .d.ts under miner/mcp is type-checked by the root tsc, not node --check.
-    expect(classifyLintGuardPackage("packages/gittensory-miner/lib/cli.d.ts")).toBe("root");
-    expect(classifyLintGuardPackage("packages/gittensory-mcp/lib/local-branch.d.ts")).toBe("root");
+    expect(classifyLintGuardPackage("packages/loopover-miner/lib/cli.d.ts")).toBe("root");
+    expect(classifyLintGuardPackage("packages/loopover-mcp/lib/local-branch.d.ts")).toBe("root");
   });
 
   it("classifyLintGuardPackage normalizes Windows-style backslash paths and a leading ./", () => {
-    expect(classifyLintGuardPackage("packages\\gittensory-miner\\lib\\cli.js")).toBe("miner-js");
+    expect(classifyLintGuardPackage("packages\\loopover-miner\\lib\\cli.js")).toBe("miner-js");
     expect(classifyLintGuardPackage("./src/review/ops-wire.ts")).toBe("root");
   });
 
@@ -662,18 +662,18 @@ describe("lint-guarded edit wrapper (#4276)", () => {
 
   it("guardChangedFiles reports a node --check syntax error in a gittensory-miner JS file", async () => {
     const { spawn } = recordingSpawn({
-      "node --check packages/gittensory-miner/lib/cli.js": {
+      "node --check packages/loopover-miner/lib/cli.js": {
         code: 1,
         output: "SyntaxError: Unexpected token '}'",
       },
     });
-    const result = await guardChangedFiles(["packages/gittensory-miner/lib/cli.js"], { spawn, cwd: "/repo" });
+    const result = await guardChangedFiles(["packages/loopover-miner/lib/cli.js"], { spawn, cwd: "/repo" });
     expect(result.ok).toBe(false);
     expect(result.checks).toEqual([
       {
         package: "miner-js",
-        file: "packages/gittensory-miner/lib/cli.js",
-        command: "node --check packages/gittensory-miner/lib/cli.js",
+        file: "packages/loopover-miner/lib/cli.js",
+        command: "node --check packages/loopover-miner/lib/cli.js",
         ok: false,
         output: "SyntaxError: Unexpected token '}'",
       },
@@ -693,15 +693,15 @@ describe("lint-guarded edit wrapper (#4276)", () => {
     const { spawn, calls } = recordingSpawn({
       "npm run typecheck": { code: 0, output: "" },
       "npm run build --workspace @loopover/engine": { code: 1, output: "engine build failed" },
-      "node --check packages/gittensory-miner/lib/cli.js": { code: 0, output: "" },
+      "node --check packages/loopover-miner/lib/cli.js": { code: 0, output: "" },
       "npm run ui:typecheck": { code: 0, output: "" },
     });
     const result = await guardChangedFiles(
       [
         "src/review/ops-wire.ts",
-        "packages/gittensory-engine/src/miner/lint-guard.ts",
-        "packages/gittensory-miner/lib/cli.js",
-        "apps/gittensory-ui/src/App.tsx",
+        "packages/loopover-engine/src/miner/lint-guard.ts",
+        "packages/loopover-miner/lib/cli.js",
+        "apps/loopover-ui/src/App.tsx",
       ],
       { spawn, cwd: "/repo" },
     );
@@ -717,18 +717,18 @@ describe("lint-guarded edit wrapper (#4276)", () => {
 
   it("guardChangedFiles groups multiple files in the same package into a single check", async () => {
     const { spawn } = recordingSpawn({
-      "node --check packages/gittensory-miner/lib/a.js": { code: 0, output: "" },
-      "node --check packages/gittensory-miner/lib/b.js": { code: 0, output: "" },
+      "node --check packages/loopover-miner/lib/a.js": { code: 0, output: "" },
+      "node --check packages/loopover-miner/lib/b.js": { code: 0, output: "" },
     });
     const result = await guardChangedFiles(
-      ["packages/gittensory-miner/lib/a.js", "packages/gittensory-miner/lib/b.js"],
+      ["packages/loopover-miner/lib/a.js", "packages/loopover-miner/lib/b.js"],
       { spawn, cwd: "/repo" },
     );
     expect(result.ok).toBe(true);
     expect(result.checks).toHaveLength(2);
     expect(result.checks.map((check) => check.file)).toEqual([
-      "packages/gittensory-miner/lib/a.js",
-      "packages/gittensory-miner/lib/b.js",
+      "packages/loopover-miner/lib/a.js",
+      "packages/loopover-miner/lib/b.js",
     ]);
   });
 

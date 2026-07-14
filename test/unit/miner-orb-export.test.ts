@@ -15,8 +15,8 @@ import {
   openOrbExportStore,
   resolveAmsCollectorUrl,
   sendAmsExportBatch,
-} from "../../packages/gittensory-miner/lib/orb-export.js";
-import type { OrbExportOutcome, OrbExportRow } from "../../packages/gittensory-miner/lib/orb-export.js";
+} from "../../packages/loopover-miner/lib/orb-export.js";
+import type { OrbExportOutcome, OrbExportRow } from "../../packages/loopover-miner/lib/orb-export.js";
 
 let dir: string;
 function storePath() {

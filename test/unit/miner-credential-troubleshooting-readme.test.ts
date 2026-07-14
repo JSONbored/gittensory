@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
 // production behavior to regression-test; the driver's own error-string vocabulary is covered by
 // test/unit/cli-subprocess-driver.test.ts (#5168/#5169). These tests only pin the docs↔code link.
 
-const readmePath = join(process.cwd(), "packages/gittensory-miner/README.md");
-const driverPath = join(process.cwd(), "packages/gittensory-engine/src/miner/cli-subprocess-driver.ts");
+const readmePath = join(process.cwd(), "packages/loopover-miner/README.md");
+const driverPath = join(process.cwd(), "packages/loopover-engine/src/miner/cli-subprocess-driver.ts");
 
 /** Each row of the README table: the error token as it appears in the first column, and the literal stem
  *  the CLI-subprocess driver source must actually contain to back it. Placeholders (`<status>`, `<code>`,

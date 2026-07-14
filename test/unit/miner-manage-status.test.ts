@@ -14,19 +14,19 @@ import {
   runManageStatus,
   type ManageStatusRow,
   type RunPortfolioRow,
-} from "../../packages/gittensory-miner/lib/manage-status.js";
+} from "../../packages/loopover-miner/lib/manage-status.js";
 import {
   closeDefaultEventLedger,
   initEventLedger,
-} from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import {
   closeDefaultRunStateStore,
   initRunStateStore,
-} from "../../packages/gittensory-miner/lib/run-state.js";
+} from "../../packages/loopover-miner/lib/run-state.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

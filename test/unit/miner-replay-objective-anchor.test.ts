@@ -8,7 +8,7 @@ import {
   extractReplayTargetFeatures,
   extractRevealedFeatures,
   scoreObjectiveAnchor,
-} from "../../packages/gittensory-miner/lib/replay-objective-anchor.js";
+} from "../../packages/loopover-miner/lib/replay-objective-anchor.js";
 
 describe("gittensory-miner replay objective-anchor scoring (#3012)", () => {
   it("exposes a frozen change-kind vocabulary and weights that sum to 1", () => {

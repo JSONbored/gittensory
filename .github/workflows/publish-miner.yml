@@ -4,7 +4,7 @@ name: Publish Miner Package
 # files for the fuller rationale): a GITHUB_TOKEN-created tag doesn't fire push-triggered workflows,
 # so the release automation must explicitly dispatch this after tagging. A bare manual dispatch (
 # released_by_release_please left false) is the human override path and self-tags HEAD from
-# packages/gittensory-miner/package.json's version.
+# packages/loopover-miner/package.json's version.
 #
 # @loopover/miner has already been bootstrap-published to npm once (from a maintainer's own
 # authenticated `npm login` session -- npm's trusted publishing/OIDC cannot create a brand-new
@@ -66,7 +66,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          VERSION="$(node -p "require('./packages/gittensory-miner/package.json').version")"
+          VERSION="$(node -p "require('./packages/loopover-miner/package.json').version")"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid package version: $VERSION"
             exit 1
@@ -121,7 +121,7 @@ jobs:
       - name: Upload package tarball
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: gittensory-miner-tarball
+          name: loopover-miner-tarball
           path: ${{ runner.temp }}/*.tgz
           if-no-files-found: error
           retention-days: 7
@@ -184,21 +184,21 @@ jobs:
       - name: Download package tarball
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: gittensory-miner-tarball
-          path: ${{ runner.temp }}/gittensory-miner-package
+          name: loopover-miner-tarball
+          path: ${{ runner.temp }}/loopover-miner-package
 
       - name: Publish to npm (OIDC trusted publishing)
         env:
           NPM_CONFIG_PROVENANCE: "true"
         run: |
           set -euo pipefail
-          count=$(find "$RUNNER_TEMP/gittensory-miner-package" -maxdepth 1 -type f -name "*.tgz" | wc -l | tr -d ' ')
+          count=$(find "$RUNNER_TEMP/loopover-miner-package" -maxdepth 1 -type f -name "*.tgz" | wc -l | tr -d ' ')
           if [ "$count" != "1" ]; then
             echo "Expected exactly one tarball, found $count" >&2
-            find "$RUNNER_TEMP/gittensory-miner-package" -maxdepth 1 -type f -name "*.tgz" -print >&2
+            find "$RUNNER_TEMP/loopover-miner-package" -maxdepth 1 -type f -name "*.tgz" -print >&2
             exit 1
           fi
-          tarball=$(find "$RUNNER_TEMP/gittensory-miner-package" -maxdepth 1 -type f -name "*.tgz" -print -quit)
+          tarball=$(find "$RUNNER_TEMP/loopover-miner-package" -maxdepth 1 -type f -name "*.tgz" -print -quit)
           npx -y npm@11.15.0 publish "$tarball" --access public --provenance
 
   github-release:

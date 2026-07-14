@@ -17,7 +17,7 @@ import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/ai-policy");

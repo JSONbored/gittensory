@@ -4,14 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { attemptLoopReentry, countConsecutiveDisengagements, countReentriesSince, LOOP_REENTRY_DECISION_EVENT } from "../../packages/gittensory-miner/lib/loop-reentry.js";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { initPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { initRunStateStore } from "../../packages/gittensory-miner/lib/run-state.js";
-import { recordPrOutcomeSnapshot } from "../../packages/gittensory-miner/lib/pr-outcome.js";
+import { attemptLoopReentry, countConsecutiveDisengagements, countReentriesSince, LOOP_REENTRY_DECISION_EVENT } from "../../packages/loopover-miner/lib/loop-reentry.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { initRunStateStore } from "../../packages/loopover-miner/lib/run-state.js";
+import { recordPrOutcomeSnapshot } from "../../packages/loopover-miner/lib/pr-outcome.js";
 
 const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];

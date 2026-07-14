@@ -4,7 +4,7 @@
 // meter (emission share), styled with this repo's own brand tokens rather
 // than a generic third-party template. Replaces matthewevans/gittensor-impact-action's
 // rendering (its per-repo data-fetch approach inspired this, but the visual
-// design here is our own, matching apps/gittensory-ui/src/styles.css).
+// design here is our own, matching apps/loopover-ui/src/styles.css).
 //
 // Usage: node scripts/gittensor-impact-card.mjs <owner/repo> <out-file.svg>
 
@@ -27,7 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const repoIconPath = path.join(
   repoRoot,
-  "apps/gittensory-ui/public/brand/gittensory-icon-citron.svg",
+  "apps/loopover-ui/public/brand/gittensory-icon-citron.svg",
 );
 
 function compact(n) {

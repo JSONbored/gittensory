@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/miner/attempt-log.js");
+  return import("../../packages/loopover-engine/src/miner/attempt-log.js");
 });
 
 import {
@@ -15,7 +15,7 @@ import {
   initAttemptLog,
   readAttemptLogEvents,
   resolveAttemptLogDbPath,
-} from "../../packages/gittensory-miner/lib/attempt-log.js";
+} from "../../packages/loopover-miner/lib/attempt-log.js";
 
 const roots: string[] = [];
 const logs: Array<{ close(): void }> = [];
@@ -228,7 +228,7 @@ describe("gittensory-miner attempt log (#4294)", () => {
   });
 
   it("is append-only: the module source issues no UPDATE or DELETE against the ledger", () => {
-    const source = readFileSync("packages/gittensory-miner/lib/attempt-log.js", "utf8");
+    const source = readFileSync("packages/loopover-miner/lib/attempt-log.js", "utf8");
     expect(source).not.toMatch(/\b(UPDATE|DELETE)\b/i);
   });
 

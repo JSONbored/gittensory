@@ -1,6 +1,6 @@
 // Reward/risk reasoning signals, extracted to `@loopover/engine` (#2281) so the gittensory-miner
 // can rank candidate work locally with the same logic the maintainer-side gate computes. The implementation
-// lives at `packages/gittensory-engine/src/reward-risk.ts`, imported via its RELATIVE SOURCE PATH (matching
+// lives at `packages/loopover-engine/src/reward-risk.ts`, imported via its RELATIVE SOURCE PATH (matching
 // the merged #2276/#2278/#2282 shims) — not the published `@loopover/engine` specifier, so no
 // tsconfig path / vitest alias / root dependency is introduced.
 //
@@ -19,7 +19,7 @@ import {
   buildPullRequestReviewability as engineBuildPullRequestReviewability,
   buildRepoRewardRisk as engineBuildRepoRewardRisk,
   type RewardRiskEngineDeps,
-} from "../../packages/gittensory-engine/src/reward-risk.js";
+} from "../../packages/loopover-engine/src/reward-risk.js";
 import {
   buildCollisionReport,
   buildContributorIntakeHealth,
@@ -38,8 +38,8 @@ export type {
   RewardRiskAction,
   RewardRiskActionKind,
   RewardRiskActionSeverity,
-} from "../../packages/gittensory-engine/src/reward-risk.js";
-export { rewardRiskFreshnessInternals } from "../../packages/gittensory-engine/src/reward-risk.js";
+} from "../../packages/loopover-engine/src/reward-risk.js";
+export { rewardRiskFreshnessInternals } from "../../packages/loopover-engine/src/reward-risk.js";
 
 // The real `src`-side builders, bound once and injected into the engine implementations. Their argument
 // records are wider than (assignable to) the engine's subset mirrors and their return types are covariantly

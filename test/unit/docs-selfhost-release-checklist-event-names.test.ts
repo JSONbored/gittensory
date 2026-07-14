@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 // event names. If an event is ever renamed/removed in src/, this test fails instead of the checklist
 // silently going stale -- mirrors docs-selfhost-troubleshooting-metric-names.test.ts's approach (#1943).
 
-const DOC_PATH = "apps/gittensory-ui/src/routes/docs.self-hosting-release-checklist.tsx";
+const DOC_PATH = "apps/loopover-ui/src/routes/docs.self-hosting-release-checklist.tsx";
 const SCRIPT_PATH = "scripts/smoke-selfhost.sh";
 const doc = readFileSync(DOC_PATH, "utf8");
 const script = readFileSync(SCRIPT_PATH, "utf8");

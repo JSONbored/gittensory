@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { buildLoopClosureSummary } from "../../packages/gittensory-miner/lib/loop-closure.js";
-import { initPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { initRunStateStore } from "../../packages/gittensory-miner/lib/run-state.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { buildLoopClosureSummary } from "../../packages/loopover-miner/lib/loop-closure.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { initRunStateStore } from "../../packages/loopover-miner/lib/run-state.js";
 
 // A mock event ledger that honors the real `readEvents({ since, repoFullName })` cursor contract (strictly-greater
 // seq, optional repo filter), so the sinceSeq cycle boundary is exercised through the same shape as the SQLite one.

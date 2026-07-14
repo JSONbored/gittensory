@@ -1,7 +1,7 @@
 export const MCP_RELEASE_DUE_MARKER = "<!-- gittensory:mcp-release-due -->";
 
 const DIRECT_MCP_PATHS = [
-  "packages/gittensory-mcp/",
+  "packages/loopover-mcp/",
   ".github/workflows/publish-mcp.yml",
   "src/mcp/",
   "src/services/mcp-compatibility.ts",
@@ -23,8 +23,8 @@ const CLIENT_VISIBLE_PATHS = [
 
 const SUPPORTING_VISIBLE_PATHS = ["src/openapi/schemas.ts", "src/openapi/spec.ts"];
 
-const GENERATED_OPENAPI_PATHS = ["apps/gittensory-ui/public/openapi.json", "src/openapi/spec.ts"];
-const UI_ONLY_PREFIXES = ["apps/gittensory-ui/", "apps/gittensory-extension/", "apps/gittensory-miner-extension/"];
+const GENERATED_OPENAPI_PATHS = ["apps/loopover-ui/public/openapi.json", "src/openapi/spec.ts"];
+const UI_ONLY_PREFIXES = ["apps/loopover-ui/", "apps/loopover-extension/", "apps/loopover-miner-extension/"];
 const RELEASE_SCOPES = new Set(["release", "changelog"]);
 const EXCLUDED_SCOPES = new Set(["pwa", "ui", "extension", "github-agent", "sync", "upstream"]);
 const GROUP_ORDER = ["Features", "Fixes", "Security", "CI", "Build", "Docs", "Tests", "Refactors", "Dependencies", "Chores", "Reverts"];
@@ -108,7 +108,7 @@ export function isMcpReleaseRelevantCommit(commit) {
   if (!parsed.type && !parsed.conventional) return false;
 
   const hasDirectMcpPath = hasAnyPath(files, DIRECT_MCP_PATHS);
-  const hasPackageReleasePath = hasAnyPath(files, ["packages/gittensory-mcp/", ".github/workflows/publish-mcp.yml"]);
+  const hasPackageReleasePath = hasAnyPath(files, ["packages/loopover-mcp/", ".github/workflows/publish-mcp.yml"]);
   const hasClientVisiblePath = hasAnyPath(files, CLIENT_VISIBLE_PATHS);
   const hasOnlySupportingVisiblePath = hasAnyPath(files, SUPPORTING_VISIBLE_PATHS) && !hasDirectMcpPath && !hasClientVisiblePath;
 
@@ -213,10 +213,10 @@ ${changedFiles}
 
 ## Release-Prep Checklist
 
-- [ ] Bump \`packages/gittensory-mcp/package.json\` to \`${report.proposedVersion}\`
+- [ ] Bump \`packages/loopover-mcp/package.json\` to \`${report.proposedVersion}\`
 - [ ] Bump the CLI \`packageVersion\` constant to \`${report.proposedVersion}\`
 - [ ] Update MCP compatibility metadata minimum supported and latest recommended versions to \`${report.proposedVersion}\`
-- [ ] Generate \`packages/gittensory-mcp/CHANGELOG.md\` with a \`mcp-v${report.proposedVersion}\` section
+- [ ] Generate \`packages/loopover-mcp/CHANGELOG.md\` with a \`mcp-v${report.proposedVersion}\` section
 - [ ] Run \`npm run build:mcp\`
 - [ ] Run \`npm run test:mcp-pack\`
 - [ ] Run \`npm run changelog:check:mcp\`

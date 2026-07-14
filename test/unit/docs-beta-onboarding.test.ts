@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const BETA_ONBOARDING_PATH = resolve(
   import.meta.dirname,
-  "../../apps/gittensory-ui/src/routes/docs.beta-onboarding.tsx",
+  "../../apps/loopover-ui/src/routes/docs.beta-onboarding.tsx",
 );
 
 describe("docs beta onboarding page", () => {

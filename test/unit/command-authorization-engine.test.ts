@@ -6,7 +6,7 @@ import {
   evaluateCommandAuthorization,
   normalizeCommandAuthorizationPolicy,
   summarizeCommandAuthorizationPolicy,
-} from "../../packages/gittensory-engine/src/settings/command-authorization";
+} from "../../packages/loopover-engine/src/settings/command-authorization";
 
 describe("repo command authorization policy", () => {
   it("preserves secure defaults for maintainers, collaborators, and confirmed-miner PR authors", () => {

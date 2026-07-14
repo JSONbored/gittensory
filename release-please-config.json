@@ -1,22 +1,22 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
-    "packages/gittensory-mcp": {
+    "packages/loopover-mcp": {
       "release-type": "node",
       "component": "mcp",
       "package-name": "@loopover/mcp"
     },
-    "packages/gittensory-engine": {
+    "packages/loopover-engine": {
       "release-type": "node",
       "component": "engine",
       "package-name": "@loopover/engine"
     },
-    "packages/gittensory-miner": {
+    "packages/loopover-miner": {
       "release-type": "node",
       "component": "miner",
       "package-name": "@loopover/miner"
     },
-    "packages/gittensory-ui-kit": {
+    "packages/loopover-ui-kit": {
       "release-type": "node",
       "component": "ui-kit",
       "package-name": "@loopover/ui-kit"

@@ -1405,7 +1405,7 @@ describe("queue processors", () => {
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
       // A web-visible route file (isVisualPath) — this is what makes screenshotsAllowed's file-touch gate open
       // and buildCapture actually run, on TOP of the no-body-table screenshotTableGate scope match (label).
-      if (url.includes("/pulls/58/files")) return Response.json([{ filename: "apps/gittensory-ui/src/routes/app.index.tsx", status: "modified", additions: 5, deletions: 1, changes: 6, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/58/files")) return Response.json([{ filename: "apps/loopover-ui/src/routes/app.index.tsx", status: "modified", additions: 5, deletions: 1, changes: 6, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/58/reviews")) return Response.json([]);
       if (url.includes("/pulls/58/commits")) return Response.json([]);
       if (url.endsWith("/pulls/58") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 58, state: "closed" }); }
@@ -1497,7 +1497,7 @@ describe("queue processors", () => {
       const method = init?.method ?? "GET";
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url.includes("/pulls/59/files")) return Response.json([{ filename: "apps/gittensory-ui/src/routes/app.index.tsx", status: "modified", additions: 5, deletions: 1, changes: 6, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/59/files")) return Response.json([{ filename: "apps/loopover-ui/src/routes/app.index.tsx", status: "modified", additions: 5, deletions: 1, changes: 6, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/59/reviews")) return Response.json([]);
       if (url.includes("/pulls/59/commits")) return Response.json([]);
       if (url.endsWith("/pulls/59") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 59, state: "closed" }); }

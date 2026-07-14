@@ -26,7 +26,7 @@
 //
 // READ SIDE (#2349): computeContributorCalibration aggregates ONE login's full history into a plain
 // {sampleSize, agreementRate} signal for buildPredictedGateVerdict's personalization input
-// (packages/gittensory-engine/src/signals/contributor-calibration.ts). It is intentionally NOT gated by
+// (packages/loopover-engine/src/signals/contributor-calibration.ts). It is intentionally NOT gated by
 // isSelfHostedReviewRuntime/isParityAuditEnabled the way the writer above is: the write-side flag controls
 // whether this telemetry class is collected at all, but the read is a plain "use whatever rows already
 // exist" query -- gating it too would make historical calibration data silently stop being read the moment
@@ -36,7 +36,7 @@
 import { isParityAuditEnabled } from "./parity-wire";
 import { isSelfHostedReviewRuntime } from "../selfhost/review-runtime";
 import { errorMessage, nowIso } from "../utils/json";
-import type { ContributorCalibrationSignal } from "../../packages/gittensory-engine/src/signals/contributor-calibration";
+import type { ContributorCalibrationSignal } from "../../packages/loopover-engine/src/signals/contributor-calibration";
 
 /** The minimal env shape the recorder needs -- mirrors parity-wire.ts's ParityRecorderEnv / contributor-
  *  calibration.ts's ContributorCalibrationEnv exactly (same gate-accuracy telemetry family, same flag). */

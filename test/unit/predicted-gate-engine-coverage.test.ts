@@ -1,33 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateGateCheck, buildPullRequestAdvisory, gateAdvisoryInternals } from "../../packages/gittensory-engine/src/advisory/gate-advisory";
-import { buildFocusManifestGuidance, isFocusManifestPublicSafe, matchesManifestPath } from "../../packages/gittensory-engine/src/focus-manifest/guidance";
-import { sanitizePublicComment } from "../../packages/gittensory-engine/src/github/sanitize-public-comment";
+import { evaluateGateCheck, buildPullRequestAdvisory, gateAdvisoryInternals } from "../../packages/loopover-engine/src/advisory/gate-advisory";
+import { buildFocusManifestGuidance, isFocusManifestPublicSafe, matchesManifestPath } from "../../packages/loopover-engine/src/focus-manifest/guidance";
+import { sanitizePublicComment } from "../../packages/loopover-engine/src/github/sanitize-public-comment";
 import {
   CLA_CHECK_UNRESOLVED_CODE,
   CLA_CONSENT_MISSING_CODE,
   evaluateClaCheck,
   type ClaCheckConfig,
-} from "../../packages/gittensory-engine/src/review/cla-check";
-import { evaluatePreMergeChecks, PRE_MERGE_CHECK_ADVISORY_CODE, PRE_MERGE_CHECK_BLOCKING_CODE, PRE_MERGE_CHECK_UNRESOLVED_CODE } from "../../packages/gittensory-engine/src/review/pre-merge-checks";
-import { REVIEW_THREAD_BLOCKER_CODE } from "../../packages/gittensory-engine/src/review/review-thread-findings";
-import { diffFilePriority } from "../../packages/gittensory-engine/src/review/diff-file-priority";
+} from "../../packages/loopover-engine/src/review/cla-check";
+import { evaluatePreMergeChecks, PRE_MERGE_CHECK_ADVISORY_CODE, PRE_MERGE_CHECK_BLOCKING_CODE, PRE_MERGE_CHECK_UNRESOLVED_CODE } from "../../packages/loopover-engine/src/review/pre-merge-checks";
+import { REVIEW_THREAD_BLOCKER_CODE } from "../../packages/loopover-engine/src/review/review-thread-findings";
+import { diffFilePriority } from "../../packages/loopover-engine/src/review/diff-file-priority";
 import {
   clearLabelPatternRegExpCacheForTest,
   LABEL_PATTERN_REGEXP_CACHE_MAX_ENTRIES,
   labelMatchesPattern,
   labelPatternRegExpCacheKeysForTest,
-} from "../../packages/gittensory-engine/src/scoring/label-match";
+} from "../../packages/loopover-engine/src/scoring/label-match";
 import {
   changedPathsHittingGuardrail,
   globToRegExp,
   guardrailPathMatches,
   isGuardrailHit,
   matchesAny,
-} from "../../packages/gittensory-engine/src/signals/change-guardrail";
-import { isDuplicateClusterWinner, isDuplicateClusterWinnerByClaim, resolveDuplicateClusterWinnerNumber } from "../../packages/gittensory-engine/src/signals/duplicate-winner";
-import { buildCollisionReport, buildPreflightResult, buildPublicReadinessScore, buildQueueHealth, classifyBountyLifecycle, itemSharesPlannedLinkedIssue, predictedGateEngineInternals, termOverlap, unionScopedOverlapClusters } from "../../packages/gittensory-engine/src/signals/predicted-gate-engine";
-import type { CollisionItem, FocusManifest, IssueQualityReport, PreMergeCheck, PullRequestRecord, RepositoryRecord } from "../../packages/gittensory-engine/src/types/predicted-gate-types";
+} from "../../packages/loopover-engine/src/signals/change-guardrail";
+import { isDuplicateClusterWinner, isDuplicateClusterWinnerByClaim, resolveDuplicateClusterWinnerNumber } from "../../packages/loopover-engine/src/signals/duplicate-winner";
+import { buildCollisionReport, buildPreflightResult, buildPublicReadinessScore, buildQueueHealth, classifyBountyLifecycle, itemSharesPlannedLinkedIssue, predictedGateEngineInternals, termOverlap, unionScopedOverlapClusters } from "../../packages/loopover-engine/src/signals/predicted-gate-engine";
+import type { CollisionItem, FocusManifest, IssueQualityReport, PreMergeCheck, PullRequestRecord, RepositoryRecord } from "../../packages/loopover-engine/src/types/predicted-gate-types";
 
 const REPO: RepositoryRecord = {
   fullName: "acme/widgets",

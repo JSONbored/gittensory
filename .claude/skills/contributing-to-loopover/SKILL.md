@@ -84,7 +84,7 @@ opening a **fresh** PR. This is the entire reason to get it right before you pus
 git clone https://github.com/<you>/gittensory && cd gittensory
 git remote add upstream https://github.com/JSONbored/gittensory   # to sync main later
 nvm use            # Node 22 (.nvmrc)
-npm ci             # installs the whole workspace, incl. apps/gittensory-ui — required before any check
+npm ci             # installs the whole workspace, incl. apps/loopover-ui — required before any check
 ```
 
 All `npm run …` commands run from the **repo root**. As an external contributor you **push to your
@@ -125,7 +125,7 @@ pasted JSON block will not work in Codex). You'll use these tools in Phases 1 an
 - **Run the pre-start checks** via MCP: `loopover_check_before_start` (is it claimed / a duplicate
   cluster / already solved?) and, if linking an issue, `loopover_validate_linked_issue`.
 - **Stay in scope.** The gate's `wantedPaths` are `src/`, `packages/`, `test/`, `migrations/`,
-  `scripts/`, `review-enrichment/`, `.github/workflows/`, `wrangler.jsonc`, `apps/gittensory-ui/`. Avoid `blockedPaths`
+  `scripts/`, `review-enrichment/`, `.github/workflows/`, `wrangler.jsonc`, `apps/loopover-ui/`. Avoid `blockedPaths`
   (`site/`, `CNAME`, `**/lovable/**`). Keep the PR narrow — one coherent change.
 
 ---
@@ -198,13 +198,13 @@ Run the matching command(s) and **commit the regenerated file(s)** — CI fails 
 
 | You changed… | Run | Commit |
 |---|---|---|
-| API routes or OpenAPI schemas (`src/`) | `npm run ui:openapi` | `apps/gittensory-ui/public/openapi.json` |
+| API routes or OpenAPI schemas (`src/`) | `npm run ui:openapi` | `apps/loopover-ui/public/openapi.json` |
 | A Cloudflare binding/var in `wrangler.jsonc` | `npm run cf-typegen` | `worker-configuration.d.ts` |
 | Drizzle schema (`src/db/schema.ts`) | `npm run drizzle:generate` | the new `migrations/NNNN_*.sql` |
 | Added a raw-SQL migration | (none — just author it) | next **contiguous** `migrations/NNNN_snake.sql` |
-| `src/selfhost/**` (or a few other scanned files — see `scripts/gen-selfhost-env-reference.mjs`'s `DEFAULT_SOURCE_ROOTS`) adding/removing an `env.SOMETHING` read | `npm run selfhost:env-reference` | `apps/gittensory-ui/src/lib/selfhost-env-reference.ts` — the doc cites the file only (not `file:line`, deliberately, so an unrelated line shift elsewhere in the file never makes this go stale) |
+| `src/selfhost/**` (or a few other scanned files — see `scripts/gen-selfhost-env-reference.mjs`'s `DEFAULT_SOURCE_ROOTS`) adding/removing an `env.SOMETHING` read | `npm run selfhost:env-reference` | `apps/loopover-ui/src/lib/selfhost-env-reference.ts` — the doc cites the file only (not `file:line`, deliberately, so an unrelated line shift elsewhere in the file never makes this go stale) |
 | CLI command surface | `npm run command-reference` | the generated command-reference doc |
-| UI files (`apps/gittensory-ui/**`) | `npm --workspace @loopover/ui run format` | formatted files |
+| UI files (`apps/loopover-ui/**`) | `npm --workspace @loopover/ui run format` | formatted files |
 
 Migrations must use the **next free number** (contiguous, no gaps, no reuse) and match
 `NNNN_snake_case.sql`; `db:migrations:check` enforces it.
@@ -264,17 +264,17 @@ merge instead of a one-shot close.
 below needs real, clickable thumbnail URLs — here's how to get them when you can't drag-and-drop into
 GitHub's web editor (which needs a human browser session an AI coding tool can't drive end-to-end):
 
-1. **Local dev server:** `npm --prefix apps/gittensory-ui run dev` (Vite forces port **8080** regardless
+1. **Local dev server:** `npm --prefix apps/loopover-ui run dev` (Vite forces port **8080** regardless
    of what you request — use that port in any launch config, or `preview_screenshot`-style tooling just
    hangs waiting for the server). For an auth-gated page, use the sanctioned local-preview escape hatch
-   instead of real GitHub OAuth: `useSession().signInPreview()` (`apps/gittensory-ui/src/lib/api/session.ts`),
+   instead of real GitHub OAuth: `useSession().signInPreview()` (`apps/loopover-ui/src/lib/api/session.ts`),
    gated on `import.meta.env.DEV` — it sets a synthetic session client-side with no network write. Click
    the "Continue with local preview" button in the sign-in wall rather than calling the hook indirectly
    (the real `fetchBrowserSession()` call can race in afterward and silently overwrite it back to `null`);
    overriding `window.fetch` for `/v1/auth/session` to return the same authenticated shape closes that
    race either way.
 2. **Fixed viewport, never a full-page/`fullPage: true` capture.** gittensory-ui is a **dark-mode-only
-   build** (`apps/gittensory-ui/src/components/site/theme-toggle.tsx` — the toggle was removed; there is
+   build** (`apps/loopover-ui/src/components/site/theme-toggle.tsx` — the toggle was removed; there is
    no light theme left to force), so there's no theme dimension to multiply out. Capture at whichever
    viewport(s) your change actually affects — mobile (375×812) and desktop (1280×800) cover most cases;
    add a caption per state either way (`"Loaded state"`, `"Mobile layout"`, etc., matching the existing

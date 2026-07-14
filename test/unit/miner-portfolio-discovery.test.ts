@@ -5,13 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   closeDefaultEventLedger,
   initEventLedger,
-} from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { enqueueRankedDiscovery } from "../../packages/gittensory-miner/lib/portfolio-discovery.js";
-import type { EnqueueRankedDiscoveryInput } from "../../packages/gittensory-miner/lib/portfolio-discovery.d.ts";
+} from "../../packages/loopover-miner/lib/event-ledger.js";
+import { enqueueRankedDiscovery } from "../../packages/loopover-miner/lib/portfolio-discovery.js";
+import type { EnqueueRankedDiscoveryInput } from "../../packages/loopover-miner/lib/portfolio-discovery.d.ts";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

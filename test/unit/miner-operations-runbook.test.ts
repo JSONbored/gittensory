@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = process.cwd();
-const runbookPath = join(repoRoot, "packages/gittensory-miner/docs/operations-runbook.md");
-const codingAgentDriverDocPath = join(repoRoot, "packages/gittensory-miner/docs/coding-agent-driver.md");
-const deploymentDocPath = join(repoRoot, "packages/gittensory-miner/DEPLOYMENT.md");
+const runbookPath = join(repoRoot, "packages/loopover-miner/docs/operations-runbook.md");
+const codingAgentDriverDocPath = join(repoRoot, "packages/loopover-miner/docs/coding-agent-driver.md");
+const deploymentDocPath = join(repoRoot, "packages/loopover-miner/DEPLOYMENT.md");
 
 describe("miner operations runbook (#4875)", () => {
   it("covers the three operational scenarios from the issue plus the busy_timeout guarantee", () => {

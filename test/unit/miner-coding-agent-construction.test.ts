@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { createRealCliSubprocessSpawn, constructProductionCodingAgentDriver } from "../../packages/gittensory-miner/lib/coding-agent-construction.js";
-import type { AgentSdkQueryFn, CodingAgentDriverTask } from "../../packages/gittensory-engine/src/index";
+import { createRealCliSubprocessSpawn, constructProductionCodingAgentDriver } from "../../packages/loopover-miner/lib/coding-agent-construction.js";
+import type { AgentSdkQueryFn, CodingAgentDriverTask } from "../../packages/loopover-engine/src/index";
 
 const task: CodingAgentDriverTask = {
   attemptId: "attempt-1",

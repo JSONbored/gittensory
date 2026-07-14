@@ -14,7 +14,7 @@ import { errorMessage, nowIso } from "../utils/json";
 // src/scoring/preview.ts's shim comment for why) so every existing import of this module keeps working
 // unchanged. The upstream-fetching, D1-persisting logic below is Cloudflare/D1-bound and cannot move into
 // the engine package, so it stays here, importing its pure dependencies back from the engine.
-export * from "../../packages/gittensory-engine/src/scoring/model";
+export * from "../../packages/loopover-engine/src/scoring/model";
 import {
   DEFAULT_GITTENSOR_UPSTREAM_REPO,
   DEFAULT_GITTENSOR_UPSTREAM_REF,
@@ -26,7 +26,7 @@ import {
   hasSaturationConstants,
   hasDensityConstants,
   scoringSnapshotStalenessWarning,
-} from "../../packages/gittensory-engine/src/scoring/model";
+} from "../../packages/loopover-engine/src/scoring/model";
 
 function scoringUpstreamConfig(env: Env): { repo: string; ref: string } {
   return {

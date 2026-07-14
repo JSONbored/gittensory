@@ -4,7 +4,7 @@ import {
   MINER_TELEMETRY_OUTCOME_BUCKETS,
   normalizeMinerTelemetryEvent,
   type MinerTelemetryEvent,
-} from "../../packages/gittensory-engine/src/miner-telemetry";
+} from "../../packages/loopover-engine/src/miner-telemetry";
 
 const base: MinerTelemetryEvent = { eventType: "candidates_returned", outcome: "ok" };
 
@@ -84,7 +84,7 @@ describe("miner-telemetry schema (#4301)", () => {
   });
 
   it("is re-exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.normalizeMinerTelemetryEvent).toBe("function");
     expect(barrel.MINER_TELEMETRY_EVENT_TYPES).toBe(MINER_TELEMETRY_EVENT_TYPES);
   });

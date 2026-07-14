@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mechanical drift tripwire for hand-duplicated src/ <-> gittensory-engine file pairs (#4260). Most src/{review,
+// Mechanical drift tripwire for hand-duplicated src/ <-> loopover-engine file pairs (#4260). Most src/{review,
 // settings,signals} modules are thin re-export shims over the engine, but ~15 twin files are still maintained in
 // parallel — this script discovers those pairs, normalizes known-harmless import-path aliases, and fails CI when
 // the normalized bodies diverge. Also compares the workspace-installed @loopover/engine semver against
@@ -27,7 +27,7 @@ export type NamedTwinPair = Readonly<{
 export const GATE_DECISION_TWIN_PAIR: NamedTwinPair = Object.freeze({
   area: "gate-decision",
   hostRelative: "src/rules/advisory.ts",
-  engineRelative: "packages/gittensory-engine/src/advisory/gate-advisory.ts",
+  engineRelative: "packages/loopover-engine/src/advisory/gate-advisory.ts",
   hostFileName: "advisory.ts",
   engineFileName: "gate-advisory.ts",
 });
@@ -45,7 +45,7 @@ export const GATE_DECISION_CORE_MARKERS = Object.freeze([
 export const SAFE_URL_TWIN_PAIR: NamedTwinPair = Object.freeze({
   area: "content-lane",
   hostRelative: "src/review/content-lane/safe-url.ts",
-  engineRelative: "packages/gittensory-engine/src/review/safe-url.ts",
+  engineRelative: "packages/loopover-engine/src/review/safe-url.ts",
   hostFileName: "safe-url.ts",
   engineFileName: "safe-url.ts",
 });
@@ -63,7 +63,7 @@ export const SAFE_URL_MARKERS = Object.freeze([
 export const DIFF_FILE_PRIORITY_TWIN_PAIR: NamedTwinPair = Object.freeze({
   area: "diff-file-priority",
   hostRelative: "src/review/review-diff.ts",
-  engineRelative: "packages/gittensory-engine/src/review/diff-file-priority.ts",
+  engineRelative: "packages/loopover-engine/src/review/diff-file-priority.ts",
   hostFileName: "review-diff.ts",
   engineFileName: "diff-file-priority.ts",
 });
@@ -79,7 +79,7 @@ export const DIFF_FILE_PRIORITY_MARKERS = Object.freeze([
 export const SHARES_MEANINGFUL_FILE_TWIN_PAIR: NamedTwinPair = Object.freeze({
   area: "shares-meaningful-file",
   hostRelative: "src/signals/engine.ts",
-  engineRelative: "packages/gittensory-engine/src/signals/predicted-gate-engine.ts",
+  engineRelative: "packages/loopover-engine/src/signals/predicted-gate-engine.ts",
   hostFileName: "engine.ts",
   engineFileName: "predicted-gate-engine.ts",
 });
@@ -146,10 +146,10 @@ export const NAMED_TWIN_PAIRS: ReadonlyArray<{ pair: NamedTwinPair; markers: rea
   { pair: SHARES_MEANINGFUL_FILE_TWIN_PAIR, markers: SHARES_MEANINGFUL_FILE_MARKERS },
   { pair: SECRET_DETECTION_TWIN_PAIR, markers: SECRET_DETECTION_MARKERS },
 ]);
-const ENGINE_SRC_ROOT = "packages/gittensory-engine/src";
+const ENGINE_SRC_ROOT = "packages/loopover-engine/src";
 const HOST_SRC_ROOT = "src";
-const ENGINE_PACKAGE_JSON = "packages/gittensory-engine/package.json";
-const MINER_ENGINE_PIN_FILE = "packages/gittensory-miner/expected-engine.version";
+const ENGINE_PACKAGE_JSON = "packages/loopover-engine/package.json";
+const MINER_ENGINE_PIN_FILE = "packages/loopover-miner/expected-engine.version";
 const ENGINE_PACKAGE_NAME = "@loopover/engine";
 
 export type EngineParityPair = {
@@ -204,7 +204,7 @@ export function isThinEngineReExportShim(srcText: string): boolean {
     .map((line) => line.replace(/\/\/.*$/, "").trim())
     .filter(Boolean)
     .join("\n");
-  return /^export\s+(\{[\s\S]*\}|\*)\s+from\s+['"][^'"]*gittensory-engine[^'"]*['"];?\s*$/.test(stripped);
+  return /^export\s+(\{[\s\S]*\}|\*)\s+from\s+['"][^'"]*loopover-engine[^'"]*['"];?\s*$/.test(stripped);
 }
 
 /** True when the engine twin is a placeholder stub (e.g. check-names) rather than a full parallel copy.
@@ -365,7 +365,7 @@ export function enginePackageVersionIncreased(baseVersion: string | null, headVe
 }
 
 /**
- * Fail PRs that touch only one gate-decision twin without bumping packages/gittensory-engine/package.json.
+ * Fail PRs that touch only one gate-decision twin without bumping packages/loopover-engine/package.json.
  * Updating both twins together is allowed without a version bump; a single-sided edit requires a bump.
  */
 export function checkGateDecisionVersionBump({

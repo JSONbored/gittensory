@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const MCP_BIN_PATH = join(process.cwd(), "packages/gittensory-miner/bin/loopover-miner-mcp.js");
-const README_PATH = join(process.cwd(), "packages/gittensory-miner/README.md");
-const CODING_AGENT_DRIVER_DOC_PATH = join(process.cwd(), "packages/gittensory-miner/docs/coding-agent-driver.md");
+const MCP_BIN_PATH = join(process.cwd(), "packages/loopover-miner/bin/loopover-miner-mcp.js");
+const README_PATH = join(process.cwd(), "packages/loopover-miner/README.md");
+const CODING_AGENT_DRIVER_DOC_PATH = join(process.cwd(), "packages/loopover-miner/docs/coding-agent-driver.md");
 
 /** Every `server.registerTool("loopover_miner_...", ...)` name in the real MCP bin -- the source of truth
  *  this test pins the README's "MCP server" section against, so the two can never silently drift (#5162). */

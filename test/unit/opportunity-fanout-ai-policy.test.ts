@@ -6,10 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // Route the miner's bare "@loopover/engine" import at the engine source (mirrors
 // miner-opportunity-fanout.test.ts) so the fan-out uses the real resolveAiPolicyVerdict.
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { fetchCandidateIssuesWithSummary } from "../../packages/gittensory-miner/lib/opportunity-fanout.js";
+import { fetchCandidateIssuesWithSummary } from "../../packages/loopover-miner/lib/opportunity-fanout.js";
 
 const API = "https://api.test";
 

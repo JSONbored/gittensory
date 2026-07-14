@@ -7,7 +7,7 @@ import { parse } from "yaml";
 // the structural contract (service built from the package Dockerfile, named volume for SQLite persistence,
 // restart policy, credentials via env-file not inlined) is asserted here as a real test, and the env example is
 // checked to ship only empty (secret-scanner-safe) placeholders.
-const MINER_DIR = join(process.cwd(), "packages/gittensory-miner");
+const MINER_DIR = join(process.cwd(), "packages/loopover-miner");
 const compose = parse(
   readFileSync(join(MINER_DIR, "docker-compose.miner.yml"), "utf8"),
 ) as Record<string, any>;
@@ -20,7 +20,7 @@ describe("docker-compose.miner.yml (#5177)", () => {
   it("defines a miner service built from the package Dockerfile (monorepo-root context)", () => {
     const miner = compose.services?.miner;
     expect(miner).toBeTruthy();
-    expect(miner.build.dockerfile).toBe("packages/gittensory-miner/Dockerfile");
+    expect(miner.build.dockerfile).toBe("packages/loopover-miner/Dockerfile");
     expect(miner.build.context).toBe("../..");
     expect(miner.command).toContain("run");
   });

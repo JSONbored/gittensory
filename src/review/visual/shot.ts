@@ -30,7 +30,7 @@ export interface CaptureShotOptions {
    *  VERIFIED (#4109): `emulateMediaFeatures` maps to CDP's `Emulation.setEmulatedMedia`, which only changes
    *  what CSS media queries and `window.matchMedia` report — it cannot write `localStorage` and has NO effect
    *  on any theme mechanism that reads an explicit stored preference instead of consulting
-   *  `prefers-color-scheme`. This is reproducible today against gittensory's own UI: `apps/gittensory-ui`
+   *  `prefers-color-scheme`. This is reproducible today against gittensory's own UI: `apps/loopover-ui`
    *  forces dark mode unconditionally in its no-flash script (`components/site/theme-toggle.tsx`), never
    *  consulting the media feature at all, so a `light` vs `dark` capture of gittensory's own site renders
    *  byte-identical regardless of this option. `themeStorageKey` below is the fallback for exactly that class

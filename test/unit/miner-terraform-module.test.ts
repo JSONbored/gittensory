@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 // syntax check can't see — chiefly "no public inbound by default" and "state lands on the persistent /data/miner
 // volume" — so a future edit can't silently regress them.
 
-const DIR = "packages/gittensory-miner/terraform";
+const DIR = "packages/loopover-miner/terraform";
 const mainTf = readFileSync(`${DIR}/main.tf`, "utf8");
 const variablesTf = readFileSync(`${DIR}/variables.tf`, "utf8");
 const outputsTf = readFileSync(`${DIR}/outputs.tf`, "utf8");

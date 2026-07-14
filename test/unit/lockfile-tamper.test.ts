@@ -18,7 +18,7 @@ describe("isNpmLockfilePath", () => {
   it("matches package-lock.json at any depth", () => {
     expect(isNpmLockfilePath("package-lock.json")).toBe(true);
     expect(isNpmLockfilePath("review-enrichment/package-lock.json")).toBe(true);
-    expect(isNpmLockfilePath("apps/gittensory-ui/package-lock.json")).toBe(true);
+    expect(isNpmLockfilePath("apps/loopover-ui/package-lock.json")).toBe(true);
     expect(isNpmLockfilePath("PACKAGE-LOCK.JSON")).toBe(true); // case-insensitive
   });
 
@@ -131,7 +131,7 @@ describe("lockfileTamperRiskFinding", () => {
     expect(finding?.detail).toContain("outside registry.npmjs.org");
   });
 
-  it("scans review-enrichment/package-lock.json and apps/gittensory-ui/package-lock.json the same way", () => {
+  it("scans review-enrichment/package-lock.json and apps/loopover-ui/package-lock.json the same way", () => {
     const lockPatch = [
       '@@ -1,4 +1,4 @@',
       '     "node_modules/left-pad": {',
@@ -143,9 +143,9 @@ describe("lockfileTamperRiskFinding", () => {
     expect(finding).not.toBeNull();
     expect(finding?.detail).toContain("review-enrichment/package-lock.json");
 
-    const findingUi = lockfileTamperRiskFinding([fileRecord({ path: "apps/gittensory-ui/package-lock.json", payload: { patch: lockPatch } })]);
+    const findingUi = lockfileTamperRiskFinding([fileRecord({ path: "apps/loopover-ui/package-lock.json", payload: { patch: lockPatch } })]);
     expect(findingUi).not.toBeNull();
-    expect(findingUi?.detail).toContain("apps/gittensory-ui/package-lock.json");
+    expect(findingUi?.detail).toContain("apps/loopover-ui/package-lock.json");
   });
 
   it("bare (non-node_modules) top-level package key is tracked as a package name (lockfileVersion 1 shape)", () => {
@@ -289,12 +289,12 @@ describe("lockfileTamperRiskFinding", () => {
   it("does NOT flag a workspace-local package's relative-path resolved value as off-registry", () => {
     const lockPatch = [
       "@@ -2,7 +2,7 @@",
-      '     "packages/gittensory-mcp": {',
+      '     "packages/loopover-mcp": {',
       '-      "version": "0.6.0",',
-      '-      "resolved": "packages/gittensory-mcp",',
+      '-      "resolved": "packages/loopover-mcp",',
       "       \"link\": true",
       '+      "version": "0.7.0",',
-      '+      "resolved": "packages/gittensory-mcp",',
+      '+      "resolved": "packages/loopover-mcp",',
       "       \"link\": true",
       "     },",
     ].join("\n");

@@ -2,13 +2,13 @@ import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
   fetchCandidateIssues,
   searchCandidateIssuesWithSummary,
-} from "../../packages/gittensory-miner/lib/opportunity-fanout.js";
+} from "../../packages/loopover-miner/lib/opportunity-fanout.js";
 
 type Call = { url: string; headers: Record<string, string> };
 

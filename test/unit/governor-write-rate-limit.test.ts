@@ -9,7 +9,7 @@ import {
   type WriteRateLimitBackoffStore,
   type WriteRateLimitBucketStore,
   type WriteRateLimitPolicies,
-} from "../../packages/gittensory-engine/src/governor/write-rate-limit";
+} from "../../packages/loopover-engine/src/governor/write-rate-limit";
 
 const ACTION = "open_pr";
 const REPO_A = "acme/repo-a";

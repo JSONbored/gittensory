@@ -11,7 +11,7 @@ import {
   removeReplaySnapshotWorktree,
   REPLAY_SNAPSHOT_SUBDIR,
   validateSnapshotFreshness,
-} from "../../packages/gittensory-miner/lib/replay-snapshot.js";
+} from "../../packages/loopover-miner/lib/replay-snapshot.js";
 
 const FIELD_SEP = "\x1f";
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyContributorFit,
   type ContributorFitProfile,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 function profile(overrides: Partial<ContributorFitProfile> = {}): ContributorFitProfile {
   return {

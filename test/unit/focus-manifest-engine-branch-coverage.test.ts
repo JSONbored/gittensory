@@ -6,7 +6,7 @@ import {
   parseFocusManifest,
   parseFocusManifestContent,
   reviewConfigToJson,
-} from "../../packages/gittensory-engine/src/focus-manifest";
+} from "../../packages/loopover-engine/src/focus-manifest";
 
 describe("focus-manifest engine branch coverage (#2280)", () => {
   it("warns when settings.linkedIssueHardRules is not an object", () => {

@@ -3,7 +3,7 @@ import {
   DEFAULT_MINER_GOAL_SPEC,
   parseMinerGoalSpec,
   parseMinerGoalSpecContent,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 describe("MinerGoalSpec parser (#2301)", () => {
   it("re-exports the parser API from the engine barrel", () => {

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildManifest } from "../../src/selfhost/setup-wizard";
 
-const DOCS_PATH = "apps/gittensory-ui/src/routes/docs.self-hosting-github-app.tsx";
+const DOCS_PATH = "apps/loopover-ui/src/routes/docs.self-hosting-github-app.tsx";
 const ENV_EXAMPLE_PATH = ".env.example";
 
 // docs.self-hosting-github-app.tsx claims its manual permission list "is generated from the identical

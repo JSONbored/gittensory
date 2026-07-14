@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAiPolicyVerdict, scanAiPolicyText } from "../../packages/gittensory-engine/src/ai-policy-map";
+import { resolveAiPolicyVerdict, scanAiPolicyText } from "../../packages/loopover-engine/src/ai-policy-map";
 
 describe("miner AI policy map (#2305)", () => {
   it.each([

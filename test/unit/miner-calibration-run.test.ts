@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // The runner imports `computePhase7CalibrationLoop` from the engine PACKAGE; resolve it to the in-repo source so the
 // default (non-injected) combine branch runs against the real engine, exactly like miner-feasibility-cli.test.ts.
-vi.mock("@loopover/engine", async () => import("../../packages/gittensory-engine/src/index"));
+vi.mock("@loopover/engine", async () => import("../../packages/loopover-engine/src/index"));
 
 import {
   MINER_CALIBRATION_SNAPSHOT_EVENT,
@@ -14,8 +14,8 @@ import {
   runHistoricalReplayCalibrationCycle,
   scoreHistoricalReplayComposite,
   snapshotPayloadFromResult,
-} from "../../packages/gittensory-miner/lib/calibration-run.js";
-import type { AppendEventInput, LedgerEntry } from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/calibration-run.js";
+import type { AppendEventInput, LedgerEntry } from "../../packages/loopover-miner/lib/event-ledger.js";
 
 // A minimal injected event ledger (the DI shape record/read accept) — pure unit tests, no SQLite file. `_events` is
 // exposed so a test can inject crafted rows for the reader's defensive skip branches. Typed against the real

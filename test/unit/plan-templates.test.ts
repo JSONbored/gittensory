@@ -10,7 +10,7 @@ import {
   PLAN_TEMPLATE_BUILDERS,
   type PlanTemplateStage,
   type RawPlanStep,
-} from "../../packages/gittensory-engine/src/plan-templates";
+} from "../../packages/loopover-engine/src/plan-templates";
 import { rawPlanStepSchema } from "../../src/mcp/server";
 
 const STAGES = Object.keys(PLAN_TEMPLATE_BUILDERS) as PlanTemplateStage[];

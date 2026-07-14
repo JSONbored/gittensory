@@ -9,7 +9,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_SOURCE_PATH = "src/github/commands.ts";
-export const DEFAULT_OUTPUT_PATH = "apps/gittensory-ui/src/lib/command-reference.ts";
+export const DEFAULT_OUTPUT_PATH = "apps/loopover-ui/src/lib/command-reference.ts";
 
 const PUBLIC_CATALOG_NAME = "PUBLIC_MENTION_COMMAND_CATALOG";
 const MAINTAINER_CATALOG_NAME = "MAINTAINER_QUEUE_DIGEST_COMMAND_CATALOG";

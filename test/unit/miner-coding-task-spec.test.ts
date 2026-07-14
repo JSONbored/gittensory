@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
@@ -12,7 +12,7 @@ import {
   buildCodingTaskFeasibility,
   buildCodingTaskSpec,
   writeAcceptanceCriteriaFile,
-} from "../../packages/gittensory-miner/lib/coding-task-spec.js";
+} from "../../packages/loopover-miner/lib/coding-task-spec.js";
 
 const roots: string[] = [];
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
@@ -9,10 +9,10 @@ import {
   resolveDocumentedDiscoverTokenEnvVar,
   resolveDocumentedGovernorActionMode,
   resolveDocumentedKillSwitchScope,
-} from "../../packages/gittensory-miner/lib/config-precedence.js";
-import { parseDiscoverArgs } from "../../packages/gittensory-miner/lib/discover-cli.js";
-import { parseAttemptArgs } from "../../packages/gittensory-miner/lib/attempt-cli.js";
-import { resolveCodingAgentModeFromConfig } from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-miner/lib/config-precedence.js";
+import { parseDiscoverArgs } from "../../packages/loopover-miner/lib/discover-cli.js";
+import { parseAttemptArgs } from "../../packages/loopover-miner/lib/attempt-cli.js";
+import { resolveCodingAgentModeFromConfig } from "../../packages/loopover-engine/src/index";
 
 describe("miner config precedence (#5198)", () => {
   describe("kill switch: env global > .gittensory-miner.yml repo pause", () => {

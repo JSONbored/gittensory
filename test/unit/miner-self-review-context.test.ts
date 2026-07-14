@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { MAX_FOCUS_MANIFEST_BYTES } from "../../packages/gittensory-engine/src/index";
-import { fetchSelfReviewContext } from "../../packages/gittensory-miner/lib/self-review-context.js";
+import { MAX_FOCUS_MANIFEST_BYTES } from "../../packages/loopover-engine/src/index";
+import { fetchSelfReviewContext } from "../../packages/loopover-miner/lib/self-review-context.js";
 
 function jsonResponse(body: unknown, status = 200) {
   return {

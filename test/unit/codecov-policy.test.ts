@@ -77,22 +77,22 @@ describe("Codecov policy", () => {
 
   it("measures miner lib changes for codecov patch coverage (#4864)", () => {
     const vitestConfig = readFileSync("vitest.config.ts", "utf8");
-    expect(vitestConfig).toMatch(/packages\/gittensory-miner\/lib\/\*\*\/\*\.js/);
+    expect(vitestConfig).toMatch(/packages\/loopover-miner\/lib\/\*\*\/\*\.js/);
 
     const config = readYaml("codecov.yml");
     const ignore = config.ignore;
     if (!Array.isArray(ignore)) throw new Error("codecov.yml ignore must be an array");
-    expect(ignore.some((entry) => typeof entry === "string" && entry.includes("gittensory-miner"))).toBe(false);
+    expect(ignore.some((entry) => typeof entry === "string" && entry.includes("loopover-miner"))).toBe(false);
   });
 
   it("keeps miner-ui and miner-extension under app-local coverage gates (#4865)", () => {
-    const minerUi = readFileSync("apps/gittensory-miner-ui/vitest.config.ts", "utf8");
-    const minerExtension = readFileSync("apps/gittensory-miner-extension/vitest.config.ts", "utf8");
-    const minerUiPkg = JSON.parse(readFileSync("apps/gittensory-miner-ui/package.json", "utf8")) as {
+    const minerUi = readFileSync("apps/loopover-miner-ui/vitest.config.ts", "utf8");
+    const minerExtension = readFileSync("apps/loopover-miner-extension/vitest.config.ts", "utf8");
+    const minerUiPkg = JSON.parse(readFileSync("apps/loopover-miner-ui/package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
     const minerExtensionPkg = JSON.parse(
-      readFileSync("apps/gittensory-miner-extension/package.json", "utf8"),
+      readFileSync("apps/loopover-miner-extension/package.json", "utf8"),
     ) as { scripts: Record<string, string> };
     const rootPkg = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
 
@@ -102,7 +102,7 @@ describe("Codecov policy", () => {
     expect(minerExtension).toMatch(/thresholds:/);
     expect(minerUiPkg.scripts.test).toContain("--coverage");
     expect(minerExtensionPkg.scripts.test).toContain("--coverage");
-    expect(rootPkg.scripts["ui:test"]).toContain("@jsonbored/gittensory-miner-extension run test");
+    expect(rootPkg.scripts["ui:test"]).toContain("@loopover/miner-extension run test");
   });
 
   it("uploads fork PR coverage tokenlessly instead of silently skipping it", () => {

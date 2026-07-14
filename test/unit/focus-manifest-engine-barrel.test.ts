@@ -5,11 +5,11 @@ import {
   matchesManifestPath,
   parseFocusManifest,
   parseFocusManifestContent,
-} from "../../packages/gittensory-engine/src/focus-manifest";
+} from "../../packages/loopover-engine/src/focus-manifest";
 
 describe("gittensory-engine focus-manifest barrel exports (#2280)", () => {
   it("re-exports the focus-manifest parse/compile API from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.parseFocusManifest).toBe("function");
     expect(typeof barrel.parseFocusManifestContent).toBe("function");
     expect(typeof barrel.compileFocusManifestPolicy).toBe("function");

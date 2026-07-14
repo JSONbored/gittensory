@@ -16,7 +16,7 @@ import {
   initLaptopState,
   resolveLaptopStateDbPath,
   runInit,
-} from "../../packages/gittensory-miner/lib/laptop-init.js";
+} from "../../packages/loopover-miner/lib/laptop-init.js";
 
 const roots: string[] = [];
 

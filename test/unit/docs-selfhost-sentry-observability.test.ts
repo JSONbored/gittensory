@@ -9,7 +9,7 @@ import {
 
 // Drift guard (#1824): self-host Sentry docs must stay aligned with exported taxonomy and runbook signals.
 
-const OPERATIONS = "apps/gittensory-ui/src/routes/docs.self-hosting-operations.tsx";
+const OPERATIONS = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
 const operations = readFileSync(OPERATIONS, "utf8");
 
 describe("self-host Sentry observability docs (#1824)", () => {

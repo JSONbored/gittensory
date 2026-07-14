@@ -16,8 +16,8 @@ import {
   normalizeScreenshotTableGateConfig,
   requiredScreenshotMatrixPairs,
   type ScreenshotMatrixPair,
-} from "../../packages/gittensory-engine/src/review/screenshot-table-gate";
-import type { ScreenshotTableGateConfig } from "../../packages/gittensory-engine/src/types/manifest-deps-types";
+} from "../../packages/loopover-engine/src/review/screenshot-table-gate";
+import type { ScreenshotTableGateConfig } from "../../packages/loopover-engine/src/types/manifest-deps-types";
 
 function config(overrides: Partial<ScreenshotTableGateConfig> = {}): ScreenshotTableGateConfig {
   return { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [], ...overrides };

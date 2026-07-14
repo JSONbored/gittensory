@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createCliSubprocessCodingAgentDriver,
   type CliSubprocessSpawnFn,
-} from "../../packages/gittensory-engine/src/index";
-import type { CodingAgentDriverTask } from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
+import type { CodingAgentDriverTask } from "../../packages/loopover-engine/src/index";
 
 const TASK: CodingAgentDriverTask = {
   attemptId: "attempt-1",

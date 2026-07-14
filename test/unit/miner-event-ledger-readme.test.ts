@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const readmePath = join(process.cwd(), "packages/gittensory-miner/README.md");
+const readmePath = join(process.cwd(), "packages/loopover-miner/README.md");
 
 describe("gittensory-miner event ledger README (#2322)", () => {
   it("documents the append-only event ledger API surface", () => {

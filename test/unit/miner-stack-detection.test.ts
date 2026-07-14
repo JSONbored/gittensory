@@ -4,7 +4,7 @@ import {
   detectRepoStack,
   RECOGNIZED_MANIFESTS,
   renderStackSummary,
-} from "../../packages/gittensory-miner/lib/stack-detection.js";
+} from "../../packages/loopover-miner/lib/stack-detection.js";
 
 const ROOT = "/repo";
 

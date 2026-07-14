@@ -13,13 +13,13 @@ import {
   markDone,
   markFailed,
   resolvePortfolioQueueDbPath,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { classifyPortfolioConvergence } from "../../packages/gittensory-engine/src/index";
+import { classifyPortfolioConvergence } from "../../packages/loopover-engine/src/index";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

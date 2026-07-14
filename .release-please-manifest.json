@@ -1,6 +1,6 @@
 {
-  "packages/gittensory-mcp": "1.0.0",
-  "packages/gittensory-engine": "2.0.0",
-  "packages/gittensory-miner": "2.0.0",
-  "packages/gittensory-ui-kit": "0.2.0"
+  "packages/loopover-mcp": "1.0.0",
+  "packages/loopover-engine": "2.0.0",
+  "packages/loopover-miner": "2.0.0",
+  "packages/loopover-ui-kit": "0.2.0"
 }

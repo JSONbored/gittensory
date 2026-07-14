@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
-import { rankMetadataOpportunitiesAtOrAboveScore } from "../../packages/gittensory-engine/src/metadata-min-score";
+import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/loopover-engine/src/miner-goal-spec";
+import { rankMetadataOpportunitiesAtOrAboveScore } from "../../packages/loopover-engine/src/metadata-min-score";
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 
@@ -69,7 +69,7 @@ describe("rankMetadataOpportunitiesAtOrAboveScore", () => {
   });
 
   it("is exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.rankMetadataOpportunitiesAtOrAboveScore).toBe("function");
     expect(
       barrel.rankMetadataOpportunitiesAtOrAboveScore(candidates, { nowMs: NOW }, 0.1).map(

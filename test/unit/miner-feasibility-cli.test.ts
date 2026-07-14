@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
   parseFeasibilityArgs,
   runFeasibilityCli,
-} from "../../packages/gittensory-miner/lib/feasibility-cli.js";
+} from "../../packages/loopover-miner/lib/feasibility-cli.js";
 import { runCapture } from "./support/miner-cli-harness";
 
 afterEach(() => {

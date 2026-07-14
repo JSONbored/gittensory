@@ -6,7 +6,7 @@ import {
   type FeasibilityDuplicateClusterRisk,
   type FeasibilityGateInput,
   type FeasibilityIssueStatus,
-} from "../../packages/gittensory-engine/src/feasibility";
+} from "../../packages/loopover-engine/src/feasibility";
 import { buildPreStartCheck } from "../../src/signals/engine";
 import type { IssueRecord, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../src/types";
 

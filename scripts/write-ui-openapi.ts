@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { buildOpenApiSpec } from "../src/openapi/spec";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const target = resolve(root, "apps/gittensory-ui/public/openapi.json");
+const target = resolve(root, "apps/loopover-ui/public/openapi.json");
 const checkOnly = process.argv.includes("--check");
 
 const spec = buildOpenApiSpec();
@@ -18,13 +18,13 @@ const next = `${JSON.stringify(orderedSpec, null, 2)}\n`;
 
 if (checkOnly) {
   if (current !== next) {
-    console.error("apps/gittensory-ui/public/openapi.json is stale; run npm run ui:openapi.");
+    console.error("apps/loopover-ui/public/openapi.json is stale; run npm run ui:openapi.");
     process.exit(1);
   }
-  console.log("checked apps/gittensory-ui/public/openapi.json");
+  console.log("checked apps/loopover-ui/public/openapi.json");
 } else {
   await writeFile(target, next);
-  console.log("wrote apps/gittensory-ui/public/openapi.json");
+  console.log("wrote apps/loopover-ui/public/openapi.json");
 }
 
 function parseCurrentSpec(currentText: string): Record<string, unknown> | null {

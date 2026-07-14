@@ -4,7 +4,7 @@ import {
   computeMinerGoalLaneFit,
   DEFAULT_MINER_GOAL_SPEC,
   isMinerRepoTargetable,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 describe("computeMetadataLaneFit", () => {
   it("falls back to label-only lane fit when candidatePaths are absent or empty", () => {

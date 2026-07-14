@@ -10,7 +10,7 @@ import {
   type AgentSdkQueryFn,
   type CreateAgentSdkDriverOptions,
   type CodingAgentDriverTask,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 // Secret-shaped strings are BUILT AT RUNTIME so the diff never contains a token-shaped literal (the
 // repo secret scanner pattern-matches raw diff text; redactSecrets only needs the shape to exist at runtime).
@@ -129,14 +129,14 @@ describe("createAgentSdkCodingAgentDriver", () => {
       ]),
       listChangedFiles: async (cwd) => {
         expect(cwd).toBe(task.workingDirectory);
-        return ["packages/gittensory-engine/src/vulnerable.ts"];
+        return ["packages/loopover-engine/src/vulnerable.ts"];
       },
     });
 
     const result = await driver.run(task);
 
     expect(result.ok).toBe(true);
-    expect(result.changedFiles).toEqual(["packages/gittensory-engine/src/vulnerable.ts"]);
+    expect(result.changedFiles).toEqual(["packages/loopover-engine/src/vulnerable.ts"]);
   });
 
   it("fails closed when changed-file enumeration is unavailable, but still reports the real dollar cost", async () => {

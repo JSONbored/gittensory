@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 // bin package and can't import from src/). They must mirror the server's isTestPath/isCodeFile, or a miner's
 // LOCAL preview classifies files differently than the gate would. This spawns the real script and checks the
 // token classification, which is where the drift would surface.
-const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), "../../packages/gittensory-mcp/scripts");
+const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), "../../packages/loopover-mcp/scripts");
 const scriptMjs = join(scriptsDir, "gittensor-score-preview.mjs");
 const scriptPy = join(scriptsDir, "gittensor-score-preview.py");
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 // Cloudflare's Schema Validation (Security > Settings > Schema validation) rejects an uploaded schema
 // once it exceeds the zone's schema-storage limit — 204800 bytes (200 KiB) on the Free plan. The full
-// public apps/gittensory-ui/public/openapi.json (pretty-printed, full response bodies + component
+// public apps/loopover-ui/public/openapi.json (pretty-printed, full response bodies + component
 // schemas + prose descriptions) is ~480KB, since it's meant for human developers and doesn't need to fit
 // under a WAF's storage cap.
 //

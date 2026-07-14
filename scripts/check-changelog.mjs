@@ -30,13 +30,13 @@ try {
     },
     {
       label: "MCP package changelog",
-      output: "packages/gittensory-mcp/CHANGELOG.md",
+      output: "packages/loopover-mcp/CHANGELOG.md",
       command: "npm run changelog:mcp",
       selector: "--mcp",
       runner: () => {
         const generatedPath = join(tempDir, "MCP_CHANGELOG.md");
-        const version = JSON.parse(readFileSync("packages/gittensory-mcp/package.json", "utf8")).version;
-        writeFileSync(generatedPath, readFileSync("packages/gittensory-mcp/CHANGELOG.md", "utf8"));
+        const version = JSON.parse(readFileSync("packages/loopover-mcp/package.json", "utf8")).version;
+        writeFileSync(generatedPath, readFileSync("packages/loopover-mcp/CHANGELOG.md", "utf8"));
         run(["node", "scripts/generate-mcp-changelog.mjs", "--output", generatedPath, "--version", version], "MCP package changelog");
         return generatedPath;
       },

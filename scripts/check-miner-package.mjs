@@ -50,7 +50,7 @@ export function validateMinerPackFileList(files, readContent) {
 
 export function runMinerPackCheck(options = {}) {
   const pack = options.pack ?? loadMinerPackFromNpm();
-  const packageRoot = options.packageRoot ?? join(process.cwd(), "packages/gittensory-miner");
+  const packageRoot = options.packageRoot ?? join(process.cwd(), "packages/loopover-miner");
   const readContent =
     options.readContent ??
     ((file) => {

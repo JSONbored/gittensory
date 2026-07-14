@@ -908,7 +908,7 @@ function isEvaluationBlocker(code: string, policy: GateCheckPolicy): boolean {
 // Default configured close-confidence floor (#7). A sub-floor AI-judgment finding still blocks the gate under
 // aiReviewGateMode: block (see isConfiguredGateBlocker) UNLESS the resolved aiReviewLowConfidenceDisposition
 // (#4603) is "advisory_only" -- the floor never softens a blocker into a non-blocker on its own. Exported for
-// resolveAiReviewLowConfidenceHold (below) and for the packages/gittensory-engine gate-decision twin's own copy.
+// resolveAiReviewLowConfidenceHold (below) and for the packages/loopover-engine gate-decision twin's own copy.
 export const DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE = 0.93;
 
 function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPolicy): boolean {

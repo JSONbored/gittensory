@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 // If the real compose pattern ever changes without the docs snippet changing too, this fails instead of
 // operators copy-pasting a stale/incorrect multi-runner example.
 
-const DOC_PATH = "apps/gittensory-ui/src/routes/docs.self-hosting-operations.tsx";
+const DOC_PATH = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
 
 function readYamlWithMerge(path: string): Record<string, unknown> {
   const doc = parseDocument(readFileSync(path, "utf8"), { merge: true });

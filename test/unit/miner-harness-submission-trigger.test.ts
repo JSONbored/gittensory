@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
@@ -12,8 +12,8 @@ import {
   countConsecutiveGateBlocks,
   prepareOpenPrSubmission,
   HARNESS_SUBMISSION_TRIGGER_DECISION_EVENT,
-} from "../../packages/gittensory-miner/lib/harness-submission-trigger.js";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/harness-submission-trigger.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
 
 const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];

@@ -3,7 +3,7 @@ import {
   DISCOVERY_INDEX_CONTRACT_VERSION,
   buildSoftClaimRequest,
   softClaimActionForStatus,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 const ACTIVE_CLAIM = {
   id: 7,

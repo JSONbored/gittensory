@@ -7,7 +7,7 @@ import {
   type SelfReviewSlopAssessment,
   type SelfReviewSlopBand,
   type SubmissionGateCandidate,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 function passingVerdict(): PredictedGateVerdict {
   return {

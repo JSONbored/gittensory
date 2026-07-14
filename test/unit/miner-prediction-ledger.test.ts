@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { initPredictionLedger, resolvePredictionLedgerDbPath } from "../../packages/gittensory-miner/lib/prediction-ledger.js";
+import { initPredictionLedger, resolvePredictionLedgerDbPath } from "../../packages/loopover-miner/lib/prediction-ledger.js";
 
 const ledgers: Array<{ close: () => void }> = [];
 const roots: string[] = [];

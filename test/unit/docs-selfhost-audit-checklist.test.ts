@@ -7,10 +7,10 @@ import {
   SELFHOST_DOCS_PAGES,
   SELFHOST_DOCS_VALIDATION_COMMANDS,
   SELFHOST_SOURCE_OF_TRUTH_ROWS,
-} from "../../apps/gittensory-ui/src/lib/selfhost-docs-audit";
+} from "../../apps/loopover-ui/src/lib/selfhost-docs-audit";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
-const ROUTES_DIR = resolve(REPO_ROOT, "apps/gittensory-ui/src/routes");
+const ROUTES_DIR = resolve(REPO_ROOT, "apps/loopover-ui/src/routes");
 const AUDIT_PAGE = resolve(ROUTES_DIR, "docs.self-hosting-docs-audit.tsx");
 const MAINTAINER_INDEX = resolve(ROUTES_DIR, "docs.maintainer-self-hosting.tsx");
 const PACKAGE_JSON = resolve(REPO_ROOT, "package.json");
@@ -76,7 +76,7 @@ describe("self-host docs accuracy audit (#1829)", () => {
 
   it("records the loose-docs consolidation plan with canonical website links", () => {
     const manifestSource = readFileSync(
-      resolve(REPO_ROOT, "apps/gittensory-ui/src/lib/selfhost-docs-audit.ts"),
+      resolve(REPO_ROOT, "apps/loopover-ui/src/lib/selfhost-docs-audit.ts"),
       "utf8",
     );
     for (const row of LOOSE_DOCS_ROWS) {

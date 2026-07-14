@@ -2,16 +2,16 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openClaimLedger, closeDefaultClaimLedger } from "../../packages/gittensory-miner/lib/claim-ledger.js";
-import { initEventLedger, closeDefaultEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { initGovernorLedger, closeDefaultGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import { initPredictionLedger, closeDefaultPredictionLedger } from "../../packages/gittensory-miner/lib/prediction-ledger.js";
-import { initAttemptLog, closeDefaultAttemptLog } from "../../packages/gittensory-miner/lib/attempt-log.js";
+import { openClaimLedger, closeDefaultClaimLedger } from "../../packages/loopover-miner/lib/claim-ledger.js";
+import { initEventLedger, closeDefaultEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { initGovernorLedger, closeDefaultGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { initPredictionLedger, closeDefaultPredictionLedger } from "../../packages/loopover-miner/lib/prediction-ledger.js";
+import { initAttemptLog, closeDefaultAttemptLog } from "../../packages/loopover-miner/lib/attempt-log.js";
 import {
   ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
   parsePurgeArgs,
   runPurge,
-} from "../../packages/gittensory-miner/lib/purge-cli.js";
+} from "../../packages/loopover-miner/lib/purge-cli.js";
 
 const roots: string[] = [];
 const closeables: Array<{ close(): void }> = [];

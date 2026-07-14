@@ -4,9 +4,9 @@
 
 Two products, self-host-first:
 
-- **AMS (Autonomous Miner System)** — `packages/gittensory-miner` (npm: `@loopover/miner`) +
-  `packages/gittensory-engine` (npm: `@loopover/engine`, shared core also used by ORB) +
-  `apps/gittensory-miner-ui` + `apps/gittensory-miner-extension`. The contributor/miner side: finds
+- **AMS (Autonomous Miner System)** — `packages/loopover-miner` (npm: `@loopover/miner`) +
+  `packages/loopover-engine` (npm: `@loopover/engine`, shared core also used by ORB) +
+  `apps/loopover-miner-ui` + `apps/loopover-miner-extension`. The contributor/miner side: finds
   issues, plans, writes code, opens PRs, autonomously. Self-host (a local Miner Node) is the only
   shipped deployment target; hosted AMS is a later phase (see "AMS/ORB Cloud Readiness" below).
 - **ORB (Owner/One-shot Review Brain)** — `src/**` (the Worker app: `src/review`, `src/queue`,
@@ -21,7 +21,7 @@ Two products, self-host-first:
 **Standing priorities named by the maintainer (2026-07-14), not yet issue-backed:**
 - **AMS selfhost hardening, round 2.** Miner Wave 4 ("AMS Hardening & Packaging") fully closed
   (151/151) on 2026-07-14 — that backlog is empty, not hiding more maintainer-only work. Getting more
-  requires a fresh gap-audit (read the current `packages/gittensory-miner`/`-engine` code against what
+  requires a fresh gap-audit (read the current `packages/loopover-miner`/`-engine` code against what
   Wave 4 already covered — coverage gate, ledger races, MCP scaffolding — and find what's still
   genuinely thin), not relabeling existing issues.
 - **Unified AMS+ORB self-host harness** — letting one operator install/run both products together in

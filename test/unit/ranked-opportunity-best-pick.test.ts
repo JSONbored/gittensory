@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { bestRankedOpportunity } from "../../packages/gittensory-engine/src/ranked-opportunity-best-pick";
-import type { OpportunityRankInput } from "../../packages/gittensory-engine/src/opportunity-ranker";
+import { bestRankedOpportunity } from "../../packages/loopover-engine/src/ranked-opportunity-best-pick";
+import type { OpportunityRankInput } from "../../packages/loopover-engine/src/opportunity-ranker";
 
 function input(over: Partial<OpportunityRankInput> = {}): OpportunityRankInput {
   return { potential: 1, feasibility: 1, laneFit: 1, freshness: 1, dupRisk: 0, ...over };
@@ -32,7 +32,7 @@ describe("bestRankedOpportunity", () => {
   });
 
   it("is exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.bestRankedOpportunity).toBe("function");
     expect(barrel.bestRankedOpportunity([{ id: "solo", ...input() }])?.id).toBe("solo");
   });

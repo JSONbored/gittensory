@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { resolveMinerActionModeGate, recordMinerDryRunShadow } from "../../packages/gittensory-miner/lib/governor-action-mode.js";
-import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
+import { resolveMinerActionModeGate, recordMinerDryRunShadow } from "../../packages/loopover-miner/lib/governor-action-mode.js";
+import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];

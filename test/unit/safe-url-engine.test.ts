@@ -1,6 +1,6 @@
 // Mirror of the app suite pointed at the gittensory-engine copy so the extracted module owns its branch coverage (#2280).
 import { describe, expect, it } from "vitest";
-import { isSafeEndpointUrl, isSafeHttpUrl } from "../../packages/gittensory-engine/src/review/safe-url";
+import { isSafeEndpointUrl, isSafeHttpUrl } from "../../packages/loopover-engine/src/review/safe-url";
 
 describe("isSafeHttpUrl", () => {
   it("accepts public https hosts", () => {

@@ -6,8 +6,8 @@ import type { CheckSummaryRecord, PullRequestRecord, PullRequestReviewRecord } f
 // — see src/scoring/preview.ts's shim comment for why) so every existing import of this module keeps
 // working unchanged. The two D1-fetching loaders below cannot move into the engine package, so they stay
 // here, importing the pure classifier back from the engine.
-export * from "../../packages/gittensory-engine/src/scoring/pending-pr-scenarios";
-import type { ContributorRepoOpenPrSignals } from "../../packages/gittensory-engine/src/scoring/pending-pr-scenarios";
+export * from "../../packages/loopover-engine/src/scoring/pending-pr-scenarios";
+import type { ContributorRepoOpenPrSignals } from "../../packages/loopover-engine/src/scoring/pending-pr-scenarios";
 
 export async function loadContributorRepoOpenPrSignalRecords(
   env: Env,

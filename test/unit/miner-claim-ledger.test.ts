@@ -15,7 +15,7 @@ import {
   recordClaim,
   releaseClaim,
   resolveClaimLedgerDbPath,
-} from "../../packages/gittensory-miner/lib/claim-ledger.js";
+} from "../../packages/loopover-miner/lib/claim-ledger.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
@@ -141,7 +141,7 @@ describe("gittensory-miner claim ledger (#2314)", () => {
   });
 
   it("documents that miner_claims is local bookkeeping only, not duplicate adjudication (#3355)", () => {
-    const source = readFileSync("packages/gittensory-miner/lib/claim-ledger.js", "utf8");
+    const source = readFileSync("packages/loopover-miner/lib/claim-ledger.js", "utf8");
     expect(source).toContain("LOCAL bookkeeping only");
     expect(source).toContain("does NOT adjudicate contested duplicates");
     expect(source).toContain("isDuplicateClusterWinnerByClaim");

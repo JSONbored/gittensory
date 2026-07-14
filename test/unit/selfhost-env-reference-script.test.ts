@@ -139,7 +139,7 @@ describe("gen-selfhost-env-reference (#2081)", () => {
 
   it("writes the generated module and reports stale output in check mode", () => {
     const root = fixtureRoot();
-    const outputPath = "apps/gittensory-ui/src/lib/selfhost-env-reference.ts";
+    const outputPath = "apps/loopover-ui/src/lib/selfhost-env-reference.ts";
     const outputAbs = join(root, outputPath);
 
     const written = writeSelfHostEnvReference({ rootDir: root, outputPath });

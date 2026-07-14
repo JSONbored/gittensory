@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeOpportunityFreshness } from "../../packages/gittensory-engine/src/opportunity-freshness";
+import { computeOpportunityFreshness } from "../../packages/loopover-engine/src/opportunity-freshness";
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 

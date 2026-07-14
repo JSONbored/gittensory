@@ -33,7 +33,7 @@ import {
   type CodingAgentDriver,
   type CodingAgentDriverResult,
   type CodingAgentDriverTask,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 // One shared worktree path across every describe.each iteration ON PURPOSE: harness isolation comes from each
 // case calling `make()` for a fresh driver + recorder, not from unique paths — reusing the constant keeps the

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveAiPolicyVerdict } from "../../packages/gittensory-engine/src/ai-policy-map";
+import { resolveAiPolicyVerdict } from "../../packages/loopover-engine/src/ai-policy-map";
 
 // Fixture-corpus companion to miner-ai-policy-map.test.ts (#2306). The sibling test exercises the
 // scanner with inline strings; this one drives resolveAiPolicyVerdict over real .md documents on disk

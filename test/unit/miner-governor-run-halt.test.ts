@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { evaluateRunLoopBoundaryGate } from "../../packages/gittensory-miner/lib/governor-run-halt.js";
-import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import { initPortfolioQueueManager } from "../../packages/gittensory-miner/lib/portfolio-queue-manager.js";
-import { initPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+import { evaluateRunLoopBoundaryGate } from "../../packages/loopover-miner/lib/governor-run-halt.js";
+import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { initPortfolioQueueManager } from "../../packages/loopover-miner/lib/portfolio-queue-manager.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];

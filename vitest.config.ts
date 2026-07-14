@@ -28,8 +28,8 @@ export default defineConfig({
       provider: "v8",
       include: [
         "src/**/*.ts",
-        "packages/gittensory-engine/src/**/*.ts",
-        "packages/gittensory-miner/lib/**/*.js",
+        "packages/loopover-engine/src/**/*.ts",
+        "packages/loopover-miner/lib/**/*.js",
         "review-enrichment/src/analyzers/codeowners.ts",
       ],
       exclude: ["src/env.d.ts", "apps/**"],

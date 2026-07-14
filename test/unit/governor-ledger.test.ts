@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GOVERNOR_LEDGER_EVENT_TYPES,
   normalizeGovernorLedgerEvent,
-} from "../../packages/gittensory-engine/src/governor-ledger";
+} from "../../packages/loopover-engine/src/governor-ledger";
 
 describe("governor ledger normalization (#2328)", () => {
   it("exposes the frozen governor event vocabulary", () => {

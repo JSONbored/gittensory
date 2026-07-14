@@ -14,7 +14,7 @@ function commit(subject: string, files: string[], sha = subject): TestCommit {
 
 describe("MCP release changelog detection", () => {
   it("includes package-only MCP package changes", () => {
-    const commits = selectMcpReleaseCommits([commit("docs(ci): add MCP package usage note (#1)", ["packages/gittensory-mcp/README.md"])]);
+    const commits = selectMcpReleaseCommits([commit("docs(ci): add MCP package usage note (#1)", ["packages/loopover-mcp/README.md"])]);
 
     expect(commits.map((entry) => entry.subject)).toEqual(["docs(ci): add MCP package usage note (#1)"]);
   });
@@ -33,7 +33,7 @@ describe("MCP release changelog detection", () => {
 
   it("excludes UI-only changes", () => {
     const commits = selectMcpReleaseCommits([
-      commit("feat(ui): add release dashboard card (#4)", ["apps/gittensory-ui/src/routes/app.operator.tsx", "apps/gittensory-ui/public/openapi.json"]),
+      commit("feat(ui): add release dashboard card (#4)", ["apps/loopover-ui/src/routes/app.operator.tsx", "apps/loopover-ui/public/openapi.json"]),
     ]);
 
     expect(commits).toEqual([]);
@@ -60,7 +60,7 @@ describe("MCP release changelog detection", () => {
       existingChangelog: `# Changelog\n\n${priorSections}`,
       targetVersion: "0.4.0",
       generatedAt: "2026-06-02",
-      commits: [commit("feat(mcp): add local workspace intelligence v2 (#70)", ["packages/gittensory-mcp/bin/loopover-mcp.js"])],
+      commits: [commit("feat(mcp): add local workspace intelligence v2 (#70)", ["packages/loopover-mcp/bin/loopover-mcp.js"])],
     });
 
     expect(changelog).toContain("## mcp-v0.4.0 - 2026-06-02");

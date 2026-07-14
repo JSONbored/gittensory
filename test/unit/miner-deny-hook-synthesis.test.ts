@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_DENY_RULES,
   evaluateDenyHooks,
-} from "../../packages/gittensory-miner/lib/deny-hooks.js";
+} from "../../packages/loopover-miner/lib/deny-hooks.js";
 import {
   aggregateBlockerHistory,
   changedPathToDenyGlob,
@@ -16,7 +16,7 @@ import {
   resolveEffectiveDenyRules,
   setProposalStatuses,
   synthesizeDenyRuleProposals,
-} from "../../packages/gittensory-miner/lib/deny-hook-synthesis.js";
+} from "../../packages/loopover-miner/lib/deny-hook-synthesis.js";
 
 const tempDirs: string[] = [];
 const stores: Array<{ close(): void }> = [];

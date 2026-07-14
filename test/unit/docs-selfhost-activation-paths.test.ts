@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 // one-click activation routes, Checks:write re-approval, INSTALL_AI_CLIS, and the re-gate sweep job
 // types — otherwise operators follow stale instructions after the underlying paths change.
 
-const QUICKSTART = "apps/gittensory-ui/src/routes/docs.self-hosting-quickstart.tsx";
-const CONFIG = "apps/gittensory-ui/src/routes/docs.self-hosting-configuration.tsx";
-const OPERATIONS = "apps/gittensory-ui/src/routes/docs.self-hosting-operations.tsx";
-const GITHUB_APP = "apps/gittensory-ui/src/routes/docs.self-hosting-github-app.tsx";
-const MAINTAINER = "apps/gittensory-ui/src/routes/docs.maintainer-self-hosting.tsx";
+const QUICKSTART = "apps/loopover-ui/src/routes/docs.self-hosting-quickstart.tsx";
+const CONFIG = "apps/loopover-ui/src/routes/docs.self-hosting-configuration.tsx";
+const OPERATIONS = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
+const GITHUB_APP = "apps/loopover-ui/src/routes/docs.self-hosting-github-app.tsx";
+const MAINTAINER = "apps/loopover-ui/src/routes/docs.maintainer-self-hosting.tsx";
 
 const quickstart = readFileSync(QUICKSTART, "utf8");
 const configuration = readFileSync(CONFIG, "utf8");

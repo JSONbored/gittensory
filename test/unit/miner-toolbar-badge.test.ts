@@ -8,7 +8,7 @@ import {
   TOOLBAR_BADGE_EMPTY_COLOR,
   TOOLBAR_BADGE_HAS_DATA_COLOR,
   TOOLBAR_BADGE_NO_DATA_TEXT,
-} from "../../apps/gittensory-miner-extension/toolbar-badge.js";
+} from "../../apps/loopover-miner-extension/toolbar-badge.js";
 
 // ─── The pure state map (the substance of #5193) ──────────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ describe("computeToolbarBadge (miner extension toolbar badge, #5193)", () => {
 // Loaded exactly the way the extension's own VM harness loads it (readFileSync + node:vm), so no module loader
 // and no engine import is needed — this keeps the wiring test runnable without native/optional deps.
 
-const EXT_DIR = "apps/gittensory-miner-extension";
+const EXT_DIR = "apps/loopover-miner-extension";
 const opportunityBadgeScript = readFileSync(
   `${EXT_DIR}/opportunity-badge.js`,
   "utf8",

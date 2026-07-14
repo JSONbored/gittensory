@@ -3,7 +3,7 @@
 // via a hosted API round-trip (stdio MCP proxies to `/v1/issue-rag/retrieve`). Returns retrieved paths
 // and scores only — never chunk bodies or source text.
 
-import { buildIssueRagQuery } from "../../packages/gittensory-engine/src/issue-rag-query";
+import { buildIssueRagQuery } from "../../packages/loopover-engine/src/issue-rag-query";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { emptyIssueRagTelemetry, normalizeIssueRagTopK, retrieveIssueRagContext, type IssueRagTelemetry } from "../review/issue-rag-retrieval";
 

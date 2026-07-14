@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openClaimLedger } from "../../packages/gittensory-miner/lib/claim-ledger.js";
+import { openClaimLedger } from "../../packages/loopover-miner/lib/claim-ledger.js";
 
-const bin = join(process.cwd(), "packages/gittensory-mcp/bin/loopover-mcp.js");
+const bin = join(process.cwd(), "packages/loopover-mcp/bin/loopover-mcp.js");
 
 let client: Client;
 let transport: StdioClientTransport;

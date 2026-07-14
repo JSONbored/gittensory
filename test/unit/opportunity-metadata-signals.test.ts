@@ -6,11 +6,11 @@ import {
   computeMetadataPotential,
   opportunityMetadataInternals,
   rankMetadataOpportunities,
-} from "../../packages/gittensory-engine/src/opportunity-metadata";
-import { pickTopMetadataOpportunities } from "../../packages/gittensory-engine/src/metadata-top-pick";
-import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
-import { computeOpportunityCompetition } from "../../packages/gittensory-engine/src/opportunity-competition";
-import { computeOpportunityFreshness } from "../../packages/gittensory-engine/src/opportunity-freshness";
+} from "../../packages/loopover-engine/src/opportunity-metadata";
+import { pickTopMetadataOpportunities } from "../../packages/loopover-engine/src/metadata-top-pick";
+import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/loopover-engine/src/miner-goal-spec";
+import { computeOpportunityCompetition } from "../../packages/loopover-engine/src/opportunity-competition";
+import { computeOpportunityFreshness } from "../../packages/loopover-engine/src/opportunity-freshness";
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 
@@ -151,7 +151,7 @@ describe("opportunity metadata signals", () => {
   });
 
   it("pickTopMetadataOpportunities is exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.pickTopMetadataOpportunities).toBe("function");
     const top = barrel.pickTopMetadataOpportunities(
       [{ ...base, issueNumber: 9, labels: ["help wanted"] }],

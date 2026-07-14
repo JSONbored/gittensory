@@ -24,7 +24,7 @@ const FORBIDDEN = /wallet|hotkey|raw trust score|payout|reward estimate|farming|
 
 const GITTENSORY_MANIFEST = parseFocusManifestContent(
   JSON.stringify({
-    wantedPaths: ["src/", "apps/gittensory-ui/", "packages/gittensory-mcp/"],
+    wantedPaths: ["src/", "apps/loopover-ui/", "packages/loopover-mcp/"],
     testExpectations: ["npm run test:ci"],
     publicNotes: ["Stay advisory."],
     linkedIssuePolicy: "required",

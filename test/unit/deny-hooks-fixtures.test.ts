@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateDenyHooks } from "../../packages/gittensory-miner/lib/deny-hooks.js";
+import { evaluateDenyHooks } from "../../packages/loopover-miner/lib/deny-hooks.js";
 import { denyHookFixtures } from "../fixtures/deny-hooks/cases.js";
 
 // Data-driven deny-hook corpus (#2296): every fixture in test/fixtures/deny-hooks/cases.ts is evaluated against

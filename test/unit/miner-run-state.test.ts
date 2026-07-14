@@ -11,7 +11,7 @@ import {
   listRunStates,
   resolveRunStateDbPath,
   setRunState,
-} from "../../packages/gittensory-miner/lib/run-state.js";
+} from "../../packages/loopover-miner/lib/run-state.js";
 
 const roots: string[] = [];
 
@@ -32,7 +32,7 @@ afterEach(() => {
 describe("gittensory-miner run-state store (#2289)", () => {
   it("keeps the package engine floor aligned with unflagged node:sqlite support", () => {
     const packageJson = JSON.parse(
-      readFileSync("packages/gittensory-miner/package.json", "utf8"),
+      readFileSync("packages/loopover-miner/package.json", "utf8"),
     ) as { engines?: { node?: string } };
 
     expect(packageJson.engines?.node).toBe(">=22.13.0");

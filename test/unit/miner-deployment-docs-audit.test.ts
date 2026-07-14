@@ -11,20 +11,20 @@ import {
   isRepoRelativePath,
   scanEnvVarTokens,
   scanRegisteredCommands,
-} from "../../packages/gittensory-miner/lib/deployment-docs-audit.js";
-import type { DeploymentDocsReality } from "../../packages/gittensory-miner/lib/deployment-docs-audit.d.ts";
+} from "../../packages/loopover-miner/lib/deployment-docs-audit.js";
+import type { DeploymentDocsReality } from "../../packages/loopover-miner/lib/deployment-docs-audit.d.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
-const MINER_DIR = resolve(REPO_ROOT, "packages/gittensory-miner");
+const MINER_DIR = resolve(REPO_ROOT, "packages/loopover-miner");
 const DEPLOYMENT_MD = resolve(MINER_DIR, "DEPLOYMENT.md");
 const BIN_DIR = resolve(MINER_DIR, "bin");
 const BIN_ENTRY = resolve(BIN_DIR, "loopover-miner.js");
 const LIB_DIR = resolve(MINER_DIR, "lib");
 // gittensory-miner's coding-agent driver construction (MINER_CODING_AGENT_*) is implemented in the
-// gittensory-engine package it depends on, not under packages/gittensory-miner/** -- an env var read only
+// gittensory-engine package it depends on, not under packages/loopover-miner/** -- an env var read only
 // there would otherwise false-positive as undocumented-in-code. Source (not dist/, which is gitignored and
 // may not be built) so this stays accurate on a fresh checkout without a build step.
-const ENGINE_MINER_DIR = resolve(REPO_ROOT, "packages/gittensory-engine/src/miner");
+const ENGINE_MINER_DIR = resolve(REPO_ROOT, "packages/loopover-engine/src/miner");
 
 function readFilesWithExtension(dir: string, extension: string): string[] {
   return readdirSync(dir)
@@ -68,9 +68,9 @@ describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
     expect(result.failures).toEqual([]);
   });
 
-  it("REGRESSION: sees env var reads implemented in gittensory-engine's miner source, not just packages/gittensory-miner/**", () => {
+  it("REGRESSION: sees env var reads implemented in gittensory-engine's miner source, not just packages/loopover-miner/**", () => {
     // MINER_CODING_AGENT_CLAUDE_MODEL / MINER_CODING_AGENT_CODEX_MODEL / MINER_CODING_AGENT_TIMEOUT_MS are
-    // read in packages/gittensory-engine/src/miner/driver-factory.ts, a real dependency of gittensory-miner
+    // read in packages/loopover-engine/src/miner/driver-factory.ts, a real dependency of gittensory-miner
     // for coding-agent driver construction -- scanning only LIB_DIR/BIN_DIR previously false-flagged them
     // as undocumented-in-code even though they are genuinely live, functioning env vars.
     const reality = buildLiveReality();

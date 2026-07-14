@@ -777,7 +777,7 @@ export type RepositorySettings = {
    *  a further "strikes" escalation reuses the existing cross-repo banned-contributors ledger once wired).
    *  Config-as-code only — no DB column or dashboard toggle; set via `.gittensory.yml gate.copycat.mode`.
    *  CURRENTLY INERT: this field is parsed and threaded end-to-end, but no detection engine reads it yet —
-   *  see {@link CopycatGateMode}'s doc comment in packages/gittensory-engine for the tracked follow-up plan. */
+   *  see {@link CopycatGateMode}'s doc comment in packages/loopover-engine for the tracked follow-up plan. */
   copycatGateMode?: CopycatGateMode | undefined;
   /** `gate.copycat.minScore`: containment/similarity score (0-100) at/above which `copycatGateMode` would act,
    *  once the detection engine exists. `null`/absent ⇒ the engine's own default threshold. Config-as-code

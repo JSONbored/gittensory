@@ -5,8 +5,8 @@ import {
   normalizePrOutcomePayload,
   readPrOutcomes,
   recordPrOutcomeSnapshot,
-} from "../../packages/gittensory-miner/lib/pr-outcome.js";
-import type { AppendEventInput, LedgerEntry } from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/pr-outcome.js";
+import type { AppendEventInput, LedgerEntry } from "../../packages/loopover-miner/lib/event-ledger.js";
 
 // A minimal injected event ledger (the DI shape the writer/reader accept), so these stay pure unit tests with no
 // SQLite file. `_events` is exposed so a test can inject crafted rows for the reader's defensive skip branches.

@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openPlanStore } from "../../packages/gittensory-miner/lib/plan-store.js";
-import type { PlanDag, PlanRecord } from "../../packages/gittensory-miner/lib/plan-store.d.ts";
+import { openPlanStore } from "../../packages/loopover-miner/lib/plan-store.js";
+import type { PlanDag, PlanRecord } from "../../packages/loopover-miner/lib/plan-store.d.ts";
 import {
   parsePlanListArgs,
   parsePlanShowArgs,
@@ -11,7 +11,7 @@ import {
   runPlanCli,
   runPlanList,
   runPlanShow,
-} from "../../packages/gittensory-miner/lib/plan-store-cli.js";
+} from "../../packages/loopover-miner/lib/plan-store-cli.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

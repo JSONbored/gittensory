@@ -3,7 +3,7 @@
 // binding, cold index, short query, or any error degrades to empty metadata and NEVER throws.
 // The MCP/API surfaces return metadata only (paths + scores), never retrieved source text.
 
-import { buildIssueRagQuery } from "../../packages/gittensory-engine/src/issue-rag-query";
+import { buildIssueRagQuery } from "../../packages/loopover-engine/src/issue-rag-query";
 import { createReviewAdapters } from "./adapters";
 import { retrieveContextWithMetrics } from "./rag";
 

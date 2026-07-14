@@ -1,0 +1,80 @@
+{
+  "name": "@loopover/engine",
+  "version": "2.0.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "Shared deterministic engine logic for the LoopOver review stack and gittensory-miner.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSONbored/gittensory.git",
+    "directory": "packages/loopover-engine"
+  },
+  "homepage": "https://github.com/JSONbored/gittensory#readme",
+  "bugs": {
+    "url": "https://github.com/JSONbored/gittensory/issues"
+  },
+  "keywords": [
+    "gittensor",
+    "gittensory",
+    "engine",
+    "deterministic",
+    "scoring",
+    "signals"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./scoring/model": {
+      "types": "./dist/scoring/model.d.ts",
+      "default": "./dist/scoring/model.js"
+    },
+    "./scoring/preview": {
+      "types": "./dist/scoring/preview.d.ts",
+      "default": "./dist/scoring/preview.js"
+    },
+    "./scoring/pending-pr-scenarios": {
+      "types": "./dist/scoring/pending-pr-scenarios.d.ts",
+      "default": "./dist/scoring/pending-pr-scenarios.js"
+    },
+    "./signals/test-evidence": {
+      "types": "./dist/signals/test-evidence.d.ts",
+      "default": "./dist/signals/test-evidence.js"
+    },
+    "./signals/check-summary": {
+      "types": "./dist/signals/check-summary.d.ts",
+      "default": "./dist/signals/check-summary.js"
+    },
+    "./signals/path-matchers": {
+      "types": "./dist/signals/path-matchers.d.ts",
+      "default": "./dist/signals/path-matchers.js"
+    }
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && rm -rf dist-test && tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.205",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.20.8",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMinerCommandActions } from "../../apps/gittensory-ui/src/lib/miner-commands";
+import { buildMinerCommandActions } from "../../apps/loopover-ui/src/lib/miner-commands";
 
 describe("miner dashboard command actions", () => {
   it("builds copyable miner commands for an authenticated repo context", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeOpportunityCompetition } from "../../packages/gittensory-engine/src/opportunity-competition";
+import { computeOpportunityCompetition } from "../../packages/loopover-engine/src/opportunity-competition";
 
 describe("computeOpportunityCompetition", () => {
   it("mirrors hosted reward-risk competitionFactor for representative inputs", () => {

@@ -17,7 +17,7 @@ const readDashboard = (): Dashboard => JSON.parse(readFileSync(dashboardPath, "u
 // The AMS cross-link (#5189) points the hub at the "Observing your miner" guide — the AMS observability entry
 // point (mirrors the just-merged #5191 callout target). Kept as an in-repo path so the link-target-exists
 // invariant below can prove it is not a dead link.
-const AMS_GUIDE_REPO_PATH = "packages/gittensory-miner/docs/observability.md";
+const AMS_GUIDE_REPO_PATH = "packages/loopover-miner/docs/observability.md";
 const AMS_GUIDE_URL = `https://github.com/JSONbored/gittensory/blob/main/${AMS_GUIDE_REPO_PATH}`;
 
 function amsPanel(dashboard = readDashboard()): TextPanel | undefined {

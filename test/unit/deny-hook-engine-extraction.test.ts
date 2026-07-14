@@ -19,7 +19,7 @@ import {
   setProposalStatuses,
   synthesizeDenyRuleProposals,
   type DenyRuleProposal,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 import { denyHookFixtures } from "../fixtures/deny-hooks/cases.js";
 
 // A fixed injected clock so the synthesizer is deterministic given its inputs (the #5667 requirement).

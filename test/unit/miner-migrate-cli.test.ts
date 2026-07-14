@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runMigrate, runMigrateChecks } from "../../packages/gittensory-miner/lib/migrate-cli.js";
-import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
+import { runMigrate, runMigrateChecks } from "../../packages/loopover-miner/lib/migrate-cli.js";
+import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 
 const roots: string[] = [];
 

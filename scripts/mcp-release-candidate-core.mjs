@@ -51,7 +51,7 @@ export function checkTag({ tag, packageVersion }) {
     return { ok: false, code: "package_version_missing", message: "Could not read the MCP package version to compare against the tag." };
   }
   if (parsed.version !== packageVersion) {
-    return { ok: false, code: "tag_version_mismatch", message: `Release tag ${tag} (${parsed.version}) does not match packages/gittensory-mcp/package.json version ${packageVersion}.` };
+    return { ok: false, code: "tag_version_mismatch", message: `Release tag ${tag} (${parsed.version}) does not match packages/loopover-mcp/package.json version ${packageVersion}.` };
   }
   return { ok: true, code: "tag_ok", message: `Release tag ${tag} matches package version ${packageVersion}.` };
 }
@@ -166,8 +166,8 @@ function hasEnabledProvenanceFlag(run) {
 
 const REMEDIATION = {
   tag_format_invalid: "Use an mcp-v<major>.<minor>.<patch> tag that matches the package version.",
-  package_version_missing: "Restore a valid version in packages/gittensory-mcp/package.json.",
-  tag_version_mismatch: "Align the tag with packages/gittensory-mcp/package.json (and the CLI packageVersion) before tagging.",
+  package_version_missing: "Restore a valid version in packages/loopover-mcp/package.json.",
+  tag_version_mismatch: "Align the tag with packages/loopover-mcp/package.json (and the CLI packageVersion) before tagging.",
   changelog_section_missing: "Run npm run changelog:mcp and commit the generated mcp-v<version> changelog section.",
   tarball_unsafe: "Remove unexpected or secret-bearing files from the package and rerun the dry-run.",
   cli_smoke_failed: "Fix the packed CLI so `loopover-mcp --help` exits cleanly before tagging.",

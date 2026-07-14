@@ -4,7 +4,7 @@ import {
   renderPlanAsMarkdown,
   type PlanDag,
   type PlanStep,
-} from "../../packages/gittensory-engine/src/plan-export";
+} from "../../packages/loopover-engine/src/plan-export";
 
 function step(over: Partial<PlanStep> & { id: string; title: string }): PlanStep {
   return {

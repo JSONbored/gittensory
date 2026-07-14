@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildMcpReleaseIssue, buildMcpReleaseReport, latestSemverTag, MCP_RELEASE_DUE_MARKER } from "./mcp-release-core.mjs";
 
-const packageJsonPath = "packages/gittensory-mcp/package.json";
+const packageJsonPath = "packages/loopover-mcp/package.json";
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));

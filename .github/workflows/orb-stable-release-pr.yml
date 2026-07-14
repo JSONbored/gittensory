@@ -1,8 +1,8 @@
 # Automated ORB (self-host container image, ghcr.io/jsonbored/loopover-selfhost) STABLE-channel Release PR --
 # the release-please-equivalent for ORB, whose cross-cutting image-relevant scoping (src/** shared with
 # UI/MCP-only subtrees it must exclude -- see orb-release-core.mjs's IMAGE_RELEVANT_PREFIXES/EXCLUDED_PREFIXES)
-# doesn't fit release-please's directory-component model the way packages/gittensory-mcp and
-# packages/gittensory-engine do (see mcp-release-please.yml). Same UX contract as those, hand-rolled: on the
+# doesn't fit release-please's directory-component model the way packages/loopover-mcp and
+# packages/loopover-engine do (see mcp-release-please.yml). Same UX contract as those, hand-rolled: on the
 # same schedule (or on demand), (re)compute the next stable version from conventional commits since the last
 # STABLE orb-v tag (scripts/check-orb-stable-release-due.mjs / orb-release-core.mjs's buildOrbStableReleaseReport)
 # and keep a standing `release-orb-stable` branch + PR in sync with that proposal. Nothing ships until a

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateLocalRateLimit, jitteredBackoffMs, type LocalRateBucket, type LocalRateLimitConfig } from "../../packages/gittensory-engine/src/governor/rate-limit";
+import { evaluateLocalRateLimit, jitteredBackoffMs, type LocalRateBucket, type LocalRateLimitConfig } from "../../packages/loopover-engine/src/governor/rate-limit";
 
 const config: LocalRateLimitConfig = { limit: 10, windowMs: 60_000 };
 

@@ -6,8 +6,8 @@ import {
   parseQueueItemId,
   queueItemId,
   selectEligibleBatch,
-} from "../../packages/gittensory-miner/lib/portfolio-queue-manager.js";
-import { initPortfolioQueueStore, type QueueEntry } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue-manager.js";
+import { initPortfolioQueueStore, type QueueEntry } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 
 const stores: Array<{ close(): void }> = [];
 

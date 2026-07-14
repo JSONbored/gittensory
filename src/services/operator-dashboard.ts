@@ -49,7 +49,7 @@ export type OperatorDashboardNoiseMetric = {
 };
 
 /** Finding acceptance rate (#1967), reshaped for the dashboard's `AcceptanceRateCard` (see
- *  apps/gittensory-ui/src/components/site/app-panels/acceptance-rate-card.tsx). The card's field names
+ *  apps/loopover-ui/src/components/site/app-panels/acceptance-rate-card.tsx). The card's field names
  *  (windowDays/accepted/total/rate) intentionally differ from `FindingAcceptanceAggregate`'s
  *  (flagged/addressed/unaddressed/acceptanceRate) — this is the UI-facing shape, mapped in buildOperatorDashboardPayload. */
 export type OperatorDashboardFindingAcceptance = {

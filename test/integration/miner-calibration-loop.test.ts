@@ -2,7 +2,7 @@
  * End-to-end regression for the Phase 7 calibration wiring (#4248): the full chain the closed #3014 claimed but
  * never connected — the deterministic replay scorer (replay-objective-anchor.js, #3012) → the engine's combine
  * contract (computePhase7CalibrationLoop, #3014) → a persisted, queryable ledger row. Per-module edge cases stay in
- * test/unit/miner-calibration-run.test.ts and packages/gittensory-engine/test/phase7-calibration-loop.test.ts; this
+ * test/unit/miner-calibration-run.test.ts and packages/loopover-engine/test/phase7-calibration-loop.test.ts; this
  * file pins the composed chain against a REAL engine combine and a REAL temp-file event ledger.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -12,15 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Resolve the engine PACKAGE import inside calibration-run.js to the in-repo source, so the runner's default
 // (non-injected) combine runs the real computePhase7CalibrationLoop rather than a stub.
-vi.mock("@loopover/engine", async () => import("../../packages/gittensory-engine/src/index"));
+vi.mock("@loopover/engine", async () => import("../../packages/loopover-engine/src/index"));
 
 import {
   MINER_CALIBRATION_SNAPSHOT_EVENT,
   readCalibrationSnapshots,
   runHistoricalReplayCalibrationCycle,
-} from "../../packages/gittensory-miner/lib/calibration-run.js";
-import { filterLedgerEvents, runLedgerList } from "../../packages/gittensory-miner/lib/event-ledger-cli.js";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/calibration-run.js";
+import { filterLedgerEvents, runLedgerList } from "../../packages/loopover-miner/lib/event-ledger-cli.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
 
 const roots: string[] = [];
 

@@ -4,16 +4,16 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { parseLoopArgs, runLoop } from "../../packages/gittensory-miner/lib/loop-cli.js";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import { initPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { initRunStateStore } from "../../packages/gittensory-miner/lib/run-state.js";
-import { openGovernorState } from "../../packages/gittensory-miner/lib/governor-state.js";
-import { DEFAULT_AMS_POLICY_SPEC } from "../../packages/gittensory-engine/src/index";
+import { parseLoopArgs, runLoop } from "../../packages/loopover-miner/lib/loop-cli.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { initRunStateStore } from "../../packages/loopover-miner/lib/run-state.js";
+import { openGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
+import { DEFAULT_AMS_POLICY_SPEC } from "../../packages/loopover-engine/src/index";
 
 const roots: string[] = [];
 // Fresh, separate connections opened AFTER a runLoop call to inspect real persisted state -- runLoop's own

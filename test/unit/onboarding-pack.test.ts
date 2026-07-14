@@ -33,7 +33,7 @@ const POLICY_COMPILER_FIXTURE: RepoPolicyCompilerOutput = {
       id: "label-policy",
       title: "Label policy lane",
       summary: "Changes that make maintainer-owned labels easier to audit.",
-      preferredPaths: ["src/api/", "apps/gittensory-ui/src/"],
+      preferredPaths: ["src/api/", "apps/loopover-ui/src/"],
       validationExpectations: ["Include a focused regression test for policy output."],
     },
   ],

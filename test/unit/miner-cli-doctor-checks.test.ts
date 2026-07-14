@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkClaudeCliPresent, checkCodexCliPresent } from "../../packages/gittensory-miner/lib/laptop-init.js";
+import { checkClaudeCliPresent, checkCodexCliPresent } from "../../packages/loopover-miner/lib/laptop-init.js";
 import {
   checkCodingAgentCredential,
   checkGitHubTokenPresent,
   runDoctorChecks,
-} from "../../packages/gittensory-miner/lib/status.js";
+} from "../../packages/loopover-miner/lib/status.js";
 
 const roots: string[] = [];
 function tempRoot() {

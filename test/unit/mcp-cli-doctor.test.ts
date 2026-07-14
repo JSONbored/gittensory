@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bin, closeFixtureServer, createPacketRepo, git, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
-import mcpPackageJson from "../../packages/gittensory-mcp/package.json";
+import mcpPackageJson from "../../packages/loopover-mcp/package.json";
 
 // A "higher-core prerelease" fixture (release outranks any prerelease of the same core, but a
 // HIGHER-core prerelease still beats a lower-core release) needs a version strictly above the local

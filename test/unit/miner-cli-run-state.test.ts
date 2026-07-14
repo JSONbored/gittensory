@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const getRunState = vi.fn();
 const setRunState = vi.fn();
 
-vi.mock("../../packages/gittensory-miner/lib/run-state.js", () => ({
+vi.mock("../../packages/loopover-miner/lib/run-state.js", () => ({
   RUN_STATES: ["idle", "discovering", "planning", "preparing"],
   getRunState,
   setRunState,
@@ -14,7 +14,7 @@ const {
   parseStateSetArgs,
   runStateGet,
   runStateSet,
-} = await import("../../packages/gittensory-miner/lib/run-state-cli.js");
+} = await import("../../packages/loopover-miner/lib/run-state-cli.js");
 
 afterEach(() => {
   vi.restoreAllMocks();

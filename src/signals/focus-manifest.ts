@@ -1,5 +1,5 @@
 /**
- * Focus-manifest shim (#2280). Parse/compile core lives in `packages/gittensory-engine/src/focus-manifest.ts`;
+ * Focus-manifest shim (#2280). Parse/compile core lives in `packages/loopover-engine/src/focus-manifest.ts`;
  * this file re-exports the engine surface and keeps app-local resolver/guidance functions that depend on
  * `src/` modules (`classifyChangedFile`, `mergeContributorBlacklists`, etc.).
  */
@@ -75,7 +75,7 @@ export {
   type VisualPreviewConfig,
   type VisualRoutesConfig,
   type VisualTheme,
-} from "../../packages/gittensory-engine/src/focus-manifest.js";
+} from "../../packages/loopover-engine/src/focus-manifest.js";
 
 import type { PrTypeLabelSet, RepositorySettings } from "../types";
 import { mergeContributorBlacklists } from "../settings/contributor-blacklist";
@@ -108,7 +108,7 @@ import {
   type ReviewProfile,
   type SelfHostAiModelConfig,
   type VisualConfig,
-} from "../../packages/gittensory-engine/src/focus-manifest.js";
+} from "../../packages/loopover-engine/src/focus-manifest.js";
 import type { ReesAnalyzerName } from "../review/enrichment-analyzer-names";
 
 export function resolveReviewPathInstructions(pathInstructions: ReviewPathInstruction[], changedPaths: string[]): string {

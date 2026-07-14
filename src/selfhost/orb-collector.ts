@@ -16,7 +16,7 @@
 // reason category + cycle time, with repo/PR identifiers HMAC'd by a key the collector never holds (so it
 // can never de-anonymize).
 import { createHash, createHmac } from "node:crypto";
-import { generateAnonSecret, hmacAnonymize } from "../../packages/gittensory-engine/src/telemetry/anonymize.js";
+import { generateAnonSecret, hmacAnonymize } from "../../packages/loopover-engine/src/telemetry/anonymize.js";
 import { incr } from "./metrics";
 
 /** Key under which the per-instance anonymization secret is persisted in system_flags. */

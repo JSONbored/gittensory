@@ -4,7 +4,7 @@ import {
   applySchemaMigrations,
   readSchemaVersion,
   BASELINE_SCHEMA_VERSION,
-} from "../../packages/gittensory-miner/lib/schema-version.js";
+} from "../../packages/loopover-miner/lib/schema-version.js";
 
 type Migration = (db: DatabaseSync) => void;
 

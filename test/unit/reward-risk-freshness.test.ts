@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeOpportunityFreshness,
   type FreshnessIssue,
-} from "../../packages/gittensory-engine/src/opportunity-freshness";
+} from "../../packages/loopover-engine/src/opportunity-freshness";
 import {
   buildContributorOutcomeHistory,
   buildContributorProfile,

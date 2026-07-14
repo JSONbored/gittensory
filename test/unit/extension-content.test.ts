@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
-const contentScript = readFileSync("apps/gittensory-extension/content.js", "utf8");
+const contentScript = readFileSync("apps/loopover-extension/content.js", "utf8");
 
 describe("extension content script", () => {
   it("detects GitHub pull request and issue routes while only mounting pull overlays", () => {

@@ -69,11 +69,11 @@ jobs:
             # A dependency bump (package.json/package-lock.json) stays here too since it can break the UI
             # build or types in ways only that full toolchain would catch.
             ui:
-              - 'apps/gittensory-ui/**'
-              - 'apps/gittensory-miner-ui/**'
-              - 'apps/gittensory-extension/**'
-              - 'apps/gittensory-miner-extension/**'
-              - 'packages/gittensory-ui-kit/**'
+              - 'apps/loopover-ui/**'
+              - 'apps/loopover-miner-ui/**'
+              - 'apps/loopover-extension/**'
+              - 'apps/loopover-miner-extension/**'
+              - 'packages/loopover-ui-kit/**'
               - 'scripts/build-extension.mjs'
               - 'scripts/build-miner-extension.mjs'
               - 'package.json'
@@ -81,7 +81,7 @@ jobs:
             # Backend changes that can drift the OpenAPI contract the UI type-checks against, but say
             # nothing about the UI app's OWN code -- only the lightweight drift check needs to run, not
             # ui:lint/typecheck/test/build (#ci-scope). If a backend PR's change IS UI-relevant, regenerating
-            # `apps/gittensory-ui/public/openapi.json` per CONTRIBUTING.md lands a change under `ui` above,
+            # `apps/loopover-ui/public/openapi.json` per CONTRIBUTING.md lands a change under `ui` above,
             # which correctly re-triggers the full toolchain.
             uiContract:
               - 'src/**'
@@ -90,23 +90,23 @@ jobs:
               # Self-contained package: build is `node --check` on its own files
               # and the pack check only inspects the tarball. Root src/ cannot
               # affect it, so it is intentionally NOT a trigger here.
-              - 'packages/gittensory-mcp/**'
+              - 'packages/loopover-mcp/**'
               - 'scripts/check-mcp-package.mjs'
               - 'package-lock.json'
             engine:
-              - 'packages/gittensory-engine/**'
+              - 'packages/loopover-engine/**'
               - 'package-lock.json'
             miner:
-              - 'packages/gittensory-miner/**'
+              - 'packages/loopover-miner/**'
               - 'scripts/check-miner-package.mjs'
               - 'package-lock.json'
             # 6 of the 7 MCP CLI-cluster test files, and ONLY these 6, are truly self-contained w.r.t. root
             # src/**: verified by direct-import inspection that test/unit/mcp-cli-*.test.ts (5 files) and
             # their shared test/unit/support/mcp-cli-harness.ts import nothing but node:* builtins + vitest,
-            # and mcp-discovery.test.ts spawns packages/gittensory-mcp/bin/loopover-mcp.js as a real
+            # and mcp-discovery.test.ts spawns packages/loopover-mcp/bin/loopover-mcp.js as a real
             # subprocess via StdioClientTransport -- none of the 6 ever load root src/ in-process. This mirrors
             # the `mcp` filter's own established trust boundary above (a self-contained package build). They are
-            # NOT self-contained w.r.t. packages/gittensory-engine/**, though: gittensory-mcp now has a real
+            # NOT self-contained w.r.t. packages/loopover-engine/**, though: loopover-mcp now has a real
             # dependency on @loopover/engine (isTestFile/isCodeFile), which the bin subprocess and
             # local-branch.js load at runtime -- hence that path below, alongside the mcp package's own.
             # test/unit/mcp-output-schemas.test.ts is DELIBERATELY NOT in this filter: unlike the other 6, it
@@ -127,8 +127,8 @@ jobs:
               - 'scripts/**'
               - 'migrations/**'
               - '.github/workflows/**'
-              - 'packages/gittensory-mcp/**'
-              - 'packages/gittensory-engine/**'
+              - 'packages/loopover-mcp/**'
+              - 'packages/loopover-engine/**'
               - 'test/helpers/**'
               - 'test/unit/mcp-cli-*.test.ts'
               - 'test/unit/mcp-discovery.test.ts'
@@ -139,7 +139,7 @@ jobs:
             # Both miner-package test files are self-contained w.r.t. root src/**, the same trust boundary as
             # mcpCliHarness above: check-miner-package.test.ts only spawns scripts/check-miner-package.mjs as a
             # real subprocess (node:child_process + vitest, nothing else), and miner-calibration-types.test.ts
-            # only imports the scaffolded packages/gittensory-miner/lib/calibration.js -- neither ever loads
+            # only imports the scaffolded packages/loopover-miner/lib/calibration.js -- neither ever loads
             # root src/ in-process. Mirrors mcpCliHarness's filter shape for the same reason (tooling/config
             # changes that could plausibly affect how these tests run, plus the miner package + the test files
             # themselves), swapping in the miner-specific package and test files.
@@ -151,7 +151,7 @@ jobs:
               - 'scripts/**'
               - 'migrations/**'
               - '.github/workflows/**'
-              - 'packages/gittensory-miner/**'
+              - 'packages/loopover-miner/**'
               - 'test/unit/check-miner-package.test.ts'
               - 'test/unit/miner-calibration-types.test.ts'
 
@@ -197,7 +197,7 @@ jobs:
         with:
           path: |
             node_modules
-            apps/gittensory-ui/node_modules
+            apps/loopover-ui/node_modules
           # hashFiles('.nvmrc') matters as much as the package manifests and lockfile: a Node bump
           # with no lockfile change would otherwise still hit and silently reuse node_modules whose
           # native addons (sharp, workerd, fsevents) were compiled against the OLD Node's ABI. The
@@ -225,7 +225,7 @@ jobs:
         with:
           path: |
             node_modules
-            apps/gittensory-ui/node_modules
+            apps/loopover-ui/node_modules
           key: ${{ steps.node-modules-cache.outputs.cache-primary-key }}
       - name: Lint workflows
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
@@ -250,7 +250,7 @@ jobs:
       # lines (not just one that adds/removes an env var) can make it stale. Was previously enforced ONLY by
       # the local `npm run test:ci` aggregate script, never by this workflow -- went stale twice in one day
       # (2026-07-04) with zero CI signal until someone happened to run the full local script. Gated on `ui`
-      # too, not just `backend`: the generated file itself lives under apps/gittensory-ui/**, so a PR that
+      # too, not just `backend`: the generated file itself lives under apps/loopover-ui/**, so a PR that
       # hand-edits it (or a docs page docs:drift-check below cross-checks) without touching backend source
       # would otherwise never re-run this check.
       - name: Selfhost env-reference drift check
@@ -275,10 +275,10 @@ jobs:
           NODE_OPTIONS: ""
         run: node scripts/validate-observability-configs.mjs
       # Runs ahead of Typecheck AND "Test with coverage" (#ci-engine-build-order): src/mcp/find-opportunities.ts
-      # (root backend, since #2281/#3985) imports packages/gittensory-miner/lib/opportunity-fanout.js --
+      # (root backend, since #2281/#3985) imports packages/loopover-miner/lib/opportunity-fanout.js --
       # committed, pre-built JS -- which itself imports @loopover/engine. That package's dist/ is
       # gitignored and only exists after this build step, so ANY backend typecheck or test run needs it built
-      # first, not just a PR that touches packages/gittensory-engine/** directly (this step's original, too-
+      # first, not just a PR that touches packages/loopover-engine/** directly (this step's original, too-
       # narrow trigger). Originally ran after coverage (broke test:coverage on PRs that didn't touch the
       # engine) and after Typecheck (broke a real, non-vi.mock `import type` from the package specifier with
       # TS2307 in CI while passing locally against a stale leftover dist/ -- first hit by PR #5082). Now ahead
@@ -312,8 +312,8 @@ jobs:
       - name: Worker runtime tests
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
         run: npm run test:workers
-      # gittensory-mcp now depends on @loopover/engine for real (isTestFile/isCodeFile), so a
-      # PR that only touches packages/gittensory-engine/** must also rebuild + pack-check the mcp package,
+      # loopover-mcp now depends on @loopover/engine for real (isTestFile/isCodeFile), so a
+      # PR that only touches packages/loopover-engine/** must also rebuild + pack-check the mcp package,
       # not just the mcp filter's own (deliberately narrower) path list.
       - name: Build MCP
         if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' }}
@@ -360,14 +360,14 @@ jobs:
       - name: OpenAPI settings-parity check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.uiContract == 'true' }}
         run: npm run ui:openapi:settings-parity
-      # Checks apps/gittensory-ui/src' known-latest MCP version string against the published package, so
+      # Checks apps/loopover-ui/src' known-latest MCP version string against the published package, so
       # its dependency is `ui` (the file it scans) + `mcp` (the package it checks against) -- NOT the
       # OpenAPI contract, which this script never reads.
       - name: UI/MCP version audit
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.mcp == 'true' }}
         run: npm run ui:version-audit
-      # gittensory-ui and gittensory-miner-ui both import compiled output from this shared package
-      # (packages/gittensory-ui-kit/dist), which is gitignored like every other workspace package's
+      # loopover-ui and loopover-miner-ui both import compiled output from this shared package
+      # (packages/loopover-ui-kit/dist), which is gitignored like every other workspace package's
       # dist -- so it does not exist on a fresh checkout until something builds it. Same class of gap
       # as "Build engine package" above; runs before UI lint/typecheck/tests/build all in this same
       # job, so building it here once covers all four.
@@ -389,7 +389,7 @@ jobs:
       - name: Extension typecheck
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
         run: npm run extension:typecheck && npm run miner-extension:typecheck
-      # `npm run ui:build` also regenerates apps/gittensory-ui/public/openapi.json (needed for a
+      # `npm run ui:build` also regenerates apps/loopover-ui/public/openapi.json (needed for a
       # standalone build), but this step's trigger condition is a strict subset of "OpenAPI drift
       # check" above (push || ui==true, vs. push || ui==true || uiContract==true), so whenever this
       # step runs, that check already ran and passed in this same job -- the committed spec is
@@ -446,7 +446,7 @@ jobs:
         with:
           path: |
             node_modules
-            apps/gittensory-ui/node_modules
+            apps/loopover-ui/node_modules
           key: npm-${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'fork' || 'trusted' }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('package.json', 'apps/*/package.json', 'packages/*/package.json', 'package-lock.json') }}
       - name: Install dependencies (retry on transient failures)
         if: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' }}
@@ -466,7 +466,7 @@ jobs:
         with:
           path: |
             node_modules
-            apps/gittensory-ui/node_modules
+            apps/loopover-ui/node_modules
           key: ${{ steps.node-modules-cache.outputs.cache-primary-key }}
       # Any backend test run needs the engine package's dist/ built first -- see the identical step's
       # comment in validate-code (#ci-engine-build-order) for why.
@@ -490,14 +490,14 @@ jobs:
         run: |
           EXCLUDE_ARGS=()
           if [ "$SKIP_MCP_CLI_HARNESS" = "true" ]; then
-            echo "Skipping the self-contained MCP CLI-harness tests (no packages/gittensory-mcp-relevant paths changed)."
+            echo "Skipping the self-contained MCP CLI-harness tests (no packages/loopover-mcp-relevant paths changed)."
             EXCLUDE_ARGS+=(
               --exclude "test/unit/mcp-cli-*.test.ts"
               --exclude "test/unit/mcp-discovery.test.ts"
             )
           fi
           if [ "$SKIP_MINER_TEST_HARNESS" = "true" ]; then
-            echo "Skipping the self-contained miner-package tests (no packages/gittensory-miner-relevant paths changed)."
+            echo "Skipping the self-contained miner-package tests (no packages/loopover-miner-relevant paths changed)."
             EXCLUDE_ARGS+=(
               --exclude "test/unit/check-miner-package.test.ts"
               --exclude "test/unit/miner-calibration-types.test.ts"
@@ -618,7 +618,7 @@ jobs:
         with:
           path: |
             node_modules
-            apps/gittensory-ui/node_modules
+            apps/loopover-ui/node_modules
           key: npm-${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true) && 'fork' || 'trusted' }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('package.json', 'apps/*/package.json', 'packages/*/package.json', 'package-lock.json') }}
       - name: Install dependencies (retry on transient failures)
         if: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' }}

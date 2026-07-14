@@ -11,7 +11,7 @@ import {
   splitRepoFullName,
   type GittensorConfigRecommendationPayload,
   type RegistrationReadinessPayload,
-} from "../../apps/gittensory-ui/src/lib/registration-workspace";
+} from "../../apps/loopover-ui/src/lib/registration-workspace";
 
 const FORBIDDEN =
   /wallet|hotkey|raw trust score|payout|reward|farming|private reviewability|reviewability|public score estimate/i;

@@ -4,20 +4,20 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { closeDefaultClaimLedger, openClaimLedger } from "../../packages/gittensory-miner/lib/claim-ledger.js";
-import { closeDefaultEventLedger, initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { closeDefaultAttemptLog, initAttemptLog } from "../../packages/gittensory-miner/lib/attempt-log.js";
-import type { AttemptLog } from "../../packages/gittensory-miner/lib/attempt-log.js";
-import { closeDefaultGovernorLedger, initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import { closeDefaultWorktreeAllocator, openWorktreeAllocator } from "../../packages/gittensory-miner/lib/worktree-allocator.js";
-import { closeDefaultPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { closeDefaultGovernorState } from "../../packages/gittensory-miner/lib/governor-state.js";
-import { buildAttemptDeps, parseAttemptArgs, runAttempt } from "../../packages/gittensory-miner/lib/attempt-cli.js";
-import type { PrepareAttemptWorktreeResult } from "../../packages/gittensory-miner/lib/attempt-worktree.js";
-import { DEFAULT_AMS_POLICY_SPEC, DEFAULT_MINER_GOAL_SPEC, parseFocusManifest } from "../../packages/gittensory-engine/src/index";
+import { closeDefaultClaimLedger, openClaimLedger } from "../../packages/loopover-miner/lib/claim-ledger.js";
+import { closeDefaultEventLedger, initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { closeDefaultAttemptLog, initAttemptLog } from "../../packages/loopover-miner/lib/attempt-log.js";
+import type { AttemptLog } from "../../packages/loopover-miner/lib/attempt-log.js";
+import { closeDefaultGovernorLedger, initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { closeDefaultWorktreeAllocator, openWorktreeAllocator } from "../../packages/loopover-miner/lib/worktree-allocator.js";
+import { closeDefaultPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { closeDefaultGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
+import { buildAttemptDeps, parseAttemptArgs, runAttempt } from "../../packages/loopover-miner/lib/attempt-cli.js";
+import type { PrepareAttemptWorktreeResult } from "../../packages/loopover-miner/lib/attempt-worktree.js";
+import { DEFAULT_AMS_POLICY_SPEC, DEFAULT_MINER_GOAL_SPEC, parseFocusManifest } from "../../packages/loopover-engine/src/index";
 
 const roots: string[] = [];
 // Only ever holds ledgers a test itself must close -- runAttempt tests inject theirs via DI and runAttempt's
@@ -483,7 +483,7 @@ describe("runAttempt (#5132)", () => {
     });
 
     // A real write against the isolated store proves the real default (not a DI stub) actually ran.
-    const { listRecentOwnSubmissions } = await import("../../packages/gittensory-miner/lib/governor-state.js");
+    const { listRecentOwnSubmissions } = await import("../../packages/loopover-miner/lib/governor-state.js");
     const submissions = listRecentOwnSubmissions({ repoFullName: "acme/widgets" });
     expect(submissions).toEqual([
       expect.objectContaining({ repoFullName: "acme/widgets", fingerprint: "src/a.ts", pullRequestNumber: 9, issueNumber: 7 }),

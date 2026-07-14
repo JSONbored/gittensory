@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCalibrationTrendView,
   calibrationSnapshotFromResult,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 import type {
   CalibrationTrendSnapshot,
   Phase7CalibrationLoopResult,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 function snap(observedAt: string, combinedAccuracy: number | null, baselineAccuracy = 0.62): CalibrationTrendSnapshot {
   return { observedAt, combinedAccuracy, baselineAccuracy };

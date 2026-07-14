@@ -1,11 +1,11 @@
-# Browser Sentry source-map upload for the operator UI (#1737). apps/gittensory-ui's PRODUCTION build/deploy
+# Browser Sentry source-map upload for the operator UI (#1737). apps/loopover-ui's PRODUCTION build/deploy
 # is NOT driven by GitHub Actions -- Cloudflare's own Workers Build git integration owns that (see
-# apps/gittensory-ui/vite.config.ts's header comment). That regular build never enables source maps (vite.config.ts's
+# apps/loopover-ui/vite.config.ts's header comment). That regular build never enables source maps (vite.config.ts's
 # SENTRY_BUILD_SOURCEMAPS gate), so `dist/client` never ships a `.map` file publicly.
 #
 # This workflow does its own INDEPENDENT build with source maps enabled, purely to upload them to Sentry as a
 # release artifact -- it never deploys anything. Because Cloudflare Workers Build is external to this repo, the
-# operator must set the SAME VITE_SENTRY_RELEASE value (gittensory-ui@<short-sha>, matching this workflow's own
+# operator must set the SAME VITE_SENTRY_RELEASE value (loopover-ui@<short-sha>, matching this workflow's own
 # `release` output) in their Cloudflare deploy's build environment variables for a given commit, or Sentry
 # events won't symbolicate against these maps -- see the "Enabling browser Sentry" self-host doc.
 name: ui-sentry-release
@@ -14,7 +14,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "apps/gittensory-ui/**"
+      - "apps/loopover-ui/**"
       - "src/signals/redaction.ts"
       - ".github/workflows/ui-sentry-release.yml"
   workflow_dispatch:
@@ -58,10 +58,10 @@ jobs:
 
       - name: Resolve release id
         id: version
-        run: echo "release=gittensory-ui@${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+        run: echo "release=loopover-ui@${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
       - name: Build UI with source maps
-        working-directory: apps/gittensory-ui
+        working-directory: apps/loopover-ui
         env:
           SENTRY_BUILD_SOURCEMAPS: "1"
           VITE_SENTRY_RELEASE: ${{ steps.version.outputs.release }}
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload Sentry source maps
         if: steps.sentry.outputs.enabled == 'true'
-        working-directory: apps/gittensory-ui
+        working-directory: apps/loopover-ui
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG || 'jsonbored' }}

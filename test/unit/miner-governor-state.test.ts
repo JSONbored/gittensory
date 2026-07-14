@@ -10,7 +10,7 @@ import {
   openGovernorState,
   savePauseState,
   saveReputationHistory,
-} from "../../packages/gittensory-miner/lib/governor-state.js";
+} from "../../packages/loopover-miner/lib/governor-state.js";
 
 const roots: string[] = [];
 const states: Array<{ close(): void }> = [];

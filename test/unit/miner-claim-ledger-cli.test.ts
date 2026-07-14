@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeDefaultClaimLedger,
   openClaimLedger,
-} from "../../packages/gittensory-miner/lib/claim-ledger.js";
-import type { ClaimEntry } from "../../packages/gittensory-miner/lib/claim-ledger.d.ts";
+} from "../../packages/loopover-miner/lib/claim-ledger.js";
+import type { ClaimEntry } from "../../packages/loopover-miner/lib/claim-ledger.d.ts";
 import {
   parseClaimClaimArgs,
   parseClaimListArgs,
@@ -16,7 +16,7 @@ import {
   runClaimCli,
   runClaimList,
   runClaimRelease,
-} from "../../packages/gittensory-miner/lib/claim-ledger-cli.js";
+} from "../../packages/loopover-miner/lib/claim-ledger-cli.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];

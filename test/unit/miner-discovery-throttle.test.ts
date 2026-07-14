@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
   DEFAULT_RATE_LIMIT_HIGH_WATER_MARK,
   DEFAULT_RATE_LIMIT_LOW_WATER_MARK,
   resolveThrottledConcurrency,
-} from "../../packages/gittensory-miner/lib/discovery-throttle.js";
+} from "../../packages/loopover-miner/lib/discovery-throttle.js";
 import {
   fetchCandidateIssuesWithSummary,
   mapWithConcurrency,
-} from "../../packages/gittensory-miner/lib/opportunity-fanout.js";
+} from "../../packages/loopover-miner/lib/opportunity-fanout.js";
 
 const instant = async () => {};
 

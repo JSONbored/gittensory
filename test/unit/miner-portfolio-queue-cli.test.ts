@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import {
   parseQueueDoneArgs,
   parseQueueListArgs,
@@ -22,8 +22,8 @@ import {
   runQueueRelease,
   runQueueRequeue,
   selectNextEligibleTarget,
-} from "../../packages/gittensory-miner/lib/portfolio-queue-cli.js";
-import type { QueueEntry } from "../../packages/gittensory-miner/lib/portfolio-queue.d.ts";
+} from "../../packages/loopover-miner/lib/portfolio-queue-cli.js";
+import type { QueueEntry } from "../../packages/loopover-miner/lib/portfolio-queue.d.ts";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

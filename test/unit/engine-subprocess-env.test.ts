@@ -1,6 +1,6 @@
 // App-vitest coverage for the engine subprocess-env helper (#4284). The engine also has its own node:test suite,
 // but codecov/patch is computed from this app vitest run (vitest.config coverage includes
-// packages/gittensory-engine/src/**), so the changed engine lines need a vitest test that imports the SRC directly.
+// packages/loopover-engine/src/**), so the changed engine lines need a vitest test that imports the SRC directly.
 //
 // The secret-shaped fixtures below are BUILT from parts (`.join(...)`) so the gate's own diff secret-scanner never
 // sees a literal token in the source (it would flag it as a leaked secret), while the runtime string still matches
@@ -11,7 +11,7 @@ import {
   buildAllowlistedEnv,
   SECRET_PATTERNS,
   redactSecrets,
-} from "../../packages/gittensory-engine/src/subprocess-env";
+} from "../../packages/loopover-engine/src/subprocess-env";
 
 const openaiKey = ["sk", "abcdefghijklmnop123"].join("-");
 const githubToken = ["ghp", "ABCDEFGHIJKLMNOPQRSTUV"].join("_");

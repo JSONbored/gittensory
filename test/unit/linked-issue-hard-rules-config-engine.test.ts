@@ -4,7 +4,7 @@ import {
   DEFAULT_LINKED_ISSUE_HARD_RULES,
   isLinkedIssueHardRuleMode,
   normalizeLinkedIssueHardRulesConfig,
-} from "../../packages/gittensory-engine/src/review/linked-issue-hard-rules-config";
+} from "../../packages/loopover-engine/src/review/linked-issue-hard-rules-config";
 
 describe("isLinkedIssueHardRuleMode [engine]", () => {
   it("accepts the valid modes and rejects everything else", () => {

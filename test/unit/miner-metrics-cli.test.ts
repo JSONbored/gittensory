@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initPredictionLedger } from "../../packages/gittensory-miner/lib/prediction-ledger.js";
+import { initPredictionLedger } from "../../packages/loopover-miner/lib/prediction-ledger.js";
 import {
   collectPredictionMetricRows,
   runMetrics,
-} from "../../packages/gittensory-miner/lib/metrics-cli.js";
-import type { PredictionLedger } from "../../packages/gittensory-miner/lib/prediction-ledger.d.ts";
+} from "../../packages/loopover-miner/lib/metrics-cli.js";
+import type { PredictionLedger } from "../../packages/loopover-miner/lib/prediction-ledger.d.ts";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];

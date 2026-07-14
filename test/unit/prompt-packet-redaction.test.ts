@@ -5,7 +5,7 @@ import {
   PROMPT_PACKET_TEXT_FIELDS,
   buildPromptPacket,
   type PromptPacketInput,
-} from "../../packages/gittensory-engine/src/prompt-packet";
+} from "../../packages/loopover-engine/src/prompt-packet";
 import { PUBLIC_LOCAL_PATH_INLINE, PUBLIC_UNSAFE_TERMS } from "../../src/signals/redaction";
 
 function cleanPacketInput(over: Partial<PromptPacketInput> = {}): PromptPacketInput {

@@ -7,20 +7,20 @@ import {
   normalizeLocalStoreDbPath,
   openLocalStoreDb,
   resolveLocalStoreDbPath,
-} from "../../packages/gittensory-miner/lib/local-store.js";
-import { closeDefaultClaimLedger, openClaimLedger, resolveClaimLedgerDbPath } from "../../packages/gittensory-miner/lib/claim-ledger.js";
-import { closeDefaultEventLedger, initEventLedger, resolveEventLedgerDbPath } from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/local-store.js";
+import { closeDefaultClaimLedger, openClaimLedger, resolveClaimLedgerDbPath } from "../../packages/loopover-miner/lib/claim-ledger.js";
+import { closeDefaultEventLedger, initEventLedger, resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
   resolvePortfolioQueueDbPath,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { closeDefaultRunStateStore, initRunStateStore, resolveRunStateDbPath } from "../../packages/gittensory-miner/lib/run-state.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { closeDefaultRunStateStore, initRunStateStore, resolveRunStateDbPath } from "../../packages/loopover-miner/lib/run-state.js";
 import {
   cleanupResourceCount,
   closeAllCleanupResources,
   resetProcessLifecycleForTesting,
-} from "../../packages/gittensory-miner/lib/process-lifecycle.js";
+} from "../../packages/loopover-miner/lib/process-lifecycle.js";
 
 const roots: string[] = [];
 const dbs: Array<{ close(): void }> = [];

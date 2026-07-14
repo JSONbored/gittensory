@@ -5,16 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runQueueClaimBatch,
   parseQueueClaimBatchArgs,
-} from "../../packages/gittensory-miner/lib/portfolio-queue-cli.js";
-import { initPortfolioQueueManager } from "../../packages/gittensory-miner/lib/portfolio-queue-manager.js";
-import { initPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue-cli.js";
+import { initPortfolioQueueManager } from "../../packages/loopover-miner/lib/portfolio-queue-manager.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import {
   runOrbExportCli,
   parseOrbExportArgs,
   openOrbExportStore,
-} from "../../packages/gittensory-miner/lib/orb-export.js";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { recordPrOutcomeSnapshot } from "../../packages/gittensory-miner/lib/pr-outcome.js";
+} from "../../packages/loopover-miner/lib/orb-export.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { recordPrOutcomeSnapshot } from "../../packages/loopover-miner/lib/pr-outcome.js";
 
 const roots: string[] = [];
 const closeables: Array<{ close(): void }> = [];

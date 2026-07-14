@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const MINER_WORKFLOW_PATH = resolve(
   import.meta.dirname,
-  "../../apps/gittensory-ui/src/routes/docs.miner-workflow.tsx",
+  "../../apps/loopover-ui/src/routes/docs.miner-workflow.tsx",
 );
 
 describe("docs miner workflow page", () => {

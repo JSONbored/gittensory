@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { buildHouseRulesAgentSdkHooks, runHouseRulesEnforcedCodingAgentAttempt } from "../../packages/gittensory-miner/lib/coding-agent-house-rules.js";
+import { buildHouseRulesAgentSdkHooks, runHouseRulesEnforcedCodingAgentAttempt } from "../../packages/loopover-miner/lib/coding-agent-house-rules.js";
 // Typed from source, not the "@loopover/engine" package specifier: that resolves via the
 // workspace package's dist/ (git-ignored, only built by CI's later "Build engine package" step -- #ci-engine-
 // build-order), which runs AFTER Typecheck, so a real (non-vi.mock) `import type` from the package specifier
 // fails TS2307 in CI even though it resolves fine locally with a stale/leftover dist/ already on disk. The
 // vi.mock above already redirects the package specifier to this exact source file at runtime; importing
 // types from the same source path keeps both resolutions consistent and needs no build step at all.
-import type { AgentSdkQueryFn, CodingAgentDriverTask } from "../../packages/gittensory-engine/src/index";
+import type { AgentSdkQueryFn, CodingAgentDriverTask } from "../../packages/loopover-engine/src/index";
 
 // buildHouseRulesPreToolUseHook's own deny-rule matching logic (matcher, glob, path-tokenizing, force-push
 // detection) is already exhaustively tested in miner-pretooluse-hook.test.ts. These tests cover only this

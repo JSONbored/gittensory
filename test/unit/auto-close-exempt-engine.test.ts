@@ -1,6 +1,6 @@
 // Mirror of the app suite pointed at the gittensory-engine copy so the extracted module owns its branch coverage (#2280).
 import { describe, expect, it } from "vitest";
-import { isAutoCloseExempt, normalizeAutoCloseExemptLogins } from "../../packages/gittensory-engine/src/settings/auto-close-exempt";
+import { isAutoCloseExempt, normalizeAutoCloseExemptLogins } from "../../packages/loopover-engine/src/settings/auto-close-exempt";
 
 describe("normalizeAutoCloseExemptLogins (#2463)", () => {
   it("returns [] for null/undefined and a non-array (with a warning)", () => {

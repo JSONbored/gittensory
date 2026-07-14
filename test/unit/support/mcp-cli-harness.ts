@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "vitest";
 
-export const bin = join(process.cwd(), "packages/gittensory-mcp/bin/loopover-mcp.js");
+export const bin = join(process.cwd(), "packages/loopover-mcp/bin/loopover-mcp.js");
 let server: Server | null = null;
 
 export async function closeFixtureServer() {

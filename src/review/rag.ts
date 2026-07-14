@@ -498,8 +498,8 @@ export async function deleteChunksForPaths(infra: RagInfra, project: string, rep
 /** Skip retrieval for a trivially-short query (e.g. a one-word scope string): not worth an embed +
  *  a vector query, and the matches would be noise. Defined in the engine next to the issue-query
  *  builder that guards on it (#4254) and re-exported here so the two can never drift. (#cloud-opt) */
-export { MIN_QUERY_CHARS } from "../../packages/gittensory-engine/src/issue-rag-query";
-import { MIN_QUERY_CHARS } from "../../packages/gittensory-engine/src/issue-rag-query";
+export { MIN_QUERY_CHARS } from "../../packages/loopover-engine/src/issue-rag-query";
+import { MIN_QUERY_CHARS } from "../../packages/loopover-engine/src/issue-rag-query";
 /** Hard cap on neighbours per query — bounds vector-index cost even if a caller passes a large topK. (#cloud-opt) */
 const RAG_MAX_TOPK = 20;
 const EMPTY_RAG_RETRIEVAL_METRICS: RagRetrievalMetrics = {

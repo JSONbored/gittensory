@@ -4712,7 +4712,7 @@ export function buildPublicPrPanelSignalRows(args: {
 // new row/toggle key: the row (and therefore the quadrant prefix) already only renders when `improvementSignal`
 // resolves on for the repo, so reusing it keeps opted-out repos byte-identical for free, with no second
 // `fields:` key to hand-sync across `.gittensory.yml.example` / `config/examples/loopover.full.yml` /
-// `gittensory-repo-focus-manifest.ts` / `.gittensory.yml`. No dashboard visualization (`apps/gittensory-ui/`)
+// `gittensory-repo-focus-manifest.ts` / `.gittensory.yml`. No dashboard visualization (`apps/loopover-ui/`)
 // or queue-level "high risk / low value" worklist is built here -- explicitly out of scope for this issue (see
 // its own "Optional" deliverable and this PR's description for the fast-follow call).
 

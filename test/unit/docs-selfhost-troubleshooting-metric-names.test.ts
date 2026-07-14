@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 // renamed/removed in prometheus/rules/alerts.yml, this test fails instead of the docs silently going stale
 // — mirrors the same source-of-truth-diff approach as scripts/check-openapi-settings-parity.mjs (#2556).
 
-const DOC_PATH = "apps/gittensory-ui/src/routes/docs.self-hosting-troubleshooting.tsx";
+const DOC_PATH = "apps/loopover-ui/src/routes/docs.self-hosting-troubleshooting.tsx";
 const doc = readFileSync(DOC_PATH, "utf8");
 
 // The exact source files that emit every loopover_*_total metric referenced in the runbooks, per an

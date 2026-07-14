@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
   rankCandidateIssues,
   rankCandidateIssuesWithSummary,
-} from "../../packages/gittensory-miner/lib/opportunity-ranker.js";
-import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
+} from "../../packages/loopover-miner/lib/opportunity-ranker.js";
+import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/loopover-engine/src/miner-goal-spec";
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 

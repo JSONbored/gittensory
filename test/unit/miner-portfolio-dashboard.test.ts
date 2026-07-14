@@ -4,7 +4,7 @@ import {
   parsePortfolioDashboardArgs,
   renderPortfolioDashboardTable,
   runPortfolioDashboard,
-} from "../../packages/gittensory-miner/lib/portfolio-dashboard.js";
+} from "../../packages/loopover-miner/lib/portfolio-dashboard.js";
 
 const mockQueue = (entries: unknown[]): { listQueue: () => unknown[]; close: () => void } => ({ listQueue: () => entries, close: () => {} });
 const NOW = Date.parse("2026-07-10T00:00:00.000Z");

@@ -6,8 +6,8 @@
 # StatefulSet's volumeClaimTemplates give each replica its OWN PersistentVolumeClaim, so N workers run with
 # fully isolated state — the safety property this manifest exists to guarantee. See k8s/README.md.
 #
-# Image: build from packages/gittensory-miner/Dockerfile at the monorepo root and push to your registry:
-#   docker build -f packages/gittensory-miner/Dockerfile -t <registry>/loopover-miner:latest .
+# Image: build from packages/loopover-miner/Dockerfile at the monorepo root and push to your registry:
+#   docker build -f packages/loopover-miner/Dockerfile -t <registry>/loopover-miner:latest .
 # Then set `image:` below. Secrets come from k8s/miner-secret.example.yaml (apply that first).
 apiVersion: apps/v1
 kind: StatefulSet
@@ -40,7 +40,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: miner
-          # Replace with the image you built + pushed from packages/gittensory-miner/Dockerfile.
+          # Replace with the image you built + pushed from packages/loopover-miner/Dockerfile.
           image: loopover-miner:latest
           # ENTRYPOINT is `loopover-miner`; `run` is the continuous fleet-worker loop.
           args: ["run"]

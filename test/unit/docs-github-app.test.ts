@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const GITHUB_APP_DOCS_PATH = resolve(
   import.meta.dirname,
-  "../../apps/gittensory-ui/src/routes/docs.github-app.tsx",
+  "../../apps/loopover-ui/src/routes/docs.github-app.tsx",
 );
 
 describe("docs GitHub App setup page", () => {

@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(process.cwd());
 const SERVICE_PATH = join(REPO_ROOT, "systemd/loopover-miner-ui.service.example");
-const MINER_UI_README_PATH = join(REPO_ROOT, "apps/gittensory-miner-ui/README.md");
-const DEPLOYMENT_PATH = join(REPO_ROOT, "packages/gittensory-miner/DEPLOYMENT.md");
-const MINER_UI_PACKAGE_JSON_PATH = join(REPO_ROOT, "apps/gittensory-miner-ui/package.json");
+const MINER_UI_README_PATH = join(REPO_ROOT, "apps/loopover-miner-ui/README.md");
+const DEPLOYMENT_PATH = join(REPO_ROOT, "packages/loopover-miner/DEPLOYMENT.md");
+const MINER_UI_PACKAGE_JSON_PATH = join(REPO_ROOT, "apps/loopover-miner-ui/package.json");
 
 describe("miner-ui persistent-service launcher (#4852)", () => {
   it("ships a systemd unit with every directive the main miner's unit requires", () => {
@@ -44,6 +44,6 @@ describe("miner-ui persistent-service launcher (#4852)", () => {
   it("cross-references the miner-ui service from the main miner's Bare-host deployment doc", () => {
     const deployment = readFileSync(DEPLOYMENT_PATH, "utf8");
     expect(deployment).toContain("loopover-miner-ui.service.example");
-    expect(deployment).toContain("apps/gittensory-miner-ui/README.md#running-as-a-persistent-service");
+    expect(deployment).toContain("apps/loopover-miner-ui/README.md#running-as-a-persistent-service");
   });
 });

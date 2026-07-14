@@ -6,7 +6,7 @@ import {
   normalizeDiscoveryIndexCandidate,
   normalizeDiscoveryIndexRequest,
   normalizeDiscoveryIndexResponse,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 const VALID_CANDIDATE = {
   repoFullName: "owner/repo",

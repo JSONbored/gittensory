@@ -5,7 +5,7 @@ import { isPublicSafeText } from "../../src/signals/redaction";
 
 const OWNER_CHECKLIST_PATH = resolve(
   import.meta.dirname,
-  "../../apps/gittensory-ui/src/routes/docs.owner-checklist.tsx",
+  "../../apps/loopover-ui/src/routes/docs.owner-checklist.tsx",
 );
 
 describe("docs owner onboarding checklist page", () => {

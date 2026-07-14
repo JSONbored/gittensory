@@ -1,8 +1,8 @@
 // App-vitest coverage for the engine telemetry-anonymization primitive (#5680). codecov/patch is computed from
-// this app vitest run (vitest.config coverage includes packages/gittensory-engine/src/**), so the changed engine
+// this app vitest run (vitest.config coverage includes packages/loopover-engine/src/**), so the changed engine
 // lines need a vitest test that imports the SRC directly, in addition to the engine's own node:test suite.
 import { describe, expect, it } from "vitest";
-import { generateAnonSecret, hmacAnonymize } from "../../packages/gittensory-engine/src/telemetry/anonymize";
+import { generateAnonSecret, hmacAnonymize } from "../../packages/loopover-engine/src/telemetry/anonymize";
 
 describe("engine telemetry-anonymize primitive (#5680)", () => {
   it("generateAnonSecret returns a 64-char hex string and never collides across calls", () => {

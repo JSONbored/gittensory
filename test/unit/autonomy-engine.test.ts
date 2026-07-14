@@ -12,8 +12,8 @@ import {
   normalizeAutoMaintainPolicy,
   normalizeAutonomyPolicy,
   resolveAutonomy,
-} from "../../packages/gittensory-engine/src/settings/autonomy";
-import type { AutonomyPolicy } from "../../packages/gittensory-engine/src/types/manifest-deps-types";
+} from "../../packages/loopover-engine/src/settings/autonomy";
+import type { AutonomyPolicy } from "../../packages/loopover-engine/src/types/manifest-deps-types";
 
 describe("resolveAutonomy (#773 deny-by-default gate)", () => {
   it("returns the configured level for an action class", () => {

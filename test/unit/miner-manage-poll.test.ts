@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeDefaultEventLedger,
   initEventLedger,
-} from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
   MANAGE_PR_UPDATE_EVENT,
   collectManageStatus,
-} from "../../packages/gittensory-miner/lib/manage-status.js";
+} from "../../packages/loopover-miner/lib/manage-status.js";
 import {
   buildManagePollEventPayload,
   mapPollConclusionToGateVerdict,
@@ -17,12 +17,12 @@ import {
   parseManagePollArgs,
   recordManagePollSnapshot,
   runManagePoll,
-} from "../../packages/gittensory-miner/lib/manage-poll.js";
-import type { PollCheckRunsResult } from "../../packages/gittensory-miner/lib/ci-poller.d.ts";
+} from "../../packages/loopover-miner/lib/manage-poll.js";
+import type { PollCheckRunsResult } from "../../packages/loopover-miner/lib/ci-poller.d.ts";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];

@@ -4,7 +4,7 @@ import {
   DEFAULT_AMS_POLICY_SPEC,
   parseAmsPolicySpec,
   parseAmsPolicySpecContent,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 describe("AmsPolicySpec parser (#5132)", () => {
   it("re-exports the parser API from the engine barrel", () => {

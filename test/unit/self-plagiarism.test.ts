@@ -8,7 +8,7 @@ import {
   resolveSelfPlagiarismConfig,
   selfPlagiarismCheck,
   type OwnSubmissionRecord,
-} from "../../packages/gittensory-engine/src/governor/self-plagiarism";
+} from "../../packages/loopover-engine/src/governor/self-plagiarism";
 
 const CANDIDATE_AT = "2026-07-10T12:00:00.000Z";
 

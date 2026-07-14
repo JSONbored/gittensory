@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildPullRequestAdvisory, evaluateGateCheck, gateAdvisoryInternals } from "../../packages/gittensory-engine/src/advisory/gate-advisory";
-import { evaluateClaCheck, CLA_CHECK_UNRESOLVED_CODE, CLA_CONSENT_MISSING_CODE } from "../../packages/gittensory-engine/src/review/cla-check";
-import { REVIEW_THREAD_BLOCKER_CODE } from "../../packages/gittensory-engine/src/review/review-thread-findings";
-import { guardrailPathMatches } from "../../packages/gittensory-engine/src/signals/change-guardrail";
+import { buildPullRequestAdvisory, evaluateGateCheck, gateAdvisoryInternals } from "../../packages/loopover-engine/src/advisory/gate-advisory";
+import { evaluateClaCheck, CLA_CHECK_UNRESOLVED_CODE, CLA_CONSENT_MISSING_CODE } from "../../packages/loopover-engine/src/review/cla-check";
+import { REVIEW_THREAD_BLOCKER_CODE } from "../../packages/loopover-engine/src/review/review-thread-findings";
+import { guardrailPathMatches } from "../../packages/loopover-engine/src/signals/change-guardrail";
 import {
   buildCollisionReport,
   buildLaneAdvice,
@@ -13,8 +13,8 @@ import {
   classifyBountyLifecycle,
   predictedGateEngineInternals,
   termOverlap,
-} from "../../packages/gittensory-engine/src/signals/predicted-gate-engine";
-import type { IssueQualityReport, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../packages/gittensory-engine/src/types/predicted-gate-types";
+} from "../../packages/loopover-engine/src/signals/predicted-gate-engine";
+import type { IssueQualityReport, PullRequestRecord, RegistryRepoConfig, RepositoryRecord } from "../../packages/loopover-engine/src/types/predicted-gate-types";
 
 const REPO = repo("acme/widgets");
 

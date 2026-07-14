@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // Drift guard (#1823): the self-host update/rollback docs must stay aligned with the shipped deploy
 // scripts and the post-update verification helper.
 
-const OPERATIONS = "apps/gittensory-ui/src/routes/docs.self-hosting-operations.tsx";
+const OPERATIONS = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
 const IMAGE_SCRIPT = "scripts/deploy-selfhost-image.sh";
 const PREBUILT_SCRIPT = "scripts/deploy-selfhost-prebuilt.sh";
 const POST_UPDATE_SCRIPT = "scripts/selfhost-post-update-check.sh";
@@ -33,9 +33,9 @@ describe("self-host update + rollback docs (#1823)", () => {
   });
 
   it("prebuilt deploy builds the gittensory-engine workspace before bundling (#4530)", () => {
-    // packages/gittensory-engine/dist/ is gitignored and built via `tsc`; `npm ci --ignore-scripts`
+    // packages/loopover-engine/dist/ is gitignored and built via `tsc`; `npm ci --ignore-scripts`
     // never triggers that build on its own, so anything that imports the engine (e.g.
-    // packages/gittensory-miner) fails to resolve during the --all bundle unless this runs first.
+    // packages/loopover-miner) fails to resolve during the --all bundle unless this runs first.
     const engineBuildIndex = prebuiltScript.indexOf("@loopover/engine run build");
     const bundleIndex = prebuiltScript.indexOf("build-selfhost.mjs --all");
     expect(engineBuildIndex).toBeGreaterThan(-1);

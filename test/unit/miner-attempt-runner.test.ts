@@ -4,24 +4,24 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { runMinerAttempt } from "../../packages/gittensory-miner/lib/attempt-runner.js";
-import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
-import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
+import { runMinerAttempt } from "../../packages/loopover-miner/lib/attempt-runner.js";
+import { initEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
+import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
 import {
   closeDefaultGovernorState,
   listRecentOwnSubmissions,
   openGovernorState,
   recordOwnSubmission,
-} from "../../packages/gittensory-miner/lib/governor-state.js";
+} from "../../packages/loopover-miner/lib/governor-state.js";
 import {
   fingerprintFromChangedFiles,
   parseFocusManifest,
   type CodingAgentDriver,
   type CodingAgentDriverResult,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];
@@ -59,7 +59,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-// ── IterateLoopInput fixtures, mirroring packages/gittensory-engine/test/iterate-loop.test.ts's own ──────────
+// ── IterateLoopInput fixtures, mirroring packages/loopover-engine/test/iterate-loop.test.ts's own ──────────
 
 const REPO = { fullName: "acme/widgets", owner: "acme", name: "widgets", isInstalled: true, isRegistered: true, isPrivate: false };
 

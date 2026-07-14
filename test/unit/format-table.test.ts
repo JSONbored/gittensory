@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // mirror the local-branch.test.ts pattern of dynamically importing the packaged .js module.
 async function loadFormatTable() {
   // @ts-expect-error package helper is plain JS because the local wrapper ships as a Node bin package.
-  return (await import("../../packages/gittensory-mcp/lib/format-table.js")).formatTable;
+  return (await import("../../packages/loopover-mcp/lib/format-table.js")).formatTable;
 }
 
 describe("formatTable", () => {

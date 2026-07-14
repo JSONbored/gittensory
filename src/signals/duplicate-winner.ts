@@ -4,7 +4,7 @@
  * versioned election logic instead of drifting apart. See the engine module's doc comment for the full
  * election-order rationale (claim-time election, anti-backdating semantics).
  *
- * packages/gittensory-engine/src/duplicate-winner.ts (imported via relative source path, not the published
+ * packages/loopover-engine/src/duplicate-winner.ts (imported via relative source path, not the published
  * module, matching the #2282 scoring-preview extraction) is the source of truth.
  */
 export {
@@ -12,4 +12,4 @@ export {
   isDuplicateClusterWinnerByClaim,
   resolveDuplicateClusterWinnerNumber,
   type DuplicateClaimMember,
-} from "../../packages/gittensory-engine/src/duplicate-winner";
+} from "../../packages/loopover-engine/src/duplicate-winner";

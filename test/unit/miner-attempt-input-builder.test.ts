@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { buildAttemptGovernorContext, buildAttemptLoopInput } from "../../packages/gittensory-miner/lib/attempt-input-builder.js";
-import { DEFAULT_AMS_POLICY_SPEC, evaluateGovernorChokepoint, parseFocusManifest } from "../../packages/gittensory-engine/src/index";
+import { buildAttemptGovernorContext, buildAttemptLoopInput } from "../../packages/loopover-miner/lib/attempt-input-builder.js";
+import { DEFAULT_AMS_POLICY_SPEC, evaluateGovernorChokepoint, parseFocusManifest } from "../../packages/loopover-engine/src/index";
 
 function codingTaskSpec(overrides: Record<string, unknown> = {}) {
   return {

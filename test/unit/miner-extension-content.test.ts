@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { rankCandidateIssues } from "../../packages/gittensory-miner/lib/opportunity-ranker.js";
+import { rankCandidateIssues } from "../../packages/loopover-miner/lib/opportunity-ranker.js";
 
-const contentScript = readFileSync("apps/gittensory-miner-extension/content.js", "utf8");
-const backgroundScript = readFileSync("apps/gittensory-miner-extension/background.js", "utf8");
-const badgeScript = readFileSync("apps/gittensory-miner-extension/opportunity-badge.js", "utf8");
-const optionsScript = readFileSync("apps/gittensory-miner-extension/options.js", "utf8");
-const optionsHtml = readFileSync("apps/gittensory-miner-extension/options.html", "utf8");
-const manifest = JSON.parse(readFileSync("apps/gittensory-miner-extension/manifest.json", "utf8"));
+const contentScript = readFileSync("apps/loopover-miner-extension/content.js", "utf8");
+const backgroundScript = readFileSync("apps/loopover-miner-extension/background.js", "utf8");
+const badgeScript = readFileSync("apps/loopover-miner-extension/opportunity-badge.js", "utf8");
+const optionsScript = readFileSync("apps/loopover-miner-extension/options.js", "utf8");
+const optionsHtml = readFileSync("apps/loopover-miner-extension/options.html", "utf8");
+const manifest = JSON.parse(readFileSync("apps/loopover-miner-extension/manifest.json", "utf8"));
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 

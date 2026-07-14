@@ -148,7 +148,7 @@ describe("change-guardrail glob matching", () => {
 // while leaving ordinary paths auto-mergeable. These examples are not runtime defaults.
 describe("configured hard-guardrail glob examples", () => {
   const GITTENSORY_GLOBS = [
-    ".github/**", "scripts/**", "packages/**", "apps/gittensory-ui/**",
+    ".github/**", "scripts/**", "packages/**", "apps/loopover-ui/**",
     "src/scoring/**", "src/signals/**", "src/rules/**", "src/gittensor/**", "src/auth/**",
     "src/upstream/**", "src/settings/**", "src/review/**", "src/services/**", "src/github/**", "src/config/**",
   ];

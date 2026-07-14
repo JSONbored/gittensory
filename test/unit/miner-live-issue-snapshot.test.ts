@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchLiveIssueSnapshot } from "../../packages/gittensory-miner/lib/live-issue-snapshot.js";
+import { fetchLiveIssueSnapshot } from "../../packages/loopover-miner/lib/live-issue-snapshot.js";
 
 function graphqlResponse(body: unknown, status = 200) {
   return async () =>

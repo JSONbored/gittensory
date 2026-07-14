@@ -3,7 +3,7 @@ import {
   DEFAULT_FLEET_RUN_MANIFEST,
   parseFleetRunManifest,
   parseFleetRunManifestContent,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 describe("FleetRunManifest parser (#4299)", () => {
   it("re-exports the parser API from the engine barrel", () => {

@@ -1,8 +1,8 @@
 // AUTO-GENERATED-STYLE mirror of the app suite to cover the gittensory-engine copy (#2280).
 // DB round-trip cases stay in the app suite; the engine package only owns the pure normalizers.
 import { describe, expect, it } from "vitest";
-import { findBlacklistEntry, isAuthorBlacklisted, mergeContributorBlacklists, normalizeContributorBlacklist } from "../../packages/gittensory-engine/src/settings/contributor-blacklist";
-import type { ContributorBlacklistEntry } from "../../packages/gittensory-engine/src/types/manifest-deps-types";
+import { findBlacklistEntry, isAuthorBlacklisted, mergeContributorBlacklists, normalizeContributorBlacklist } from "../../packages/loopover-engine/src/settings/contributor-blacklist";
+import type { ContributorBlacklistEntry } from "../../packages/loopover-engine/src/types/manifest-deps-types";
 
 describe("normalizeContributorBlacklist (#1425) [engine]", () => {
   it("returns [] for null/undefined and a non-array (with a warning)", () => {

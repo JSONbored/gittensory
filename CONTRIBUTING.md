@@ -73,7 +73,7 @@ Focused contributions are welcome in these areas:
 - GitHub App webhook, check-run, command, sanitized comment, and installation-health behavior.
 - Registry, bounty, issue, PR, label, queue, collision, and GitHub backfill ingestion.
 - Deterministic signal builders for contributors, maintainers, repository owners, and operators.
-- The Lovable/TanStack Start frontend under `apps/gittensory-ui`, as long as it preserves the
+- The Lovable/TanStack Start frontend under `apps/loopover-ui`, as long as it preserves the
   current product structure and stays wired to live API data or honest empty/error states.
 - Cloudflare Worker, D1, Queue, scheduled job, deploy, and production smoke reliability.
 - MCP server/client behavior, CLI ergonomics, compatibility metadata, and npm package hygiene.
@@ -224,7 +224,7 @@ Backend/API:
 
 Frontend:
 
-- The production frontend is the TanStack Start app in `apps/gittensory-ui`.
+- The production frontend is the TanStack Start app in `apps/loopover-ui`.
 - Use the existing design system and route structure unless a maintainer explicitly approves a
   larger redesign.
 - Signed-in app state comes from `GET /v1/auth/session`; do not restore app login through
@@ -261,7 +261,7 @@ Cloudflare/deploy:
     include: `src/**`, `wrangler.jsonc`, `migrations/**`, `package.json`, `package-lock.json`,
     `tsconfig*.json`, `drizzle.config.ts`; exclude: `apps/**`, `docs/**`, `**/*.md`.
   - `gittensory-ui` build command: `npm run build:cloudflare`. Scope its watch-paths to
-    `apps/gittensory-ui/**` (note: the UI build runs `ui:openapi` off the API contract, so rebuild the
+    `apps/loopover-ui/**` (note: the UI build runs `ui:openapi` off the API contract, so rebuild the
     UI after API OpenAPI changes).
 - Do not re-add GitHub Pages or static-site deployment workflows.
 

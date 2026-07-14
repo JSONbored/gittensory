@@ -3,7 +3,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = resolve(root, "apps/gittensory-miner-extension");
+const source = resolve(root, "apps/loopover-miner-extension");
 const outDir = resolve(source, "dist/package");
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;

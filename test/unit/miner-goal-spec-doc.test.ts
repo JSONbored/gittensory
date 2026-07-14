@@ -2,11 +2,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { parseMinerGoalSpecContent } from "../../packages/gittensory-engine/src/miner-goal-spec";
+import { parseMinerGoalSpecContent } from "../../packages/loopover-engine/src/miner-goal-spec";
 
 const repoRoot = process.cwd();
-const schemaPath = join(repoRoot, "packages/gittensory-miner/schema/miner-goal-spec.schema.json");
-const docPath = join(repoRoot, "packages/gittensory-miner/docs/miner-goal-spec.md");
+const schemaPath = join(repoRoot, "packages/loopover-miner/schema/miner-goal-spec.schema.json");
+const docPath = join(repoRoot, "packages/loopover-miner/docs/miner-goal-spec.md");
 const examplePath = join(repoRoot, ".gittensory-miner.yml.example");
 
 const SPEC_FIELDS = [

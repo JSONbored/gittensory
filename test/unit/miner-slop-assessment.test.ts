@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { runSlopAssessment } from "../../packages/gittensory-miner/lib/slop-assessment.js";
-import { buildSlopAssessment } from "../../packages/gittensory-engine/src/index";
+import { runSlopAssessment } from "../../packages/loopover-miner/lib/slop-assessment.js";
+import { buildSlopAssessment } from "../../packages/loopover-engine/src/index";
 
 describe("runSlopAssessment (#5133)", () => {
   it("is a real, non-stub binding: identical input produces the identical result buildSlopAssessment itself would (clean case)", () => {

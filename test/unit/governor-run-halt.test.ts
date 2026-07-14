@@ -5,9 +5,9 @@ import {
   detectNonConvergence,
   evaluateBudgetCaps,
   evaluateRunLoopHalt,
-} from "../../packages/gittensory-engine/src/governor/run-halt";
-import type { GovernorCapLimits, GovernorCapUsage } from "../../packages/gittensory-engine/src/governor/budget-cap";
-import type { PortfolioConvergenceInput } from "../../packages/gittensory-engine/src/portfolio/non-convergence";
+} from "../../packages/loopover-engine/src/governor/run-halt";
+import type { GovernorCapLimits, GovernorCapUsage } from "../../packages/loopover-engine/src/governor/budget-cap";
+import type { PortfolioConvergenceInput } from "../../packages/loopover-engine/src/portfolio/non-convergence";
 
 const LIMITS: GovernorCapLimits = { budget: 100, turns: 5, elapsedMs: 60_000 };
 const HEALTHY_USAGE: GovernorCapUsage = { budgetSpent: 10, turnsTaken: 1, elapsedMs: 1_000 };

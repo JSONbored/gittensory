@@ -3,7 +3,7 @@ import {
   evaluateGovernorCaps,
   type GovernorCapLimits,
   type GovernorCapUsage,
-} from "../../packages/gittensory-engine/src/governor/budget-cap";
+} from "../../packages/loopover-engine/src/governor/budget-cap";
 
 // A generous set of ceilings; individual tests push one dimension past its cap.
 const LIMITS: GovernorCapLimits = { budget: 100, turns: 20, elapsedMs: 60_000 };

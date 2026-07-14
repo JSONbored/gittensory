@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { extractObjectiveAnchorFeatures } from "../../packages/gittensory-engine/src/objective-anchor";
+import { extractObjectiveAnchorFeatures } from "../../packages/loopover-engine/src/objective-anchor";
 
-// packages/gittensory-engine/src/objective-anchor.ts's CONFIG_FILENAMES set is exercised almost
+// packages/loopover-engine/src/objective-anchor.ts's CONFIG_FILENAMES set is exercised almost
 // exclusively by its own node:test suite (invisible to Codecov's vitest-based coverage), so
 // classifying ".loopover.yml" needs a real vitest-side assertion, not just a top-level module-load hit.
 describe("gittensory-engine objective-anchor config-filename classification", () => {

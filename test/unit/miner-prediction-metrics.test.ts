@@ -4,7 +4,7 @@ import {
   MINER_PREDICTION_CORRECT_TOTAL,
   MINER_PREDICTION_INCORRECT_TOTAL,
   renderMinerPredictionMetrics,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 /** Parse `name{labels} value` / `name value` data lines out of an exposition string, keyed for easy assertions. */
 function dataLines(text: string): Record<string, string> {

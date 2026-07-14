@@ -1,4 +1,4 @@
-import type { DenyRule, ProposedToolCall } from "../../../packages/gittensory-miner/lib/deny-hooks.js";
+import type { DenyRule, ProposedToolCall } from "../../../packages/loopover-miner/lib/deny-hooks.js";
 
 // Table-driven fixture corpus for the deny-hook primitive (#2296). Each case is a realistic tool-call shape a
 // future coding-agent driver will actually produce (file writes, shell/git commands, multi-path edits). `rules`

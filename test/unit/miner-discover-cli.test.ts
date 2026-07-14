@@ -2,19 +2,19 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initPolicyDocCacheStore } from "../../packages/gittensory-miner/lib/policy-doc-cache.js";
-import { initPolicyVerdictCacheStore } from "../../packages/gittensory-miner/lib/policy-verdict-cache.js";
+import { initPolicyDocCacheStore } from "../../packages/loopover-miner/lib/policy-doc-cache.js";
+import { initPolicyVerdictCacheStore } from "../../packages/loopover-miner/lib/policy-verdict-cache.js";
 import {
   closeDefaultPortfolioQueueStore,
   initPortfolioQueueStore,
-} from "../../packages/gittensory-miner/lib/portfolio-queue.js";
-import { initRankedCandidatesStore } from "../../packages/gittensory-miner/lib/ranked-candidates.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { initRankedCandidatesStore } from "../../packages/loopover-miner/lib/ranked-candidates.js";
 import {
   parseDiscoverArgs,
   renderDiscoverSummary,
   runDiscover,
   sanitizeDiscoverDisplayText,
-} from "../../packages/gittensory-miner/lib/discover-cli.js";
+} from "../../packages/loopover-miner/lib/discover-cli.js";
 import { bin, runCapture } from "./support/miner-cli-harness";
 
 const NOW = Date.parse("2026-07-09T12:00:00.000Z");

@@ -1,8 +1,8 @@
 name: Package Release Please
 
 # Conventional-commit-driven release automation for the four published npm packages in this monorepo
-# (packages/gittensory-mcp, packages/gittensory-engine, packages/gittensory-miner,
-# packages/gittensory-ui-kit). release-please maintains a Release PR per component that bumps its
+# (packages/loopover-mcp, packages/loopover-engine, packages/loopover-miner,
+# packages/loopover-ui-kit). release-please maintains a Release PR per component that bumps its
 # SemVer + regenerates its CHANGELOG.md from conventional commits touching that package's own
 # subtree. Merging a Release PR tags the component (mcp-v<semver> / engine-v<semver> /
 # miner-v<semver> / ui-kit-v<semver>, matching this repo's existing mcp-v* tag convention) and
@@ -83,7 +83,7 @@ jobs:
             fi
             git fetch origin "$branch"
             git checkout -B "sync-check-${component}" "origin/$branch"
-            node "$trusted_sync_script" packages/gittensory-mcp packages/gittensory-engine packages/gittensory-miner packages/gittensory-ui-kit
+            node "$trusted_sync_script" packages/loopover-mcp packages/loopover-engine packages/loopover-miner packages/loopover-ui-kit
             if git diff --quiet package-lock.json; then
               echo "package-lock.json already in sync on $branch."
             else
@@ -107,25 +107,25 @@ jobs:
       # exactly this race when an unrelated PR merged seconds apart). A tag doesn't move, so
       # dispatching against it makes the publish deterministic regardless of main's activity.
       - name: Dispatch MCP publish
-        if: ${{ steps.release.outputs['packages/gittensory-mcp--release_created'] == 'true' }}
+        if: ${{ steps.release.outputs['packages/loopover-mcp--release_created'] == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run publish-mcp.yml --ref "${{ steps.release.outputs['packages/gittensory-mcp--tag_name'] }}" -f released_by_release_please=true
+        run: gh workflow run publish-mcp.yml --ref "${{ steps.release.outputs['packages/loopover-mcp--tag_name'] }}" -f released_by_release_please=true
 
       - name: Dispatch Engine publish
-        if: ${{ steps.release.outputs['packages/gittensory-engine--release_created'] == 'true' }}
+        if: ${{ steps.release.outputs['packages/loopover-engine--release_created'] == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run publish-engine.yml --ref "${{ steps.release.outputs['packages/gittensory-engine--tag_name'] }}" -f released_by_release_please=true
+        run: gh workflow run publish-engine.yml --ref "${{ steps.release.outputs['packages/loopover-engine--tag_name'] }}" -f released_by_release_please=true
 
       - name: Dispatch Miner publish
-        if: ${{ steps.release.outputs['packages/gittensory-miner--release_created'] == 'true' }}
+        if: ${{ steps.release.outputs['packages/loopover-miner--release_created'] == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run publish-miner.yml --ref "${{ steps.release.outputs['packages/gittensory-miner--tag_name'] }}" -f released_by_release_please=true
+        run: gh workflow run publish-miner.yml --ref "${{ steps.release.outputs['packages/loopover-miner--tag_name'] }}" -f released_by_release_please=true
 
       - name: Dispatch UI Kit publish
-        if: ${{ steps.release.outputs['packages/gittensory-ui-kit--release_created'] == 'true' }}
+        if: ${{ steps.release.outputs['packages/loopover-ui-kit--release_created'] == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run publish-ui-kit.yml --ref "${{ steps.release.outputs['packages/gittensory-ui-kit--tag_name'] }}" -f released_by_release_please=true
+        run: gh workflow run publish-ui-kit.yml --ref "${{ steps.release.outputs['packages/loopover-ui-kit--tag_name'] }}" -f released_by_release_please=true

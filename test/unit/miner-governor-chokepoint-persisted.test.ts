@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { evaluateGovernorChokepointGatePersisted } from "../../packages/gittensory-miner/lib/governor-chokepoint-persisted.js";
-import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import { openGovernorState } from "../../packages/gittensory-miner/lib/governor-state.js";
+import { evaluateGovernorChokepointGatePersisted } from "../../packages/loopover-miner/lib/governor-chokepoint-persisted.js";
+import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { openGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
 
 const roots: string[] = [];
 const closeables: Array<{ close(): void }> = [];

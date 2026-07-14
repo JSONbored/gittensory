@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const EXT = "apps/gittensory-miner-extension";
+const EXT = "apps/loopover-miner-extension";
 const manifest = JSON.parse(readFileSync(`${EXT}/manifest.json`, "utf8"));
 
 /** Parse a PNG's signature + IHDR (width/height/colorType) — enough to assert a real image of the expected size. */

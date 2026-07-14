@@ -42,7 +42,7 @@ describe("CI dependency-install caching", () => {
     expect(restore.uses).toContain("actions/cache/restore@");
     const restoreWith = record(restore.with, "restore.with");
     expect(String(restoreWith.path)).toContain("node_modules");
-    expect(String(restoreWith.path)).toContain("apps/gittensory-ui/node_modules");
+    expect(String(restoreWith.path)).toContain("apps/loopover-ui/node_modules");
     expect(String(restoreWith.key)).toContain("hashFiles('package.json', 'apps/*/package.json', 'packages/*/package.json', 'package-lock.json')");
     expect(String(restoreWith.key)).toContain("package.json");
     expect(String(restoreWith.key)).toContain("apps/*/package.json");

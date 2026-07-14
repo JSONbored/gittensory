@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const ownerPanelSource = readFileSync(
-  "apps/gittensory-ui/src/components/site/app-panels/owner-panel.tsx",
+  "apps/loopover-ui/src/components/site/app-panels/owner-panel.tsx",
   "utf8",
 );
 

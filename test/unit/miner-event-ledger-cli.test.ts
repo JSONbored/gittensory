@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeDefaultEventLedger,
   initEventLedger,
-} from "../../packages/gittensory-miner/lib/event-ledger.js";
+} from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
   filterLedgerEvents,
   parseLedgerListArgs,
@@ -14,8 +14,8 @@ import {
   runLedgerCli,
   runLedgerList,
   runLedgerMetrics,
-} from "../../packages/gittensory-miner/lib/event-ledger-cli.js";
-import type { LedgerEntry } from "../../packages/gittensory-miner/lib/event-ledger.d.ts";
+} from "../../packages/loopover-miner/lib/event-ledger-cli.js";
+import type { LedgerEntry } from "../../packages/loopover-miner/lib/event-ledger.d.ts";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];

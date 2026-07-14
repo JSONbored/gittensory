@@ -9,7 +9,7 @@ import {
   resolveRepoMapLanguage,
   type LoadRepoMapLanguageFn,
   type RepoMapFileEntry,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 // Test-only parser, independent of `buildRepoMap`'s internal (unexported) loader -- gives direct tests of
 // `extractRepoMapSymbols` a real `Parser.Tree` to call it with.
@@ -505,7 +505,7 @@ describe("extractRepoMapSymbols default maxSignatureChars (#4280)", () => {
 
 describe("extractRepoMapSymbols legacy (tree, maxSignatureChars?) overload (#4280)", () => {
   // `buildRepoMap` only ever calls the newer (tree, sourceText, options) form, but this overload is
-  // exported public API (packages/gittensory-engine/src/index.ts) for direct callers that pre-date the
+  // exported public API (packages/loopover-engine/src/index.ts) for direct callers that pre-date the
   // sourceText-slicing rewrite -- exercise it directly so its fallback-to-`tree.rootNode.text` path stays covered.
   it("falls back to tree.rootNode.text and the 120-char default when called with just a tree", async () => {
     const tree = await parseTypescript("function plain(a) {}");

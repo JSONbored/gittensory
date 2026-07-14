@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 // @ts-expect-error The extension runtime files are plain MV3 JavaScript, intentionally unbundled.
-import * as extensionAuth from "../../apps/gittensory-extension/auth.js";
+import * as extensionAuth from "../../apps/loopover-extension/auth.js";
 
 const {
   EXTENSION_SESSION_EXPIRED_MESSAGE,

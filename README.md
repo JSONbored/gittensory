@@ -64,8 +64,8 @@ See [Tuning your reviews](https://gittensory.aethereal.dev/docs/tuning) for the 
 | Website           | [gittensory.aethereal.dev](https://gittensory.aethereal.dev/)                                                                      |
 | Docs              | [gittensory.aethereal.dev/docs](https://gittensory.aethereal.dev/docs)                                                             |
 | MCP package       | [@loopover/mcp](https://www.npmjs.com/package/@loopover/mcp)                                               |
-| Engine package    | [`@loopover/engine`](packages/gittensory-engine/README.md) — shared deterministic logic for the review stack and miner |
-| Miner package     | [`@loopover/miner`](packages/gittensory-miner/README.md) — local foundation CLI for the autonomous miner runtime        |
+| Engine package    | [`@loopover/engine`](packages/loopover-engine/README.md) — shared deterministic logic for the review stack and miner |
+| Miner package     | [`@loopover/miner`](packages/loopover-miner/README.md) — local foundation CLI for the autonomous miner runtime        |
 | API               | [API browser](https://gittensory.aethereal.dev/api) and [OpenAPI JSON](https://gittensory-api.aethereal.dev/openapi.json)          |
 | GitHub App        | [Setup docs](https://gittensory.aethereal.dev/docs/github-app) — self-hosting is the only currently available path |
 | Browser extension | [Extension page](https://gittensory.aethereal.dev/extension)                                                                       |

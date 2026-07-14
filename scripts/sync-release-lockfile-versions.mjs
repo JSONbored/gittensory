@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // release-please's `extra-files` JSON-path updater doesn't reliably reach package-lock.json's
-// per-workspace version fields, whose keys contain slashes (e.g. "packages/gittensory-engine")
+// per-workspace version fields, whose keys contain slashes (e.g. "packages/loopover-engine")
 // nested under a manifest-mode component's own release-please-config.json block -- confirmed
 // empirically (mcp-v0.7.0/engine-v0.2.0 dry runs both left package-lock.json un-synced, breaking
 // `npm ci` with "Missing: @loopover/engine@0.1.0 from lock file"). This does the same

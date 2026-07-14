@@ -4,7 +4,7 @@ import { dirname, extname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
-export const DEFAULT_OUTPUT_PATH = "apps/gittensory-ui/src/lib/selfhost-env-reference.ts";
+export const DEFAULT_OUTPUT_PATH = "apps/loopover-ui/src/lib/selfhost-env-reference.ts";
 export const DEFAULT_SOURCE_ROOTS = [
   "src/selfhost",
   "src/server.ts",

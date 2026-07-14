@@ -21,9 +21,9 @@ import type { AdvisoryFinding, PullRequestFileRecord } from "../types";
 const NPM_REGISTRY_HOST_RE = /^https:\/\/registry\.npmjs\.org\//i;
 
 // Only a `resolved` value that IS a URL can be judged against the registry-host allowlist. An npm
-// workspace's own local packages (e.g. this repo's `packages/gittensory-mcp`, `apps/gittensory-ui` — see
+// workspace's own local packages (e.g. this repo's `packages/loopover-mcp`, `apps/loopover-ui` — see
 // `"link": true` entries in package-lock.json) have a `resolved` field that's a RELATIVE FILESYSTEM PATH, not a
-// URL at all (e.g. `"packages/gittensory-mcp"`). Such a value was never resolved FROM a registry, so it can't be
+// URL at all (e.g. `"packages/loopover-mcp"`). Such a value was never resolved FROM a registry, so it can't be
 // "off-registry" — it must be exempted rather than flagged just because it fails the npmjs.org prefix check.
 // Remote npm lockfile entries are not limited to http(s): git+ssh://, git+https://, ssh://, and similar URL
 // schemes still fetch outside the npm registry and must stay visible to the supply-chain gate.
@@ -49,7 +49,7 @@ function npmPackageFromNodeModulesPath(path: string): string | null {
 
 /** True when `path`'s basename is `package-lock.json` — the only lockfile format this check parses today
  *  (npm/lockfileVersion 2-3 JSON shape). Matches ANY directory depth (root, `review-enrichment/`,
- *  `apps/gittensory-ui/`, or a future workspace) rather than a hardcoded path list, so a new workspace package
+ *  `apps/loopover-ui/`, or a future workspace) rather than a hardcoded path list, so a new workspace package
  *  is covered without a code change. */
 export function isNpmLockfilePath(path: string): boolean {
   const normalized = path.replace(/\\/g, "/").toLowerCase();

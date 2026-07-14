@@ -7,9 +7,9 @@ import {
   startRegistryFixture,
 } from "./support/miner-cli-harness";
 
-type MinerCli = typeof import("../../packages/gittensory-miner/lib/cli.js");
+type MinerCli = typeof import("../../packages/loopover-miner/lib/cli.js");
 type MinerUpdateCheck =
-  typeof import("../../packages/gittensory-miner/lib/update-check.js");
+  typeof import("../../packages/loopover-miner/lib/update-check.js");
 
 let printHelp: MinerCli["printHelp"];
 let printVersion: MinerCli["printVersion"];
@@ -24,9 +24,9 @@ let startUpdateCheck: MinerUpdateCheck["startUpdateCheck"];
 let awaitOpportunisticUpdateCheck: MinerUpdateCheck["awaitOpportunisticUpdateCheck"];
 
 beforeAll(async () => {
-  const cli = await import("../../packages/gittensory-miner/lib/cli.js");
+  const cli = await import("../../packages/loopover-miner/lib/cli.js");
   const updateCheck =
-    await import("../../packages/gittensory-miner/lib/update-check.js");
+    await import("../../packages/loopover-miner/lib/update-check.js");
   ({ printHelp, printVersion, runCli } = cli);
   ({
     compareSemver,
@@ -97,7 +97,7 @@ describe("loopover-miner CLI helpers", () => {
 
   it("keeps the CLI version source aligned with package metadata", async () => {
     const packageJson = await import(
-      "../../packages/gittensory-miner/package.json",
+      "../../packages/loopover-miner/package.json",
       { with: { type: "json" } }
     );
     expect(packageJson.default.version).toBe("2.0.0");

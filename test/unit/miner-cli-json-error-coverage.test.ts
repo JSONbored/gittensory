@@ -4,12 +4,12 @@ import {
   runClaimCli,
   runClaimList,
   runClaimRelease,
-} from "../../packages/gittensory-miner/lib/claim-ledger-cli.js";
-import { runLedgerList } from "../../packages/gittensory-miner/lib/event-ledger-cli.js";
-import { runGovernorList } from "../../packages/gittensory-miner/lib/governor-ledger-cli.js";
-import { runLoop } from "../../packages/gittensory-miner/lib/loop-cli.js";
-import { runManagePoll } from "../../packages/gittensory-miner/lib/manage-poll.js";
-import { runPlanList, runPlanShow } from "../../packages/gittensory-miner/lib/plan-store-cli.js";
+} from "../../packages/loopover-miner/lib/claim-ledger-cli.js";
+import { runLedgerList } from "../../packages/loopover-miner/lib/event-ledger-cli.js";
+import { runGovernorList } from "../../packages/loopover-miner/lib/governor-ledger-cli.js";
+import { runLoop } from "../../packages/loopover-miner/lib/loop-cli.js";
+import { runManagePoll } from "../../packages/loopover-miner/lib/manage-poll.js";
+import { runPlanList, runPlanShow } from "../../packages/loopover-miner/lib/plan-store-cli.js";
 import {
   runQueueClaimBatch,
   runQueueDone,
@@ -17,21 +17,21 @@ import {
   runQueueNext,
   runQueueRelease,
   runQueueRequeue,
-} from "../../packages/gittensory-miner/lib/portfolio-queue-cli.js";
+} from "../../packages/loopover-miner/lib/portfolio-queue-cli.js";
 
 const { getRunState, setRunState } = vi.hoisted(() => ({
   getRunState: vi.fn(),
   setRunState: vi.fn(),
 }));
 
-vi.mock("../../packages/gittensory-miner/lib/run-state.js", () => ({
+vi.mock("../../packages/loopover-miner/lib/run-state.js", () => ({
   RUN_STATES: ["idle", "discovering", "planning", "preparing"],
   getRunState,
   setRunState,
 }));
 
 const { runStateCli, runStateGet, runStateSet } = await import(
-  "../../packages/gittensory-miner/lib/run-state-cli.js"
+  "../../packages/loopover-miner/lib/run-state-cli.js"
 );
 
 afterEach(() => {

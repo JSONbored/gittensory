@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import enginePkg from "../../packages/gittensory-engine/package.json";
+import enginePkg from "../../packages/loopover-engine/package.json";
 
 // The gittensory-engine package is a packaging-only scaffold (no runtime logic yet — the barrel export is
 // intentionally empty until later issues extract deterministic modules into it). These tests pin the published
@@ -30,6 +30,6 @@ describe("gittensory-engine package scaffold", () => {
 
   it("builds with a real tsc compile and records its repository directory", () => {
     expect(enginePkg.scripts?.build).toBe("tsc -p tsconfig.json");
-    expect(enginePkg.repository?.directory).toBe("packages/gittensory-engine");
+    expect(enginePkg.repository?.directory).toBe("packages/loopover-engine");
   });
 });

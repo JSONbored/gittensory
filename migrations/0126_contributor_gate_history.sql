@@ -17,7 +17,7 @@
 -- would only add a lookup-key translation step with no privacy benefit for this specific access pattern.
 --
 -- THIS PR ONLY POPULATES THE TABLE. Nothing reads it yet — the confidence-adjustment function that would
--- consume it (in packages/gittensory-engine/src/predicted-gate.ts) is explicit follow-up work, deliberately
+-- consume it (in packages/loopover-engine/src/predicted-gate.ts) is explicit follow-up work, deliberately
 -- deferred so the safety-critical "a personalization adjustment must never bypass a hard blocker" invariant
 -- gets its own focused review.
 CREATE TABLE IF NOT EXISTS contributor_gate_history (

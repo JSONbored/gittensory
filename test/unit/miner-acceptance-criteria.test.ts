@@ -8,7 +8,7 @@ import {
   buildFeasibilityVerdict,
   type AcceptanceCriteria,
   type PromptPacket,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 const CLEAN_PACKET: PromptPacket = {
   taskBrief: "Fix the off-by-one in the pagination cursor.",

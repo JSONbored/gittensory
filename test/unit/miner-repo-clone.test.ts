@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureRepoCloned, resolveRepoCloneBaseDir, resolveRepoCloneDir } from "../../packages/gittensory-miner/lib/repo-clone.js";
+import { ensureRepoCloned, resolveRepoCloneBaseDir, resolveRepoCloneDir } from "../../packages/loopover-miner/lib/repo-clone.js";
 
 const roots: string[] = [];
 

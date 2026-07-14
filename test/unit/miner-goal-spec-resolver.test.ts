@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { resolveMinerGoalSpec } from "../../packages/gittensory-miner/lib/miner-goal-spec.js";
+import { resolveMinerGoalSpec } from "../../packages/loopover-miner/lib/miner-goal-spec.js";
 
 const roots: string[] = [];
 

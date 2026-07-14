@@ -4,18 +4,18 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { closeDefaultGovernorLedger, initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import type { GovernorLedgerEntry } from "../../packages/gittensory-miner/lib/governor-ledger.d.ts";
+import { closeDefaultGovernorLedger, initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import type { GovernorLedgerEntry } from "../../packages/loopover-miner/lib/governor-ledger.d.ts";
 import {
   filterGovernorEvents,
   parseGovernorListArgs,
   renderGovernorTable,
   runGovernorCli,
   runGovernorList,
-} from "../../packages/gittensory-miner/lib/governor-ledger-cli.js";
+} from "../../packages/loopover-miner/lib/governor-ledger-cli.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
@@ -159,7 +159,7 @@ describe("gittensory-miner governor ledger CLI (#2328)", () => {
   it("runGovernorCli dispatches pause, resume, and status to governor-pause-cli.js (#4851)", async () => {
     const root = mkdtempSync(join(tmpdir(), "gittensory-miner-governor-ledger-cli-pause-"));
     roots.push(root);
-    const { openGovernorState } = await import("../../packages/gittensory-miner/lib/governor-state.js");
+    const { openGovernorState } = await import("../../packages/loopover-miner/lib/governor-state.js");
     const governorState = openGovernorState(join(root, "governor-state.sqlite3"));
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 

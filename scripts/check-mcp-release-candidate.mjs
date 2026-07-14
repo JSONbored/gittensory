@@ -12,7 +12,7 @@ import {
   redactSensitive,
 } from "./mcp-release-candidate-core.mjs";
 
-const PACKAGE_DIR = "packages/gittensory-mcp";
+const PACKAGE_DIR = "packages/loopover-mcp";
 const WORKSPACE = "@loopover/mcp";
 const PUBLISH_WORKFLOW = ".github/workflows/publish-mcp.yml";
 const onWindows = process.platform === "win32";

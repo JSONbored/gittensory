@@ -4,7 +4,7 @@ import {
   resolveSelfReputationThresholds,
   selfReputationThrottle,
   selfReputationThrottleLedgerEvent,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 describe("resolveSelfReputationThresholds (#2346)", () => {
   it("returns the conservative defaults when nothing is overridden", () => {

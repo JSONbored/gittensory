@@ -14,7 +14,7 @@ import {
   isVendoredFile,
 } from "../../src/signals/path-matchers";
 
-// Structural guard (#3690-followup): this file is reachable from apps/gittensory-ui/src/lib/
+// Structural guard (#3690-followup): this file is reachable from apps/loopover-ui/src/lib/
 // registration-workspace.ts via focus-manifest.ts's classifyChangedFile import. local-branch.ts pulls in
 // the whole review-scoring/Gittensor-API subsystem, so an import from it here breaks `ui:typecheck` under
 // the UI's tsconfig (no Workers ambient types there) -- confirmed by a real ~35-file "Cannot find name

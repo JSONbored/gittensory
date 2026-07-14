@@ -9,7 +9,7 @@ import {
   listRankedCandidates,
   resolveRankedCandidatesDbPath,
   saveRankedCandidates,
-} from "../../packages/gittensory-miner/lib/ranked-candidates.js";
+} from "../../packages/loopover-miner/lib/ranked-candidates.js";
 
 const roots: string[] = [];
 

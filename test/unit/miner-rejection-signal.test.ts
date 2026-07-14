@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
 import {
   resolveOwnRejectionHistory,
   resolveRejectionSignaled,
-} from "../../packages/gittensory-miner/lib/rejection-signal.js";
+} from "../../packages/loopover-miner/lib/rejection-signal.js";
 
 // resolveRejectionSignaled fetches plain markdown text (AI-USAGE.md/CONTRIBUTING.md), never JSON, so
 // json() is never actually called -- it's here only to satisfy SelfReviewContextFetch's response shape.

@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@loopover/engine", async () => {
-  return import("../../packages/gittensory-engine/src/index");
+  return import("../../packages/loopover-engine/src/index");
 });
 
-import { DEFAULT_AMS_POLICY_SPEC } from "../../packages/gittensory-engine/src/index";
-import { resolveAmsPolicy, resolveAmsPolicyConfigPath } from "../../packages/gittensory-miner/lib/ams-policy.js";
+import { DEFAULT_AMS_POLICY_SPEC } from "../../packages/loopover-engine/src/index";
+import { resolveAmsPolicy, resolveAmsPolicyConfigPath } from "../../packages/loopover-miner/lib/ams-policy.js";
 
 const roots: string[] = [];
 

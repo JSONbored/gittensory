@@ -49,7 +49,7 @@ describe("check-engine-parity script", () => {
   });
 
   it("detects thin engine re-export shims and engine stub pairs", () => {
-    const shim = `// comment\nexport * from "../../packages/gittensory-engine/src/signals/test-evidence";\n`;
+    const shim = `// comment\nexport * from "../../packages/loopover-engine/src/signals/test-evidence";\n`;
     expect(isThinEngineReExportShim(shim)).toBe(true);
     expect(isThinEngineReExportShim("export const MODE = 'strict';\n")).toBe(false);
     expect(isEngineStubPair("export const A = 1;\n".repeat(30), "export {};\n")).toBe(true);
@@ -59,12 +59,12 @@ describe("check-engine-parity script", () => {
     const body = "export const VALUE = 1;\nimport type { T } from \"../types\";\n";
     const readFile = (_root: string, relativePath: string) => {
       if (relativePath === "src/settings/sample.ts") return body;
-      if (relativePath === "packages/gittensory-engine/src/settings/sample.ts") return body;
+      if (relativePath === "packages/loopover-engine/src/settings/sample.ts") return body;
       throw new Error(`unexpected read: ${relativePath}`);
     };
     const listDir = (_root: string, relativePath: string) => {
       if (relativePath === "src/settings") return ["sample.ts"];
-      if (relativePath === "packages/gittensory-engine/src/settings") return ["sample.ts"];
+      if (relativePath === "packages/loopover-engine/src/settings") return ["sample.ts"];
       return [];
     };
     const result = checkEngineParityDrift({ root: "/fake", readFile, listDir });
@@ -75,18 +75,18 @@ describe("check-engine-parity script", () => {
   it("fails with a clear message when a discovered pair diverges", () => {
     const readFile = (_root: string, relativePath: string) => {
       if (relativePath === "src/settings/autonomy.ts") return "export const MODE = 'strict';\n";
-      if (relativePath === "packages/gittensory-engine/src/settings/autonomy.ts") return "export const MODE = 'relaxed';\n";
+      if (relativePath === "packages/loopover-engine/src/settings/autonomy.ts") return "export const MODE = 'relaxed';\n";
       throw new Error(`unexpected read: ${relativePath}`);
     };
     const listDir = (_root: string, relativePath: string) => {
       if (relativePath === "src/settings") return ["autonomy.ts"];
-      if (relativePath === "packages/gittensory-engine/src/settings") return ["autonomy.ts"];
+      if (relativePath === "packages/loopover-engine/src/settings") return ["autonomy.ts"];
       return [];
     };
     const result = checkEngineParityDrift({ root: "/fake", readFile, listDir });
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]).toContain("src/settings/autonomy.ts");
-    expect(result.failures[0]).toContain("packages/gittensory-engine/src/settings/autonomy.ts");
+    expect(result.failures[0]).toContain("packages/loopover-engine/src/settings/autonomy.ts");
     expect(result.failures[0]).toContain("drifted apart");
   });
 
@@ -104,34 +104,34 @@ describe("check-engine-parity script", () => {
       const body = "export const NESTED = 1;\n";
       const readFile = (_root: string, relativePath: string) => {
         if (relativePath === "src/review/sub/nested.ts") return body;
-        if (relativePath === "packages/gittensory-engine/src/review/sub/nested.ts") return body;
+        if (relativePath === "packages/loopover-engine/src/review/sub/nested.ts") return body;
         throw new Error(`unexpected read: ${relativePath}`);
       };
       const listDir = (_root: string, relativePath: string) => {
         if (relativePath === "src/review") return ["sub"];
         if (relativePath === "src/review/sub") return ["nested.ts"];
-        if (relativePath === "packages/gittensory-engine/src/review") return ["sub"];
-        if (relativePath === "packages/gittensory-engine/src/review/sub") return ["nested.ts"];
+        if (relativePath === "packages/loopover-engine/src/review") return ["sub"];
+        if (relativePath === "packages/loopover-engine/src/review/sub") return ["nested.ts"];
         return [];
       };
       const pairs = discoverEngineParityPairs({ root: "/fake", readFile, listDir });
       expect(pairs).toHaveLength(1);
       expect(pairs[0]!.fileName).toBe("sub/nested.ts");
       expect(pairs[0]!.hostRelative).toBe("src/review/sub/nested.ts");
-      expect(pairs[0]!.engineRelative).toBe("packages/gittensory-engine/src/review/sub/nested.ts");
+      expect(pairs[0]!.engineRelative).toBe("packages/loopover-engine/src/review/sub/nested.ts");
     });
 
     it("still requires an identical sub-path on both sides — a depth MISMATCH stays invisible to the scan (needs its own NAMED_TWIN_PAIRS entry)", () => {
       const body = "export const MISMATCHED = 1;\n";
       const readFile = (_root: string, relativePath: string) => {
         if (relativePath === "src/review/sub/mismatch.ts") return body;
-        if (relativePath === "packages/gittensory-engine/src/review/mismatch.ts") return body;
+        if (relativePath === "packages/loopover-engine/src/review/mismatch.ts") return body;
         throw new Error(`unexpected read: ${relativePath}`);
       };
       const listDir = (_root: string, relativePath: string) => {
         if (relativePath === "src/review") return ["sub"];
         if (relativePath === "src/review/sub") return ["mismatch.ts"];
-        if (relativePath === "packages/gittensory-engine/src/review") return ["mismatch.ts"];
+        if (relativePath === "packages/loopover-engine/src/review") return ["mismatch.ts"];
         return [];
       };
       const pairs = discoverEngineParityPairs({ root: "/fake", readFile, listDir });
@@ -198,7 +198,7 @@ describe("check-engine-parity script", () => {
 
     it("passes when a single-sided gate-decision edit includes an engine package version bump", () => {
       const result = checkGateDecisionVersionBump({
-        changedFiles: [GATE_DECISION_TWIN_PAIR.hostRelative, "packages/gittensory-engine/package.json"],
+        changedFiles: [GATE_DECISION_TWIN_PAIR.hostRelative, "packages/loopover-engine/package.json"],
         baseEngineVersion: "0.2.0",
         headEngineVersion: "0.2.1",
       });
@@ -218,7 +218,7 @@ describe("check-engine-parity script", () => {
       const combined = runEngineParityChecks({
         root: "/fake",
         readFile: (_root, relativePath) => {
-          if (relativePath === "packages/gittensory-engine/package.json") return JSON.stringify({ version: "0.2.0" });
+          if (relativePath === "packages/loopover-engine/package.json") return JSON.stringify({ version: "0.2.0" });
           if (relativePath === GATE_DECISION_TWIN_PAIR.hostRelative) return gateBody;
           if (relativePath === GATE_DECISION_TWIN_PAIR.engineRelative) return gateBody;
           throw new Error(`unexpected read: ${relativePath}`);
@@ -258,7 +258,7 @@ describe("check-engine-parity script", () => {
     it("discovers the content-lane/safe-url.ts pair invisible to the top-level directory scan", () => {
       const pair = discoverGateDecisionTwinPair({ root: process.cwd(), pair: SAFE_URL_TWIN_PAIR });
       expect(pair.hostRelative).toBe("src/review/content-lane/safe-url.ts");
-      expect(pair.engineRelative).toBe("packages/gittensory-engine/src/review/safe-url.ts");
+      expect(pair.engineRelative).toBe("packages/loopover-engine/src/review/safe-url.ts");
       // Confirms the directory scan really would miss it: "safe-url.ts" is nested under content-lane/ on
       // the host, so a top-level readdirSync("src/review") pairing by filename never lists it.
       const scanned = discoverEngineParityPairs({ root: process.cwd() });
@@ -306,7 +306,7 @@ describe("check-engine-parity script", () => {
       expect(SHARES_MEANINGFUL_FILE_MARKERS.length).toBeGreaterThan(0);
       expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.hostRelative).toBe("src/signals/engine.ts");
       expect(SHARES_MEANINGFUL_FILE_TWIN_PAIR.engineRelative).toBe(
-        "packages/gittensory-engine/src/signals/predicted-gate-engine.ts",
+        "packages/loopover-engine/src/signals/predicted-gate-engine.ts",
       );
     });
 
@@ -325,7 +325,7 @@ describe("check-engine-parity script", () => {
       expect(SECRET_DETECTION_TWIN_PAIR.engineRelative).toBe(
         "review-enrichment/src/analyzers/secret-scan.ts",
       );
-      // Not discoverable by the generic src/{review,settings,signals} <-> packages/gittensory-engine scan:
+      // Not discoverable by the generic src/{review,settings,signals} <-> packages/loopover-engine scan:
       // REES lives under review-enrichment/, a different root entirely.
       const scanned = discoverEngineParityPairs({ root: process.cwd() });
       expect(scanned.some((discovered) => discovered.fileName === "secret-patterns.ts")).toBe(false);
@@ -478,7 +478,7 @@ describe("check-engine-parity script", () => {
       const result = checkMinerEngineVersionPinSync({
         root: "/fake",
         readFile: (_root, relativePath) => {
-          if (relativePath === "packages/gittensory-miner/expected-engine.version") return "0.1.0\n";
+          if (relativePath === "packages/loopover-miner/expected-engine.version") return "0.1.0\n";
           throw new Error(`unexpected read: ${relativePath}`);
         },
         readExpected: () => "0.2.0",
@@ -536,9 +536,9 @@ describe("check-engine-parity script", () => {
     const combined = runEngineParityChecks({
       root: "/fake",
       readFile: (_root: string, relativePath: string) => {
-        if (relativePath === "packages/gittensory-engine/package.json") return JSON.stringify({ version: "0.2.0" });
+        if (relativePath === "packages/loopover-engine/package.json") return JSON.stringify({ version: "0.2.0" });
         if (relativePath === "src/settings/autonomy.ts") return "export const MODE = 'strict';\n";
-        if (relativePath === "packages/gittensory-engine/src/settings/autonomy.ts") return "export const MODE = 'relaxed';\n";
+        if (relativePath === "packages/loopover-engine/src/settings/autonomy.ts") return "export const MODE = 'relaxed';\n";
         if (relativePath === GATE_DECISION_TWIN_PAIR.hostRelative) {
           return "export function evaluateGateCheck() {}\nfunction evaluateGateCheckCore() {}\nfunction isConfiguredGateBlocker() {}\nexport function buildPullRequestAdvisory() {}\n";
         }
@@ -549,7 +549,7 @@ describe("check-engine-parity script", () => {
       },
       listDir: (_root: string, relativePath: string) => {
         if (relativePath === "src/settings") return ["autonomy.ts"];
-        if (relativePath === "packages/gittensory-engine/src/settings") return ["autonomy.ts"];
+        if (relativePath === "packages/loopover-engine/src/settings") return ["autonomy.ts"];
         return [];
       },
       resolveInstalled: () => "0.1.0",

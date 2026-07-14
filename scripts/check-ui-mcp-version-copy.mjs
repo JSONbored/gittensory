@@ -6,11 +6,11 @@ import { get } from "node:https";
 const root = process.cwd();
 const packageName = "@loopover/mcp";
 const registryUrl = "https://registry.npmjs.org/@loopover%2fmcp";
-const sourceLatestPath = join(root, "apps/gittensory-ui/src/lib/mcp-package.ts");
+const sourceLatestPath = join(root, "apps/loopover-ui/src/lib/mcp-package.ts");
 const targets = [
   "README.md",
-  "packages/gittensory-mcp/README.md",
-  "apps/gittensory-ui/src",
+  "packages/loopover-mcp/README.md",
+  "apps/loopover-ui/src",
 ].map((target) => join(root, target));
 
 // The live npm-registry check is BEST-EFFORT: a transient registry blip must not fail CI, because a red
@@ -30,7 +30,7 @@ const failures = [];
 
 if (latest && sourceLatest !== latest) {
   failures.push(
-    `apps/gittensory-ui/src/lib/mcp-package.ts: known latest ${sourceLatest} does not match npm dist-tags.latest ${latest}`,
+    `apps/loopover-ui/src/lib/mcp-package.ts: known latest ${sourceLatest} does not match npm dist-tags.latest ${latest}`,
   );
 } else if (!latest) {
   console.warn(

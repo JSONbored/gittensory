@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import mcpPackageJson from "../../packages/gittensory-mcp/package.json";
+import mcpPackageJson from "../../packages/loopover-mcp/package.json";
 import { createSessionForGitHubUser, hashToken } from "../../src/auth/security";
 import {
   upsertBounty,

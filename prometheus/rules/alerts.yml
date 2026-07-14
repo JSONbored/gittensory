@@ -623,7 +623,7 @@ groups:
   # ── Miner prediction-calibration drift (#5188) ────────────────────────────
   # UNLIKE every group above, this rule targets the gittensory-MINER's own scrape surface, not the
   # loopover server's GET /metrics. The miner is a local CLI (not a daemon), so an operator renders
-  # renderMinerPredictionMetrics (packages/gittensory-engine/src/miner-prediction-metrics.ts, #4264, wired
+  # renderMinerPredictionMetrics (packages/loopover-engine/src/miner-prediction-metrics.ts, #4264, wired
   # into a command in #4838 over the calibration-report join built in #4849) to a file/pushgateway their
   # Prometheus scrapes. The rule is therefore DORMANT until such a target exists: an absent
   # loopover_miner_prediction_* series simply yields no result (and the `> 0` denominator guard also makes
@@ -667,7 +667,7 @@ groups:
 
   # ── Miner portfolio-queue backlog health (#5186) ──────────────────────────
   # Same DORMANT-until-a-scrape-target-exists posture as gittensory-miner-prediction above: an operator runs
-  # `gittensory-miner queue metrics` (packages/gittensory-miner/lib/portfolio-queue-cli.js's
+  # `gittensory-miner queue metrics` (packages/loopover-miner/lib/portfolio-queue-cli.js's
   # renderPortfolioQueueMetrics) to a file/pushgateway their Prometheus scrapes. Absent
   # loopover_miner_portfolio_queue_* series simply yield no result, so this loads cleanly via
   # `selfhost:validate-observability` and never false-fires on an install with no miner scrape configured.
@@ -706,7 +706,7 @@ groups:
 
   # ── Governor rate-limit/budget threshold pressure (#5187) ─────────────────
   # Same DORMANT-until-a-scrape-target-exists posture as the two miner groups above: an operator runs
-  # `gittensory-miner governor metrics` (packages/gittensory-miner/lib/governor-metrics-cli.js's
+  # `gittensory-miner governor metrics` (packages/loopover-miner/lib/governor-metrics-cli.js's
   # renderGovernorMetrics) to a file/pushgateway their Prometheus scrapes. Absent loopover_miner_governor_*
   # series simply yield no result. Read-only: these rules alert on the governor's already-persisted rate-limit
   # (#5134/write-rate-limit.ts) and cap-usage (#5134/budget-cap.ts) state; they do not gate, retry, or modify

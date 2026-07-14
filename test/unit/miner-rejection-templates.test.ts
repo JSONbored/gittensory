@@ -3,7 +3,7 @@ import {
   REJECTION_REASONS,
   containsPrivateLanguage,
   renderRejectionMessage,
-} from "../../packages/gittensory-miner/lib/rejection-templates.js";
+} from "../../packages/loopover-miner/lib/rejection-templates.js";
 
 const CONTEXT = { repoFullName: "JSONbored/gittensory", prNumber: 2751 } as const;
 

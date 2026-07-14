@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { latestSemverTag, renderMcpChangelog, selectMcpReleaseCommits } from "./mcp-release-core.mjs";
 
-const defaultOutput = "packages/gittensory-mcp/CHANGELOG.md";
-const defaultPackageJson = "packages/gittensory-mcp/package.json";
+const defaultOutput = "packages/loopover-mcp/CHANGELOG.md";
+const defaultPackageJson = "packages/loopover-mcp/package.json";
 
 export function generateMcpChangelog({ output = defaultOutput, version, generatedAt, baseTag, dryRun = false } = {}) {
   const targetVersion = version ?? readPackageVersion(defaultPackageJson);
@@ -109,7 +109,7 @@ function readReleasePrepEntries({ baseTag, targetVersion }) {
     entries.push({
       sha: "release-prep-deps",
       subject: `chore(deps): update MCP release dependency stack (${dependencyChanges.join(", ")})`,
-      files: ["package.json", "packages/gittensory-mcp/package.json", "package-lock.json"],
+      files: ["package.json", "packages/loopover-mcp/package.json", "package-lock.json"],
     });
   }
 

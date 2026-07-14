@@ -22,7 +22,7 @@ const stalePackageText = /(private beta|zeronode\.workers\.dev|preview URL)/i;
 for (const file of files) {
   if (forbiddenPath.test(file)) throw new Error(`Forbidden file in MCP package: ${file}`);
   if (!allowed.some((pattern) => pattern.test(file))) throw new Error(`Unexpected file in MCP package: ${file}`);
-  const fullPath = join("packages/gittensory-mcp", file);
+  const fullPath = join("packages/loopover-mcp", file);
   const content = readFileSync(fullPath, "utf8");
   if (forbiddenContent.test(content)) throw new Error(`Secret-like content found in MCP package file: ${file}`);
   if (file === "README.md" && stalePackageText.test(content)) throw new Error(`Stale public-package wording found in MCP package file: ${file}`);

@@ -2,14 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeDefaultGovernorState, openGovernorState } from "../../packages/gittensory-miner/lib/governor-state.js";
+import { closeDefaultGovernorState, openGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
 import {
   parseGovernorPauseArgs,
   parseGovernorResumeArgs,
   runGovernorPause,
   runGovernorResume,
   runGovernorStatus,
-} from "../../packages/gittensory-miner/lib/governor-pause-cli.js";
+} from "../../packages/loopover-miner/lib/governor-pause-cli.js";
 
 const roots: string[] = [];
 const states: Array<{ close(): void }> = [];

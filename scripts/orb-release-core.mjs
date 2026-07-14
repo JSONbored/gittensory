@@ -4,7 +4,7 @@
 // schedules by separate automation, and keeping them decoupled means neither can accidentally regress the
 // other's release path.
 //
-// Unlike MCP (whose packages/gittensory-mcp/package.json IS the version manifest, bumped by hand as part of a
+// Unlike MCP (whose packages/loopover-mcp/package.json IS the version manifest, bumped by hand as part of a
 // human release-prep PR), ORB has no npm manifest -- orb-manifest.json plays that role. The manifest's
 // `version` is the maintainer's OWN stated intent ("we are working toward X.Y.Z"); this module only ever
 // reads it, never proposes overwriting it automatically -- see `manifestStale` on the report. Promoting a
@@ -34,10 +34,10 @@ const IMAGE_RELEVANT_PREFIXES = [
 // Never itself a reason to cut a new image -- these are Worker-only, or genuinely orthogonal to what runs
 // inside the self-host container.
 const EXCLUDED_PREFIXES = [
-  "apps/gittensory-ui/",
-  "apps/gittensory-extension/",
-  "packages/gittensory-mcp/",
-  "packages/gittensory-miner/",
+  "apps/loopover-ui/",
+  "apps/loopover-extension/",
+  "packages/loopover-mcp/",
+  "packages/loopover-miner/",
   "src/mcp/",
   "src/env.d.ts", // ambient Worker binding types only -- never reachable at self-host runtime
 ];

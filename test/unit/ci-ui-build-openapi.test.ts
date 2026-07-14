@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
-// `npm run ui:build` also regenerates apps/gittensory-ui/public/openapi.json. Both call sites below
+// `npm run ui:build` also regenerates apps/loopover-ui/public/openapi.json. Both call sites below
 // chain it immediately after `ui:openapi:check`, which just proved the committed spec is already fresh --
 // regenerating it again is pure repeat work. These assert the two split commands stay in place instead of
 // the aggregate `ui:build` script sneaking back in (ui:build itself is untouched for standalone callers).

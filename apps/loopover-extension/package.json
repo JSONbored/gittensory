@@ -1,0 +1,12 @@
+{
+  "name": "@loopover/extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maintainer-facing browser extension overlay for GitHub pull requests and issues.",
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/build-extension.mjs",
+    "lint": "node --check auth.js && node --check background.js && node --check content.js && node --check options.js",
+    "typecheck": "npm run lint"
+  }
+}

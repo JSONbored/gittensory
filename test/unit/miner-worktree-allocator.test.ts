@@ -8,7 +8,7 @@ import {
   openWorktreeAllocator,
   resolveWorktreeAllocatorDbPath,
   resolveWorktreeBaseDir,
-} from "../../packages/gittensory-miner/lib/worktree-allocator.js";
+} from "../../packages/loopover-miner/lib/worktree-allocator.js";
 
 const roots: string[] = [];
 const allocators: Array<{ close(): void }> = [];

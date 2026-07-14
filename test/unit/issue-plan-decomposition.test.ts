@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decomposeIssueToPlan, type IssuePlanInput } from "../../packages/gittensory-engine/src/issue-plan-decomposition";
-import type { RawPlanStep } from "../../packages/gittensory-engine/src/plan-templates";
+import { decomposeIssueToPlan, type IssuePlanInput } from "../../packages/loopover-engine/src/issue-plan-decomposition";
+import type { RawPlanStep } from "../../packages/loopover-engine/src/plan-templates";
 import { rawPlanStepSchema } from "../../src/mcp/server";
 
 // Assert the structural rules plan-store.js's validatePlanDag enforces (rawPlanStepSchema-valid steps, unique ids,

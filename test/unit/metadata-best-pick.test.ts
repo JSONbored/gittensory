@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/gittensory-engine/src/miner-goal-spec";
-import { bestMetadataOpportunity } from "../../packages/gittensory-engine/src/metadata-best-pick";
+import { DEFAULT_MINER_GOAL_SPEC } from "../../packages/loopover-engine/src/miner-goal-spec";
+import { bestMetadataOpportunity } from "../../packages/loopover-engine/src/metadata-best-pick";
 
 const NOW = Date.parse("2026-07-03T12:00:00.000Z");
 
@@ -60,7 +60,7 @@ describe("bestMetadataOpportunity", () => {
   });
 
   it("is exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.bestMetadataOpportunity).toBe("function");
     expect(
       barrel.bestMetadataOpportunity([{ ...base, issueNumber: 9, labels: ["help wanted"] }], { nowMs: NOW })

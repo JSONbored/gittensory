@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { hasPlanFailedSteps } from "../../packages/gittensory-engine/src/plan-failure";
-import type { PlanStep } from "../../packages/gittensory-engine/src/plan-export";
+import { hasPlanFailedSteps } from "../../packages/loopover-engine/src/plan-failure";
+import type { PlanStep } from "../../packages/loopover-engine/src/plan-export";
 
 function step(over: Partial<PlanStep> & { id: string; title: string }): PlanStep {
   return {
@@ -43,7 +43,7 @@ describe("hasPlanFailedSteps", () => {
   });
 
   it("is exported from the package barrel", async () => {
-    const barrel = await import("../../packages/gittensory-engine/src/index");
+    const barrel = await import("../../packages/loopover-engine/src/index");
     expect(typeof barrel.hasPlanFailedSteps).toBe("function");
     expect(
       barrel.hasPlanFailedSteps({

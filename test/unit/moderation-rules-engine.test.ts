@@ -11,7 +11,7 @@ import {
   normalizeModerationRules,
   resolveEffectiveModerationRules,
   resolveModerationGateEnabled,
-} from "../../packages/gittensory-engine/src/settings/moderation-rules";
+} from "../../packages/loopover-engine/src/settings/moderation-rules";
 
 describe("normalizeModerationRules (#selfhost-mod-engine)", () => {
   it("returns [] for null/undefined and a non-array (with a warning)", () => {

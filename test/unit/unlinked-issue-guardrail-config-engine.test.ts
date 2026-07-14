@@ -4,7 +4,7 @@ import {
   DEFAULT_UNLINKED_ISSUE_GUARDRAIL,
   isUnlinkedIssueGuardrailMode,
   normalizeUnlinkedIssueGuardrailConfig,
-} from "../../packages/gittensory-engine/src/review/unlinked-issue-guardrail-config";
+} from "../../packages/loopover-engine/src/review/unlinked-issue-guardrail-config";
 
 describe("isUnlinkedIssueGuardrailMode", () => {
   it("accepts the two valid modes", () => {

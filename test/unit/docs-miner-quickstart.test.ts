@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const MINER_QUICKSTART_PATH = resolve(
   import.meta.dirname,
-  "../../apps/gittensory-ui/src/routes/docs.miner-quickstart.tsx",
+  "../../apps/loopover-ui/src/routes/docs.miner-quickstart.tsx",
 );
 
 describe("docs miner quickstart page", () => {

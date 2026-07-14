@@ -42,7 +42,7 @@ describe("LoopOver repo focus manifest", () => {
     expect(manifest.present).toBe(true);
     expect(manifest.wantedPaths).toContain("src/");
     expect(manifest.wantedPaths).toContain("review-enrichment/");
-    expect(manifest.wantedPaths).toContain("apps/gittensory-ui/");
+    expect(manifest.wantedPaths).toContain("apps/loopover-ui/");
     expect(manifest.issueDiscoveryPolicy).toBe("discouraged");
 
     const policy = compileFocusManifestPolicy(manifest);
@@ -73,7 +73,7 @@ describe("LoopOver repo focus manifest", () => {
     const manifest = parseFocusManifestContent(GITTENSORY_REPO_FOCUS_MANIFEST_YAML, "repo_file");
     const guidance = buildFocusManifestGuidance({
       manifest,
-      changedPaths: ["apps/gittensory-ui/src/routes/app.operator.tsx"],
+      changedPaths: ["apps/loopover-ui/src/routes/app.operator.tsx"],
     });
     expect(guidance.findings.some((finding) => finding.code === "manifest_preferred_path")).toBe(true);
   });
@@ -81,7 +81,7 @@ describe("LoopOver repo focus manifest", () => {
   it("recommendation influence prefers in-scope backend and UI paths without legacy blocked surfaces", () => {
     const manifest = parseFocusManifestContent(GITTENSORY_REPO_FOCUS_MANIFEST_YAML, "repo_file");
     const backend = buildFocusManifestGuidance({ manifest, changedPaths: ["src/api/routes.ts"] });
-    const controlPanel = buildFocusManifestGuidance({ manifest, changedPaths: ["apps/gittensory-ui/src/app.tsx"] });
+    const controlPanel = buildFocusManifestGuidance({ manifest, changedPaths: ["apps/loopover-ui/src/app.tsx"] });
     const retiredSite = buildFocusManifestGuidance({ manifest, changedPaths: ["site/index.html"] });
     expect(backend.findings.some((finding) => finding.code === "manifest_preferred_path")).toBe(true);
     expect(controlPanel.findings.some((finding) => finding.code === "manifest_preferred_path")).toBe(true);
@@ -116,7 +116,7 @@ describe("LoopOver repo focus manifest", () => {
     const manifest = await loadRepoFocusManifest(env, "JSONbored/gittensory", { fetcher: async () => null });
     expect(manifest.present).toBe(true);
     expect(manifest.wantedPaths).toContain("packages/");
-    expect(manifest.wantedPaths).toContain("apps/gittensory-ui/");
+    expect(manifest.wantedPaths).toContain("apps/loopover-ui/");
   });
 
   it("does not treat legacy lovable-only and CNAME paths as manifest holds", () => {

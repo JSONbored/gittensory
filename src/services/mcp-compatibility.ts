@@ -3,7 +3,7 @@
 // one fewer place to forget. Deploys with the Worker on merge, same as today's manual-sync timing: this
 // advertises the new version to /health and /v1/mcp/compatibility as soon as the release PR merges,
 // before the npm package itself is actually tagged/published.
-import gittensoryMcpPackageJson from "../../packages/gittensory-mcp/package.json";
+import gittensoryMcpPackageJson from "../../packages/loopover-mcp/package.json";
 
 export const GITTENSORY_API_VERSION = "0.1.0";
 export const GITTENSORY_MCP_PACKAGE_NAME = "@loopover/mcp";

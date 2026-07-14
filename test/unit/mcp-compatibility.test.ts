@@ -4,7 +4,7 @@ import { classifyMcpClientVersion, compareMcpSemver, LATEST_RECOMMENDED_MCP_VERS
 
 // Derives values relative to the actual current recommended release instead of hardcoding a literal
 // that only happens to be correct for whichever version is current when the test is written --
-// LATEST_RECOMMENDED_MCP_VERSION now derives from packages/gittensory-mcp/package.json (no longer a
+// LATEST_RECOMMENDED_MCP_VERSION now derives from packages/loopover-mcp/package.json (no longer a
 // second hand-synced literal), so these assertions stay correct across every future release too.
 // MINIMUM_SUPPORTED_MCP_VERSION-relative literals ("0.5.9" etc.) stay hardcoded on purpose: unlike the
 // recommended version, that constant is deliberately NOT bumped every release.

@@ -11,7 +11,7 @@ export type { LinkedIssueLabelPropagationConfig, LinkedIssueLabelPropagationMapp
 //
 // PURE config types + normalizer only — no GitHub/fetch/Env-dependent imports. `focus-manifest.ts`'s YAML
 // parser imports this module directly, and `focus-manifest.ts` is itself pulled into the gittensory-ui
-// workspace's isolated typecheck (via `apps/gittensory-ui/src/lib/registration-workspace.ts`), which has no
+// workspace's isolated typecheck (via `apps/loopover-ui/src/lib/registration-workspace.ts`), which has no
 // visibility into the Worker's ambient `Env` type. The actual GitHub fetch orchestrator
 // (`fetchLinkedIssueLabelsForPropagation`) lives in `linked-issue-label-propagation-fetch.ts` instead, kept
 // out of this file specifically so the UI workspace's typecheck never has to resolve `Env`.

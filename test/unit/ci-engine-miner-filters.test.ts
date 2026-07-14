@@ -7,8 +7,8 @@ const CI_PATH = join(process.cwd(), ".github/workflows/ci.yml");
 describe("CI engine/miner path filters", () => {
   it("declares engine and miner filters with package paths", () => {
     const ci = readFileSync(CI_PATH, "utf8");
-    expect(ci).toMatch(/engine:\s*\n\s*- 'packages\/gittensory-engine\/\*\*'/);
-    expect(ci).toMatch(/miner:\s*\n\s*- 'packages\/gittensory-miner\/\*\*'/);
+    expect(ci).toMatch(/engine:\s*\n\s*- 'packages\/loopover-engine\/\*\*'/);
+    expect(ci).toMatch(/miner:\s*\n\s*- 'packages\/loopover-miner\/\*\*'/);
     expect(ci).toContain("scripts/check-miner-package.mjs");
     expect(ci).toContain("needs.changes.outputs.engine");
     expect(ci).toContain("needs.changes.outputs.miner");

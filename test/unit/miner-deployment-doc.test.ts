@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const DEPLOYMENT_PATH = join(process.cwd(), "packages/gittensory-miner/DEPLOYMENT.md");
-const README_PATH = join(process.cwd(), "packages/gittensory-miner/README.md");
+const DEPLOYMENT_PATH = join(process.cwd(), "packages/loopover-miner/DEPLOYMENT.md");
+const README_PATH = join(process.cwd(), "packages/loopover-miner/README.md");
 
 describe("miner deployment guide (#2330)", () => {
   it("documents laptop and fleet modes with required walkthrough sections", () => {
@@ -17,13 +17,13 @@ describe("miner deployment guide (#2330)", () => {
     expect(doc).toContain("credentials");
     expect(doc).toContain("docker build");
     expect(doc).toContain("docker run");
-    expect(doc).toContain("packages/gittensory-miner/Dockerfile");
+    expect(doc).toContain("packages/loopover-miner/Dockerfile");
     expect(doc).toContain("loopover-miner:latest");
     expect(doc).toContain("docker-compose.yml");
   });
 
   it("ships a fleet Dockerfile with non-root runtime and no baked secrets (#4295)", () => {
-    const dockerfile = readFileSync(join(process.cwd(), "packages/gittensory-miner/Dockerfile"), "utf8");
+    const dockerfile = readFileSync(join(process.cwd(), "packages/loopover-miner/Dockerfile"), "utf8");
     const dockerignore = readFileSync(join(process.cwd(), ".dockerignore"), "utf8");
     expect(dockerfile).toContain("COPY . .");
     expect(dockerfile).toContain("npm prune --omit=dev --ignore-scripts");

@@ -8,9 +8,9 @@ import { describe, expect, it } from "vitest";
 // badge.js/toolbar-badge.js need zero changes. This file covers the NEW sync machinery specifically; the
 // pre-existing badge/paste/purge behavior stays covered by miner-extension-content.test.ts.
 
-const backgroundScript = readFileSync("apps/gittensory-miner-extension/background.js", "utf8");
-const optionsScript = readFileSync("apps/gittensory-miner-extension/options.js", "utf8");
-const manifest = JSON.parse(readFileSync("apps/gittensory-miner-extension/manifest.json", "utf8"));
+const backgroundScript = readFileSync("apps/loopover-miner-extension/background.js", "utf8");
+const optionsScript = readFileSync("apps/loopover-miner-extension/options.js", "utf8");
+const manifest = JSON.parse(readFileSync("apps/loopover-miner-extension/manifest.json", "utf8"));
 
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));

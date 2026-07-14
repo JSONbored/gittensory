@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { openClaimLedger } from "../../packages/gittensory-miner/lib/claim-ledger.js";
-import { initPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+import { openClaimLedger } from "../../packages/loopover-miner/lib/claim-ledger.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 
 // Real cross-process concurrency coverage for the claim-ledger and portfolio-queue stores (#4867). Only the
 // worktree-allocator had a dedicated multi-process collision test before this; claim-ledger/portfolio-queue

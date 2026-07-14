@@ -1,6 +1,6 @@
 #!/bin/sh
 # gittensory-miner local-state backup (#4872): every store is an independent SQLite file directly under
-# LOOPOVER_MINER_CONFIG_DIR (packages/gittensory-miner/docs/operations-runbook.md's "Local state at a
+# LOOPOVER_MINER_CONFIG_DIR (packages/loopover-miner/docs/operations-runbook.md's "Local state at a
 # glance") -- there is no Postgres/Qdrant involved, so this is deliberately a simpler sibling to
 # scripts/backup.sh, not a reuse of it (that script's manifest/multi-target logic has nothing to compose with
 # here). Backs up EVERY *.sqlite3 file currently present, discovered by glob rather than a hardcoded filename

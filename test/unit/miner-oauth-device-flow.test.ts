@@ -5,7 +5,7 @@ import {
   requestDeviceCode,
   resolveAmsOauthClientId,
   runDeviceFlowAuthorization,
-} from "../../packages/gittensory-miner/lib/oauth-device-flow.js";
+} from "../../packages/loopover-miner/lib/oauth-device-flow.js";
 
 function jsonResponse(body: unknown, ok = true, status = 200) {
   return { ok, status, json: async () => body };

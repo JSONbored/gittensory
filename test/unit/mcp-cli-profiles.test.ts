@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeFixtureServer, run, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
-import mcpPackageJson from "../../packages/gittensory-mcp/package.json";
+import mcpPackageJson from "../../packages/loopover-mcp/package.json";
 
 describe("gittensory-mcp CLI — profiles", () => {
   let tempDir: string | null = null;

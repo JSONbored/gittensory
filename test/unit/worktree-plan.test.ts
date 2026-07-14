@@ -8,7 +8,7 @@ import {
   WORKTREE_SUBDIR,
   type WorktreeExecFn,
   type WorktreeExecResult,
-} from "../../packages/gittensory-engine/src/index";
+} from "../../packages/loopover-engine/src/index";
 
 /** A fake git exec that records calls and returns a scripted result. */
 function fakeExec(result: WorktreeExecResult) {

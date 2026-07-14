@@ -104,7 +104,7 @@ describe("visual capture preview discovery", () => {
         headSha: "abc123",
         previewFromChecks: true,
       },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       key,
     );
 
@@ -146,7 +146,7 @@ describe("visual capture preview discovery", () => {
         previewUrl: "https://should-be-ignored.example.com",
         previewFromChecks: true,
       },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { preview: { urlTemplate: "https://pr-{number}-{head_sha_short}.preview.example.com" } },
     );
@@ -175,7 +175,7 @@ describe("visual capture preview discovery", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 9, previewUrl: "https://existing-preview.example.com", previewFromChecks: true },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(seenUrls).toEqual([]);
@@ -191,7 +191,7 @@ describe("visual capture preview discovery", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 10, headSha: "deadbeef" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(result.routes[0]?.afterUrl).toContain("placeholder=loading");
       expect(result.previewPending).toBe(false);
@@ -216,7 +216,7 @@ describe("visual capture preview discovery", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 11, headSha: "cafebabe", previewFromChecks: true },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(result.previewPending).toBe(true);
@@ -240,7 +240,7 @@ describe("visual capture preview discovery", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 9, headSha: "cafebabe", previewFromChecks: true },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(seenUrls.some((url) => url.includes("/issues/9/comments"))).toBe(false);
@@ -263,7 +263,7 @@ describe("visual capture preview discovery", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 12, headSha: "cafebabe", previewFromChecks: true },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(result.previewPending).toBe(true);
@@ -283,7 +283,7 @@ describe("visual capture preview discovery", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 13, headSha: "cafebabe", previewFromChecks: true },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(result.previewPending).toBe(false);
@@ -296,7 +296,7 @@ describe("visual capture preview discovery", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 1, previewFromChecks: false },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { routes: { paths: ["/pricing"] } },
     );
@@ -326,11 +326,11 @@ describe("resolvePreviewUrlTemplate (#3609)", () => {
 });
 
 describe("resolveVisualRoutes (#3610)", () => {
-  const files = ["apps/gittensory-ui/src/routes/app.index.tsx"];
+  const files = ["apps/loopover-ui/src/routes/app.index.tsx"];
   const manyFiles = [
-    "apps/gittensory-ui/src/routes/app.index.tsx",
-    "apps/gittensory-ui/src/routes/app.analytics.tsx",
-    "apps/gittensory-ui/src/routes/app.billing.tsx",
+    "apps/loopover-ui/src/routes/app.index.tsx",
+    "apps/loopover-ui/src/routes/app.analytics.tsx",
+    "apps/loopover-ui/src/routes/app.billing.tsx",
   ];
 
   it("falls through to file-based inference when config is absent, null, or empty", () => {
@@ -354,9 +354,9 @@ describe("resolveVisualRoutes (#3610)", () => {
   it("clamps oversized configured maxRoutes to the safe visual route limit", () => {
     const sixFiles = [
       ...manyFiles,
-      "apps/gittensory-ui/src/routes/app.settings.tsx",
-      "apps/gittensory-ui/src/routes/app.usage.tsx",
-      "apps/gittensory-ui/src/routes/app.users.tsx",
+      "apps/loopover-ui/src/routes/app.settings.tsx",
+      "apps/loopover-ui/src/routes/app.usage.tsx",
+      "apps/loopover-ui/src/routes/app.users.tsx",
     ];
     expect(resolveVisualRoutes(sixFiles, { maxRoutes: 1000 })).toEqual([
       "/app",
@@ -376,9 +376,9 @@ describe("resolveVisualRoutes (#3610)", () => {
 
 describe("mapFilesToRoutes maxRoutes parameter", () => {
   const manyFiles = [
-    "apps/gittensory-ui/src/routes/app.index.tsx",
-    "apps/gittensory-ui/src/routes/app.analytics.tsx",
-    "apps/gittensory-ui/src/routes/app.billing.tsx",
+    "apps/loopover-ui/src/routes/app.index.tsx",
+    "apps/loopover-ui/src/routes/app.analytics.tsx",
+    "apps/loopover-ui/src/routes/app.billing.tsx",
   ];
 
   it("defaults to the built-in cap of 2", () => {
@@ -392,7 +392,7 @@ describe("mapFilesToRoutes maxRoutes parameter", () => {
 });
 
 describe("mapFilesToRoutes app-folder generalization (#3611 follow-up)", () => {
-  it("maps metagraphed-style apps/ui/src/routes/** files the same way as apps/gittensory-ui/** (identical TanStack flat-file convention, different app folder name)", () => {
+  it("maps metagraphed-style apps/ui/src/routes/** files the same way as apps/loopover-ui/** (identical TanStack flat-file convention, different app folder name)", () => {
     expect(mapFilesToRoutes(["apps/ui/src/routes/settings.tsx"])).toEqual(["/settings"]);
     expect(mapFilesToRoutes(["apps/ui/src/routes/accounts.index.tsx"])).toEqual(["/accounts"]);
   });
@@ -421,7 +421,7 @@ describe("review.visual.production_url (#3611 follow-up)", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://gittensory.example.com" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 51, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { productionUrl: null },
     );
@@ -431,7 +431,7 @@ describe("review.visual.production_url (#3611 follow-up)", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://gittensory.example.com" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 52, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
     expect(withoutConfig.routes[0]?.beforeUrl).toContain(encodeURIComponent("https://gittensory.example.com/app"));
   });
@@ -443,7 +443,7 @@ describe("review.visual.production_url (#3611 follow-up)", () => {
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 53, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { productionUrl: null },
     );
@@ -461,7 +461,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 1, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(availableSpy).toHaveBeenCalled();
       expect(compareSpy).not.toHaveBeenCalled();
@@ -490,7 +490,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 2, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(result.routes[0]?.diffUrl).toContain("/loopover/shot?key=");
       expect(result.routes[0]?.diffUrlMobile).toContain("/loopover/shot?key=");
@@ -513,7 +513,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 3, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(result.routes[0]?.diffUrl).toBeUndefined();
       expect(result.routes[0]?.diffUrlMobile).toBeUndefined();
@@ -535,7 +535,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 4, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(result.routes[0]?.diffUrl).toBeUndefined();
     } finally {
@@ -564,7 +564,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 5, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
 
       const desktopCall = compareSpy.mock.calls.find(([before, after]) => before !== undefined || after !== undefined);
@@ -585,7 +585,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 6, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(result.routes[0]?.beforeUrl).toContain("/loopover/shot?key=");
@@ -607,7 +607,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 7, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
 
       expect(result.routes[0]?.beforeUrl).toContain("/loopover/shot?key=");
@@ -630,7 +630,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 11, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
 
       expect(captureShotSpy).toHaveBeenCalled();
@@ -656,7 +656,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 8, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
 
       expect(captureShotSpy).toHaveBeenCalled();
@@ -688,7 +688,7 @@ describe("buildCapture pixel-diff wiring (#3674)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 10, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
 
       expect(result.routes[0]?.diffUrl).toContain("/loopover/shot?key=");
@@ -713,7 +713,7 @@ describe("buildCapture with REVIEW_AUDIT_S3_PUBLIC_URL configured (direct bucket
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 30, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
     expect(result.routes[0]?.afterUrl).toBe(`https://pub-abc123.r2.dev/${afterKey}`);
     expect(result.routes[0]?.afterUrl).not.toContain("/loopover/shot?key=");
@@ -732,7 +732,7 @@ describe("buildCapture with REVIEW_AUDIT_S3_PUBLIC_URL configured (direct bucket
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 31, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
     expect(result.routes[0]?.afterUrl).toBe(`https://pub-abc123.r2.dev/${afterKey}`); // no double slash
   });
@@ -750,7 +750,7 @@ describe("buildCapture with REVIEW_AUDIT_S3_PUBLIC_URL configured (direct bucket
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 32, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
     expect(result.routes[0]?.beforeUrl).toContain("pub-abc123.r2.dev");
     expect(result.routes[0]?.beforeUrl).not.toContain("worker.example");
@@ -767,7 +767,7 @@ describe("buildCapture with REVIEW_AUDIT_S3_PUBLIC_URL configured (direct bucket
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 23, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
     expect(result.routes[0]?.afterUrl).toContain("worker.example/loopover/shot?url=");
   });
@@ -790,7 +790,7 @@ describe("buildCapture with REVIEW_AUDIT_S3_PUBLIC_URL configured (direct bucket
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 24, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(result.routes[0]?.diffUrl).toMatch(/^https:\/\/pub-abc123\.r2\.dev\//);
     } finally {
@@ -816,7 +816,7 @@ describe("buildCapture with REVIEW_AUDIT_S3_PUBLIC_URL configured (direct bucket
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 25, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(result.routes[0]?.diffUrl).toBeUndefined();
     } finally {
@@ -832,7 +832,7 @@ describe("buildCapture theme matrix (#3678)", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 20, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
     expect(result.routes).toHaveLength(1);
     expect(result.routes[0]?.theme).toBeUndefined();
@@ -844,7 +844,7 @@ describe("buildCapture theme matrix (#3678)", () => {
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 21, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { themes: ["light", "dark"] },
     );
@@ -860,7 +860,7 @@ describe("buildCapture theme matrix (#3678)", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 22, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { themes: ["dark"] },
     );
@@ -875,7 +875,7 @@ describe("buildCapture theme matrix (#3678)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 23, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { themes: ["dark"] },
       );
@@ -894,7 +894,7 @@ describe("buildCapture theme matrix (#3678)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 24, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(captureShotSpy).toHaveBeenCalled();
       expect(captureShotSpy.mock.calls.every(([, , , opts]) => !opts?.theme)).toBe(true);
@@ -920,7 +920,7 @@ describe("buildCapture theme matrix (#3678)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 25, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { themes: ["dark"] },
       );
@@ -944,7 +944,7 @@ describe("buildCapture theme-storage-key wiring (#4109)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 40, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { themes: ["dark"], themeStorageKey: "theme" },
       );
@@ -963,7 +963,7 @@ describe("buildCapture theme-storage-key wiring (#4109)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 41, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { themeStorageKey: "theme" },
       );
@@ -979,7 +979,7 @@ describe("buildCapture theme-storage-key wiring (#4109)", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }), // no REVIEW_AUDIT -> always the on-demand fallback
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 44, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { themes: ["dark"], themeStorageKey: "theme" },
     );
@@ -993,7 +993,7 @@ describe("buildCapture theme-storage-key wiring (#4109)", () => {
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 45, previewUrl: "https://preview.example.com" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { themeStorageKey: "theme" },
     );
@@ -1008,7 +1008,7 @@ describe("buildCapture theme-storage-key wiring (#4109)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 42, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { themes: ["dark"], themeStorageKey: "theme" },
       );
@@ -1035,7 +1035,7 @@ describe("buildCapture theme-storage-key wiring (#4109)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 43, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true, themes: ["dark"], themeStorageKey: "theme" },
       );
@@ -1061,7 +1061,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 30, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
       expect(captureScrollSpy).not.toHaveBeenCalled();
       expect(result.routes[0]?.beforeGifUrl).toBeUndefined();
@@ -1080,7 +1080,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 31, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1106,7 +1106,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 32, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1140,7 +1140,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 33, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1166,7 +1166,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 33 }, // no previewUrl -> afterPage is ""
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1190,7 +1190,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
     try {
       const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() });
       const target = { repoFullName: "owner/repo", prNumber: 34, previewUrl: "https://preview.example.com" };
-      const files = ["apps/gittensory-ui/src/routes/app.index.tsx"];
+      const files = ["apps/loopover-ui/src/routes/app.index.tsx"];
       const first = await buildCapture(env, "installation-token", target, files, undefined, { gif: true });
       expect(captureScrollSpy).toHaveBeenCalledTimes(2);
       const second = await buildCapture(env, "installation-token", target, files, undefined, { gif: true });
@@ -1214,7 +1214,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 35, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1241,7 +1241,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 36, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1267,7 +1267,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 37, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1290,7 +1290,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 38, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1316,7 +1316,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 39, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true, themes: ["dark"] },
       );
@@ -1348,7 +1348,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 40, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1370,7 +1370,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 41, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1399,7 +1399,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
         env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 42, previewUrl: "https://preview.example.com" },
-        ["apps/gittensory-ui/src/routes/app.index.tsx"],
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
         undefined,
         { gif: true },
       );
@@ -1501,7 +1501,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 20, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1533,7 +1533,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 20, headSha: "cafebabecafebabecafebabecafebabecafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1561,7 +1561,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 20, headSha: "cafebabecafebabecafebabecafebabecafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1580,7 +1580,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 21, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1602,7 +1602,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 22, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
     expect(dispatchCalled).toBe(false);
@@ -1623,7 +1623,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 23, previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1645,7 +1645,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 24, headSha: "cafebabe", previewFromChecks: true },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1667,7 +1667,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 25, headSha: "cafebabe", previewFailed: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1694,7 +1694,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 26, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1717,7 +1717,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 27, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1740,7 +1740,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 29, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1762,7 +1762,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 31, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1782,7 +1782,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 28, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1802,7 +1802,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       env,
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 30, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );
@@ -1817,7 +1817,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
       createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com" }),
       "installation-token",
       { repoFullName: "owner/repo", prNumber: 29, headSha: "cafebabe", previewFromChecks: true, defaultBranchRef: "main" },
-      ["apps/gittensory-ui/src/routes/app.index.tsx"],
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
       undefined,
       { actionsFallback: true },
     );

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   MINER_PREDICTION_CORRECT_TOTAL,
   MINER_PREDICTION_INCORRECT_TOTAL,
-} from "../../packages/gittensory-engine/src/miner-prediction-metrics";
+} from "../../packages/loopover-engine/src/miner-prediction-metrics";
 
 // Fixture for the LoopOverMinerPredictionCalibrationDrift alert (#5188). This is the config-side
 // equivalent of a `promtool test rules` harness (the repo ships no promtool dependency): it pins the
@@ -12,7 +12,7 @@ import {
 // drift away from the metrics it consumes. Mirrors alerts-job-failure-ratio-formula.test.ts (#3892).
 //
 // Deliberately keyed off the engine's exported metric-name CONSTANTS (renderMinerPredictionMetrics,
-// packages/gittensory-engine/src/miner-prediction-metrics.ts) rather than hardcoded strings: if that
+// packages/loopover-engine/src/miner-prediction-metrics.ts) rather than hardcoded strings: if that
 // renderer ever renames a counter, this test fails instead of the alert going quietly stale against a
 // metric name that no longer exists.
 

@@ -11,8 +11,8 @@ import { localBranchAnalysisSchema } from "../../src/api/routes";
 // example, and validates it against the real schema/type -- so a future hand-edit that drifts either
 // example fails a test immediately instead of rotting silently until the next manual audit.
 
-const BRANCH_ANALYSIS_DOC_PATH = "apps/gittensory-ui/src/routes/docs.branch-analysis.tsx";
-const SCOREABILITY_DOC_PATH = "apps/gittensory-ui/src/routes/docs.scoreability.tsx";
+const BRANCH_ANALYSIS_DOC_PATH = "apps/loopover-ui/src/routes/docs.branch-analysis.tsx";
+const SCOREABILITY_DOC_PATH = "apps/loopover-ui/src/routes/docs.scoreability.tsx";
 
 // ScorePreviewResult (src/scoring/preview.ts) is a plain TS type with no runtime schema to introspect,
 // so -- same manual-sync limitation as other doc-drift guards in this repo -- this set must be kept in

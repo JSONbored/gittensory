@@ -28,7 +28,7 @@ path filter matched; on push to `main`, everything runs.
 | lint → migrations | migration guard | `npm run db:migrations:check` | duplicate/gap/misnamed migration number |
 | lint → cf-typegen | worker types drift | `npm run cf-typegen:check` | committed `worker-configuration.d.ts` is stale (run `npm run cf-typegen`) |
 | lint → schema-drift | `src/db/schema.ts` vs `migrations/` | `npm run db:schema-drift:check` | a Drizzle table's schema doesn't match the migration history |
-| lint → selfhost-env-reference | self-host env-var doc drift | `npm run selfhost:env-reference:check` | committed `apps/gittensory-ui/src/lib/selfhost-env-reference.ts` is stale (run `npm run selfhost:env-reference`) — triggers when `src/selfhost/**` (+ a few other scanned files) adds/removes an env var read; a pure line shift of an existing read does NOT trigger it, since the doc cites the file only, not `file:line` (#env-reference-churn) |
+| lint → selfhost-env-reference | self-host env-var doc drift | `npm run selfhost:env-reference:check` | committed `apps/loopover-ui/src/lib/selfhost-env-reference.ts` is stale (run `npm run selfhost:env-reference`) — triggers when `src/selfhost/**` (+ a few other scanned files) adds/removes an env var read; a pure line shift of an existing read does NOT trigger it, since the doc cites the file only, not `file:line` (#env-reference-churn) |
 | lint → observability | Grafana/Prometheus/alert config validation | `npm run selfhost:validate-observability` | a self-host observability config (dashboard/rule/datasource) is malformed |
 | lint → typecheck | `tsc --noEmit` | `npm run typecheck` | any backend type error |
 | test (1/2) | sharded vitest + coverage | `npm run test:coverage` (unsharded) | any failing `test/**/*.test.ts` (excl. `test/workers/**`) |
@@ -51,7 +51,7 @@ path filter matched; on push to `main`, everything runs.
 
 **One command for everything except `security`:** `npm run test:ci`. There is **no** CodeQL/Analyze
 workflow in this repo. There is **no** root-level Prettier gate — Prettier is enforced only inside
-`ui:lint` (so it only bites `apps/gittensory-ui/**`).
+`ui:lint` (so it only bites `apps/loopover-ui/**`).
 
 **Local-only checks with no separate named CI status — `npm run test:ci` is the only thing that catches
 these for a normal PR:**
@@ -65,7 +65,7 @@ these for a normal PR:**
 This is a real, previously-hit gap, not a hypothetical: a past PR shipped a genuine, undetected
 `codecov/patch`-adjacent regression in the engine package specifically because `test --workspace
 @loopover/engine` isn't part of `ci.yml`. If your change touches
-`packages/gittensory-engine/**`, running `npm run test:ci` locally (not just watching the PR's CI
+`packages/loopover-engine/**`, running `npm run test:ci` locally (not just watching the PR's CI
 checks go green) is the only way to know you didn't break it.
 
 ---
@@ -117,7 +117,7 @@ Implications for you:
 `.loopover.yml` (the public config you can predict against) sets the gate *modes* (`linkedIssue:
 advisory`, `duplicates: block`, `readiness: advisory/60`, AI review off) and the focus manifest
 (`wantedPaths`: `src/ packages/ test/ migrations/ scripts/ review-enrichment/ .github/workflows/
-wrangler.jsonc apps/gittensory-ui/`; `blockedPaths`: `site/ CNAME **/lovable/**`; `linkedIssuePolicy: preferred`;
+wrangler.jsonc apps/loopover-ui/`; `blockedPaths`: `site/ CNAME **/lovable/**`; `linkedIssuePolicy: preferred`;
 `testExpectations: npm run test:ci`). But the **modes are inputs to the disposition above** — the
 engine still auto-merges the clean case and auto-closes the adverse case. The MCP `predict_gate` uses
 the public config + safe defaults; a clean prediction is necessary but not sufficient (it can't see

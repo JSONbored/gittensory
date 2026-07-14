@@ -3,7 +3,7 @@
 // be documented EXHAUSTIVELY somewhere: feature flags (src/env.d.ts's LOOPOVER_REVIEW_* family),
 // @loopover commands (src/github/commands.ts's two command catalogs), gate-mode dimensions (src/types.ts's
 // *GateMode fields on RepositorySettings) against specific docs pages, and -- the widened part (#4617) -- the
-// FULL RepositorySettings field surface plus every parseable FocusManifest field (packages/gittensory-engine)
+// FULL RepositorySettings field surface plus every parseable FocusManifest field (packages/loopover-engine)
 // against .loopover.yml.example. Nothing else in CI catches a docs page/example silently falling behind when
 // a new flag/command/gate-mode/settings/manifest field is added to source but the place documenting that
 // surface is never updated -- a reviewer has to notice by eye, and often doesn't (#4617's own audit found
@@ -97,7 +97,7 @@ export function extractRepositorySettingsFields(typesText) {
  *     DB-row bookkeeping timestamps.
  *   - `agentGlobalFreezeOverride`: genuinely settable, but DELIBERATELY never documented in the PUBLIC
  *     `.loopover.yml.example` -- it is settable only from the self-host operator's own PRIVATE config
- *     (`source: "api_record"` in `parseSettingsOverride`, packages/gittensory-engine/src/focus-manifest.ts),
+ *     (`source: "api_record"` in `parseSettingsOverride`, packages/loopover-engine/src/focus-manifest.ts),
  *     never from a repo's own committed, maintainer-owned manifest (#4391's scope-leak fix). Documenting it in
  *     the public example would misleadingly suggest a repo maintainer can set it themselves -- see the same
  *     exclusion, with the same rationale, in `SETTINGS_OPERATOR_ONLY_FIELDS` in
@@ -229,7 +229,7 @@ export const FOCUS_MANIFEST_ALIAS_MANIFEST = [
 
 // The real current *GateMode fields on RepositorySettings in src/types.ts. Each row maps the field to its
 // .loopover.yml alias(es) (the field's own DB/settings name, plus any config-as-code YAML path it is also
-// known by) and the docs route filenames (relative to apps/gittensory-ui/src/routes/) that must document it.
+// known by) and the docs route filenames (relative to apps/loopover-ui/src/routes/) that must document it.
 // Adding a new *GateMode field to src/types.ts without adding a row here is a docs-drift failure by design
 // (see checkDocsDrift step 3) -- the manifest is the single place that maps "a gate dimension exists" to
 // "here is where a maintainer can read about it".
@@ -249,7 +249,7 @@ export const GATE_MODE_MANIFEST = [
   { field: "moderationGateMode", aliases: ["moderationGateMode", "settings.moderationGateMode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
 ];
 
-const DOCS_ROUTES_DIR = "apps/gittensory-ui/src/routes";
+const DOCS_ROUTES_DIR = "apps/loopover-ui/src/routes";
 
 function defaultReadFile(root, relativePath) {
   return readFileSync(join(root, relativePath), "utf8");
@@ -286,7 +286,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
 
   // 2. @loopover commands: src/github/commands.ts vs docs.maintainer-workflow.tsx + docs.maintainer-install-trust.tsx.
   // A page can satisfy this either by literally mentioning "@loopover <id>" in its own source, or by
-  // importing the generated command-reference constants (apps/gittensory-ui/src/lib/command-reference.ts,
+  // importing the generated command-reference constants (apps/loopover-ui/src/lib/command-reference.ts,
   // regenerated from the same catalogs via `npm run command-reference:check`) -- once a page delegates to the
   // generator, per-id substring checks against its own source would always false-fail, since the literal
   // "@loopover <id>" text now lives in the generated file, not the page.
@@ -361,11 +361,11 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
 
   // 5. Every parseable FocusManifest field (#4617), excluding gate:/settings: (already exhaustively covered by
   // step 4 above through their RepositorySettings mirror), vs .loopover.yml.example.
-  const focusManifestText = read("packages/gittensory-engine/src/focus-manifest.ts");
+  const focusManifestText = read("packages/loopover-engine/src/focus-manifest.ts");
   const focusManifestFields = extractFocusManifestFields(focusManifestText);
   if (focusManifestFields.length < 15) {
     failures.push(
-      `packages/gittensory-engine/src/focus-manifest.ts: extraction found only ${focusManifestFields.length} FocusManifest leaf fields -- expected 15+; the extraction regex may be broken`,
+      `packages/loopover-engine/src/focus-manifest.ts: extraction found only ${focusManifestFields.length} FocusManifest leaf fields -- expected 15+; the extraction regex may be broken`,
     );
   } else {
     const focusManifestAliases = new Map(FOCUS_MANIFEST_ALIAS_MANIFEST.map((row) => [row.field, row.aliases]));

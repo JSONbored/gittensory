@@ -47,7 +47,7 @@ describe("generated-artifact drift checks are wired into CI, not just local test
     expect(step).toBeDefined();
     expect(String(step!.run)).toBe(command);
     // Gated on backend OR ui (not backend alone): the generated artifact each check validates lives under
-    // apps/gittensory-ui/**, so a UI-only edit that hand-desyncs it from its source of truth must still
+    // apps/loopover-ui/**, so a UI-only edit that hand-desyncs it from its source of truth must still
     // re-trigger the check, not just a backend source change (#gittensory-pr-3254-review).
     const condition = String(step!.if);
     expect(condition).toContain("needs.changes.outputs.backend == 'true'");

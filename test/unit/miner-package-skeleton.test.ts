@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { runCapture } from "./support/miner-cli-harness.js";
 
-const minerRoot = join(process.cwd(), "packages/gittensory-miner");
-const mcpRoot = join(process.cwd(), "packages/gittensory-mcp");
+const minerRoot = join(process.cwd(), "packages/loopover-miner");
+const mcpRoot = join(process.cwd(), "packages/loopover-mcp");
 const readmePath = join(minerRoot, "README.md");
 
 type PackageJson = {
