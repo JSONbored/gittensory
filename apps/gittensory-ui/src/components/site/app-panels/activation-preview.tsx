@@ -250,14 +250,23 @@ function ActivationPreviewBody({
       ) : null}
 
       {preview.samples.length > 0 ? (
-        <div className="overflow-hidden rounded-token border-hairline">
-          <table className="w-full text-left text-token-xs">
+        <div className="overflow-x-auto rounded-token border-hairline">
+          <table className="w-full min-w-[520px] text-left text-token-xs">
+            <caption className="sr-only">Activation preview samples</caption>
             <thead className="border-b-hairline font-mono uppercase tracking-wider text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 font-normal">PR</th>
-                <th className="px-3 py-2 font-normal">Title</th>
-                <th className="px-3 py-2 font-normal">Severity</th>
-                <th className="px-3 py-2 font-normal">Findings</th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  PR
+                </th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  Title
+                </th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  Severity
+                </th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  Findings
+                </th>
               </tr>
             </thead>
             <tbody>

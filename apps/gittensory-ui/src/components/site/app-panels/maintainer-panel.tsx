@@ -335,57 +335,81 @@ function MaintainerDashboardView({
 
           <section className="rounded-token border-hairline bg-card p-5">
             <div className="flex items-center justify-between">
-              <h2 className="font-display text-token-lg font-semibold">Reviewability queue</h2>
+              <h2
+                id="reviewability-queue-heading"
+                className="font-display text-token-lg font-semibold"
+              >
+                Reviewability queue
+              </h2>
               <span className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
                 private
               </span>
             </div>
-            <table className="mt-4 w-full text-left text-token-sm">
-              <thead>
-                <tr className="border-b-hairline font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-                  <th className="py-2 pr-3 font-normal">PR</th>
-                  <th className="py-2 pr-3 font-normal">Title</th>
-                  <th className="py-2 pr-3 font-normal">Author</th>
-                  <th className="py-2 pr-3 font-normal">Bucket</th>
-                  <th className="py-2 pr-3 font-normal">Slop</th>
-                  <th className="py-2 font-normal">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.reviewability.map((row) => (
-                  <tr
-                    key={row.pr}
-                    className="border-b-hairline last:border-b-0 transition-colors hover:bg-muted/40"
-                  >
-                    <td className="py-2 pr-3 font-mono text-token-xs text-foreground/90">
-                      {row.pr}
-                    </td>
-                    <td className="py-2 pr-3">{row.title}</td>
-                    <td className="py-2 pr-3 text-token-xs text-muted-foreground">{row.author}</td>
-                    <td className="py-2 pr-3">
-                      <StatusPill status={BUCKET_TONE[row.bucket] ?? "info"}>
-                        {row.bucket}
-                      </StatusPill>
-                    </td>
-                    <td className="py-2 pr-3">
-                      {row.slop ? (
-                        <StatusPill status={SLOP_BAND_TONE[row.slop.band] ?? "info"}>
-                          {row.slop.band} {row.slop.risk}
-                        </StatusPill>
-                      ) : (
-                        <span
-                          className="text-token-xs text-muted-foreground"
-                          title="Slop detection is off for this repo, or this PR has not been assessed yet."
-                        >
-                          —
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 text-token-xs text-muted-foreground">{row.reason}</td>
+            <div className="mt-4 overflow-x-auto">
+              <table
+                aria-labelledby="reviewability-queue-heading"
+                className="w-full min-w-[640px] text-left text-token-sm"
+              >
+                <thead>
+                  <tr className="border-b-hairline font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      PR
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Title
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Author
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Bucket
+                    </th>
+                    <th scope="col" className="py-2 pr-3 font-normal">
+                      Slop
+                    </th>
+                    <th scope="col" className="py-2 font-normal">
+                      Reason
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.reviewability.map((row) => (
+                    <tr
+                      key={row.pr}
+                      className="border-b-hairline last:border-b-0 transition-colors hover:bg-muted/40"
+                    >
+                      <td className="py-2 pr-3 font-mono text-token-xs text-foreground/90">
+                        {row.pr}
+                      </td>
+                      <td className="py-2 pr-3">{row.title}</td>
+                      <td className="py-2 pr-3 text-token-xs text-muted-foreground">
+                        {row.author}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <StatusPill status={BUCKET_TONE[row.bucket] ?? "info"}>
+                          {row.bucket}
+                        </StatusPill>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {row.slop ? (
+                          <StatusPill status={SLOP_BAND_TONE[row.slop.band] ?? "info"}>
+                            {row.slop.band} {row.slop.risk}
+                          </StatusPill>
+                        ) : (
+                          <span
+                            className="text-token-xs text-muted-foreground"
+                            title="Slop detection is off for this repo, or this PR has not been assessed yet."
+                          >
+                            —
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 text-token-xs text-muted-foreground">{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <GateOutcomeCard breakdown={data.qualityDashboard.gateOutcomeBreakdown} />
@@ -716,13 +740,20 @@ export function PreviewResult({
       )}
 
       {preview.installation?.permissionRemediation.length ? (
-        <div className="overflow-hidden rounded-token border-hairline">
-          <table className="w-full text-left text-token-xs">
+        <div className="overflow-x-auto rounded-token border-hairline">
+          <table className="w-full min-w-[420px] text-left text-token-xs">
+            <caption className="sr-only">Permission remediation</caption>
             <thead className="border-b-hairline font-mono uppercase tracking-wider text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 font-normal">Permission</th>
-                <th className="px-3 py-2 font-normal">Current</th>
-                <th className="px-3 py-2 font-normal">Required</th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  Permission
+                </th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  Current
+                </th>
+                <th scope="col" className="px-3 py-2 font-normal">
+                  Required
+                </th>
               </tr>
             </thead>
             <tbody>

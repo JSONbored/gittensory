@@ -18,7 +18,7 @@ export function ContributorQualityTable({
   return (
     <section className="rounded-token border-hairline bg-card p-5">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-display text-token-lg font-semibold">
+        <h2 id="contributor-quality-heading" className="font-display text-token-lg font-semibold">
           Top contributors by quality band
         </h2>
         <BoundaryBadge boundary="public" />
@@ -31,12 +31,21 @@ export function ContributorQualityTable({
         />
       ) : (
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[420px] text-left text-token-sm">
+          <table
+            aria-labelledby="contributor-quality-heading"
+            className="w-full min-w-[420px] text-left text-token-sm"
+          >
             <thead>
               <tr className="border-b-hairline font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-                <th className="py-2 pr-3 font-normal">Contributor</th>
-                <th className="py-2 pr-3 font-normal">Band</th>
-                <th className="py-2 font-normal">Open PRs</th>
+                <th scope="col" className="py-2 pr-3 font-normal">
+                  Contributor
+                </th>
+                <th scope="col" className="py-2 pr-3 font-normal">
+                  Band
+                </th>
+                <th scope="col" className="py-2 font-normal">
+                  Open PRs
+                </th>
               </tr>
             </thead>
             <tbody>
