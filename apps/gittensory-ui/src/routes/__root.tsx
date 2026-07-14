@@ -11,6 +11,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { captureBrowserError } from "../lib/browser-sentry";
 import { SiteHeader } from "@/components/site/site-header";
 import { SiteFooter } from "@/components/site/site-footer";
 import { THEME_NOFLASH_SCRIPT } from "@/components/site/theme-toggle";
@@ -48,6 +49,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   const router = useRouter();
   useEffect(() => {
     reportLovableError(error, { boundary: "tanstack_root_error_component" });
+    captureBrowserError(error, { boundary: "tanstack_root_error_component" });
   }, [error]);
 
   return (

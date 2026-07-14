@@ -590,6 +590,42 @@ SENTRY_RELEASE=gittensory-selfhost@2026.07.05
         phones home to a maintainer-owned project unless you configure one.
       </Callout>
 
+      <h2>Browser Sentry (operator UI)</h2>
+      <p>
+        The operator UI (<code>apps/gittensory-ui</code>) has its own, separate client-side Sentry
+        integration for route errors, unhandled browser exceptions, and failed app-level resource
+        loads — independent of the backend's <code>SENTRY_DSN</code> above.{" "}
+        <strong>Opt-in and off by default</strong>: leave <code>VITE_SENTRY_DSN</code> unset for a
+        complete no-op — the SDK is never even fetched by the browser. Session Replay is not
+        enabled.
+      </p>
+      <CodeBlock
+        filename="Cloudflare deploy build variables"
+        code={`VITE_SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
+VITE_SENTRY_ENVIRONMENT=production
+# Match the release id the ui-sentry-release workflow uploaded for this commit,
+# or symbolication won't find the matching source maps:
+VITE_SENTRY_RELEASE=gittensory-ui@<short-sha>`}
+      />
+      <p>
+        Every browser event is scrubbed before it leaves the box: request cookies, headers, and body
+        data are stripped outright; secret-shaped keys and values (tokens, bearer headers, JWTs) are
+        redacted recursively; local filesystem paths are replaced with a placeholder; and{" "}
+        <code>user</code> is always dropped — no PII is ever sent. Tags stay a small,
+        low-cardinality set: <code>route</code> (pathname only), <code>release</code>,{" "}
+        <code>environment</code>, and <code>app_surface</code>.
+      </p>
+      <Callout variant="note">
+        The UI's production build/deploy runs through Cloudflare's own Workers Build git
+        integration, not GitHub Actions, so <code>VITE_SENTRY_DSN</code>/
+        <code>VITE_SENTRY_RELEASE</code> are configured as Cloudflare build environment variables,
+        not repo secrets. Source maps are never produced by that regular build or served publicly —
+        the <code>.github/workflows/ui-sentry-release.yml</code> workflow (behind the same
+        maintainer-only <code>release</code> environment gate as the Orb image release) does an
+        independent, never-deployed build with source maps enabled and uploads them to Sentry as a
+        release artifact whenever <code>apps/gittensory-ui</code> changes on <code>main</code>.
+      </Callout>
+
       <h2>Sentry context taxonomy</h2>
       <p>
         Self-host Sentry events carry a small, scrubbed taxonomy so operators can filter by

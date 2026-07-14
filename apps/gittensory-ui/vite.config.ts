@@ -7,6 +7,14 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 const shouldBuildNitro = process.env.npm_lifecycle_event?.startsWith("build") ?? false;
+// Source maps (#1737) are OFF by default -- the regular `ui:build`/Cloudflare Workers Build pipeline that
+// serves `dist/client` publicly must never produce `.map` files, or a static-asset deploy would serve them.
+// Only the dedicated Sentry source-map-upload workflow (.github/workflows/ui-sentry-release.yml) sets
+// SENTRY_BUILD_SOURCEMAPS=1 for its own separate, never-deployed build. "hidden" emits `.map` files on disk
+// (for that workflow to read and upload) without embedding a `//# sourceMappingURL` comment in the shipped
+// JS, so even if this var were ever set by mistake on a real deploy build, the maps would not be
+// auto-discoverable from the public bundle.
+const sentryBuildSourcemaps = process.env.SENTRY_BUILD_SOURCEMAPS === "1";
 const vendorChunks = [
   ["react-vendor", ["/node_modules/react", "/node_modules/react-dom"]],
   ["tanstack-vendor", ["/node_modules/@tanstack"]],
@@ -50,6 +58,7 @@ export default defineConfig({
     : false,
   vite: {
     build: {
+      ...(sentryBuildSourcemaps ? { sourcemap: "hidden" as const } : {}),
       rollupOptions: {
         output: { manualChunks },
       },

@@ -1,0 +1,114 @@
+# Browser Sentry source-map upload for the operator UI (#1737). apps/gittensory-ui's PRODUCTION build/deploy
+# is NOT driven by GitHub Actions -- Cloudflare's own Workers Build git integration owns that (see
+# apps/gittensory-ui/vite.config.ts's header comment). That regular build never enables source maps (vite.config.ts's
+# SENTRY_BUILD_SOURCEMAPS gate), so `dist/client` never ships a `.map` file publicly.
+#
+# This workflow does its own INDEPENDENT build with source maps enabled, purely to upload them to Sentry as a
+# release artifact -- it never deploys anything. Because Cloudflare Workers Build is external to this repo, the
+# operator must set the SAME VITE_SENTRY_RELEASE value (gittensory-ui@<short-sha>, matching this workflow's own
+# `release` output) in their Cloudflare deploy's build environment variables for a given commit, or Sentry
+# events won't symbolicate against these maps -- see the "Enabling browser Sentry" self-host doc.
+name: ui-sentry-release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/gittensory-ui/**"
+      - "src/signals/redaction.ts"
+      - ".github/workflows/ui-sentry-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-sentry-release
+  cancel-in-progress: true
+
+jobs:
+  upload-sourcemaps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Same protected-approval boundary as the MCP/engine release-please workflow and the Orb image release
+    # (Settings > Environments > release) -- a source-map upload is low-risk (nothing deploys), but it still
+    # writes into the shared Sentry org, so it stays behind the same gate as every other release-adjacent job.
+    environment: release
+    env:
+      SENTRY_ORG: jsonbored
+      SENTRY_UI_PROJECT: loopover-ui
+      SENTRY_CLI_PACKAGE: "@sentry/cli@3.6.0"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build engine + ui-kit (workspace dependency order)
+        run: |
+          npm run build --workspace @loopover/engine
+          npm run ui:kit:build
+
+      - name: Resolve release id
+        id: version
+        run: echo "release=gittensory-ui@${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build UI with source maps
+        working-directory: apps/gittensory-ui
+        env:
+          SENTRY_BUILD_SOURCEMAPS: "1"
+          VITE_SENTRY_RELEASE: ${{ steps.version.outputs.release }}
+        run: npm run build
+
+      - name: Detect Sentry release token
+        id: sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Fails advisory-soft (skip, not error) on the official repo: unlike the Orb image release, browser
+      # Sentry is a self-host-operator-facing OPT-IN feature (#1737's own "off by default"), not a required
+      # release artifact -- an unconfigured SENTRY_AUTH_TOKEN should not block every merge to main.
+      - name: Skip when Sentry isn't configured
+        if: steps.sentry.outputs.enabled != 'true'
+        run: echo "::notice::SENTRY_AUTH_TOKEN not configured in the release environment -- skipping source-map upload."
+
+      - name: Upload Sentry source maps
+        if: steps.sentry.outputs.enabled == 'true'
+        working-directory: apps/gittensory-ui
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'jsonbored' }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_UI_PROJECT || 'loopover-ui' }}
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
+          SENTRY_RELEASE: ${{ steps.version.outputs.release }}
+          SENTRY_REPOSITORY: ${{ github.repository }}
+          SENTRY_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SENTRY_AUTH_TOKEN"
+          if [ -z "${SENTRY_URL:-}" ]; then unset SENTRY_URL; fi
+          npx -y "$SENTRY_CLI_PACKAGE" releases new "$SENTRY_RELEASE"
+          # Direct PUT (not `sentry-cli releases set-commits`) -- see release-selfhost.yml's identical
+          # comment: set-commits can silently leave zero associated commits against the GitHub App
+          # integration; a direct PUT to the release resource resolves the same repo/commit correctly.
+          curl -sf -X PUT \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "${SENTRY_URL:-https://sentry.io}/api/0/organizations/${SENTRY_ORG}/releases/$(node -e "process.stdout.write(encodeURIComponent(process.env.SENTRY_RELEASE))")/" \
+            -d "$(node -e "process.stdout.write(JSON.stringify({commits:[{repository: process.env.SENTRY_REPOSITORY, id: process.env.SENTRY_COMMIT_SHA}]}))")" \
+            >/dev/null
+          npx -y "$SENTRY_CLI_PACKAGE" sourcemaps inject dist/client
+          npx -y "$SENTRY_CLI_PACKAGE" sourcemaps upload --release="$SENTRY_RELEASE" --validate --wait --strict dist/client
