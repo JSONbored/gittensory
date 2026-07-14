@@ -23,7 +23,7 @@ import { initLaptopState } from "../../packages/loopover-miner/lib/laptop-init.j
 const roots: string[] = [];
 
 function tempRoot() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-status-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-status-"));
   roots.push(root);
   return root;
 }
@@ -42,7 +42,7 @@ function fakeBinDir(name: string): string {
   return dir;
 }
 
-describe("gittensory-miner status/doctor (#2288)", () => {
+describe("loopover-miner status/doctor (#2288)", () => {
   it("resolves the state dir from the config-dir override, XDG, then the home default", () => {
     expect(resolveMinerStateDir({ LOOPOVER_MINER_CONFIG_DIR: "/custom/state" })).toBe("/custom/state");
     expect(resolveMinerStateDir({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/loopover-miner");
@@ -81,11 +81,11 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     const status = collectStatus(
       {
         LOOPOVER_MINER_CONFIG_DIR: "/s",
-        LOOPOVER_MINER_VERSION: "gittensory-miner-fleet@deadbeef",
+        LOOPOVER_MINER_VERSION: "loopover-miner-fleet@deadbeef",
       },
       tempRoot(),
     );
-    expect(status.package.version).toBe("gittensory-miner-fleet@deadbeef");
+    expect(status.package.version).toBe("loopover-miner-fleet@deadbeef");
   });
 
   it("runStatus prints human-readable text (0) and machine JSON with --json", () => {
@@ -144,7 +144,7 @@ describe("gittensory-miner status/doctor (#2288)", () => {
     it("is a clean pass when no config file is present (defaults apply)", () => {
       const result = checkConfigContent(tempRoot());
       expect(result).toMatchObject({ name: "config-content", ok: true });
-      expect(result.detail).toContain("no .gittensory-miner config");
+      expect(result.detail).toContain("no .loopover-miner config");
     });
 
     it("passes a well-formed config", () => {

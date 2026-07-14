@@ -10,7 +10,7 @@ import {
 const CONTEXT = { repoFullName: "JSONbored/gittensory", prNumber: 4278 } as const;
 const closedUnmerged = { state: "closed", merged: false, merged_at: null, closed_at: "2026-07-09T18:00:00Z" };
 
-describe("gittensory-miner rejection state machine (#4278)", () => {
+describe("loopover-miner rejection state machine (#4278)", () => {
   it("extracts terminal-outcome fields from a full PR payload", () => {
     expect(extractPrOutcomeFields(closedUnmerged)).toEqual({
       state: "closed",

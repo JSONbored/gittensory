@@ -15,7 +15,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-expiry-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-expiry-"));
   roots.push(root);
   const store = initPortfolioQueueStore(join(root, "portfolio-queue.sqlite3"));
   stores.push(store);

@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const tmpRoots: string[] = [];
 
 function tmpRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), "gittensory-ams-reporting-"));
+  const dir = mkdtempSync(join(tmpdir(), "loopover-ams-reporting-"));
   tmpRoots.push(dir);
   return dir;
 }

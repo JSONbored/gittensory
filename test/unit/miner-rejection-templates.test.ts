@@ -7,7 +7,7 @@ import {
 
 const CONTEXT = { repoFullName: "JSONbored/gittensory", prNumber: 2751 } as const;
 
-describe("gittensory-miner rejection templates (#2324)", () => {
+describe("loopover-miner rejection templates (#2324)", () => {
   it("exposes the frozen reason vocabulary", () => {
     expect(REJECTION_REASONS).toEqual(["gate_close", "maintainer_close_no_reason", "superseded_by_duplicate"]);
     expect(Object.isFrozen(REJECTION_REASONS)).toBe(true);

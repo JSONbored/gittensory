@@ -284,7 +284,7 @@ describe("opportunity fan-out policy-verdict cache (#4843)", () => {
   });
 
   it("persists across two runs with the real on-disk store, reusing the verdict on an unchanged ETag", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-policy-verdict-cache-fanout-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-policy-verdict-cache-fanout-"));
     roots.push(root);
     const dbPath = join(root, "policy-verdict-cache.sqlite3");
     const store = initPolicyVerdictCacheStore(dbPath);

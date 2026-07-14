@@ -16,7 +16,7 @@ import {
 const roots: string[] = [];
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-run-state-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-run-state-"));
   roots.push(root);
   return root;
 }
@@ -29,7 +29,7 @@ afterEach(() => {
   }
 });
 
-describe("gittensory-miner run-state store (#2289)", () => {
+describe("loopover-miner run-state store (#2289)", () => {
   it("keeps the package engine floor aligned with unflagged node:sqlite support", () => {
     const packageJson = JSON.parse(
       readFileSync("packages/loopover-miner/package.json", "utf8"),

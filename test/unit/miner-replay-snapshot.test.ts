@@ -57,7 +57,7 @@ function happyPathScripts(overrides: Array<{ match: (args: readonly string[]) =>
 let stores: Array<{ close(): void }> = [];
 let roots: string[] = [];
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-replay-snapshot-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-replay-snapshot-"));
   roots.push(root);
   const store = openReplaySnapshotStore(join(root, "db.sqlite3"));
   stores.push(store);
@@ -380,7 +380,7 @@ describe("exportReplaySnapshot (#3010)", () => {
   });
 
   it("falls back to the default (env-resolved) store when deps.store is omitted", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-replay-snapshot-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-replay-snapshot-default-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_REPLAY_SNAPSHOT_DB", join(root, "default.sqlite3"));
     const { exec } = scriptedExec(happyPathScripts());

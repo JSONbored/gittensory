@@ -14,7 +14,7 @@ import {
 const roots: string[] = [];
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-ranked-candidates-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-ranked-candidates-"));
   roots.push(root);
   return root;
 }
@@ -40,7 +40,7 @@ const fullCandidate = {
   dupRisk: 0.1,
 };
 
-describe("gittensory-miner ranked-candidates store (#4859 prerequisite)", () => {
+describe("loopover-miner ranked-candidates store (#4859 prerequisite)", () => {
   it("resolves the DB path from env override, miner config dir, XDG config, then the home default", () => {
     expect(resolveRankedCandidatesDbPath({ LOOPOVER_MINER_RANKED_CANDIDATES_DB: "/custom/ranked.sqlite3" })).toBe(
       "/custom/ranked.sqlite3",

@@ -10,7 +10,7 @@ import {
   scoreObjectiveAnchor,
 } from "../../packages/loopover-miner/lib/replay-objective-anchor.js";
 
-describe("gittensory-miner replay objective-anchor scoring (#3012)", () => {
+describe("loopover-miner replay objective-anchor scoring (#3012)", () => {
   it("exposes a frozen change-kind vocabulary and weights that sum to 1", () => {
     expect(Object.isFrozen(CHANGE_KINDS)).toBe(true);
     expect(CHANGE_KINDS).toContain("feature");

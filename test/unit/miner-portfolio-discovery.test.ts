@@ -17,7 +17,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempQueueStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-discovery-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-discovery-"));
   roots.push(root);
   const store = initPortfolioQueueStore(join(root, "portfolio-queue.sqlite3"));
   stores.push(store);
@@ -25,7 +25,7 @@ function tempQueueStore() {
 }
 
 function tempEventLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-discovery-ledger-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-discovery-ledger-"));
   roots.push(root);
   const ledger = initEventLedger(join(root, "event-ledger.sqlite3"));
   stores.push(ledger);
@@ -50,7 +50,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner portfolio discovery (#2292)", () => {
+describe("loopover-miner portfolio discovery (#2292)", () => {
   it("returns a zero summary for empty input without touching the queue", () => {
     const queueStore = tempQueueStore();
     expect(enqueueRankedDiscovery([], { queueStore })).toEqual({

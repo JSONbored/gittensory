@@ -25,7 +25,7 @@ import { resolvePlanStoreDbPath } from "./plan-store.js";
 // this laptop set up correctly). Both are read-only and 100% local — no repo-scanning, no coding-agent invocation,
 // no GitHub writes, and no network calls of any kind. Later phases add the real discover/plan/manage loop.
 
-// Lazy, not module-scope: mirrors the gittensory-engine repo-map.ts fix -- this file is CLI-only today, but
+// Lazy, not module-scope: mirrors the loopover-engine repo-map.ts fix -- this file is CLI-only today, but
 // an eager createRequire(import.meta.url)/import.meta.dirname at module scope would crash on import in any
 // bundler context where import.meta is unavailable (e.g. if a future import chain pulls this into a Worker
 // bundle, the way repo-map.ts was). Deferring construction to first real use keeps this import-safe.
@@ -117,10 +117,10 @@ export function readInstalledEnginePackageVersion() {
   try {
     return readInstalledEnginePackageVersionFromPaths(
       requireFromHere().resolve(ENGINE_PACKAGE),
-      join(moduleDir(), "../../gittensory-engine/package.json"),
+      join(moduleDir(), "../../loopover-engine/package.json"),
     );
   } catch {
-    const workspacePkg = join(moduleDir(), "../../gittensory-engine/package.json");
+    const workspacePkg = join(moduleDir(), "../../loopover-engine/package.json");
     if (existsSync(workspacePkg)) {
       try {
         return JSON.parse(readFileSync(workspacePkg, "utf8")).version ?? null;
@@ -155,7 +155,7 @@ export function readExpectedEnginePackageVersionFromPaths(
 
 export function readExpectedEnginePackageVersion() {
   return readExpectedEnginePackageVersionFromPaths(
-    join(moduleDir(), "../../gittensory-engine/package.json"),
+    join(moduleDir(), "../../loopover-engine/package.json"),
     join(moduleDir(), "../expected-engine.version"),
   );
 }
@@ -278,7 +278,7 @@ export function runStatus(args = [], env = process.env, cwd = process.cwd()) {
 }
 
 function checkStateDirWritable(stateDir) {
-  const probe = join(stateDir, ".gittensory-miner-write-probe");
+  const probe = join(stateDir, ".loopover-miner-write-probe");
   try {
     // Creating the dir and writing (then removing) a probe file proves it is writable — the state dir must be
     // creatable/writable for the local SQLite stores to work.
@@ -310,14 +310,14 @@ function storeIntegrityChecks(env) {
   return stores.map(([name, dbPath]) => checkStoreIntegrity(`store-integrity:${name}`, dbPath));
 }
 
-/** Validate the discovered `.gittensory-miner` config's CONTENT (#4873), not just its path: parse it with the
+/** Validate the discovered `.loopover-miner` config's CONTENT (#4873), not just its path: parse it with the
  *  tolerant goal-spec parser and surface its warnings, so a malformed config is flagged by `doctor` rather than
  *  silently degrading to defaults. No config file is fine (defaults apply); a read failure is reported. `readImpl`
  *  is injectable for tests. */
 export function checkConfigContent(cwd, readImpl = readFileSync) {
   const configPath = discoverConfigFile(cwd);
   if (!configPath) {
-    return { name: "config-content", ok: true, detail: "no .gittensory-miner config found (using defaults)" };
+    return { name: "config-content", ok: true, detail: "no .loopover-miner config found (using defaults)" };
   }
   let warnings;
   try {

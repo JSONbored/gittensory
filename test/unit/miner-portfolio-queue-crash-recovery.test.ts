@@ -27,7 +27,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempRoot(): { root: string; dbPath: string } {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-crash-recovery-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-crash-recovery-"));
   roots.push(root);
   return { root, dbPath: join(root, "portfolio-queue.sqlite3") };
 }

@@ -15,7 +15,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-plan-store-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-plan-store-"));
   roots.push(root);
   const store = openPlanStore(join(root, "nested", "plan-store.sqlite3"));
   stores.push(store);
@@ -35,7 +35,7 @@ const PLAN: PlanDag = {
   ],
 };
 
-describe("gittensory-miner plan store (#2318)", () => {
+describe("loopover-miner plan store (#2318)", () => {
   it("exposes the frozen plan-status vocabulary", () => {
     expect(PLAN_STATUSES).toEqual(["pending", "running", "completed", "failed"]);
     expect(Object.isFrozen(PLAN_STATUSES)).toBe(true);
@@ -157,7 +157,7 @@ describe("gittensory-miner plan store (#2318)", () => {
   });
 
   it("fails closed on an out-of-vocabulary status column (legacy/foreign row without the CHECK)", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-plan-store-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-plan-store-"));
     roots.push(root);
     const dbPath = join(root, "legacy.sqlite3");
     // Simulate a legacy/foreign table created before the status CHECK constraint, holding an invalid status.

@@ -14,7 +14,7 @@ const roots: string[] = [];
 const allocators: Array<{ close(): void }> = [];
 
 function tempAllocator(options: { maxConcurrency?: number; processPid?: number } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-worktree-allocator-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-worktree-allocator-"));
   roots.push(root);
   const allocator = openWorktreeAllocator({
     dbPath: join(root, "worktree-allocator.sqlite3"),
@@ -33,7 +33,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner worktree allocator scaffolding (#4298)", () => {
+describe("loopover-miner worktree allocator scaffolding (#4298)", () => {
   it("resolves DB and worktree base paths from env overrides", () => {
     expect(
       resolveWorktreeAllocatorDbPath({ LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB: "/custom/alloc.sqlite3" }),

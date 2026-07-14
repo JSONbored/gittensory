@@ -62,7 +62,7 @@ describe("resolveRepoCloneBaseDir / resolveRepoCloneDir (#5132)", () => {
 
 describe("ensureRepoCloned (#5132)", () => {
   it("clones a real repo on first use, and fetches + hard-resets an existing clone to pick up new commits", async () => {
-    const root = tempRoot("gittensory-miner-repo-clone-");
+    const root = tempRoot("loopover-miner-repo-clone-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
 
@@ -83,7 +83,7 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("respects a non-default baseBranch on the fetch+reset path", async () => {
-    const root = tempRoot("gittensory-miner-repo-clone-branch-");
+    const root = tempRoot("loopover-miner-repo-clone-branch-");
     const originPath = initOriginRepo(root);
     execFileSync("git", ["checkout", "-b", "develop"], { cwd: originPath, stdio: "ignore" });
     const cloneBaseDir = join(root, "cache");
@@ -102,7 +102,7 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("returns ok:false with the real git stderr when the clone URL doesn't resolve", async () => {
-    const root = tempRoot("gittensory-miner-repo-clone-fail-");
+    const root = tempRoot("loopover-miner-repo-clone-fail-");
     const cloneBaseDir = join(root, "cache");
     const result = await ensureRepoCloned("acme/does-not-exist", { cloneBaseDir, remoteUrl: join(root, "nonexistent-origin"), timeoutMs: 5000 });
     expect(result.ok).toBe(false);
@@ -110,7 +110,7 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("returns ok:false on a fetch failure without touching the existing clone (injected runGit)", async () => {
-    const root = tempRoot("gittensory-miner-repo-clone-fetchfail-");
+    const root = tempRoot("loopover-miner-repo-clone-fetchfail-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
     const first = await ensureRepoCloned("acme/widgets", { cloneBaseDir, remoteUrl: originPath });
@@ -123,7 +123,7 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("returns ok:false on a checkout failure and a reset failure (injected runGit)", async () => {
-    const root = tempRoot("gittensory-miner-repo-clone-checkoutfail-");
+    const root = tempRoot("loopover-miner-repo-clone-checkoutfail-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
     await ensureRepoCloned("acme/widgets", { cloneBaseDir, remoteUrl: originPath });
@@ -140,7 +140,7 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("returns ok:false with a fallback error message on a clone failure with no stderr (injected runGit)", async () => {
-    const root = tempRoot("gittensory-miner-repo-clone-nostderr-");
+    const root = tempRoot("loopover-miner-repo-clone-nostderr-");
     const cloneBaseDir = join(root, "cache");
     const runGit = async () => ({ ok: false, stdout: "", stderr: "" });
     const result = await ensureRepoCloned("acme/widgets", { cloneBaseDir, remoteUrl: "unused", runGit });

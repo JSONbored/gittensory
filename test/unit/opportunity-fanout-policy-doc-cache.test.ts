@@ -252,7 +252,7 @@ describe("opportunity fan-out policy-doc conditional-GET cache (#4842)", () => {
   });
 
   it("persists the ETag across two runs with the real on-disk store, then serves a 304", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-policy-doc-cache-fanout-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-policy-doc-cache-fanout-"));
     roots.push(root);
     const dbPath = join(root, "policy-doc-cache.sqlite3");
     const store = initPolicyDocCacheStore(dbPath);

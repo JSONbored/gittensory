@@ -25,7 +25,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-"));
   roots.push(root);
   const store = initPortfolioQueueStore(join(root, "nested", "portfolio-queue.sqlite3"));
   stores.push(store);
@@ -40,7 +40,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner portfolio/queue store (#2292)", () => {
+describe("loopover-miner portfolio/queue store (#2292)", () => {
   it("exposes the frozen status vocabulary", () => {
     expect(QUEUE_STATUSES).toEqual(["queued", "in_progress", "done"]);
     expect(Object.isFrozen(QUEUE_STATUSES)).toBe(true);
@@ -184,7 +184,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
   });
 
   it("module-level markFailed delegates to the default portfolio-queue store (#2347)", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-default-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_PORTFOLIO_QUEUE_DB", join(root, "portfolio-queue.sqlite3"));
     enqueue({ repoFullName: "o/a", identifier: "work", priority: 1 });
@@ -210,7 +210,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
   });
 
   it("module-level markDone delegates to the default portfolio-queue store", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-default-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_PORTFOLIO_QUEUE_DB", join(root, "portfolio-queue.sqlite3"));
     enqueue({ repoFullName: "o/a", identifier: "work", priority: 1 });
@@ -289,7 +289,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     });
 
     it("migrates an existing pre-#5563 file (already at the leased_at v2 shape), backfilling api_base_url and preserving every row", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-legacy-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-legacy-"));
       roots.push(root);
       const dbPath = join(root, "legacy.sqlite3");
       const legacy = new DatabaseSync(dbPath);
@@ -329,7 +329,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     });
 
     it("REGRESSION: a legacy row violating the rebuilt table's status CHECK constraint is dropped, not a migration-aborting crash", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-legacy-corrupt-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-legacy-corrupt-"));
       roots.push(root);
       const dbPath = join(root, "legacy-corrupt.sqlite3");
       const legacy = new DatabaseSync(dbPath);
@@ -456,7 +456,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     });
 
     it("module-level getAttemptHistory delegates to the default portfolio-queue store", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-default-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-default-"));
       roots.push(root);
       vi.stubEnv("LOOPOVER_MINER_PORTFOLIO_QUEUE_DB", join(root, "portfolio-queue.sqlite3"));
       enqueue({ repoFullName: "o/a", identifier: "work", priority: 1 });
@@ -476,7 +476,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     });
 
     it("migrates an existing pre-#5654 file (already at the api_base_url v3 shape) by backfilling the counters to 0, preserving every row", () => {
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-legacy-v3-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-legacy-v3-"));
       roots.push(root);
       const dbPath = join(root, "legacy-v3.sqlite3");
       const legacy = new DatabaseSync(dbPath);
@@ -526,7 +526,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
       // Mirrors the leased_at migration's own defensive column-presence guard one migration index up: a file
       // that already has the three new columns (e.g. from a partially-applied prior migration attempt) must
       // not crash re-adding columns that already exist -- each of the three checks must independently skip.
-      const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-legacy-partial-v4-"));
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-legacy-partial-v4-"));
       roots.push(root);
       const dbPath = join(root, "legacy-partial-v4.sqlite3");
       const legacy = new DatabaseSync(dbPath);

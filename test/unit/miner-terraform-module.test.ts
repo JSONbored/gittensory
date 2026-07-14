@@ -13,7 +13,7 @@ const variablesTf = readFileSync(`${DIR}/variables.tf`, "utf8");
 const outputsTf = readFileSync(`${DIR}/outputs.tf`, "utf8");
 const readme = readFileSync(`${DIR}/README.md`, "utf8");
 
-describe("gittensory-miner fleet-mode Terraform module (#5183)", () => {
+describe("loopover-miner fleet-mode Terraform module (#5183)", () => {
   it("uses the same Hetzner Cloud provider as the root module (consistency)", () => {
     expect(mainTf).toMatch(/source\s*=\s*"hetznercloud\/hcloud"/);
     expect(mainTf).toMatch(/provider\s+"hcloud"/);

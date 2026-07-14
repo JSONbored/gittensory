@@ -11,7 +11,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempDbPath(): string {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-policy-doc-cache-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-policy-doc-cache-"));
   roots.push(root);
   return join(root, "policy-doc-cache.sqlite3");
 }
@@ -44,7 +44,7 @@ describe("resolvePolicyDocCacheDbPath (#4842)", () => {
   });
 });
 
-describe("gittensory-miner policy-doc cache store (#4842)", () => {
+describe("loopover-miner policy-doc cache store (#4842)", () => {
   it("returns null for a URL that has never been cached", () => {
     expect(openStore().get(URL)).toBeNull();
   });

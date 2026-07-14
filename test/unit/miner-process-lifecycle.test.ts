@@ -48,7 +48,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("gittensory-miner process lifecycle / crash-safety (#4826)", () => {
+describe("loopover-miner process lifecycle / crash-safety (#4826)", () => {
   it("registerCleanupResource ignores null and undefined but still returns a callable no-op", () => {
     expect(cleanupResourceCount()).toBe(0);
     expect(() => registerCleanupResource(null)()).not.toThrow();

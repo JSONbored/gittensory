@@ -7,7 +7,7 @@ import { initPredictionLedger, resolvePredictionLedgerDbPath } from "../../packa
 const ledgers: Array<{ close: () => void }> = [];
 const roots: string[] = [];
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-prediction-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-prediction-"));
   roots.push(root);
   const ledger = initPredictionLedger(join(root, "prediction-ledger.sqlite3"));
   ledgers.push(ledger);

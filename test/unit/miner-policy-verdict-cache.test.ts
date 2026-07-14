@@ -12,7 +12,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempDbPath(): string {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-policy-verdict-cache-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-policy-verdict-cache-"));
   roots.push(root);
   return join(root, "policy-verdict-cache.sqlite3");
 }
@@ -46,7 +46,7 @@ describe("resolvePolicyVerdictCacheDbPath (#4843)", () => {
   });
 });
 
-describe("gittensory-miner policy-verdict cache store (#4843)", () => {
+describe("loopover-miner policy-verdict cache store (#4843)", () => {
   it("returns null for a repo that has never been cached", () => {
     expect(openStore().get(REPO)).toBeNull();
   });

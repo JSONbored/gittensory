@@ -18,7 +18,7 @@ const CONTEXT = {
   revealedIssueNumbers: [250, 300],
 };
 
-describe("gittensory-miner leakage-safe replay task generation (#3011)", () => {
+describe("loopover-miner leakage-safe replay task generation (#3011)", () => {
   it("exposes a frozen recency-pool vocabulary and a stable placeholder", () => {
     expect(Object.isFrozen(RECENCY_POOLS)).toBe(true);
     expect(RECENCY_POOLS).toEqual(["recent", "older"]);

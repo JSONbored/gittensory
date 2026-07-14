@@ -25,7 +25,7 @@ type AcquireChildResult = {
 };
 
 function tempPaths() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-worktree-collisions-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-worktree-collisions-"));
   roots.push(root);
   return {
     root,
@@ -133,7 +133,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner worktree allocator collisions (#4298)", () => {
+describe("loopover-miner worktree allocator collisions (#4298)", () => {
   it("returns distinct worktree paths when multiple processes acquire simultaneously", async () => {
     const paths = tempPaths();
     const maxConcurrency = 5;
