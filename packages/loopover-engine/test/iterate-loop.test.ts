@@ -406,3 +406,53 @@ test("a logging failure never crashes the loop or alters its decision", async ()
 
   assert.equal(result.outcome, "handoff", "the tool call is still decided correctly even though every audit write failed");
 });
+
+test("abandon (kill_switch_engaged): shouldAbort before the first driver call abandons with zero iterations (#5670)", async () => {
+  let driverCalled = false;
+  const { deps, events } = collectingDeps({
+    driver: {
+      async run() {
+        driverCalled = true;
+        return okResult();
+      },
+    },
+    shouldAbort: () => true,
+  });
+  const result = await runIterateLoop(passingInput({ maxIterations: 3 }), deps);
+
+  assert.equal(result.outcome, "abandon");
+  assert.equal(result.finalDecision.abandonReason, "kill_switch_engaged");
+  assert.equal(result.iterationsUsed, 0);
+  assert.equal(driverCalled, false);
+  assert.equal(events.some((event) => event.eventType === "attempt_aborted"), true);
+});
+
+test("abandon (kill_switch_engaged): shouldAbort after iteration 1 prevents iteration 2 (#5670 mid-iteration)", async () => {
+  let probes = 0;
+  let callCount = 0;
+  // Same duplicate-PR fixture as the no_progress test: iter 1 fails predicted-gate and continues.
+  const pullRequests: PullRequestRecord[] = [openPr(42, "Retry uploads on 5xx responses", [7])];
+  const { deps } = collectingDeps({
+    driver: {
+      async run() {
+        callCount += 1;
+        return okResult(["src/upload.ts"], 2);
+      },
+    },
+    shouldAbort: () => {
+      probes += 1;
+      return probes > 1 ? { abort: true, reason: "operator tripped kill mid-run" } : false;
+    },
+  });
+  const result = await runIterateLoop(
+    passingInput({ maxIterations: 5, reviewContext: baseReviewContext({ pullRequests }) }),
+    deps,
+  );
+
+  assert.equal(result.outcome, "abandon");
+  assert.equal(result.finalDecision.abandonReason, "kill_switch_engaged");
+  assert.match(result.finalDecision.reason, /operator tripped kill mid-run/);
+  assert.equal(callCount, 1);
+  assert.equal(result.iterationsUsed, 1);
+  assert.equal(probes, 2);
+});

@@ -47,6 +47,10 @@ export type AttemptDeps = {
   sessionStartMs?: number;
   nowMs: number;
   executeLocalWrite: (spec: LocalWriteActionSpec) => Promise<unknown>;
+  /** Mid-attempt kill-switch probe threaded into `runIterateLoop` (#5670). */
+  shouldAbort?: () => import("@loopover/engine").IterateLoopShouldAbort;
+  /** Live kill-switch scope resolver after handoff (#5670); defaults to the frozen attempt-start scope. */
+  resolveKillSwitchScope?: () => "global" | "repo" | "none";
 };
 
 export type AttemptResult =

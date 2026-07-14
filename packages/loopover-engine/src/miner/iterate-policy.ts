@@ -27,7 +27,15 @@ export type IterateLoopAction = "continue" | "handoff" | "abandon";
 
 /** Every distinct reason `decideNextAction` can abandon for -- kept as a closed literal union so a caller
  *  recording the decision (the attempt-log primitive, per #2333) has a stable, exhaustive vocabulary. */
-export type AbandonReason = "rejection_signaled" | "self_review_ambiguous" | "max_iterations_reached" | "cost_ceiling_reached" | "no_progress";
+export type AbandonReason =
+  | "rejection_signaled"
+  | "self_review_ambiguous"
+  | "max_iterations_reached"
+  | "cost_ceiling_reached"
+  | "no_progress"
+  /** Mid-attempt emergency stop (#5670): kill-switch (or operator pause acting as a stop signal) tripped
+   *  between iterate-loop iterations — cooperative, not a hard SIGKILL of an in-flight driver call. */
+  | "kill_switch_engaged";
 
 /**
  * The self-review outcome as the policy needs it -- narrower than the full {@link SelfReviewVerdict} (self-

@@ -86,6 +86,15 @@ export type IterateLoopInput = {
   rejectionSignaled: boolean;
 };
 
+/** Optional cooperative abort probed BEFORE every driver invocation (#5670). A bare `true` or
+ *  `{ abort: true }` abandons with `kill_switch_engaged` without calling the driver for that iteration. */
+export type IterateLoopShouldAbort =
+  | boolean
+  | {
+      abort: boolean;
+      reason?: string | undefined;
+    };
+
 export type IterateLoopDeps = {
   driver: CodingAgentDriver;
   runSlopAssessment: SelfReviewAdapterDeps["runSlopAssessment"];
@@ -94,6 +103,8 @@ export type IterateLoopDeps = {
    *  injected-dependency discipline elsewhere (never a hardcoded `Date.now()` a test can't control). Defaults
    *  to the real `Date.now` when omitted. */
   nowMs?: (() => number) | undefined;
+  /** Mid-iteration kill-switch / pause probe (#5670). Omitted = never abort mid-loop (pre-#5670 behavior). */
+  shouldAbort?: (() => IterateLoopShouldAbort) | undefined;
 };
 
 /** The terminal outcomes a full loop run can end in -- never `"continue"`, which is only ever a per-iteration,
@@ -186,8 +197,39 @@ function attemptLogEventTypeForDecision(decision: IterateLoopDecision): AttemptL
   // reads as aborted; a genuine failure to converge (ceiling reached, or stuck with no progress) reads as
   // failed. Both are still `action: "abandon"` in the decision itself -- this is only a coarser attempt-log
   // classification layered on top, for the fixed six-value ATTEMPT_LOG_EVENT_TYPES vocabulary.
-  if (decision.abandonReason === "rejection_signaled" || decision.abandonReason === "self_review_ambiguous") return "attempt_aborted";
+  if (
+    decision.abandonReason === "rejection_signaled" ||
+    decision.abandonReason === "self_review_ambiguous" ||
+    decision.abandonReason === "kill_switch_engaged"
+  ) {
+    return "attempt_aborted";
+  }
   return "attempt_failed";
+}
+
+function resolveShouldAbort(deps: IterateLoopDeps): { abort: boolean; reason: string } {
+  if (typeof deps.shouldAbort !== "function") {
+    return { abort: false, reason: "" };
+  }
+  const raw = deps.shouldAbort();
+  if (typeof raw === "boolean") {
+    return {
+      abort: raw,
+      reason: raw
+        ? "Kill-switch engaged mid-attempt; abandoning without starting another driver iteration."
+        : "",
+    };
+  }
+  if (raw && typeof raw === "object" && raw.abort === true) {
+    return {
+      abort: true,
+      reason:
+        typeof raw.reason === "string" && raw.reason.trim()
+          ? raw.reason.trim()
+          : "Kill-switch engaged mid-attempt; abandoning without starting another driver iteration.",
+    };
+  }
+  return { abort: false, reason: "" };
 }
 
 /** A logging failure must never crash the loop or alter its decision -- mirrors the governor-ledger and
@@ -318,6 +360,39 @@ async function runIterateLoopCore(input: IterateLoopInput, deps: IterateLoopDeps
   let totalCostUsd = 0;
 
   for (let iterationNumber = 1; iterationNumber <= maxIterations; iterationNumber += 1) {
+    // Cooperative mid-iteration halt (#5670): probed BEFORE each driver call so a kill-switch that trips
+    // after iteration N prevents iteration N+1 (and prevents the first iteration when already tripped).
+    // Hard SIGKILL of an in-flight driver call is intentionally out of scope — matching #5437's budget
+    // abort, which also stops between iterations rather than interrupting a running LLM turn.
+    const abort = resolveShouldAbort(deps);
+    if (abort.abort) {
+      const decision: IterateLoopDecision = {
+        action: "abandon",
+        abandonReason: "kill_switch_engaged",
+        reason: abort.reason,
+      };
+      safeAppendAttemptLogEvent(deps, {
+        eventType: "attempt_aborted",
+        attemptId: input.attemptId,
+        actionClass: "iterate_loop",
+        mode: input.mode,
+        reason: decision.reason,
+        payload: {
+          iterationNumber: iterationNumber - 1,
+          action: decision.action,
+          abandonReason: decision.abandonReason,
+        },
+      });
+      return {
+        outcome: "abandon",
+        finalDecision: decision,
+        iterationsUsed: iterationNumber - 1,
+        totalTurnsUsed,
+        totalCostUsd,
+        iterations,
+      };
+    }
+
     const iterationStartMs = nowMs();
     const driverResult = await runDriverSafely(input, deps, {
       attemptId: input.attemptId,

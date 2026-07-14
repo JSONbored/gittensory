@@ -810,4 +810,50 @@ describe("runLoop (#5135)", () => {
     });
     for (const spy of jsonCloseSpies) expect(spy).toHaveBeenCalledTimes(1);
   });
+
+  it("halts immediately when an attempt returns kill_switch_engaged mid-run (#5670)", async () => {
+    const { eventLedger, governorLedger, portfolioQueue, runState, governorState, paths } = tempStores();
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:7" });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let killActive = false;
+    const runAttemptSpy = vi.fn(async (_args: string[], options: { onResult?: (result: unknown) => void }) => {
+      killActive = true;
+      options.onResult?.({
+        outcome: "attempt_abandon",
+        abandonReason: "kill_switch_engaged",
+        totalTurnsUsed: 1,
+        totalCostUsd: 0,
+      });
+      return 0;
+    });
+
+    const exitCode = await runLoop(["acme/widgets", "--miner-login", "alice", "--json", "--max-cycles", "3"], {
+      openGovernorState: () => governorState,
+      initEventLedger: () => eventLedger,
+      initGovernorLedger: () => governorLedger,
+      initPortfolioQueue: () => portfolioQueue,
+      initRunStateStore: () => runState,
+      runDiscover: async () => 0,
+      runAttempt: runAttemptSpy,
+      ...readyLoopOptions({
+        checkMinerKillSwitch: () =>
+          killActive ? { scope: "global" as const, active: true } : { scope: "none" as const, active: false },
+      }),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runAttemptSpy).toHaveBeenCalledTimes(1);
+    const printed = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(printed.haltReason).toBe("kill_switch_global");
+    expect(printed.cycles.at(-1)).toMatchObject({
+      outcome: "halted",
+      reason: "kill_switch_global",
+      identifier: "issue:7",
+      attemptOutcome: "attempt_abandon",
+    });
+    // Claim released back to queued via markFailed — reopen after runLoop closes its handles.
+    const reopened = initPortfolioQueueStore(paths.portfolioQueuePath);
+    expect(reopened.listQueue()[0]).toMatchObject({ identifier: "issue:7", status: "queued" });
+    reopened.close();
+  });
 });

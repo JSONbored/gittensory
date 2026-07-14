@@ -99,6 +99,8 @@ function assertInput(input) {
  *   sessionStartMs?: number,
  *   nowMs: number,
  *   executeLocalWrite: (spec: import("@loopover/engine").LocalWriteActionSpec) => Promise<unknown>,
+ *   shouldAbort?: () => import("@loopover/engine").IterateLoopShouldAbort,
+ *   resolveKillSwitchScope?: () => "global"|"repo"|"none",
  * }} deps
  */
 export async function runMinerAttempt(input, deps) {
@@ -109,6 +111,7 @@ export async function runMinerAttempt(input, deps) {
     driver: deps.driver,
     runSlopAssessment: deps.runSlopAssessment,
     appendAttemptLogEvent: deps.appendAttemptLogEvent,
+    ...(typeof deps.shouldAbort === "function" ? { shouldAbort: deps.shouldAbort } : {}),
   });
 
   if (loopResult.outcome === "abandon") {
@@ -116,6 +119,28 @@ export async function runMinerAttempt(input, deps) {
   }
 
   const handoffPacket = loopResult.handoffPacket;
+
+  // Re-check kill-switch AFTER handoff and BEFORE any write (#5670) when a live resolver is supplied.
+  // Without a live resolver, preserve pre-#5670 behavior: the frozen attempt-start scope is threaded into
+  // prepareOpenPrSubmission / the submission gate (which itself denies active kill scopes).
+  if (typeof deps.resolveKillSwitchScope === "function") {
+    const liveKillSwitchScope = deps.resolveKillSwitchScope();
+    if (liveKillSwitchScope !== "none") {
+      return {
+        outcome: "abandon",
+        loopResult: {
+          ...loopResult,
+          outcome: "abandon",
+          finalDecision: {
+            action: "abandon",
+            abandonReason: "kill_switch_engaged",
+            reason: `Kill-switch (${liveKillSwitchScope}) engaged after handoff; refusing to open a PR.`,
+          },
+          handoffPacket: undefined,
+        },
+      };
+    }
+  }
 
   const freshness = await checkSubmissionFreshness(
     { repoFullName: input.loopInput.repoFullName, issueNumber: input.issueNumber, minerLogin: input.minerLogin },

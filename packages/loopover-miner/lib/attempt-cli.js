@@ -32,7 +32,7 @@ import { cleanupAttemptWorktree, prepareAttemptWorktree } from "./attempt-worktr
 import { fetchSelfReviewContext } from "./self-review-context.js";
 import { buildCodingTaskSpec } from "./coding-task-spec.js";
 import { resolveAmsPolicy } from "./ams-policy.js";
-import { checkMinerKillSwitch } from "./governor-kill-switch.js";
+import { checkMinerKillSwitch, recordMinerKillSwitchTransition } from "./governor-kill-switch.js";
 import { buildAttemptGovernorContext, buildAttemptLoopInput } from "./attempt-input-builder.js";
 import { getAttemptHistory } from "./portfolio-queue.js";
 import { loadReputationHistory, recordOwnSubmission } from "./governor-state.js";
@@ -388,7 +388,38 @@ export async function runAttempt(args, options = {}) {
     const repoPaused = minerGoalSpec.spec.killSwitch.paused;
 
     const checkKillSwitch = options.checkMinerKillSwitch ?? checkMinerKillSwitch;
-    const killSwitchScope = checkKillSwitch({ env, repoPaused }).scope;
+    let killSwitchScope = checkKillSwitch({ env, repoPaused }).scope;
+    let previousKillSwitchScope = killSwitchScope;
+
+    const resolveLiveKillSwitch = () => {
+      // Re-read the YAML flag each probe so an on-disk unpause/pause is reflected mid-attempt (#5670).
+      const liveRepoPaused = resolveGoalSpec(worktreeResult.repoPath).spec.killSwitch.paused;
+      const live = checkKillSwitch({ env, repoPaused: liveRepoPaused });
+      if (live.scope !== previousKillSwitchScope) {
+        try {
+          recordMinerKillSwitchTransition({
+            repoFullName: parsed.repoFullName,
+            actionClass: "attempt",
+            previousScope: previousKillSwitchScope,
+            scope: live.scope,
+          });
+        } catch {
+          // Ledger append must never crash an aborting attempt.
+        }
+        previousKillSwitchScope = live.scope;
+      }
+      killSwitchScope = live.scope;
+      return live;
+    };
+
+    const shouldAbort = () => {
+      const live = resolveLiveKillSwitch();
+      if (!live.active) return false;
+      return {
+        abort: true,
+        reason: `Kill-switch (${live.scope}) engaged mid-attempt; abandoning without starting another driver iteration.`,
+      };
+    };
 
     const loopInput = buildAttemptLoopInput({
       codingTaskSpec,
@@ -435,7 +466,11 @@ export async function runAttempt(args, options = {}) {
         submissionMode: amsPolicy.spec.submissionMode,
         governor,
       },
-      deps,
+      {
+        ...deps,
+        shouldAbort,
+        resolveKillSwitchScope: () => resolveLiveKillSwitch().scope,
+      },
     );
 
     worktreeResult.attemptOk = result.outcome === "submitted";
@@ -510,6 +545,9 @@ export async function runAttempt(args, options = {}) {
       // on any iteration this attempt ran, never fabricated.
       totalTokensUsed: result.loopResult.finalMeterTotals.tokens,
       iterationsUsed: result.loopResult.iterationsUsed,
+      ...(result.outcome === "abandon" && result.loopResult.finalDecision?.abandonReason
+        ? { abandonReason: result.loopResult.finalDecision.abandonReason }
+        : {}),
       ...("reason" in result ? { reason: result.reason } : {}),
       ...("decision" in result ? { decision: result.decision } : {}),
       ...("spec" in result ? { spec: result.spec } : {}),

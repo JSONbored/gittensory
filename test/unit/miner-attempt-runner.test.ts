@@ -429,4 +429,36 @@ describe("runMinerAttempt — real self-plagiarism wiring into the chokepoint (#
     const result = await runMinerAttempt(baseAttemptInput(), deps as never);
     expect(result.outcome).toBe("governed");
   });
+
+  it("honors shouldAbort before the first driver iteration and refuses to open a PR (#5670)", async () => {
+    const executeLocalWrite = vi.fn(async () => ({ ranAt: 10_000 }));
+    const driver = vi.fn(async () => okDriverResult());
+    const result = await runMinerAttempt(
+      baseAttemptInput(),
+      baseDeps({
+        driver: { run: driver },
+        shouldAbort: () => ({ abort: true, reason: "kill already engaged" }),
+        executeLocalWrite,
+      }),
+    );
+    expect(result.outcome).toBe("abandon");
+    expect(result.loopResult.finalDecision.abandonReason).toBe("kill_switch_engaged");
+    expect(result.loopResult.iterationsUsed).toBe(0);
+    expect(driver).not.toHaveBeenCalled();
+    expect(executeLocalWrite).not.toHaveBeenCalled();
+  });
+
+  it("re-checks kill-switch after handoff and refuses open_pr (#5670)", async () => {
+    const executeLocalWrite = vi.fn(async () => ({ ranAt: 10_000 }));
+    const result = await runMinerAttempt(
+      baseAttemptInput({ killSwitchScope: "none" }),
+      baseDeps({
+        resolveKillSwitchScope: () => "global",
+        executeLocalWrite,
+      }),
+    );
+    expect(result.outcome).toBe("abandon");
+    expect(result.loopResult.finalDecision.abandonReason).toBe("kill_switch_engaged");
+    expect(executeLocalWrite).not.toHaveBeenCalled();
+  });
 });

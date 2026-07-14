@@ -311,14 +311,35 @@ export async function runLoop(args, options = {}) {
       const killSwitch = checkKillSwitchFn({ env });
       if (killSwitch.active) {
         haltReason = `kill_switch_${killSwitch.scope}`;
-        cycles.push({ cycle: cycleIndex, outcome: "halted", reason: haltReason });
+        // Release the in-flight claim so left state is defined (#5670 / mirrors run-halt's markFailed).
+        if (claimed) {
+          portfolioQueue.markFailed(claimed.repoFullName, claimed.identifier, claimed.apiBaseUrl);
+        }
+        cycles.push({
+          cycle: cycleIndex,
+          outcome: "halted",
+          reason: haltReason,
+          ...(claimed
+            ? { repoFullName: claimed.repoFullName, identifier: claimed.identifier }
+            : {}),
+        });
         break;
       }
 
       const pauseState = governorState.loadPauseState();
       if (pauseState.paused) {
         haltReason = "paused";
-        cycles.push({ cycle: cycleIndex, outcome: "halted", reason: haltReason });
+        if (claimed) {
+          portfolioQueue.markFailed(claimed.repoFullName, claimed.identifier, claimed.apiBaseUrl);
+        }
+        cycles.push({
+          cycle: cycleIndex,
+          outcome: "halted",
+          reason: haltReason,
+          ...(claimed
+            ? { repoFullName: claimed.repoFullName, identifier: claimed.identifier }
+            : {}),
+        });
         break;
       }
 
@@ -410,6 +431,9 @@ export async function runLoop(args, options = {}) {
       // different iteration budget) and is requeued -- a genuinely stuck item is caught by non-convergence
       // (reenqueues threshold) rather than silently retried forever.
       const permanentBlock = attemptOutcome === "blocked_rejection_signaled";
+      // Mid-attempt kill-switch abandon (#5670): stop the outer loop immediately instead of waiting for the
+      // next between-cycle probe, and treat the item like any other re-queued abandon via markFailed below.
+      const killSwitchAbandon = lastResult?.abandonReason === "kill_switch_engaged";
 
       if (submitted || permanentBlock) {
         // Both terminal -- a submitted PR is done, and a repo-wide AI-usage-policy ban never resolves on retry --
@@ -419,6 +443,20 @@ export async function runLoop(args, options = {}) {
         // Any other blocked/abandoned/stale/governed outcome may resolve on a later retry, so requeue it; markFailed
         // records the re-enqueue + consecutive failure the non-convergence detector reads on the next cycle.
         portfolioQueue.markFailed(claimed.repoFullName, claimed.identifier, claimed.apiBaseUrl);
+      }
+
+      if (killSwitchAbandon) {
+        const liveKill = checkKillSwitchFn({ env });
+        haltReason = liveKill.active ? `kill_switch_${liveKill.scope}` : "kill_switch_engaged";
+        cycles.push({
+          cycle: cycleIndex,
+          outcome: "halted",
+          reason: haltReason,
+          repoFullName: claimed.repoFullName,
+          identifier: claimed.identifier,
+          attemptOutcome,
+        });
+        break;
       }
 
       let reentryOutcome = "other";

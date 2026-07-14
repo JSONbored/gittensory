@@ -263,6 +263,7 @@ export {
 export {
   runIterateLoop,
   type IterateLoopDeps,
+  type IterateLoopShouldAbort,
   type IterateLoopInput,
   type IterateLoopIterationRecord,
   type IterateLoopOutcome,
