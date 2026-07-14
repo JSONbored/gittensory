@@ -26,7 +26,7 @@ const dequeueChildScript = join(
 const roots: string[] = [];
 
 function tempRoot(): { root: string; dbPath: string } {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-concurrent-races-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-concurrent-races-"));
   roots.push(root);
   return { root, dbPath: join(root, "store.sqlite3") };
 }

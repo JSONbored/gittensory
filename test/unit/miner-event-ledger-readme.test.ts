@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const readmePath = join(process.cwd(), "packages/loopover-miner/README.md");
 
-describe("gittensory-miner event ledger README (#2322)", () => {
+describe("loopover-miner event ledger README (#2322)", () => {
   it("documents the append-only event ledger API surface", () => {
     const readme = readFileSync(readmePath, "utf8");
     expect(readme).toContain("initEventLedger");

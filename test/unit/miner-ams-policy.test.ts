@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function tempRoot() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-ams-policy-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-ams-policy-"));
   roots.push(root);
   return root;
 }

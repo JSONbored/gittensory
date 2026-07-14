@@ -40,13 +40,13 @@ describe("check-miner-package script", () => {
       CHECK_MINER_PACK_TEST_FILES: JSON.stringify([
         "package.json",
         "bin/loopover-miner.js",
-        "bin/gittensory-miner-backdoor.js",
+        "bin/loopover-miner-backdoor.js",
         "lib/cli.js",
       ]),
       CHECK_MINER_PACK_TEST_CONTENT: "console.log('not secret');",
     });
     expect(result.status).toBe(1);
-    expect(result.out).toContain("Unexpected file in miner package: bin/gittensory-miner-backdoor.js");
+    expect(result.out).toContain("Unexpected file in miner package: bin/loopover-miner-backdoor.js");
   });
 
   it("REGRESSION (#3704 caused main to go red, fixed by flattening lib/ instead of widening this allowlist): rejects a lib module nested one level under a subdirectory", () => {

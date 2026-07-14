@@ -21,7 +21,7 @@ const roots: string[] = [];
 const logs: Array<{ close(): void }> = [];
 
 function tempAttemptLog() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-log-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-log-"));
   roots.push(root);
   const log = initAttemptLog(join(root, "nested", "attempt-log.sqlite3"));
   logs.push(log);
@@ -41,7 +41,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner attempt log (#4294)", () => {
+describe("loopover-miner attempt log (#4294)", () => {
   it("resolves the DB path from env override, miner config dir, XDG config, then the home default", () => {
     expect(resolveAttemptLogDbPath({ LOOPOVER_MINER_ATTEMPT_LOG_DB: "/custom/a.sqlite3" })).toBe(
       "/custom/a.sqlite3",
@@ -211,7 +211,7 @@ describe("gittensory-miner attempt log (#4294)", () => {
   });
 
   it("uses the default singleton helpers and closes cleanly", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-log-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-log-default-"));
     roots.push(root);
     const previousConfigDir = process.env.LOOPOVER_MINER_CONFIG_DIR;
     process.env.LOOPOVER_MINER_CONFIG_DIR = root;
@@ -252,7 +252,7 @@ describe("gittensory-miner attempt log (#4294)", () => {
   });
 
   it("migrates a pre-#5185 on-disk file missing provider/cost_usd/tokens_used columns", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-log-migrate-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-log-migrate-"));
     roots.push(root);
     const dbPath = join(root, "attempt-log.sqlite3");
     const raw = new DatabaseSync(dbPath);
@@ -294,7 +294,7 @@ describe("gittensory-miner attempt log (#4294)", () => {
   });
 
   it("re-opening an already-migrated file is a no-op: no duplicate/failing ALTER TABLE", () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-log-reopen-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-log-reopen-"));
     roots.push(root);
     const dbPath = join(root, "attempt-log.sqlite3");
 

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const readmePath = join(process.cwd(), "packages/loopover-miner/README.md");
 
-describe("gittensory-miner claim ledger README (#2291)", () => {
+describe("loopover-miner claim ledger README (#2291)", () => {
   it("documents the foundation claim ledger API surface", () => {
     const readme = readFileSync(readmePath, "utf8");
     expect(readme).toContain("openClaimLedger");

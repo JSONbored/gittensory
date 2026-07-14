@@ -46,7 +46,7 @@ function firstColumnErrorTokens(section: string): string[] {
   return tokens;
 }
 
-describe("gittensory-miner credential-troubleshooting README (#5175)", () => {
+describe("loopover-miner credential-troubleshooting README (#5175)", () => {
   it("adds the credential-troubleshooting section covering the three required failure modes", () => {
     const section = readCredentialSection();
     expect(section).toContain("Error string / pattern");

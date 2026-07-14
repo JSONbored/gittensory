@@ -12,7 +12,7 @@ import type {
   PredictedVerdictRecord,
 } from "../../packages/loopover-miner/lib/calibration.js";
 
-describe("gittensory-miner calibration types scaffold (#2332)", () => {
+describe("loopover-miner calibration types scaffold (#2332)", () => {
   const predicted: PredictedVerdictRecord = {
     targetId: "pr:JSONbored/gittensory#42",
     project: "JSONbored/gittensory",

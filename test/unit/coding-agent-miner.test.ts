@@ -660,7 +660,7 @@ describe("lint-guarded edit wrapper (#4276)", () => {
     ]);
   });
 
-  it("guardChangedFiles reports a node --check syntax error in a gittensory-miner JS file", async () => {
+  it("guardChangedFiles reports a node --check syntax error in a loopover-miner JS file", async () => {
     const { spawn } = recordingSpawn({
       "node --check packages/loopover-miner/lib/cli.js": {
         code: 1,

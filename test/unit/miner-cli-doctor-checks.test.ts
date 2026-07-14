@@ -11,7 +11,7 @@ import {
 
 const roots: string[] = [];
 function tempRoot() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-clicheck-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-clicheck-"));
   roots.push(root);
   return root;
 }
@@ -19,7 +19,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner doctor — coding-agent CLI checks (#4304)", () => {
+describe("loopover-miner doctor — coding-agent CLI checks (#4304)", () => {
   it("claude: present + authenticated when the OAuth token is set", () => {
     const check = checkClaudeCliPresent({ env: { CLAUDE_CODE_OAUTH_TOKEN: "present" }, resolveClaudePath: () => "/usr/bin/claude" });
     expect(check).toMatchObject({ name: "claude-cli-present", ok: true });
@@ -346,7 +346,7 @@ describe("gittensory-miner doctor — coding-agent CLI checks (#4304)", () => {
   });
 });
 
-describe("gittensory-miner doctor — credential presence checks (#5170)", () => {
+describe("loopover-miner doctor — credential presence checks (#5170)", () => {
   describe("checkGitHubTokenPresent", () => {
     it("passes when GITHUB_TOKEN is set and non-empty", () => {
       const check = checkGitHubTokenPresent({ GITHUB_TOKEN: "ghp_present" });

@@ -16,7 +16,7 @@ const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
 
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-claim-expiry-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-claim-expiry-"));
   roots.push(root);
   const ledger = openClaimLedger(join(root, "claim-ledger.sqlite3"));
   ledgers.push(ledger);
@@ -43,7 +43,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner claim ledger expiry (#2316)", () => {
+describe("loopover-miner claim ledger expiry (#2316)", () => {
   it("documents a 14-day default max age", () => {
     expect(DEFAULT_MAX_CLAIM_AGE_MS).toBe(14 * 24 * 60 * 60 * 1000);
   });

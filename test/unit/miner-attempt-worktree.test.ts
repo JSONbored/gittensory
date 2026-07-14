@@ -57,7 +57,7 @@ describe("createRealWorktreeExec (#5132)", () => {
 
 describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
   it("REGRESSION: worktreePath is a real, checked-out git repo on a real branch, not an empty directory", async () => {
-    const root = tempRoot("gittensory-miner-attempt-worktree-");
+    const root = tempRoot("loopover-miner-attempt-worktree-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
 
@@ -75,7 +75,7 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
   });
 
   it("removes a succeeded attempt's worktree but retains a failed one's, per the engine's own retention policy", async () => {
-    const root = tempRoot("gittensory-miner-attempt-worktree-cleanup-");
+    const root = tempRoot("loopover-miner-attempt-worktree-cleanup-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
 
@@ -93,7 +93,7 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
   });
 
   it("returns ok:false when the base clone cannot be prepared, without attempting git worktree add", async () => {
-    const root = tempRoot("gittensory-miner-attempt-worktree-clonefail-");
+    const root = tempRoot("loopover-miner-attempt-worktree-clonefail-");
     const cloneBaseDir = join(root, "cache");
     const execSpy = vi.fn();
 
@@ -111,7 +111,7 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
   });
 
   it("returns ok:false with git's real stderr when git worktree add fails (e.g. an unknown base branch)", async () => {
-    const root = tempRoot("gittensory-miner-attempt-worktree-addfail-");
+    const root = tempRoot("loopover-miner-attempt-worktree-addfail-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
 

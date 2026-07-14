@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function tempRepo() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-goal-spec-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-goal-spec-"));
   roots.push(root);
   return root;
 }

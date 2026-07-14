@@ -9,7 +9,7 @@ import {
   runRankingBenchmark,
 } from "../../packages/loopover-miner/scripts/benchmark.mjs";
 
-describe("gittensory-miner benchmark script (#4845)", () => {
+describe("loopover-miner benchmark script (#4845)", () => {
   it("REGRESSION: synthetic candidate generation is byte-for-byte deterministic across calls", () => {
     expect(buildSyntheticCandidates(50)).toEqual(buildSyntheticCandidates(50));
   });
@@ -63,7 +63,7 @@ describe("gittensory-miner benchmark script (#4845)", () => {
       ]),
     ).toBe(
       [
-        "gittensory-miner benchmark",
+        "loopover-miner benchmark",
         "",
         "discovery-fanout-ranking: median 12.35ms over 5 runs, 40502 ops/sec (n=500)",
         "local-store-read-write: median 8.00ms over 5 runs, 125000 ops/sec (n=1000)",
@@ -77,7 +77,7 @@ describe("gittensory-miner benchmark script (#4845)", () => {
       encoding: "utf8",
     });
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("gittensory-miner benchmark");
+    expect(result.stdout).toContain("loopover-miner benchmark");
     expect(result.stdout).toContain("discovery-fanout-ranking:");
     expect(result.stdout).toContain("local-store-read-write:");
   });

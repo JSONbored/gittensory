@@ -47,7 +47,7 @@ function seedOutcomeEvent(
   ledger.close();
 }
 
-describe("gittensory-miner calibration CLI (#4849)", () => {
+describe("loopover-miner calibration CLI (#4849)", () => {
   it("joins a merge prediction with a merged outcome and renders the per-project accuracy", () => {
     const env = envForTempStores();
     seedPrediction(env, 42, "merge");

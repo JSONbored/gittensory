@@ -12,7 +12,7 @@ const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
 
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-event-ledger-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-event-ledger-"));
   roots.push(root);
   const ledger = initEventLedger(join(root, "nested", "event-ledger.sqlite3"));
   ledgers.push(ledger);
@@ -25,7 +25,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner event ledger (#2290)", () => {
+describe("loopover-miner event ledger (#2290)", () => {
   it("resolves the DB path from env override, miner config dir, XDG config, then the home default", () => {
     expect(resolveEventLedgerDbPath({ LOOPOVER_MINER_EVENT_LEDGER_DB: "/custom/e.sqlite3" })).toBe(
       "/custom/e.sqlite3",

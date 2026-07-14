@@ -23,7 +23,7 @@ const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
 
 function tempQueueStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-"));
   roots.push(root);
   const store = initPortfolioQueueStore(join(root, "portfolio-queue.sqlite3"));
   stores.push(store);
@@ -34,7 +34,7 @@ function tempQueueStore() {
 // that only cares about the fan-out/rank/enqueue path (#4842). runDiscover doesn't own an injected store, so the
 // afterEach hook below closes it.
 function tempPolicyDocCacheStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-pdc-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pdc-"));
   roots.push(root);
   const store = initPolicyDocCacheStore(join(root, "policy-doc-cache.sqlite3"));
   stores.push(store);
@@ -43,7 +43,7 @@ function tempPolicyDocCacheStore() {
 
 // Same reasoning as tempPolicyDocCacheStore above, for the policy-verdict cache (#4843).
 function tempPolicyVerdictCacheStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-pvc-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pvc-"));
   roots.push(root);
   const store = initPolicyVerdictCacheStore(join(root, "policy-verdict-cache.sqlite3"));
   stores.push(store);
@@ -52,7 +52,7 @@ function tempPolicyVerdictCacheStore() {
 
 // Same reasoning as tempPolicyDocCacheStore above, for the ranked-candidates snapshot store (#4859 prerequisite).
 function tempRankedCandidatesStore() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-rc-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-rc-"));
   roots.push(root);
   const store = initRankedCandidatesStore(join(root, "ranked-candidates.sqlite3"));
   stores.push(store);
@@ -570,7 +570,7 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk portfolio queue when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-default-"));
     roots.push(root);
     const dbPath = join(root, "portfolio-queue.sqlite3");
     const previousDbPath = process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB;
@@ -759,7 +759,7 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk policy-doc cache when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-pdc-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pdc-default-"));
     roots.push(root);
     const cacheDbPath = join(root, "policy-doc-cache.sqlite3");
     const previousCacheDbPath = process.env.LOOPOVER_MINER_POLICY_DOC_CACHE_DB;
@@ -829,7 +829,7 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk policy-verdict cache when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-pvc-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pvc-default-"));
     roots.push(root);
     const cacheDbPath = join(root, "policy-verdict-cache.sqlite3");
     const previousCacheDbPath = process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB;
@@ -939,7 +939,7 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk ranked-candidates store when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-discover-cli-rc-default-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-rc-default-"));
     roots.push(root);
     const rankedCandidatesDbPath = join(root, "ranked-candidates.sqlite3");
     const previousDbPath = process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB;

@@ -114,7 +114,7 @@ export function runLocalStoreBenchmark(options = {}) {
 
 /** Render benchmark results as a stable, greppable text report (no locale-dependent number formatting). */
 export function formatBenchmarkReport(results) {
-  const lines = ["gittensory-miner benchmark", ""];
+  const lines = ["loopover-miner benchmark", ""];
   for (const result of results) {
     lines.push(
       `${result.name}: median ${result.medianMs.toFixed(2)}ms over ${result.iterations} runs, ` +

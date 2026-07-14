@@ -30,7 +30,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner true CLI end-to-end flows (#4869)", () => {
+describe("loopover-miner true CLI end-to-end flows (#4869)", () => {
   it("bootstraps local state and reports status + doctor through the real binary", async () => {
     const configDir = tempEnvPrefix();
     roots.push(configDir);

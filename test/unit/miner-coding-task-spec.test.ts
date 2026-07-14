@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function tempDir() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-coding-task-spec-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-coding-task-spec-"));
   roots.push(root);
   // Resolved once here, not just inside writeAcceptanceCriteriaFile: os.tmpdir() can itself sit behind a
   // symlink (e.g. macOS's /var -> /private/var), so a RAW mkdtempSync path wouldn't byte-match the realpath

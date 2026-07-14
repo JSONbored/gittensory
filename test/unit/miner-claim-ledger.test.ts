@@ -21,7 +21,7 @@ const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
 
 function tempLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-claim-ledger-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-claim-ledger-"));
   roots.push(root);
   const ledger = openClaimLedger(join(root, "nested", "claim-ledger.sqlite3"));
   ledgers.push(ledger);
@@ -37,7 +37,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("gittensory-miner claim ledger (#2314)", () => {
+describe("loopover-miner claim ledger (#2314)", () => {
   it("exposes the frozen status vocabulary", () => {
     expect(CLAIM_STATUSES).toEqual(["active", "released", "expired"]);
     expect(Object.isFrozen(CLAIM_STATUSES)).toBe(true);
@@ -466,7 +466,7 @@ describe("gittensory-miner claim ledger (#2314)", () => {
 });
 
 function tempRoot() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-claim-default-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-claim-default-"));
   roots.push(root);
   return root;
 }

@@ -41,7 +41,7 @@ describe("executeLocalWrite (#5132)", () => {
   });
 
   it("runs in the given working directory and inherits the given env", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-execute-local-write-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-execute-local-write-"));
     roots.push(root);
     const resolvedRoot = realpathSync(root);
     const result = await executeLocalWrite(spec("pwd"), { cwd: resolvedRoot, env: { ...process.env, PATH: process.env.PATH ?? "" } });

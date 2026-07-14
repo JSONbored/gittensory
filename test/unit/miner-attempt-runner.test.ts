@@ -27,7 +27,7 @@ const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];
 
 function tempEventLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-events-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-runner-events-"));
   roots.push(root);
   const ledger = initEventLedger(join(root, "db.sqlite3"));
   closers.push(ledger);
@@ -35,7 +35,7 @@ function tempEventLedger() {
 }
 
 function tempGovernorLedger() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-governor-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-runner-governor-"));
   roots.push(root);
   const ledger = initGovernorLedger(join(root, "governor-ledger.sqlite3"));
   closers.push(ledger);
@@ -45,7 +45,7 @@ function tempGovernorLedger() {
 // Isolated per test: without this, evaluateGovernorChokepointGatePersisted's own default-store fallback
 // would open the REAL ~/.config/loopover-miner/governor-state.sqlite3 on whatever machine runs these tests.
 function tempGovernorState() {
-  const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-governor-state-"));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-runner-governor-state-"));
   roots.push(root);
   const state = openGovernorState(join(root, "governor-state.sqlite3"));
   closers.push(state);
@@ -280,7 +280,7 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
   });
 
   it("falls back to the real default governor-ledger append when governorLedgerAppend is omitted", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-default-governor-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-runner-default-governor-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_GOVERNOR_LEDGER_DB", join(root, "default-governor.sqlite3"));
     const deps = baseDeps();
@@ -293,7 +293,7 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
   });
 
   it("falls back to the real default governor-state store when governorState is omitted", async () => {
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-default-governor-state-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-runner-default-governor-state-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_GOVERNOR_STATE_DB", join(root, "default-governor-state.sqlite3"));
     const deps = baseDeps();
@@ -413,7 +413,7 @@ describe("runMinerAttempt — real self-plagiarism wiring into the chokepoint (#
   it("reads the real default governor-state store when no governorState dep is supplied (production path)", async () => {
     // deps omit governorState, so BOTH the chokepoint's own default-store fallback AND this module's late
     // augmentation read the same env-pointed store; a matching prior submission there throttles.
-    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-default-gs-"));
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-runner-default-gs-"));
     roots.push(root);
     vi.stubEnv("LOOPOVER_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
     recordOwnSubmission({

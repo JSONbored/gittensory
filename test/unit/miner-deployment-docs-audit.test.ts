@@ -20,7 +20,7 @@ const DEPLOYMENT_MD = resolve(MINER_DIR, "DEPLOYMENT.md");
 const BIN_DIR = resolve(MINER_DIR, "bin");
 const BIN_ENTRY = resolve(BIN_DIR, "loopover-miner.js");
 const LIB_DIR = resolve(MINER_DIR, "lib");
-// gittensory-miner's coding-agent driver construction (MINER_CODING_AGENT_*) is implemented in the
+// loopover-miner's coding-agent driver construction (MINER_CODING_AGENT_*) is implemented in the
 // gittensory-engine package it depends on, not under packages/loopover-miner/** -- an env var read only
 // there would otherwise false-positive as undocumented-in-code. Source (not dist/, which is gitignored and
 // may not be built) so this stays accurate on a fresh checkout without a build step.
@@ -54,7 +54,7 @@ const ALWAYS_IN_SYNC: DeploymentDocsReality = {
   isRegisteredCommand: () => true,
 };
 
-describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
+describe("loopover-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
   const markdown = readFileSync(DEPLOYMENT_MD, "utf8");
   const claims = {
     envVars: extractEnvVarClaims(markdown),
@@ -70,7 +70,7 @@ describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
 
   it("REGRESSION: sees env var reads implemented in gittensory-engine's miner source, not just packages/loopover-miner/**", () => {
     // MINER_CODING_AGENT_CLAUDE_MODEL / MINER_CODING_AGENT_CODEX_MODEL / MINER_CODING_AGENT_TIMEOUT_MS are
-    // read in packages/loopover-engine/src/miner/driver-factory.ts, a real dependency of gittensory-miner
+    // read in packages/loopover-engine/src/miner/driver-factory.ts, a real dependency of loopover-miner
     // for coding-agent driver construction -- scanning only LIB_DIR/BIN_DIR previously false-flagged them
     // as undocumented-in-code even though they are genuinely live, functioning env vars.
     const reality = buildLiveReality();
@@ -131,7 +131,7 @@ describe("gittensory-miner DEPLOYMENT.md docs-accuracy audit (#5180)", () => {
     expect(isRepoRelativePath("http://example.com")).toBe(false);
     expect(isRepoRelativePath("#anchor")).toBe(false);
     expect(isRepoRelativePath("mailto:ops@example.com")).toBe(false);
-    expect(isRepoRelativePath("~/.config/gittensory-miner")).toBe(false);
+    expect(isRepoRelativePath("~/.config/loopover-miner")).toBe(false);
     expect(isRepoRelativePath("/data/miner")).toBe(false);
   });
 
