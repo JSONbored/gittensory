@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearGitHubResponseCacheForTest, githubRateLimitAdmissionKeyForInstallation, latestGitHubRestRateLimitObservation } from "../../src/github/client";
-import { getPreviewBuildState } from "../../src/review/visual/preview-url";
+import { extractPreviewUrl, getPreviewBuildState } from "../../src/review/visual/preview-url";
 
 afterEach(() => {
   clearGitHubResponseCacheForTest();
@@ -44,5 +44,39 @@ describe("preview-url GitHub reads", () => {
       resetAt: "2026-06-24T12:10:00.000Z",
       observedAtMs: Date.parse("2026-06-24T12:00:00.000Z"),
     });
+  });
+});
+
+describe("extractPreviewUrl", () => {
+  it("returns null for null, undefined, or empty input", () => {
+    expect(extractPreviewUrl(null)).toBeNull();
+    expect(extractPreviewUrl(undefined)).toBeNull();
+    expect(extractPreviewUrl("")).toBeNull();
+  });
+
+  it("returns null when the text contains no URL at all", () => {
+    expect(extractPreviewUrl("no link here, just prose")).toBeNull();
+  });
+
+  it("returns null when the only URL is not a Cloudflare preview host", () => {
+    expect(extractPreviewUrl("see https://github.com/acme/widgets/pull/1 for details")).toBeNull();
+  });
+
+  it("skips a URL-like substring that fails to parse and falls through to null", () => {
+    expect(extractPreviewUrl("broken http://[not-a-valid-host link")).toBeNull();
+  });
+
+  it("keeps scanning past a non-matching URL to return a later *.workers.dev origin", () => {
+    expect(extractPreviewUrl("ref https://github.com/acme/widgets then https://widgets-preview.acme.workers.dev/home")).toBe(
+      "https://widgets-preview.acme.workers.dev",
+    );
+  });
+
+  it("matches a *.pages.dev host as well as *.workers.dev", () => {
+    expect(extractPreviewUrl("deploy: https://widgets.pages.dev/preview")).toBe("https://widgets.pages.dev");
+  });
+
+  it("matches the host case-insensitively and returns the bare origin without the path", () => {
+    expect(extractPreviewUrl("HTTPS://Widgets.WORKERS.DEV/some/path?x=1")).toBe("https://widgets.workers.dev");
   });
 });
