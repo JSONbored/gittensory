@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   buildSelfPlagiarismGovernorLedgerEvent,
   DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD,
+  fingerprintFromChangedFiles,
   fingerprintSimilarity,
   resolveSelfPlagiarismConfig,
   selfPlagiarismCheck,
@@ -35,6 +36,7 @@ function prior(overrides: Partial<OwnSubmissionRecord> = {}): OwnSubmissionRecor
 test("barrel: the public entrypoint re-exports the self-plagiarism governor API (#2345)", () => {
   assert.equal(typeof selfPlagiarismCheck, "function");
   assert.equal(typeof fingerprintSimilarity, "function");
+  assert.equal(typeof fingerprintFromChangedFiles, "function");
   assert.equal(typeof buildSelfPlagiarismGovernorLedgerEvent, "function");
   assert.equal(typeof resolveSelfPlagiarismConfig, "function");
   assert.equal(DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD, 0.85);
@@ -126,4 +128,32 @@ test("buildSelfPlagiarismGovernorLedgerEvent: records throttled open_pr with the
 test("fingerprintSimilarity: returns Jaccard overlap for token sets", () => {
   assert.equal(fingerprintSimilarity("abc def", "ABC DEF"), 1);
   assert.equal(fingerprintSimilarity("aa bb", "bb cc"), 1 / 3);
+});
+
+test("fingerprintFromChangedFiles: sorts and comma-joins a real changed-file set", () => {
+  assert.equal(fingerprintFromChangedFiles(["src/b.ts", "src/a.ts"]), "src/a.ts,src/b.ts");
+});
+
+test("fingerprintFromChangedFiles: dedupes repeated paths", () => {
+  assert.equal(fingerprintFromChangedFiles(["src/a.ts", "src/a.ts"]), "src/a.ts");
+});
+
+test("fingerprintFromChangedFiles: is order-independent -- the same real change set always fingerprints identically", () => {
+  const first = fingerprintFromChangedFiles(["src/b.ts", "src/a.ts", "docs/c.md"]);
+  const second = fingerprintFromChangedFiles(["docs/c.md", "src/a.ts", "src/b.ts"]);
+  assert.equal(first, second);
+});
+
+test("fingerprintFromChangedFiles: an empty change set produces an honest empty string, never a fabricated token", () => {
+  assert.equal(fingerprintFromChangedFiles([]), "");
+});
+
+test("fingerprintFromChangedFiles: blank/whitespace-only entries are dropped, not turned into empty tokens", () => {
+  assert.equal(fingerprintFromChangedFiles(["src/a.ts", "  ", ""]), "src/a.ts");
+});
+
+test("fingerprintFromChangedFiles: feeds fingerprintSimilarity as a real Jaccard token set (comma-delimited paths)", () => {
+  const a = fingerprintFromChangedFiles(["src/a.ts", "src/b.ts"]);
+  const b = fingerprintFromChangedFiles(["src/a.ts", "src/c.ts"]);
+  assert.equal(fingerprintSimilarity(a, b), 1 / 3); // {a,b} vs {a,c}: intersection 1, union 3
 });

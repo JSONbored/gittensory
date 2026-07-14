@@ -14,6 +14,7 @@ import type { AttemptLog } from "../../packages/gittensory-miner/lib/attempt-log
 import { closeDefaultGovernorLedger, initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
 import { closeDefaultWorktreeAllocator, openWorktreeAllocator } from "../../packages/gittensory-miner/lib/worktree-allocator.js";
 import { closeDefaultPortfolioQueueStore } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
+import { closeDefaultGovernorState } from "../../packages/gittensory-miner/lib/governor-state.js";
 import { buildAttemptDeps, parseAttemptArgs, runAttempt } from "../../packages/gittensory-miner/lib/attempt-cli.js";
 import type { PrepareAttemptWorktreeResult } from "../../packages/gittensory-miner/lib/attempt-worktree.js";
 import { DEFAULT_AMS_POLICY_SPEC, DEFAULT_MINER_GOAL_SPEC, parseFocusManifest } from "../../packages/gittensory-engine/src/index";
@@ -82,6 +83,9 @@ function readyPipelineOptions(overrides: Record<string, unknown> = {}) {
     // Never touches the real (filesystem-backed) default portfolio-queue store (#5654) -- a test that cares
     // about a real convergenceInput value overrides this explicitly.
     getAttemptHistory: () => ({ attempts: 0, consecutiveFailures: 0, reenqueues: 0, reachedDone: false }),
+    // Never touches the real (filesystem-backed) default governor-state store (#5655 follow-up) -- a test
+    // that cares whether recordOwnSubmission was actually called overrides this explicitly.
+    recordOwnSubmission: vi.fn(),
     ...overrides,
   };
 }
@@ -108,6 +112,7 @@ afterEach(() => {
   closeDefaultAttemptLog();
   closeDefaultGovernorLedger();
   closeDefaultPortfolioQueueStore();
+  closeDefaultGovernorState();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -416,6 +421,167 @@ describe("runAttempt (#5132)", () => {
       // Real accumulated tokens (#5653), read the same way as costUsd -- from the loop's own finalMeterTotals.
       tokensUsed: 1234,
     });
+  });
+
+  it("REGRESSION (#5655 follow-up): a real submitted outcome with a real changed-files set records real own-submission history, closing the gap that left resolveOwnRejectionHistory silently a no-op", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const worktreeResult = fakeWorktreeResult();
+    const recordOwnSubmissionSpy = vi.fn();
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({
+      outcome: "submitted",
+      spec: { command: "gh pr create", cwd: worktreeResult.worktreePath, timeoutMs: 1000 },
+      execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/9\n" },
+      loopResult: fakeLoopResult({
+        handoffPacket: { changedFiles: [{ path: "src/b.ts" }, { path: "src/a.ts" }] },
+      }),
+    });
+
+    await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      nowMs: Date.parse("2026-07-13T12:00:00.000Z"),
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({ recordOwnSubmission: recordOwnSubmissionSpy, runMinerAttempt: runMinerAttemptSpy }),
+    });
+
+    expect(recordOwnSubmissionSpy).toHaveBeenCalledWith({
+      repoFullName: "acme/widgets",
+      // Sorted, comma-joined, deduped -- the real fingerprintFromChangedFiles contract (#5653 follow-up sibling).
+      fingerprint: "src/a.ts,src/b.ts",
+      submittedAt: "2026-07-13T12:00:00.000Z",
+      pullRequestNumber: 9,
+      issueNumber: 7,
+    });
+  });
+
+  it("REGRESSION (#5655 follow-up): when options.recordOwnSubmission is omitted, runAttempt falls back to the REAL governor-state.js default, not a fabricated no-op", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-cli-governor-state-"));
+    roots.push(root);
+    vi.stubEnv("GITTENSORY_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({
+      outcome: "submitted",
+      spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
+      execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/9\n" },
+      loopResult: fakeLoopResult({ handoffPacket: { changedFiles: [{ path: "src/a.ts" }] } }),
+    });
+    const { recordOwnSubmission: _omitted, ...optionsWithoutRecordOwnSubmission } = readyPipelineOptions({ runMinerAttempt: runMinerAttemptSpy });
+
+    await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...optionsWithoutRecordOwnSubmission,
+    });
+
+    // A real write against the isolated store proves the real default (not a DI stub) actually ran.
+    const { listRecentOwnSubmissions } = await import("../../packages/gittensory-miner/lib/governor-state.js");
+    const submissions = listRecentOwnSubmissions({ repoFullName: "acme/widgets" });
+    expect(submissions).toEqual([
+      expect.objectContaining({ repoFullName: "acme/widgets", fingerprint: "src/a.ts", pullRequestNumber: 9, issueNumber: 7 }),
+    ]);
+  });
+
+  it("does not record own-submission history when the loop's handoff packet reports no changed files -- an honest absence, never a fabricated fingerprint", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const recordOwnSubmissionSpy = vi.fn();
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({
+      outcome: "submitted",
+      spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
+      execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/9\n" },
+      loopResult: fakeLoopResult({ handoffPacket: { changedFiles: [] } }),
+    });
+
+    await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({ recordOwnSubmission: recordOwnSubmissionSpy, runMinerAttempt: runMinerAttemptSpy }),
+    });
+
+    expect(recordOwnSubmissionSpy).not.toHaveBeenCalled();
+  });
+
+  it("records own-submission history with a null pullRequestNumber when the real PR number couldn't be parsed from execResult -- an honest gap, not a skipped record", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const recordOwnSubmissionSpy = vi.fn();
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({
+      outcome: "submitted",
+      spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
+      execResult: { code: 0 }, // no stdout -- PR number genuinely unrecoverable
+      loopResult: fakeLoopResult({ handoffPacket: { changedFiles: [{ path: "src/a.ts" }] } }),
+    });
+
+    await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({ recordOwnSubmission: recordOwnSubmissionSpy, runMinerAttempt: runMinerAttemptSpy }),
+    });
+
+    expect(recordOwnSubmissionSpy).toHaveBeenCalledWith(expect.objectContaining({ pullRequestNumber: null }));
+  });
+
+  it("REGRESSION: a recordOwnSubmission failure never fails an otherwise-successful attempt", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const recordOwnSubmissionSpy = vi.fn().mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({
+      outcome: "submitted",
+      spec: { command: "gh pr create", cwd: "/fake", timeoutMs: 1000 },
+      execResult: { code: 0, stdout: "https://github.com/acme/widgets/pull/9\n" },
+      loopResult: fakeLoopResult({ handoffPacket: { changedFiles: [{ path: "src/a.ts" }] } }),
+    });
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({ recordOwnSubmission: recordOwnSubmissionSpy, runMinerAttempt: runMinerAttemptSpy }),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(recordOwnSubmissionSpy).toHaveBeenCalled();
+  });
+
+  it("does not record own-submission history on a non-submitted outcome", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const recordOwnSubmissionSpy = vi.fn();
+    const runMinerAttemptSpy = vi.fn().mockResolvedValue({ outcome: "abandon", loopResult: fakeLoopResult() });
+
+    await runAttempt(["acme/widgets", "7", "--miner-login", "alice", "--json"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions({ recordOwnSubmission: recordOwnSubmissionSpy, runMinerAttempt: runMinerAttemptSpy }),
+    });
+
+    expect(recordOwnSubmissionSpy).not.toHaveBeenCalled();
   });
 
   it("REGRESSION (#5654): the real portfolio-queue attempt history is read for THIS issue and threads into governor.convergenceInput, not the old hardcoded literal", async () => {

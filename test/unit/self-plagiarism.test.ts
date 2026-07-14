@@ -3,6 +3,7 @@ import {
   buildSelfPlagiarismGovernorLedgerEvent,
   DEFAULT_SELF_PLAGIARISM_CONFIG,
   DEFAULT_SELF_PLAGIARISM_SIMILARITY_THRESHOLD,
+  fingerprintFromChangedFiles,
   fingerprintSimilarity,
   resolveSelfPlagiarismConfig,
   selfPlagiarismCheck,
@@ -51,6 +52,36 @@ describe("fingerprintSimilarity", () => {
 
   it("returns partial Jaccard overlap for overlapping token sets", () => {
     expect(fingerprintSimilarity("aa bb", "bb cc")).toBeCloseTo(1 / 3);
+  });
+});
+
+describe("fingerprintFromChangedFiles", () => {
+  it("sorts and comma-joins a real changed-file set", () => {
+    expect(fingerprintFromChangedFiles(["src/b.ts", "src/a.ts"])).toBe("src/a.ts,src/b.ts");
+  });
+
+  it("dedupes repeated paths", () => {
+    expect(fingerprintFromChangedFiles(["src/a.ts", "src/a.ts"])).toBe("src/a.ts");
+  });
+
+  it("is order-independent -- the same real change set always fingerprints identically", () => {
+    const first = fingerprintFromChangedFiles(["src/b.ts", "src/a.ts", "docs/c.md"]);
+    const second = fingerprintFromChangedFiles(["docs/c.md", "src/a.ts", "src/b.ts"]);
+    expect(first).toBe(second);
+  });
+
+  it("produces an honest empty string for an empty change set, never a fabricated token", () => {
+    expect(fingerprintFromChangedFiles([])).toBe("");
+  });
+
+  it("drops blank/whitespace-only entries instead of turning them into empty tokens", () => {
+    expect(fingerprintFromChangedFiles(["src/a.ts", "  ", ""])).toBe("src/a.ts");
+  });
+
+  it("feeds fingerprintSimilarity as a real Jaccard token set (comma-delimited paths)", () => {
+    const a = fingerprintFromChangedFiles(["src/a.ts", "src/b.ts"]);
+    const b = fingerprintFromChangedFiles(["src/a.ts", "src/c.ts"]);
+    expect(fingerprintSimilarity(a, b)).toBeCloseTo(1 / 3); // {a,b} vs {a,c}: intersection 1, union 3
   });
 });
 

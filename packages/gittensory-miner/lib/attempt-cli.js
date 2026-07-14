@@ -13,7 +13,7 @@
 // own design treats that as "skip that stage entirely"). governor.convergenceInput is now a real per-issue
 // portfolio-queue.js read (#5654), not a placeholder.
 
-import { resolveCodingAgentModeFromConfig, resolveFirstConfiguredCodingAgentDriverName } from "@loopover/engine";
+import { fingerprintFromChangedFiles, resolveCodingAgentModeFromConfig, resolveFirstConfiguredCodingAgentDriverName } from "@loopover/engine";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 import { constructProductionCodingAgentDriver } from "./coding-agent-construction.js";
 import { runSlopAssessment } from "./slop-assessment.js";
@@ -35,6 +35,7 @@ import { resolveAmsPolicy } from "./ams-policy.js";
 import { checkMinerKillSwitch } from "./governor-kill-switch.js";
 import { buildAttemptGovernorContext, buildAttemptLoopInput } from "./attempt-input-builder.js";
 import { getAttemptHistory } from "./portfolio-queue.js";
+import { recordOwnSubmission } from "./governor-state.js";
 import { runMinerAttempt } from "./attempt-runner.js";
 
 const ATTEMPT_USAGE =
@@ -455,6 +456,31 @@ export async function runAttempt(args, options = {}) {
           },
           { fetchLiveIssueSnapshot: deps.fetchLiveIssueSnapshot, executeLocalWrite: deps.executeLocalWrite },
         );
+      }
+
+      // Real own-submission history (#5655 follow-up): governor-state.js's recordOwnSubmission/
+      // listRecentOwnSubmissions store (#5134) existed and was already READ by resolveOwnRejectionHistory
+      // (#5655), but nothing ever WROTE to it -- attempt-runner.js's own header names this exact gap
+      // ("real persistence primitives... but isn't auto-loaded here yet"). Left unfixed, that trigger is a
+      // silent no-op in every real deployment: an empty table always resolves "no prior submissions found."
+      // The fingerprint is the real changed-files set from the loop's own handoff packet (never fabricated) --
+      // omitted (not recorded as an empty placeholder) when the packet reports no changed files at all. A
+      // logging failure must never fail an otherwise-successful attempt, matching the summary-event write below.
+      const changedFiles = result.loopResult.handoffPacket?.changedFiles?.map((file) => file.path) ?? [];
+      const fingerprint = fingerprintFromChangedFiles(changedFiles);
+      if (fingerprint) {
+        try {
+          const record = options.recordOwnSubmission ?? recordOwnSubmission;
+          record({
+            repoFullName: parsed.repoFullName,
+            fingerprint,
+            submittedAt: new Date(nowMs).toISOString(),
+            pullRequestNumber: selfPrNumber,
+            issueNumber: parsed.issueNumber,
+          });
+        } catch {
+          // Deliberately swallowed -- see comment above.
+        }
       }
     }
 

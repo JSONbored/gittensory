@@ -13,6 +13,7 @@ import type { resolveAmsPolicy } from "./ams-policy.js";
 import type { checkMinerKillSwitch } from "./governor-kill-switch.js";
 import type { resolveMinerGoalSpec } from "./miner-goal-spec.js";
 import type { ClaimConflictResult, resolveClaimConflict } from "./claim-conflict-resolver.js";
+import type { recordOwnSubmission } from "./governor-state.js";
 import type { getAttemptHistory } from "./portfolio-queue.js";
 
 type CommonAttemptResultFields = {
@@ -93,6 +94,7 @@ export type RunAttemptOptions = {
   resolveMinerGoalSpec?: typeof resolveMinerGoalSpec;
   runMinerAttempt?: typeof runMinerAttempt;
   resolveClaimConflict?: typeof resolveClaimConflict;
+  recordOwnSubmission?: typeof recordOwnSubmission;
   getAttemptHistory?: typeof getAttemptHistory;
   /** Invoked with the real structured result at every return point, in addition to (never instead of) the
    *  plain exit-code return -- the loop orchestrator's real hook into what actually happened. */

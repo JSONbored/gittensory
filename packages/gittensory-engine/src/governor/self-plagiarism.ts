@@ -81,6 +81,24 @@ export function fingerprintSimilarity(left: string, right: string): number {
   return intersection / union;
 }
 
+/**
+ * Build a real `OwnSubmissionRecord.fingerprint` from the real set of file paths a submission actually
+ * changed (`CodingAgentDriverResult.changedFiles`/`HandoffPacket.changedFiles`, never a fabricated or
+ * partial list). Comma-joined so `fingerprintSimilarity`'s own `tokenSet` splitter treats each path as one
+ * token -- two submissions touching mostly the same files read as near-duplicates. Deduped and sorted so the
+ * same real change set always produces the identical fingerprint regardless of the order paths were reported
+ * in. Empty input (no changed files) is an honest empty string, never a fabricated placeholder token.
+ */
+export function fingerprintFromChangedFiles(paths: readonly string[]): string {
+  const unique = new Set(
+    paths
+      .filter((path): path is string => typeof path === "string")
+      .map((path) => path.trim())
+      .filter((path) => path.length > 0),
+  );
+  return [...unique].sort().join(",");
+}
+
 function submissionTimeMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
