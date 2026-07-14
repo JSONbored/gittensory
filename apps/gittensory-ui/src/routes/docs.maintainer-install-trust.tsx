@@ -220,8 +220,8 @@ API unavailable or stale data
         contribution fits the repo, issue, and subnet goals.
       </p>
       <p>
-        If the repo enables <strong>LoopOver Orb Review Agent</strong>, document which blockers
-        are enforced and why. Otherwise, treat LoopOver output as reviewer context only.
+        If the repo enables <strong>LoopOver Orb Review Agent</strong>, document which blockers are
+        enforced and why. Otherwise, treat LoopOver output as reviewer context only.
       </p>
 
       <h2>Reject weak LoopOver-driven PRs</h2>

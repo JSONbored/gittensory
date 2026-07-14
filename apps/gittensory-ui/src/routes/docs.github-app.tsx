@@ -86,8 +86,8 @@ GET /v1/installations/:id/repair`}
         </li>
         <li>
           Leave <strong>LoopOver Context</strong> advisory while you tune copy and settings. Make{" "}
-          <strong>LoopOver Orb Review Agent</strong> required only after the repo explicitly
-          enables blocking rules.
+          <strong>LoopOver Orb Review Agent</strong> required only after the repo explicitly enables
+          blocking rules.
         </li>
       </ol>
 
@@ -124,8 +124,8 @@ GET /v1/installations/:id/repair`}
         companion, controlled by its own <code>checkRunMode</code> (<code>off</code> /{" "}
         <code>enabled</code>) — these two switches are independent axes, not one setting for both
         checks. <code>checkRunDetailLevel</code> (<code>minimal</code> / <code>standard</code>) only
-        affects <strong>LoopOver Context</strong>'s output depth; it has no effect on the Orb
-        Review Agent check.
+        affects <strong>LoopOver Context</strong>'s output depth; it has no effect on the Orb Review
+        Agent check.
       </p>
       <p>
         <strong>LoopOver Context</strong> is advisory and should not be required in branch
@@ -145,8 +145,8 @@ GET /v1/installations/:id/repair`}
         <code>reviewCheckMode</code> (<code>required</code> / <code>visible</code> /{" "}
         <code>disabled</code>); each dimension then refines an already-enabled gate with a tri-state
         mode — <code>off</code> (not evaluated), <code>advisory</code> (surfaced, never blocks), or{" "}
-        <code>block</code> (can become a hard <strong>LoopOver Orb Review Agent</strong> blocker).
-        A configured blocker fails the gate for any author identically —
+        <code>block</code> (can become a hard <strong>LoopOver Orb Review Agent</strong> blocker). A
+        configured blocker fails the gate for any author identically —
         confirmed-Gittensor-contributor status does not change <em>who</em> can be blocked; it's
         carried through only for on-chain scoring, a separate concern from the gate's own
         merge/close decision.
