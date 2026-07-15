@@ -264,7 +264,7 @@ This completes the read-only AMS MCP tool surface (status, portfolio, claims, ev
 ```json
 {
   "mcpServers": {
-    "gittensory": {
+    "loopover": {
       "command": "loopover-mcp",
       "args": ["--stdio"]
     },
@@ -276,7 +276,7 @@ This completes the read-only AMS MCP tool surface (status, portfolio, claims, ev
 }
 ```
 
-`gittensory` exposes ORB's hosted contributor-workflow tools (issue ranking, PR packet prep, decision packs). `loopover-miner` exposes AMS's own local state-visibility tools listed above (portfolio dashboard, claims, audit feed, run state, plans) — a fully separate, 100% local tool surface with no shared code or network calls between the two. Both follow the same `loopover_*` tool-naming convention (`loopover_...` vs. `loopover_miner_...`), but back onto different stores: ORB's tools read the hosted gittensory backend, AMS's tools read this machine's own local SQLite files (see [Local storage](#local-storage)) — a handful of AMS tools even name the ORB tool they mirror (e.g. `loopover_miner_get_run_state` is the read-only analog of `loopover_get_automation_state`) so the relationship is explicit at the point of use, not just here.
+`loopover` exposes ORB's hosted contributor-workflow tools (issue ranking, PR packet prep, decision packs). `loopover-miner` exposes AMS's own local state-visibility tools listed above (portfolio dashboard, claims, audit feed, run state, plans) — a fully separate, 100% local tool surface with no shared code or network calls between the two. Both follow the same `loopover_*` tool-naming convention (`loopover_...` vs. `loopover_miner_...`), but back onto different stores: ORB's tools read the hosted loopover backend, AMS's tools read this machine's own local SQLite files (see [Local storage](#local-storage)) — a handful of AMS tools even name the ORB tool they mirror (e.g. `loopover_miner_get_run_state` is the read-only analog of `loopover_get_automation_state`) so the relationship is explicit at the point of use, not just here.
 
 ## Version check
 

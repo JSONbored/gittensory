@@ -27,7 +27,7 @@ describe("miner MCP client config example (#5163)", () => {
     const readme = readFileSync(README_PATH, "utf8");
     const config = JSON.parse(extractFirstJsonBlock(readme));
 
-    expect(config.mcpServers.gittensory).toEqual({
+    expect(config.mcpServers.loopover).toEqual({
       command: "loopover-mcp",
       args: ["--stdio"],
     });
@@ -39,7 +39,7 @@ describe("miner MCP client config example (#5163)", () => {
 
   it("cross-references the ORB MCP README's own Client config section", () => {
     const readme = readFileSync(README_PATH, "utf8");
-    expect(readme).toContain("../gittensory-mcp/README.md#client-config");
+    expect(readme).toContain("../loopover-mcp/README.md#client-config");
 
     const mcpReadme = readFileSync(MCP_README_PATH, "utf8");
     expect(mcpReadme).toContain("### Client config");
