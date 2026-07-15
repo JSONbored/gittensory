@@ -185,6 +185,8 @@ loopover-miner status
 
 First-time operators can instead run `loopover-miner init --interactive` (#5176): a guided prompt for `GITHUB_TOKEN` (input hidden, never echoed or written to any log) and an optional coding-agent provider — plus that provider's model/timeout companion vars, each individually skippable with Enter — writes a starter `.env` to the state dir, then automatically reruns `doctor` against the collected values so setup problems surface immediately. `--interactive` makes no network calls of its own beyond what `doctor` already makes (none); non-interactive `init` invocations are unaffected.
 
+The **primary** way to authenticate AMS's git operations (#6116) is `loopover-mcp login` (the GitHub App device flow, `npm install -g @loopover/mcp@latest` then `loopover-mcp login`) — the same one command that already authenticates ORB's MCP session. AMS resolves a live token from that session automatically; no `GITHUB_TOKEN` setup is required for the common case. A manually-created `GITHUB_TOKEN` PAT remains supported as an explicit fallback (it always wins over a session token when set) for self-host operators who already have one configured, or who need a token with different scopes than the App grants. `doctor`'s `github-token` check reports either source as satisfying the requirement.
+
 From a local checkout:
 
 ```sh
