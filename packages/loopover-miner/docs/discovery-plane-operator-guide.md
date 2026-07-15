@@ -2,14 +2,17 @@
 
 Operator-facing guide for the **optional** Phase 6 hosted discovery-index plane ([#4250](https://github.com/JSONbored/gittensory/issues/4250)). This is the client/miner half of that roadmap item: how a `loopover-miner` instance opts in, what it may send, and what never leaves the operator's machine.
 
-> **Placeholder scope:** the concrete env var names, HTTP paths, and telemetry event types below are **provisional** until the sibling contract/telemetry/client issues land. When those ship, update this file to match the real symbols — do not treat the TBD names as stable API yet.
+> **Scope:** the request/response **contract shape**, the telemetry event schema, and the client soft-claim
+> request builder have now **shipped** as real, tested modules (see the table). What remains **provisional** is
+> only the operator-facing **opt-in wiring** — the env var names and HTTP paths further below are still TBD
+> pending the hosted server and the miner-side opt-in (#4250). Do not treat those env var names as stable API yet.
 >
-> | Issue | What it defines |
-> |-------|-----------------|
-> | [#4300](https://github.com/JSONbored/gittensory/issues/4300) | Public-data-only discovery-index API contract (request/response shapes) |
-> | [#4301](https://github.com/JSONbored/gittensory/issues/4301) | Anonymized telemetry event schema for the optional hosted plane |
-> | [#4302](https://github.com/JSONbored/gittensory/issues/4302) | Client-side soft-claim coordination request builder |
-> | [#4250](https://github.com/JSONbored/gittensory/issues/4250) | Hosted discovery-index server (maintainer-operated counterpart) |
+> | Defines | Status |
+> |---------|--------|
+> | Public-data-only discovery-index API contract — `DiscoveryIndexQuery` / `DiscoveryIndexResponse` / `DiscoveryIndexCandidate` (request/response shapes) | ✅ **shipped**, stable at `DISCOVERY_INDEX_CONTRACT_VERSION` 1 — [`discovery-index-contract.ts`](../../loopover-engine/src/discovery-index-contract.ts), [`discovery-index-contract.md`](discovery-index-contract.md) ([#4300](https://github.com/JSONbored/gittensory/issues/4300)) |
+> | Anonymized telemetry event schema for the optional hosted plane | ✅ **shipped** — [`miner-telemetry.ts`](../../loopover-engine/src/miner-telemetry.ts) ([#4301](https://github.com/JSONbored/gittensory/issues/4301)) |
+> | Client-side soft-claim coordination request builder | ✅ **shipped** — [`discovery-soft-claim.ts`](../../loopover-engine/src/discovery-soft-claim.ts) ([#4302](https://github.com/JSONbored/gittensory/issues/4302)) |
+> | Hosted discovery-index server + the operator-facing opt-in wiring | ⏳ **still open** — [#4250](https://github.com/JSONbored/gittensory/issues/4250) (the actual blocker for the opt-in mechanism below; the env var names remain TBD until it lands) |
 
 Part of the Miner Wave 2 discovery plane ([#2353](https://github.com/JSONbored/gittensory/issues/2353) Phase 6). Distinct from Phase 1's **local-only** metadata fan-out documented in [`cross-repo-discovery-phase1.md`](cross-repo-discovery-phase1.md) — that path never phones home today.
 
@@ -36,9 +39,11 @@ The plane:
 
 Local discovery (`opportunity-fanout` + `opportunity-ranker`) continues to work with **zero** hosted configuration.
 
-## Opt-in mechanism (names TBD — update when #4300/#4301 ship)
+## Opt-in mechanism (env var names still TBD — pending the opt-in wiring, #4250)
 
-Until the contract issue lands, treat these as **documentation placeholders** for the shape operators should expect:
+The request/response contract has now shipped (see the scope table above), but the operator-facing opt-in env
+vars below are **not implemented yet** — treat them as **documentation placeholders** for the shape operators
+should expect once the opt-in wiring (#4250) lands:
 
 | Variable (provisional) | Default | Purpose |
 |------------------------|---------|---------|
