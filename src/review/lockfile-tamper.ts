@@ -113,8 +113,14 @@ function versionChanged(removed: string | undefined, added: string | undefined):
  *  actively maintained repo's lockfile and is out of scope here. */
 function scanPackageLockPatch(path: string, patch: string): LockfileTamperCandidate[] {
   const byEntry = new Map<string, MutableCandidate>();
-  let currentEntryKey: string | null = null;
-  let currentPackageName: string | null = null;
+  // A single flat currentEntryKey pointer loses the outer entry when a `node_modules/...` entry contains its own
+  // nested `dependencies`/`devDependencies`/`optionalDependencies` sub-object: the nested container header reset
+  // the pointer to null and never restored it, so any resolved/integrity/version line for the SAME outer entry
+  // appearing after the nested object was silently skipped — an attacker could reorder an entry's keys to put
+  // `dependencies` before `resolved`/`integrity` and evade the tamper check entirely (#5837). Track a stack of
+  // brace scopes instead: each object-header line pushes a frame (an entry, or null for a container/root/other),
+  // each closing brace pops one, so closing a nested sub-object restores the enclosing entry as the current one.
+  const scopeStack: Array<{ entryKey: string; packageName: string } | null> = [];
   let sawPackagesEntry = false;
 
   const entryFor = (entryKey: string, packageName: string): MutableCandidate => {
@@ -140,23 +146,26 @@ function scanPackageLockPatch(path: string, patch: string): LockfileTamperCandid
       const key = objectHeader[1]!;
       const nodeModulesPackage = npmPackageFromNodeModulesPath(key);
       if (nodeModulesPackage) {
-        currentEntryKey = key;
-        currentPackageName = nodeModulesPackage;
+        scopeStack.push({ entryKey: key, packageName: nodeModulesPackage });
         sawPackagesEntry = true;
       } else if (!sawPackagesEntry && !CONTAINER_KEYS.has(key)) {
-        currentEntryKey = key;
-        currentPackageName = key;
+        scopeStack.push({ entryKey: key, packageName: key });
       } else {
-        currentEntryKey = null;
-        currentPackageName = null;
+        // A container/root/unrecognized header (incl. a nested dependencies sub-object) — not an entry itself,
+        // but still a brace scope, so push a null frame that a matching closing brace will pop back off.
+        scopeStack.push(null);
       }
       continue;
     }
     if (body === "}" || body.startsWith("},")) {
-      currentEntryKey = null;
-      currentPackageName = null;
+      scopeStack.pop();
     }
-    if (!currentEntryKey || !currentPackageName || line.sign === " ") continue;
+    // The current entry is the innermost open scope IF that scope is an entry (we're directly in its body). A
+    // resolved/integrity/version line nested inside a sub-object (top frame null) is correctly not attributed.
+    const current = scopeStack.length > 0 ? scopeStack[scopeStack.length - 1] : null;
+    if (!current || line.sign === " ") continue;
+    const currentEntryKey = current.entryKey;
+    const currentPackageName = current.packageName;
 
     const resolvedMatch = /^"resolved"\s*:\s*"([^"]*)"/.exec(body);
     const integrityMatch = /^"integrity"\s*:\s*"([^"]*)"/.exec(body);

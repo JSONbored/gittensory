@@ -95,6 +95,71 @@ describe("lockfileTamperRiskFinding", () => {
     expect(finding?.detail).toContain("lodash");
   });
 
+  // #5837: a nested dependencies sub-object inside an entry, appearing BEFORE the entry's own
+  // resolved/integrity/version lines (key order reversed from real npm output), must not make the parser lose
+  // track of the outer entry — otherwise a reordered-key tamper diff evades detection entirely.
+  it("still detects tamper when the entry's dependencies sub-object precedes its resolved/integrity/version (regression for #5837)", () => {
+    const lockPatch = [
+      '@@ -100,12 +100,12 @@',
+      '     "node_modules/lodash": {',
+      '       "dependencies": {',
+      '-        "helper": "^1.0.0"',
+      '+        "helper": "^1.0.1"',
+      '       },',
+      '-      "version": "4.17.20",',
+      '-      "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",',
+      '-      "integrity": "sha512-oldoldold=="',
+      '+      "version": "4.17.20",',
+      '+      "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",',
+      '+      "integrity": "sha512-tamperedtampered=="',
+      '     },',
+    ].join("\n");
+    // resolved/integrity changed but version did NOT — the classic tamper tell, here after a nested sub-object.
+    const finding = lockfileTamperRiskFinding([lockfilePatch(lockPatch)]);
+    expect(finding).not.toBeNull();
+    expect(finding?.code).toBe("lockfile_tamper_risk");
+    expect(finding?.detail).toContain("lodash");
+  });
+
+  // #5837 + #2692: two distinct entries share the bare name "foo" (a nested duplicate under bar), each carrying
+  // its own dependencies sub-object. The full-path entry keying (#2692) and the nesting-depth fix must compose:
+  // the genuine bump on the top-level foo must NOT mask the unbumped resolved/integrity edit on the nested foo.
+  it("keeps two same-named entries independent when each also has a nested dependencies object (#5837 + #2692)", () => {
+    const lockPatch = [
+      '@@ -200,20 +200,20 @@',
+      '     "node_modules/foo": {',
+      '       "dependencies": {',
+      '-        "dep": "^1.0.0"',
+      '+        "dep": "^1.1.0"',
+      '       },',
+      '-      "version": "1.0.0",',
+      '-      "resolved": "https://registry.npmjs.org/foo/-/foo-1.0.0.tgz",',
+      '-      "integrity": "sha512-fooold=="',
+      '+      "version": "1.1.0",',
+      '+      "resolved": "https://registry.npmjs.org/foo/-/foo-1.1.0.tgz",',
+      '+      "integrity": "sha512-foonew=="',
+      '     },',
+      '     "node_modules/bar/node_modules/foo": {',
+      '       "dependencies": {',
+      '-        "dep": "^2.0.0"',
+      '+        "dep": "^2.0.1"',
+      '       },',
+      '-      "version": "2.0.0",',
+      '-      "resolved": "https://registry.npmjs.org/foo/-/foo-2.0.0.tgz",',
+      '-      "integrity": "sha512-nestedold=="',
+      '+      "version": "2.0.0",',
+      '+      "resolved": "https://registry.npmjs.org/foo/-/foo-2.0.0.tgz",',
+      '+      "integrity": "sha512-nestedtampered=="',
+      '     },',
+    ].join("\n");
+    // Top-level foo bumped legitimately (all three change); the nested foo's integrity changed with NO version
+    // bump — still flagged, because the two entries are keyed by their distinct full paths, not the shared name.
+    const finding = lockfileTamperRiskFinding([lockfilePatch(lockPatch)]);
+    expect(finding).not.toBeNull();
+    expect(finding?.code).toBe("lockfile_tamper_risk");
+    expect(finding?.detail).toContain("foo");
+  });
+
   it("triggers on a resolved URL outside the npm registry, even with a version bump", () => {
     const lockPatch = [
       '@@ -100,8 +100,8 @@',
