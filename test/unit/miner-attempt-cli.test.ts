@@ -1580,6 +1580,27 @@ describe("runAttempt: maxConcurrentClaims enforcement (#6056)", () => {
     });
   });
 
+  it("REGRESSION: reports a human-readable message when the cap is already met", async () => {
+    const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    claimLedger.claimIssue("acme/widgets", 99, "other-attempt");
+
+    const exitCode = await runAttempt(["acme/widgets", "7", "--miner-login", "alice"], {
+      env: { MINER_CODING_AGENT_PROVIDER: "noop" },
+      openWorktreeAllocator: () => allocator,
+      openClaimLedger: () => claimLedger,
+      initEventLedger: () => eventLedger,
+      initAttemptLog: () => attemptLog,
+      initGovernorLedger: () => governorLedger,
+      ...readyPipelineOptions(),
+    });
+
+    expect(exitCode).toBe(11);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("maxConcurrentClaims cap (1) is already met (1 active claim(s))"),
+    );
+  });
+
   it("REGRESSION: honors --json on the maxConcurrentClaims rejection path", async () => {
     const { allocator, claimLedger, eventLedger, attemptLog, governorLedger } = tempLedgers();
     const onResult = vi.fn();
