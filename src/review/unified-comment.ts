@@ -203,6 +203,12 @@ export interface UnifiedSignalRow {
   result?: string;
   /** Evidence cell, e.g. "#1372". */
   evidence?: string;
+  /** True only for a row that can actually change the verdict (today: just "Gate result" — see
+   *  panelRowsToSignalRows, which sets this from the row's own `key === "gateResult"`). Every other row is
+   *  advisory context by construction (#6067) — its own Evidence/Action text already says so (e.g. "No
+   *  action.", "Advisory only."). Drives the split between the always-visible "Decision drivers" list and
+   *  the collapsed "Context & advisory signals" fold. Absent/false ⇒ advisory. */
+  gates?: boolean;
 }
 
 /** A collapsed section (loopover side: signal definitions, contributor next steps, …). */
@@ -587,7 +593,10 @@ function nonRequiredFailingChecksBlock(readiness: MergeReadiness | undefined): s
   return lines.join("\n");
 }
 
-function signalTable(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
+/** The synthetic "Code review" row -- derived from the AI reviewers' own blocker count, never from
+ *  `ctx.signals` -- so it always exists and is never subject to `review.fields` visibility (matches its
+ *  pre-#6067 behavior as the signal table's unconditional first row). */
+function codeReviewRow(input: UnifiedReviewInput): UnifiedSignalRow {
   const blockerCount = (input.blockers ?? []).length;
   const reviewerEvidence =
     input.reviewerCount > 1
@@ -595,19 +604,48 @@ function signalTable(input: UnifiedReviewInput, ctx: UnifiedCommentContext): str
       : input.reviewerCount === 1
         ? "1 reviewer"
         : "No AI review summary";
-  const codeRow: UnifiedSignalRow = {
+  return {
     label: "Code review",
     state: blockerCount ? "fail" : "ok",
     result: blockerCount ? plural(blockerCount, "blocker") : "No blockers",
     evidence: reviewerEvidence,
   };
-  const rows = [codeRow, ...(ctx.signals ?? [])];
-  const lines = rows.map((r, i) => {
-    const labelText = escapePublicHtmlAngles(r.label);
-    const label = i === 0 ? `**${labelText}**` : labelText;
+}
+
+/** One "Decision drivers" bullet: `- {icon} {label} — {result} ({evidence})`. `evidence` is parenthesized
+ *  only when present, matching how sparse the underlying data can legitimately be (e.g. an unconfigured gate). */
+function signalRowLine(r: UnifiedSignalRow): string {
+  const labelText = escapePublicHtmlAngles(r.label);
+  const resultText = r.result ? escapePublicHtmlAngles(r.result) : "";
+  const evidenceText = r.evidence ? ` (${escapePublicHtmlAngles(r.evidence)})` : "";
+  return `- ${SIGNAL_ICON[r.state]} ${labelText} — ${resultText}${evidenceText}`;
+}
+
+/** The always-visible "Decision drivers" list (#6067): ONLY the rows that can actually move the verdict --
+ *  the synthetic Code review row, plus any host-supplied row marked `gates: true` (today: just "Gate
+ *  result", see `panelRowsToSignalRows`). Replaces the old signal table's synthetic-first-row special case
+ *  with an explicit, always-non-empty list (Code review alone is a valid, common case -- e.g. no gate
+ *  configured for the repo). A short bullet list, not a table: this is meant to be scanned in one glance,
+ *  not cross-referenced like the advisory rows below. */
+function decisionDriverBlock(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
+  const rows = [codeReviewRow(input), ...(ctx.signals ?? []).filter((r) => r.gates)];
+  const lines = rows.map((r) => signalRowLine(r));
+  return `**Decision drivers**\n${lines.join("\n")}`;
+}
+
+/** Every host-supplied row that is NOT `gates: true` -- advisory context that never moves the verdict (each
+ *  row's own Evidence/Action text already says so, e.g. "No action.", "Advisory only."). Rendered as the
+ *  same Signal/Result/Evidence table the pre-#6067 signal table used, just scoped to this subset and moved
+ *  behind a fold (see the "Context & advisory signals" collapsible in renderUnifiedReviewComment) instead of
+ *  always-visible -- most of what made the old always-rendered table feel noisy. "" when there is nothing
+ *  advisory to show (e.g. the host passed no signals at all), so the caller can omit the section entirely. */
+function advisorySignalsTable(ctx: UnifiedCommentContext): string {
+  const rows = (ctx.signals ?? []).filter((r) => !r.gates);
+  if (rows.length === 0) return "";
+  const lines = rows.map((r) => {
     const resultText = r.result ? ` ${escapePublicHtmlAngles(r.result)}` : "";
     const result = `${SIGNAL_ICON[r.state]}${resultText}`;
-    return `| ${label} | ${result} | ${escapePublicHtmlAngles(r.evidence ?? "")} |`;
+    return `| ${escapePublicHtmlAngles(r.label)} | ${result} | ${escapePublicHtmlAngles(r.evidence ?? "")} |`;
   });
   return ["| Signal | Result | Evidence |", "|---|---|---|", ...lines].join("\n");
 }
@@ -726,7 +764,16 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
     blocks.push(details("Flagged checks (non-blocking)", nonRequiredFailingChecks, undefined, collapsiblesOpen));
   }
 
-  blocks.push(signalTable(input, ctx));
+  // #6067: the old always-rendered 9-row table is split into an always-visible "Decision drivers" list
+  // (only rows that can move the verdict) and a collapsed "Context & advisory signals" fold (everything
+  // else). Like the table it replaces, NEITHER is gated by `review.comment_verbosity: quiet` -- these are
+  // gate-relevant/context signals, not decorative detail (matches the file's existing verbosity contract:
+  // only Nits + extraCollapsibles are ever dropped by `quiet`).
+  blocks.push(decisionDriverBlock(input, ctx));
+  const advisoryBody = advisorySignalsTable(ctx);
+  if (advisoryBody) {
+    blocks.push(details("Context & advisory signals", advisoryBody, "never blocks the verdict", collapsiblesOpen));
+  }
 
   // Linked-issue satisfaction advisory (#2174): additive, collapsed section — omitted entirely when the host
   // never resolved a result (default) or `review.comment_verbosity: quiet` trims decorative detail, exactly
