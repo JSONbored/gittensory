@@ -232,6 +232,15 @@ describe("runPurge --dry-run (#5564)", () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining("Usage: loopover-miner purge"));
   });
 
+  it("emits the {ok:false,error} JSON envelope for an argument error when --json is passed (#5915)", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runPurge(["--json"])).toBe(2);
+    expect(error).not.toHaveBeenCalled();
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("Usage: loopover-miner purge") });
+  });
+
   it("opens the real default on-disk stores in dry-run when no resolveDbPaths override is supplied", () => {
     const root = tempDir();
     const previousDirs: Record<string, string | undefined> = {

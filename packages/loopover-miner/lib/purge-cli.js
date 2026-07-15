@@ -24,6 +24,7 @@ import {
   countStoreByRepo,
   describeError,
 } from "./store-maintenance.js";
+import { argsWantJson, reportCliFailure } from "./cli-error.js";
 
 const PURGE_USAGE = "Usage: loopover-miner purge --repo <owner/repo> [--dry-run] [--json]";
 
@@ -166,8 +167,7 @@ function renderPurgeSummary(summary) {
 export function runPurge(args, options = {}) {
   const parsed = parsePurgeArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
-    return 2;
+    return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
   if (parsed.dryRun) {
