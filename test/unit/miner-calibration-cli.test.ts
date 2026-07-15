@@ -114,6 +114,23 @@ describe("loopover-miner calibration CLI (#4849)", () => {
     expect(String(err.mock.calls[0]?.[0])).toContain("Unknown option");
   });
 
+  // #5834: the check only rejected tokens starting with "-", so a stray positional was silently ignored and the
+  // command reported a calibration run the operator never asked for. This command takes no positionals at all.
+  it("rejects a stray positional argument with exit code 1 (#5834)", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(runCalibrationCli(["foo"], envForTempStores())).toBe(1);
+    expect(String(err.mock.calls[0]?.[0])).toContain("Unknown option: foo");
+  });
+
+  it("rejects a stray positional alongside --json, on the JSON error contract (#5834)", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(runCalibrationCli(["--json", "extra"], envForTempStores())).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ ok: false });
+    expect(String(JSON.parse(String(log.mock.calls[0]?.[0])).error)).toContain("Unknown option: extra");
+    expect(err).not.toHaveBeenCalled();
+  });
+
   it("emits JSON when ledger open fails with --json (#4836)", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const err = vi.spyOn(console, "error").mockImplementation(() => {});

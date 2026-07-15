@@ -68,7 +68,10 @@ function renderReportText(report) {
  */
 export function runCalibrationCli(args = [], env = process.env) {
   const json = args.includes("--json");
-  const unknown = args.find((token) => token.startsWith("-") && token !== "--json");
+  // This command takes no positional arguments, so anything that is not `--json` is a mistake -- including a
+  // bare positional (`calibration foo`), which a `startsWith("-")` check silently let through (#5834). Mirrors
+  // the strict zero-positional discipline `ledger list` (event-ledger-cli.js) already applies.
+  const unknown = args.find((token) => token !== "--json");
   if (unknown) {
     return reportCliFailure(json, `Unknown option: ${unknown}. ${CALIBRATION_USAGE}`, 1);
   }
