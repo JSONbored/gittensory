@@ -2,12 +2,21 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  emptyPortfolioQueueSummary,
   fetchPortfolioQueue,
   PORTFOLIO_QUEUE_API_PATH,
   type PortfolioQueueResult,
   type PortfolioQueueSummary,
 } from "./lib/portfolio-queue";
+
+// Local fixture (#6187). This was lib/portfolio-queue.ts's exported emptyPortfolioQueueSummary, but nothing
+// outside these tests ever called it -- the app's routes render whatever the API returns rather than
+// constructing an empty summary. It lives here now, where its only real consumers are.
+const emptyPortfolioQueueSummary = (): PortfolioQueueSummary => ({
+  total: 0,
+  byStatus: { queued: 0, in_progress: 0, done: 0 },
+  repos: [],
+  oldestQueuedAgeMs: null,
+});
 import { PortfolioPage, PortfolioQueueView } from "./routes/portfolio";
 import { handlePortfolioQueueRequest, type PortfolioQueueApiDeps } from "../vite-portfolio-queue-api";
 
@@ -51,17 +60,6 @@ const rawQueueRows = [
     enqueuedAt: "2026-07-10T05:30:00.000Z",
   },
 ];
-
-describe("emptyPortfolioQueueSummary (#4306)", () => {
-  it("summarizes an empty queue to zeros with no repos", () => {
-    expect(emptyPortfolioQueueSummary()).toEqual({
-      total: 0,
-      byStatus: { queued: 0, in_progress: 0, done: 0 },
-      repos: [],
-      oldestQueuedAgeMs: null,
-    });
-  });
-});
 
 describe("PortfolioQueueView (#4306, per-repo detail added by #4846)", () => {
   it("renders one card per status with the aggregated global counts", () => {

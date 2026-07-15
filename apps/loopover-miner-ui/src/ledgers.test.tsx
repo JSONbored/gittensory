@@ -2,15 +2,24 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  emptyLedgersSummary,
   fetchLedgers,
   LEDGERS_API_PATH,
   type LedgersResult,
   type LedgersSummary,
 } from "./lib/ledgers";
-import { defaultGovernorPauseState, type GovernorPauseState, type GovernorPauseStateResult } from "./lib/governor";
+import { type GovernorPauseState, type GovernorPauseStateResult } from "./lib/governor";
 import { LedgersPage, LedgersView } from "./routes/ledgers";
 import { handleLedgersRequest, type LedgersApiDeps } from "../vite-ledgers-api";
+
+// Local fixtures (#6187). Both were exports in lib/, but nothing outside these tests ever called them: the
+// app's routes render whatever the API returns rather than constructing an empty/default state. They live
+// here now, where their only real consumers are.
+const emptyLedgersSummary = (): LedgersSummary => ({
+  claims: { total: 0, byStatus: { active: 0, released: 0, expired: 0 } },
+  events: { total: 0, byType: {}, recent: [] },
+  governor: { total: 0, byEventType: {} },
+});
+const defaultGovernorPauseState = (): GovernorPauseState => ({ paused: false, reason: null, pausedAt: null });
 
 const fixtureSummary: LedgersSummary = {
   claims: { total: 3, byStatus: { active: 2, released: 1, expired: 0 } },
@@ -74,16 +83,6 @@ const rawGovernorRows = [
     payload_json: '{"detail":"LEAK_CANARY_GOV_B"}',
   },
 ];
-
-describe("emptyLedgersSummary (#4855)", () => {
-  it("summarizes empty ledgers to zeros", () => {
-    expect(emptyLedgersSummary()).toEqual({
-      claims: { total: 0, byStatus: { active: 0, released: 0, expired: 0 } },
-      events: { total: 0, byType: {}, recent: [] },
-      governor: { total: 0, byEventType: {} },
-    });
-  });
-});
 
 describe("LedgersView (#4855)", () => {
   it("renders claim status counts, the governor type table, and the recent-events feed", () => {

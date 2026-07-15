@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  defaultGovernorPauseState,
   fetchGovernorPauseState,
   GOVERNOR_PAUSE_API_PATH,
   GOVERNOR_PAUSE_STATE_API_PATH,
@@ -26,11 +25,10 @@ const pausedState: GovernorPauseState = {
   pausedAt: "2026-07-13T12:00:00.000Z",
 };
 
-describe("defaultGovernorPauseState (#4857)", () => {
-  it("is the not-paused state with no reason/timestamp", () => {
-    expect(defaultGovernorPauseState()).toEqual({ paused: false, reason: null, pausedAt: null });
-  });
-});
+// Local not-paused fixture (#6187). This used to be lib/governor.ts's exported defaultGovernorPauseState, but
+// nothing outside these tests ever called it — the app's routes never construct a default pause state, they
+// render whatever the API returns. It lives here now, where its only real consumers are.
+const defaultGovernorPauseState = (): GovernorPauseState => ({ paused: false, reason: null, pausedAt: null });
 
 describe("GovernorControlSection (#4857)", () => {
   it("renders the loading state before the first result arrives", () => {
