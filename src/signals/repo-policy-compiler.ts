@@ -112,7 +112,10 @@ function issueDiscoverySummary(preference: FocusManifestLanePreference, summary:
   return "Issue discovery is optional; confirm maintainer scope before filing new issues.";
 }
 
-function labelPolicyNote(linkedIssuePolicy: string): string {
+/** Shared by {@link focusManifestPolicyToCompilerOutput} (onboarding-pack.ts) so both adapters compile the same
+ *  manifest to the same `labelPolicy.note` (#5943). The reverse import there is type-only and erased, so this
+ *  export introduces no runtime cycle. */
+export function labelPolicyNote(linkedIssuePolicy: string): string {
   if (linkedIssuePolicy === "required") return "Link a tracked issue before opening a pull request.";
   if (linkedIssuePolicy === "preferred") return "Link a tracked issue when one exists.";
   return "Use labels to explain accepted scope, not to promise outcomes.";

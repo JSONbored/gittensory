@@ -5,10 +5,11 @@ import {
 } from "../../src/services/repo-onboarding-pack";
 import { createTestEnv } from "../helpers/d1";
 import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
-import { parseFocusManifestContent } from "../../src/signals/focus-manifest";
+import { compileFocusManifestPolicy, parseFocusManifest, parseFocusManifestContent } from "../../src/signals/focus-manifest";
 import { compileRepoPolicyCompilerOutput } from "../../src/signals/repo-policy-compiler";
 import {
   buildRepoOnboardingPackPreview,
+  focusManifestPolicyToCompilerOutput,
   isRepoOnboardingPackPublicSafe,
   type RepoPolicyCompilerOutput,
 } from "../../src/signals/onboarding-pack";
@@ -261,6 +262,42 @@ describe("buildRepoOnboardingPackPreview", () => {
     });
     expect(preview.droppedPublicItems).toEqual([]);
     expect(isRepoOnboardingPackPublicSafe(preview)).toBe(true);
+  });
+});
+
+// Both adapters compile the SAME FocusManifest into the same RepoPolicyCompilerOutput.labelPolicy shape, so they
+// must not disagree on any field: focusManifestPolicyToCompilerOutput omitted `note` entirely (#5943), silently
+// dropping the linked-issue guidance from registration-readiness's onboardingPackPreview while the direct
+// onboarding-pack API/MCP path (compileRepoPolicyCompilerOutput) kept it.
+describe("focusManifestPolicyToCompilerOutput labelPolicy.note parity (#5943)", () => {
+  const GENERATED_AT = "2026-06-02T12:00:00.000Z";
+
+  it.each([
+    ["required", /tracked issue before opening/i],
+    ["preferred", /when one exists/i],
+    ["optional", /accepted scope/i],
+  ] as const)("linkedIssuePolicy %s yields the same non-null note as compileRepoPolicyCompilerOutput", (linkedIssuePolicy, expected) => {
+    const manifest = parseFocusManifest({ wantedPaths: ["src/"], linkedIssuePolicy });
+    const fromAdapter = focusManifestPolicyToCompilerOutput(
+      compileFocusManifestPolicy("owner/repo", manifest, { generatedAt: GENERATED_AT }),
+    );
+    const fromCompiler = compileRepoPolicyCompilerOutput({ repoFullName: "owner/repo", manifest, generatedAt: GENERATED_AT });
+
+    expect(fromAdapter.labelPolicy?.note).toEqual(expect.any(String));
+    expect(fromAdapter.labelPolicy?.note).toMatch(expected);
+    expect(fromAdapter.labelPolicy?.note).toBe(fromCompiler.labelPolicy?.note);
+  });
+
+  it("leaves every other labelPolicy field untouched (the fix is scoped to note)", () => {
+    const manifest = parseFocusManifest({ wantedPaths: ["src/"], preferredLabels: ["bug"], linkedIssuePolicy: "required" });
+    const output = focusManifestPolicyToCompilerOutput(compileFocusManifestPolicy("owner/repo", manifest, { generatedAt: GENERATED_AT }));
+
+    expect(output.labelPolicy).toEqual({
+      preferredLabels: ["bug"],
+      requiredLabels: [],
+      discouragedLabels: [],
+      note: "Link a tracked issue before opening a pull request.",
+    });
   });
 });
 

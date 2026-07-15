@@ -308,6 +308,32 @@ describe("buildRegistrationReadiness", () => {
     expect(JSON.stringify(report.onboardingPackPreview)).not.toMatch(FORBIDDEN_PUBLIC_LANGUAGE);
   });
 
+  // #5943: focusManifestPolicyToCompilerOutput dropped labelPolicy.note, so this preview always rendered
+  // note: null — silently losing the linked-issue guidance the same manifest produces via the direct
+  // onboarding-pack API/MCP path (compileRepoPolicyCompilerOutput).
+  it("onboardingPackPreview surfaces labelPolicy.note from the manifest's linkedIssuePolicy (#5943)", () => {
+    const repo = repoFor("octo/note", configFor({ repo: "octo/note" }));
+    const readinessFor = (linkedIssuePolicy: "required" | "preferred" | "optional") =>
+      buildRegistrationReadiness({
+        repoFullName: repo.fullName,
+        repo,
+        settings: settingsFor(repo.fullName),
+        installation: healthyInstall,
+        ...signalsFor(repo, [], [], [label("bug")]),
+        focusManifest: parseFocusManifest({ wantedPaths: ["src/signals/"], linkedIssuePolicy }),
+      });
+
+    expect(readinessFor("required").onboardingPackPreview?.labelPolicy.note).toBe(
+      "Link a tracked issue before opening a pull request.",
+    );
+    expect(readinessFor("preferred").onboardingPackPreview?.labelPolicy.note).toBe(
+      "Link a tracked issue when one exists.",
+    );
+    expect(readinessFor("optional").onboardingPackPreview?.labelPolicy.note).toBe(
+      "Use labels to explain accepted scope, not to promise outcomes.",
+    );
+  });
+
   it("onboardingPackPreview strips unsafe public notes via the policy compiler pipeline", () => {
     const repo = repoFor("octo/unsafe", configFor({ repo: "octo/unsafe" }));
     const report = buildRegistrationReadiness({
