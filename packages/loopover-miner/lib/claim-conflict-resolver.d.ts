@@ -26,4 +26,14 @@ export type ClaimConflictResult =
   | { checked: true; isWinner: true; winnerNumber: number | null; competingCount: number }
   | { checked: true; isWinner: false; winnerNumber: number | null; competingCount: number; closeResult: unknown };
 
-export function resolveClaimConflict(input: ClaimConflictInput, deps: ClaimConflictDeps): Promise<ClaimConflictResult>;
+export type ClaimConflictRetryOptions = {
+  maxAttempts?: number;
+  sleepFn?: (ms: number) => Promise<unknown>;
+  backoffMs?: (attempt: number) => number;
+};
+
+export function resolveClaimConflict(
+  input: ClaimConflictInput,
+  deps: ClaimConflictDeps,
+  options?: ClaimConflictRetryOptions,
+): Promise<ClaimConflictResult>;

@@ -96,6 +96,7 @@ describe("resolveClaimConflict (#4848)", () => {
     const result = await resolveClaimConflict(
       { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 5, selfClaimedAt: "2026-01-01T00:00:00Z", minerLogin: "miner-bot" },
       { fetchLiveIssueSnapshot, executeLocalWrite },
+      { sleepFn: async () => {} },
     );
 
     expect(result).toEqual({ checked: true, isWinner: true, winnerNumber: 5, competingCount: 0 });
@@ -109,6 +110,7 @@ describe("resolveClaimConflict (#4848)", () => {
     const result = await resolveClaimConflict(
       { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 5, selfClaimedAt: "2026-01-01T00:00:00Z", minerLogin: "miner-bot" },
       { fetchLiveIssueSnapshot, executeLocalWrite },
+      { sleepFn: async () => {} },
     );
 
     expect(result).toEqual({ checked: false, reason: "live_state_unavailable" });
@@ -124,6 +126,7 @@ describe("resolveClaimConflict (#4848)", () => {
     const result = await resolveClaimConflict(
       { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 5, selfClaimedAt: "2026-01-01T00:00:00Z", minerLogin: "miner-bot" },
       { fetchLiveIssueSnapshot, executeLocalWrite },
+      { sleepFn: async () => {} },
     );
 
     expect(result).toEqual({ checked: false, reason: "live_state_unavailable" });
@@ -148,5 +151,90 @@ describe("resolveClaimConflict (#4848)", () => {
     const [spec] = executeLocalWrite.mock.calls[0]!;
     expect(spec.command).not.toContain("#null");
     expect(spec.command).toContain("another open pull request already claims this issue");
+  });
+
+  it("retries with backoff and detects a competitor that only propagates on a later attempt (#6058)", async () => {
+    const competitor = snapshot([{ number: 5, state: "open", authorLogin: "someone-else", createdAt: "2026-01-01T00:00:00Z" }]);
+    // First check: GitHub's index hasn't surfaced the competing PR yet; second check (after backoff): it has.
+    const fetchLiveIssueSnapshot = vi.fn().mockResolvedValueOnce(snapshot([])).mockResolvedValueOnce(competitor);
+    const executeLocalWrite = vi.fn(async (spec: { action: string; command: string }) => ({ action: spec.action, code: 0, stdout: "", stderr: "", timedOut: false }));
+    const sleeps: number[] = [];
+
+    const result = await resolveClaimConflict(
+      { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 6, selfClaimedAt: "2026-01-02T00:00:00Z", minerLogin: "miner-bot" },
+      { fetchLiveIssueSnapshot, executeLocalWrite },
+      { sleepFn: async (ms: number) => { sleeps.push(ms); }, backoffMs: (attempt: number) => attempt * 100 },
+    );
+
+    expect(fetchLiveIssueSnapshot).toHaveBeenCalledTimes(2);
+    expect(sleeps).toEqual([100]); // backed off once (after attempt 1) with backoffMs(1)
+    expect(result.checked).toBe(true);
+    if (!result.checked) throw new Error("expected checked");
+    expect(result.isWinner).toBe(false);
+    expect(result.competingCount).toBe(1);
+    expect(executeLocalWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops early (no extra fetch or sleep) once a competitor is observed on the first attempt (#6058)", async () => {
+    const fetchLiveIssueSnapshot = vi.fn(async () => snapshot([{ number: 5, state: "open", authorLogin: "someone-else", createdAt: "2026-01-01T00:00:00Z" }]));
+    const executeLocalWrite = vi.fn(async (spec: { action: string; command: string }) => ({ action: spec.action, code: 0, stdout: "", stderr: "", timedOut: false }));
+    const sleepFn = vi.fn(async () => {});
+
+    const result = await resolveClaimConflict(
+      { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 6, selfClaimedAt: "2026-01-02T00:00:00Z", minerLogin: "miner-bot" },
+      { fetchLiveIssueSnapshot, executeLocalWrite },
+      { sleepFn },
+    );
+
+    expect(fetchLiveIssueSnapshot).toHaveBeenCalledTimes(1);
+    expect(sleepFn).not.toHaveBeenCalled();
+    expect(result.checked).toBe(true);
+    if (!result.checked) throw new Error("expected checked");
+    expect(result.isWinner).toBe(false);
+  });
+
+  it("exhausts the configured maxAttempts (backoff between each, never after the last) before declaring a winner (#6058)", async () => {
+    const fetchLiveIssueSnapshot = vi.fn(async () => snapshot([])); // no competitor ever appears
+    const executeLocalWrite = vi.fn();
+    const backoffAttempts: number[] = [];
+
+    const result = await resolveClaimConflict(
+      { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 5, selfClaimedAt: "2026-01-01T00:00:00Z", minerLogin: "miner-bot" },
+      { fetchLiveIssueSnapshot, executeLocalWrite },
+      { maxAttempts: 4, sleepFn: async () => {}, backoffMs: (attempt: number) => { backoffAttempts.push(attempt); return 0; } },
+    );
+
+    expect(fetchLiveIssueSnapshot).toHaveBeenCalledTimes(4);
+    expect(backoffAttempts).toEqual([1, 2, 3]); // 3 gaps between 4 attempts, none after the last
+    expect(result).toEqual({ checked: true, isWinner: true, winnerNumber: 5, competingCount: 0 });
+    expect(executeLocalWrite).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient fetch failure and uses the first snapshot that comes back (#6058)", async () => {
+    const fetchLiveIssueSnapshot = vi.fn().mockRejectedValueOnce(new Error("index lag")).mockResolvedValueOnce(snapshot([]));
+    const executeLocalWrite = vi.fn();
+
+    const result = await resolveClaimConflict(
+      { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 5, selfClaimedAt: "2026-01-01T00:00:00Z", minerLogin: "miner-bot" },
+      { fetchLiveIssueSnapshot, executeLocalWrite },
+      { maxAttempts: 2, sleepFn: async () => {} },
+    );
+
+    expect(fetchLiveIssueSnapshot).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ checked: true, isWinner: true, winnerNumber: 5, competingCount: 0 });
+  });
+
+  it("uses the default (real) sleep between retries when no sleepFn is injected (#6058)", async () => {
+    const fetchLiveIssueSnapshot = vi.fn(async () => snapshot([]));
+    const executeLocalWrite = vi.fn();
+    // No sleepFn → exercises the default setTimeout-based sleep; backoffMs 0 keeps it instant.
+    const result = await resolveClaimConflict(
+      { repoFullName: "acme/widgets", issueNumber: 42, selfPrNumber: 5, selfClaimedAt: "2026-01-01T00:00:00Z", minerLogin: "miner-bot" },
+      { fetchLiveIssueSnapshot, executeLocalWrite },
+      { maxAttempts: 2, backoffMs: () => 0 },
+    );
+
+    expect(fetchLiveIssueSnapshot).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ checked: true, isWinner: true, winnerNumber: 5, competingCount: 0 });
   });
 });

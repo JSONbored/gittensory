@@ -18,12 +18,21 @@
 // the best real, publicly-observable proxy available for someone else's PR -- live-issue-snapshot.js's own
 // comment on `createdAt` explains this in more detail.
 //
-// EVENTUAL CONSISTENCY: this checks GitHub's live state immediately after submission. A competing PR that
-// exists but hasn't yet propagated through GitHub's own search/GraphQL indexing in that instant would be
-// invisible to this one-shot check -- there is no retry/backoff here, which would be its own separate scope.
+// EVENTUAL CONSISTENCY: this checks GitHub's live state after submission. A competing PR that exists but
+// hasn't yet propagated through GitHub's own search/GraphQL indexing in the first instant would be invisible
+// to a single check, so the live-state snapshot fetch is wrapped in a bounded retry-with-backoff (#6058):
+// a few attempts with exponential backoff (following http-retry.js's convention), returning as soon as a
+// competing claim is observed, and otherwise giving a late-propagating competitor time to surface before
+// this miner is declared the winner. The write-authorization boundary (#4833) is unchanged.
 
 import { adjudicateSoftClaim } from "./claim-adjudication.js";
 import { buildClosePrSpec } from "@loopover/engine";
+import { defaultRetryBackoffMs } from "./http-retry.js";
+
+// Bounded retry for the post-submission live-state check (#6058): a few attempts give a competing PR that
+// hasn't propagated through GitHub's search/GraphQL index yet time to surface, without an unbounded loop.
+const DEFAULT_SNAPSHOT_MAX_ATTEMPTS = 3;
+const defaultSnapshotSleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
 /**
  * Assemble the real competing-claims set from a fetched LiveIssueSnapshot: every OTHER open PR referencing
@@ -58,6 +67,10 @@ export function assembleCompetingClaims(snapshot, selfPrNumber, minerLogin) {
  *   fetchLiveIssueSnapshot: (repoFullName: string, issueNumber: number) => Promise<import("./submission-freshness-check.js").LiveIssueSnapshot | null>,
  *   executeLocalWrite: (spec: import("@loopover/engine").LocalWriteActionSpec) => Promise<unknown>,
  * }} deps
+ * @param {{ maxAttempts?: number, sleepFn?: (ms: number) => Promise<unknown>, backoffMs?: (attempt: number) => number }} [options]
+ *   Bounded retry for the live-state snapshot fetch (#6058): up to `maxAttempts` (default 3) attempts with
+ *   `backoffMs(attempt)` backoff between them, returning as soon as a competing claim is observed. Pure over
+ *   the injected `sleepFn`/`backoffMs` -- no real timers in tests.
  * @returns {Promise<{
  *   checked: boolean,
  *   reason?: "live_state_unavailable",
@@ -67,18 +80,34 @@ export function assembleCompetingClaims(snapshot, selfPrNumber, minerLogin) {
  *   closeResult?: unknown,
  * }>}
  */
-export async function resolveClaimConflict(input, deps) {
-  let snapshot;
-  try {
-    snapshot = await deps.fetchLiveIssueSnapshot(input.repoFullName, input.issueNumber);
-  } catch {
-    snapshot = null;
+export async function resolveClaimConflict(input, deps, options = {}) {
+  const maxAttempts =
+    Number.isFinite(options.maxAttempts) && options.maxAttempts >= 1 ? Math.floor(options.maxAttempts) : DEFAULT_SNAPSHOT_MAX_ATTEMPTS;
+  const sleepFn = typeof options.sleepFn === "function" ? options.sleepFn : defaultSnapshotSleep;
+  const backoffMs = typeof options.backoffMs === "function" ? options.backoffMs : defaultRetryBackoffMs;
+
+  let snapshot = null;
+  let competing = [];
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let current;
+    try {
+      current = await deps.fetchLiveIssueSnapshot(input.repoFullName, input.issueNumber);
+    } catch {
+      current = null;
+    }
+    if (current && typeof current === "object") {
+      snapshot = current;
+      competing = assembleCompetingClaims(current, input.selfPrNumber, input.minerLogin);
+      // A competing claim observed = GitHub's index has propagated it; stop retrying and act on it now.
+      if (competing.length > 0) break;
+    }
+    // Back off before the next attempt (index-propagation lag / a transient fetch failure); never after the last.
+    if (attempt < maxAttempts) await sleepFn(backoffMs(attempt));
   }
-  if (!snapshot || typeof snapshot !== "object") {
+  if (!snapshot) {
     return { checked: false, reason: "live_state_unavailable" };
   }
 
-  const competing = assembleCompetingClaims(snapshot, input.selfPrNumber, input.minerLogin);
   const adjudication = adjudicateSoftClaim({ number: input.selfPrNumber, claimedAt: input.selfClaimedAt }, competing);
 
   if (adjudication.isWinner) {
