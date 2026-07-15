@@ -928,7 +928,7 @@ async function main(): Promise<void> {
           try {
             const creds = await exchangeManifestCode(code);
             const outPath =
-              process.env.SETUP_OUTPUT_PATH ?? "/data/gittensory-app.env";
+              process.env.SETUP_OUTPUT_PATH ?? "/data/loopover-app.env";
             writeFileSync(outPath, credentialsToEnv(creds), { mode: 0o600 });
             console.log(
               JSON.stringify({
