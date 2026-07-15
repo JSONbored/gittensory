@@ -19,7 +19,9 @@ export type SelfReputationThresholds = {
   minCadenceFactor: number;
 };
 
-/** Conservative built-in defaults; a `.loopover-miner.yml` override is merged over these. */
+/** Conservative built-in defaults. No config-file override surface exists today: `.loopover-miner.yml` parses
+ *  into ams-policy-spec.ts, which carries no reputation fields, so these are overridden only by a partial config
+ *  passed programmatically to {@link resolveSelfReputationThresholds} by a caller that already has one. */
 export const DEFAULT_SELF_REPUTATION_THRESHOLDS: SelfReputationThresholds =
   Object.freeze({
     minSampleSize: 5,
@@ -64,7 +66,8 @@ function round3(value: number): number {
 }
 
 /**
- * Merge a partial (e.g. `.loopover-miner.yml`-sourced) threshold config over the conservative defaults,
+ * Merge a caller-supplied partial threshold config over the conservative defaults (no config-file surface feeds
+ * this today -- see {@link DEFAULT_SELF_REPUTATION_THRESHOLDS}),
  * normalizing every field so a malformed value can never produce a NaN/negative/out-of-range decision. The
  * throttle band is kept well-formed: `floorAtRatio` is pulled to at least `throttleAtRatio` so the interpolation
  * span is never negative.

@@ -56,8 +56,10 @@ export type IterateLoopInput = {
   maxTurnsPerIteration: number;
   /** Optional cumulative budget ceiling(s), evaluated every iteration against the real running totals
    *  (attempt-metering.ts's `AttemptMeterTotals`, #5395). Omitted means no additional ceiling beyond what
-   *  `maxIterations * maxTurnsPerIteration` already implies. A breach on any axis (turns/costUsd/wallClockMs
-   *  -- tokens is never real-tracked today) is a HARD, unconditional stop: checked and abandoned on BEFORE
+   *  `maxIterations * maxTurnsPerIteration` already implies. A breach on any axis (turns/costUsd/wallClockMs/
+   *  tokens -- every axis is accumulated from real per-iteration driver usage, tokens included since #5653, and
+   *  is 0 only when the driver genuinely reports no signal) is a HARD, unconditional stop: checked and
+   *  abandoned on BEFORE
    *  self-review even runs, so a same-iteration pass can never bypass the ceiling (this is deliberately NOT
    *  routed through iterate-policy.ts's `costCeilingReached` field, whose own precedence checks a self-review
    *  pass first -- see the loop body's own comment at the check site for why that ordering doesn't fit a hard

@@ -20,13 +20,15 @@ import { captureMinerError } from "./sentry.js";
 // (worktree-allocator.js, #4297) -- this module composes the create/review/gate/submit sequence #2337 is
 // actually about, not worktree allocation policy, which is a separate, already-solved concern.
 //
-// KNOWN, DELIBERATE GAP (not silently papered over -- was an injected-but-unwired seam before this module
-// existed, and remains so here):
-//   - `deps.runSlopAssessment` has no production implementation anywhere in this package. The real slop scorer
-//     (src/signals/slop.ts, 518 lines, 5 sibling src/signals/** dependencies) is far larger and more
-//     interconnected than local-write-tools.ts was, so extracting it is separate, substantial scope -- this
-//     function requires a real one be injected rather than silently stubbing a result that would either always
-//     pass (unsafe) or always fail (useless).
+// `deps.runSlopAssessment` stays INJECTED rather than imported here (this module composes the sequence and is
+// agnostic about the scorer behind the seam), but it is no longer unwired: slop-assessment.js (#5133) is its
+// real production binding -- a direct pass-through to the engine's own buildSlopAssessment -- and attempt-cli.js
+// wires that binding in on the production path. The seam was injected-but-unwired when this module was written
+// only because the deterministic scorer was not yet portable; #5133 extracted src/signals/slop.ts's PR-side
+// scorer into packages/loopover-engine/src/signals/slop.ts (byte-parity-verified against the live gate's own
+// copy), closing the gap this header used to document. This function still requires a real implementation be
+// injected rather than silently stubbing a result that would either always pass (unsafe) or always fail
+// (useless).
 //
 // `input.governor`'s cross-attempt state (rate-limit buckets, backoff attempts, budget-cap usage) DOES now
 // persist across separate process invocations (#5134, governor-state.js), via
