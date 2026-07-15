@@ -73,6 +73,20 @@ describe("loopover-mcp CLI — packets", () => {
     });
   });
 
+  it("prints decision-pack help without requiring --login or making a network call", () => {
+    const help = run(["decision-pack", "--help"]);
+    expect(help).toMatch(/Usage: loopover-mcp decision-pack/);
+    expect(help).toMatch(/loopover_get_decision_pack/);
+    expect(help).toMatch(/contributor decision pack/);
+  });
+
+  it("prints repo-decision help without requiring --login/--repo or making a network call", () => {
+    const help = run(["repo-decision", "--help"]);
+    expect(help).toMatch(/Usage: loopover-mcp repo-decision/);
+    expect(help).toMatch(/loopover_explain_repo_decision/);
+    expect(help).toMatch(/repo decision/);
+  });
+
   it("ignores incompatible decision-pack cache entries and clears cache entries on request", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const url = await startFixtureServer();

@@ -2160,7 +2160,21 @@ async function issueSlopCli(args) {
   for (const finding of payload.findings ?? []) process.stdout.write(`- ${finding.title}: ${finding.detail}\n`);
 }
 
+function printDecisionPackHelp() {
+  process.stdout.write(
+    [
+      "Usage: loopover-mcp decision-pack --login <github-login> [--json]",
+      "",
+      "Fetch the cached (or freshly built) contributor decision pack for a GitHub login.",
+      "Mirrors the loopover_get_decision_pack MCP tool and GET /v1/contributors/{login}/decision-pack. No source upload.",
+      "",
+      "Pass --json for machine-readable output.",
+    ].join("\n") + "\n",
+  );
+}
+
 async function decisionPackCli(options) {
+  if (options.help === true) return printDecisionPackHelp();
   const login = options.login ?? process.env.LOOPOVER_LOGIN ?? process.env.GITHUB_LOGIN;
   if (!login) throw new Error("Pass --login <github-login> or set LOOPOVER_LOGIN.");
   const payload = await getDecisionPackWithCache(login);
@@ -2173,7 +2187,21 @@ async function decisionPackCli(options) {
   if (payload.cache?.rerunGuidance) process.stdout.write(`Rerun when: ${payload.cache.rerunGuidance}\n`);
 }
 
+function printRepoDecisionHelp() {
+  process.stdout.write(
+    [
+      "Usage: loopover-mcp repo-decision --login <github-login> --repo owner/repo [--json]",
+      "",
+      "Fetch the cached (or freshly built) repo decision for a GitHub login and repo.",
+      "Mirrors the loopover_explain_repo_decision MCP tool. No source upload.",
+      "",
+      "Pass --json for machine-readable output.",
+    ].join("\n") + "\n",
+  );
+}
+
 async function repoDecisionCli(options) {
+  if (options.help === true) return printRepoDecisionHelp();
   const login = options.login ?? process.env.LOOPOVER_LOGIN ?? process.env.GITHUB_LOGIN;
   if (!login) throw new Error("Pass --login <github-login> or set LOOPOVER_LOGIN.");
   const repoFullName = options.repo;
