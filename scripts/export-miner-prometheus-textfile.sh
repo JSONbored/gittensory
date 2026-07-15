@@ -2,7 +2,7 @@
 set -eu
 
 # Miner Prometheus textfile export (#4839): the miner CLI already emits four Prometheus text-exposition
-# documents -- `gittensory-miner metrics` (prediction calibration), `queue metrics` (portfolio-queue),
+# documents -- `loopover-miner metrics` (prediction calibration), `queue metrics` (portfolio-queue),
 # `ledger metrics` (event ledger), and `governor metrics` (rate-limit/cap-usage pressure) -- but none of them
 # is a long-running HTTP server Prometheus can scrape directly; each is a one-shot CLI command. This script
 # bridges the two with the standard node_exporter "textfile collector" pattern: run all four, concatenate their
@@ -19,7 +19,7 @@ set -eu
 # aborting the whole export -- Prometheus treats an absent series as "no data", not an error, so a partial
 # export is strictly better than a stale-forever or entirely-missing one.
 
-MINER_BIN="${LOOPOVER_MINER_BIN:-gittensory-miner}"
+MINER_BIN="${LOOPOVER_MINER_BIN:-loopover-miner}"
 OUT_FILE="${LOOPOVER_MINER_PROMETHEUS_TEXTFILE:-/var/lib/node_exporter/textfile_collector/gittensory_miner.prom}"
 TMP_FILE="${OUT_FILE}.tmp"
 
