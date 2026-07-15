@@ -69,6 +69,25 @@ test("selfPlagiarismCheck: throttles a near-duplicate diff across repos when the
   assert.equal(verdict.matchedSubmission?.repoFullName, "acme/repo-a");
 });
 
+test("selfPlagiarismCheck: fails closed on a genuine election tie among near-duplicate priors", () => {
+  const shared = "shared implementation patch body tie";
+  const tiedPriorFields = {
+    fingerprint: shared,
+    submittedAt: "2026-07-09T12:00:00.000Z",
+    pullRequestNumber: 300,
+    repoFullName: "acme/dup",
+  };
+  const verdict = selfPlagiarismCheck(candidate({ fingerprint: shared }), [
+    prior(tiedPriorFields),
+    prior(tiedPriorFields),
+  ]);
+  assert.deepEqual(verdict, {
+    allowed: false,
+    eventType: "denied",
+    reason: "ambiguous_election_tie",
+  });
+});
+
 test("selfPlagiarismCheck: fails closed on missing or ambiguous fingerprint data", () => {
   assert.deepEqual(selfPlagiarismCheck(candidate({ fingerprint: "  " }), [prior()]), {
     allowed: false,

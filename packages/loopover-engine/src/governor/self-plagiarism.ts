@@ -202,7 +202,6 @@ export function selfPlagiarismCheck(
     return buildVerdict(false, "denied", "missing_candidate_submitted_at");
   }
 
-  let bestMatch: OwnSubmissionRecord | undefined;
   let bestSimilarity = 0;
   const nearDuplicates: OwnSubmissionRecord[] = [];
 
@@ -214,7 +213,6 @@ export function selfPlagiarismCheck(
       nearDuplicates.push(prior);
       if (similarity > bestSimilarity) {
         bestSimilarity = similarity;
-        bestMatch = prior;
       }
     }
   }
@@ -241,17 +239,16 @@ export function selfPlagiarismCheck(
     candidateFingerprint,
     nearDuplicates,
   );
-  const matched =
-    winner && winner !== candidateFingerprint
-      ? winner
-      : (bestMatch ?? nearDuplicates[0]!);
+  if (winner === null) {
+    return buildVerdict(false, "denied", "ambiguous_election_tie");
+  }
 
-  const matchedPrint = normalizeFingerprint(matched.fingerprint)!;
+  const matchedPrint = normalizeFingerprint(winner.fingerprint)!;
   return buildVerdict(
     false,
     "throttled",
     "near_duplicate_self_plagiarism",
-    matched,
+    winner,
     bestSimilarity > 0
       ? bestSimilarity
       : fingerprintSimilarity(candidatePrint, matchedPrint),

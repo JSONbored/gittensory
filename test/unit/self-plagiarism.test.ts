@@ -417,9 +417,28 @@ describe("selfPlagiarismCheck (#2345)", () => {
     );
     expect(verdict).toMatchObject({
       allowed: false,
-      eventType: "throttled",
-      reason: "near_duplicate_self_plagiarism",
-      matchedSubmission: { repoFullName: "acme/repo-a" },
+      eventType: "denied",
+      reason: "ambiguous_election_tie",
+    });
+    expect(verdict.matchedSubmission).toBeUndefined();
+  });
+
+  it("denies a genuine election tie between two identically-timed near-duplicate priors", () => {
+    const shared = "shared implementation patch body tie";
+    const tiedPriorFields = {
+      fingerprint: shared,
+      submittedAt: "2026-07-09T12:00:00.000Z",
+      pullRequestNumber: 300,
+      repoFullName: "acme/dup",
+    };
+    const verdict = selfPlagiarismCheck(candidate({ fingerprint: shared }), [
+      prior(tiedPriorFields),
+      prior(tiedPriorFields),
+    ]);
+    expect(verdict).toStrictEqual({
+      allowed: false,
+      eventType: "denied",
+      reason: "ambiguous_election_tie",
     });
   });
 
@@ -517,7 +536,7 @@ describe("selfPlagiarismCheck (#2345)", () => {
     expect(verdict.eventType).toBe("throttled");
   });
 
-  it("falls back to the first near-duplicate when winner resolution and bestMatch are absent", () => {
+  it("denies when winner resolution is absent and no repo name breaks the tie", () => {
     const verdict = selfPlagiarismCheck(
       candidate({
         repoFullName: "",
@@ -536,9 +555,12 @@ describe("selfPlagiarismCheck (#2345)", () => {
       ],
       { similarityThreshold: 0 },
     );
-    expect(verdict.eventType).toBe("throttled");
-    expect(verdict.matchedSubmission?.repoFullName).toBe("");
-    expect(verdict.similarity).toBe(0);
+    expect(verdict).toMatchObject({
+      allowed: false,
+      eventType: "denied",
+      reason: "ambiguous_election_tie",
+    });
+    expect(verdict.matchedSubmission).toBeUndefined();
   });
 
   it("defaults claim member number to zero when neither pull nor issue number is present", () => {
