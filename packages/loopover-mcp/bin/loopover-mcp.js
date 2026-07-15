@@ -166,6 +166,12 @@ const ownerRepoShape = {
   repo: z.string().min(1),
 };
 
+const ownerRepoPullShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  number: z.number().int().positive(),
+};
+
 const loginShape = {
   login: z.string().min(1),
 };
@@ -434,6 +440,10 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the canonical repo intelligence bundle from the private LoopOver API.",
   },
   {
+    name: "loopover_get_pr_reviewability",
+    description: "Return the reviewability report for an open PR: how ready it is to review/merge, the blocking or advisory signals against it, and its lane/duplicate/linked-issue context. Metadata-only, no GitHub writes.",
+  },
+  {
     name: "loopover_get_maintainer_noise",
     description: "Return the maintainer queue-noise triage report for a repo: a noise score/level, the specific noise sources to clear first, and recommended maintainer actions. Maintainer-authenticated; advisory only.",
   },
@@ -616,6 +626,18 @@ registerStdioTool(
   async ({ owner, repo }) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver repo intelligence.", await apiGet(`${prefix}/intelligence`));
+  },
+);
+
+registerStdioTool(
+  "loopover_get_pr_reviewability",
+  {
+    description: stdioToolDescription("loopover_get_pr_reviewability"),
+    inputSchema: ownerRepoPullShape,
+  },
+  async ({ owner, repo, number }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult("LoopOver PR reviewability.", await apiGet(`${prefix}/pulls/${number}/reviewability`));
   },
 );
 
