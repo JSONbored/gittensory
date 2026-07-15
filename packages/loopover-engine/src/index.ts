@@ -597,6 +597,14 @@ export {
 // `LoopConsumptionOutcome` is deliberately its own name, not loop-escalation.ts's `LoopRunOutcome` re-exported
 // below: that one is a loop's HEALTH state (running/converged/abandoned/error), whereas a consumption entry
 // only exists for a run that already stopped and only distinguishes finished work from work cut short.
+// The customer-facing counterpart to #4808's internal ops fleet view: one customer's own loop only, with
+// spend sourced through #4792's tenant-filtering primitive so another tenant's rows cannot reach it (#4807).
+export {
+  buildCustomerLoopView,
+  type CustomerLoopSpend,
+  type CustomerLoopView,
+  type CustomerLoopViewInput,
+} from "./customer-loop-view.js";
 export {
   buildLoopConsumptionEntry,
   totalConsumptionForTenant,
