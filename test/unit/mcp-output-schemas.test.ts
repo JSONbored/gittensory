@@ -17,6 +17,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "loopover_get_maintainer_lane",
   "loopover_get_repo_onboarding_pack",
   "loopover_get_registration_readiness",
+  "loopover_get_config_recommendation",
   "loopover_get_burden_forecast",
   "loopover_get_repo_outcome_patterns",
   "loopover_get_outcome_calibration",

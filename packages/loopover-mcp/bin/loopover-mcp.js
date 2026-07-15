@@ -137,7 +137,7 @@ const AGENT_PROFILES = {
     audience: "repository owners preparing intake readiness and onboarding plans",
     purpose: "Review registration readiness, focus manifests, docs/onboarding gaps, and manual setup actions.",
     recommendedPrompts: ["loopover_repo_owner_intake_readiness", "loopover_repo_owner_focus_manifest_review", "loopover_repo_owner_onboarding_pack"],
-    recommendedTools: ["loopover_get_repo_context", "loopover_get_issue_quality", "loopover_get_registration_readiness"],
+    recommendedTools: ["loopover_get_repo_context", "loopover_get_issue_quality", "loopover_get_registration_readiness", "loopover_get_config_recommendation"],
     boundaries: [
       "Human-approved only: review, explain, and draft setup plans; do not push config, label issues, post comments, close issues, or publish public output.",
       "Separate public readiness guidance from private maintainer or authenticated owner context.",

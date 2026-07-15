@@ -4960,7 +4960,7 @@ async function buildSelfDogfoodRegistrationPackResponse(env: Env) {
   };
 }
 
-async function buildGittensorConfigRecommendationResponse(env: Env, fullName: string) {
+export async function buildGittensorConfigRecommendationResponse(env: Env, fullName: string) {
   /* v8 ignore start -- Config recommendation route-level shaping over covered signal helpers. */
   // Intentionally the raw DB settings, not resolveRepositorySettings's merged view: this tool recommends what
   // to ADD to .loopover.yml based on the repo's currently-active (dashboard/API-configured) behavior — using

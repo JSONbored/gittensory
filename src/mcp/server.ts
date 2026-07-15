@@ -104,7 +104,7 @@ import { loadMaintainerNoiseReport, maintainerNoiseSummary } from "../services/m
 import { loadLabelAudit, labelAuditSummary } from "../services/label-audit";
 import { loadMaintainerLaneReport, maintainerLaneSummary } from "../services/maintainer-lane";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
-import { buildRegistrationReadinessResponse } from "../api/routes";
+import { buildRegistrationReadinessResponse, buildGittensorConfigRecommendationResponse } from "../api/routes";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import {
@@ -806,6 +806,18 @@ const registrationReadinessOutputSchema = {
   policyReadiness: z.unknown().optional(),
   onboardingPackPreview: z.unknown().optional(),
   blockers: z.array(z.string()).optional(),
+  warnings: z.array(z.string()).optional(),
+  dataQuality: z.unknown().optional(),
+};
+
+const configRecommendationOutputSchema = {
+  repoFullName: z.string().optional(),
+  generatedAt: z.string().optional(),
+  privateOnly: z.boolean().optional(),
+  current: z.unknown().optional(),
+  recommended: z.unknown().optional(),
+  tradeoffs: z.array(z.string()).optional(),
+  reasons: z.array(z.string()).optional(),
   warnings: z.array(z.string()).optional(),
   dataQuality: z.unknown().optional(),
 };
@@ -1691,6 +1703,17 @@ export class LoopoverMcp {
         outputSchema: registrationReadinessOutputSchema,
       },
       async (input) => this.toolResult(await this.getRegistrationReadiness(input)),
+    );
+
+    server.registerTool(
+      "loopover_get_config_recommendation",
+      {
+        description:
+          "Return recommended .loopover.yml additions for a repository, derived from the repo's live, currently-active configured behavior (the raw dashboard/API-configured settings, not a yml-merged view — so the recommendation never compares itself against an override that already exists). Advisory only, not a write action.",
+        inputSchema: ownerRepoShape,
+        outputSchema: configRecommendationOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getConfigRecommendation(input)),
     );
 
     server.registerTool(
@@ -2805,6 +2828,19 @@ export class LoopoverMcp {
       summary: report.ready
         ? `LoopOver registration readiness for ${fullName}: ready (preview-only, not a registration action).`
         : `LoopOver registration readiness for ${fullName}: not ready — ${report.blockers.length} blocker(s) (preview-only, not a registration action).`,
+      data: report as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getConfigRecommendation(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoAccess(fullName);
+    const report = await buildGittensorConfigRecommendationResponse(this.env, fullName);
+    return {
+      summary:
+        report.warnings.length > 0
+          ? `LoopOver .loopover.yml recommendation for ${fullName}: ${report.warnings.length} warning(s) to review alongside the recommendation (advisory only, not a write action).`
+          : `LoopOver .loopover.yml recommendation for ${fullName}: recommendation generated with no outstanding warnings (advisory only, not a write action).`,
       data: report as unknown as Record<string, unknown>,
     };
   }
