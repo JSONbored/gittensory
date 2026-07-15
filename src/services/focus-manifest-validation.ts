@@ -8,6 +8,7 @@ import {
   reviewRecapConfigToJson,
   maintainerRecapConfigToJson,
   settingsOverrideToJson,
+  unknownTopLevelWarnings,
   type FocusManifest,
   type FocusManifestSource,
 } from "../signals/focus-manifest";
@@ -28,7 +29,7 @@ export function buildFocusManifestValidation(input: {
   source?: FocusManifestSource | undefined;
 }): FocusManifestValidationResult {
   const manifest = parseFocusManifestContent(input.content, input.source ?? "repo_file");
-  const warnings = [...manifest.warnings];
+  const warnings = [...manifest.warnings, ...unknownTopLevelWarnings(input.content)];
   const normalized = focusManifestToNormalizedJson(manifest);
   return {
     present: manifest.present,

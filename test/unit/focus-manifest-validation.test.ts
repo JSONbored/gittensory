@@ -129,4 +129,22 @@ maintainerRecap:
     expect(result.status).toBe("error");
     expect(result.warnings.join(" ")).toMatch(/must be a mapping/i);
   });
+
+  it("REGRESSION (#5929): warns on a typo'd unknown top-level field the field-by-field parser silently drops", () => {
+    // record.gates is never read by parseFocusManifest -- only record.gate -- so before #5929 this typo'd a
+    // recognized field (wantedPaths) present and no parser warning fired, leaving status "ok" while the
+    // entire gate: block was silently dropped.
+    const result = buildFocusManifestValidation({ content: "wantedPaths: [src/]\ngates:\n  enabled: true\n" });
+    expect(result.status).not.toBe("ok");
+    expect(result.status).toBe("warn");
+    expect(result.warnings).toContain("Manifest contains unknown top-level field: gates.");
+    expect(result.normalized).toMatchObject({ present: true, wantedPaths: ["src/"] });
+    expect(result.normalized).not.toHaveProperty("gate");
+  });
+
+  it("does not double-report a retired top-level field already covered by the migration warning", () => {
+    const result = buildFocusManifestValidation({ content: "wantedPaths: [src/]\nblockedPaths: [dist/]\n" });
+    expect(result.status).toBe("warn");
+    expect(result.warnings).toEqual(["blockedPaths is retired; use settings.hardGuardrailGlobs for path holds."]);
+  });
 });

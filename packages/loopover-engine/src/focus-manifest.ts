@@ -3195,6 +3195,96 @@ export function parseFocusManifestContent(content: string | null | undefined, so
 }
 
 /**
+ * Every top-level `.loopover.yml` field the manifest parsers above actually read. Single source of truth for
+ * "unknown top-level field" detection (`unknownTopLevelWarnings`) shared by `src/selfhost/config-lint.ts` and
+ * `src/services/focus-manifest-validation.ts`, so a new top-level field only needs adding here to fix
+ * detection in both places.
+ */
+export const TOP_LEVEL_FIELDS = [
+  "source",
+  "wantedPaths",
+  "preferredLabels",
+  "linkedIssuePolicy",
+  "testExpectations",
+  "issueDiscoveryPolicy",
+  "maintainerNotes",
+  "publicNotes",
+  "gate",
+  "settings",
+  "review",
+  "features",
+  "experimental",
+  "contentLane",
+  "repoDocGeneration",
+  "reviewRecap",
+  "maintainerRecap",
+] as const;
+
+const TOP_LEVEL_FIELD_SET = new Set<string>(TOP_LEVEL_FIELDS);
+
+// Fields retired from TOP_LEVEL_FIELDS that still warrant a migration-specific warning (rather than the
+// generic "unknown field" message) pointing operators at their replacement mechanism.
+export const RETIRED_FIELD_MIGRATION_WARNINGS: Record<string, string> = {
+  blockedPaths: "blockedPaths is retired; use settings.hardGuardrailGlobs for path holds.",
+};
+
+/**
+ * Warn on top-level manifest keys outside `TOP_LEVEL_FIELDS` (e.g. a typo'd `gates:` instead of `gate:`),
+ * plus a migration-specific warning for a retired field. Malformed/oversize/non-mapping content yields no
+ * warnings here — the caller's own parse already reports that failure, and re-parsing it as a bare top-level
+ * object would only duplicate or contradict that message.
+ */
+export function unknownTopLevelWarnings(text: string | null | undefined): string[] {
+  const raw = text ?? "";
+  const trimmed = raw.trim();
+  if (!trimmed || isTopLevelTextOversize(raw)) return [];
+  const parsed = parseTopLevelManifestObject(trimmed);
+  if (parsed === null) return [];
+  const keys = Object.keys(parsed).filter((key) => !TOP_LEVEL_FIELD_SET.has(key));
+  // `hasOwnProperty.call`, NOT `key in`: a manifest field named like an Object.prototype member
+  // (`constructor`, `toString`, `hasOwnProperty`, ...) would otherwise test true for the inherited
+  // property and resolve to the prototype's function instead of a real retired-field warning string,
+  // corrupting the string[] result and suppressing the genuine unknown-field warning.
+  const isRetired = (key: string): boolean => Object.prototype.hasOwnProperty.call(RETIRED_FIELD_MIGRATION_WARNINGS, key);
+  const retiredWarnings = keys.filter(isRetired).map((key) => RETIRED_FIELD_MIGRATION_WARNINGS[key]!);
+  const unknown = keys.filter((key) => !isRetired(key)).map(formatTopLevelFieldName);
+  return [
+    ...retiredWarnings,
+    ...(unknown.length > 0 ? [`Manifest contains unknown top-level field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`] : []),
+  ];
+}
+
+function parseTopLevelManifestObject(text: string): Record<string, unknown> | null {
+  const looksLikeJson = text.startsWith("{") || text.startsWith("[");
+  if (looksLikeJson) {
+    try {
+      const parsed = JSON.parse(text);
+      return topLevelManifestObjectOrNull(parsed);
+    } catch {
+      // YAML flow mappings can start with "{" or "[" while still being valid manifest syntax.
+    }
+  }
+  try {
+    return topLevelManifestObjectOrNull(parseYaml(text));
+  } catch {
+    return null;
+  }
+}
+
+function topLevelManifestObjectOrNull(parsed: unknown): Record<string, unknown> | null {
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+}
+
+function isTopLevelTextOversize(text: string): boolean {
+  return text.length > MAX_FOCUS_MANIFEST_BYTES || new TextEncoder().encode(text).byteLength > MAX_FOCUS_MANIFEST_BYTES;
+}
+
+function formatTopLevelFieldName(name: string): string {
+  const trimmed = name.replace(/[^\w.-]/g, "_").slice(0, 80);
+  return trimmed || "<blank>";
+}
+
+/**
  * Format a manifest's parse `warnings[]` into one grouped, deduped, order-preserving notice for the review
  * surface — an acceptance criterion of #1670: an invalid/malformed `.loopover.yml` value should fail
  * clearly instead of silently falling back to a default. Empty/no warnings ⇒ `null` (byte-identical, no
