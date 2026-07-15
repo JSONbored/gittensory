@@ -356,15 +356,87 @@ export async function renameRepositoryIdentity(env: Env, oldFullName: string, ne
   // carry no repo at all) and there is no index of any kind on this table. Plain rename.
   await db.update(signalSnapshots).set({ repoFullName: newFullName }).where(eq(signalSnapshots.repoFullName, oldFullName));
 
-  // Deliberately OUT OF SCOPE: the request-scoped AI/LLM result caches (ai_review_cache, ai_slop_cache,
-  // linked_issue_satisfaction_cache, grounding_file_content_cache) and the RAG chunk/embedding cache
-  // (repo_chunks, a raw-SQL-only REES table). Every one of these is a rebuildable CACHE, not identity
-  // data: a miss after a rename just re-runs one LLM call or one re-index pass at the new name -- graceful,
-  // self-healing, and cheap, unlike an orphaned PR/issue/audit row a contributor or maintainer would
-  // otherwise need a full GitHub API backfill to recover. repo_chunks in particular stores its cache key as
-  // a LOWERCASED, TRUNCATED-TO-64-CHARS hash of `${ownerOnly}:${bareRepoName}` (packages layer), so a safe
-  // in-place string rename isn't even mechanically available without real risk of silently corrupting a
-  // truncated id -- letting it expire and re-index is both simpler and safer than attempting one.
+  // REES/parity tables below (review_audit, contributor_gate_history, submitter_stats) are raw-SQL-only --
+  // deliberately NOT added to the Drizzle schema (see each table's own migration header) -- so these three
+  // blocks use env.DB.prepare() directly instead of the query builder, matching how every other writer of
+  // these tables (parity-wire.ts, outcomes-wire.ts, contributor-calibration.ts, submitter-reputation.ts)
+  // already accesses them.
+
+  // reviewAudit: PK `id` alone (migrations/0049_review_audit_parity.sql), no separate unique index. `project`
+  // IS the repo full name (verified live at both writers: parity-wire.ts's recordNativeGateDecision and
+  // outcomes-wire.ts's appendReviewAudit); `target_id` is `${project}#${pullNumber}`, and `id` embeds
+  // `target_id` (hence project) as a substring in every writer's own id-construction scheme. Same
+  // PK-collision-only fold shape as pullRequestReviews/collisionEdges above -- no business-key unique index
+  // exists to fold on instead.
+  const oldReviewAuditIds = (
+    await env.DB.prepare("SELECT id FROM review_audit WHERE project = ?").bind(oldFullName).all<{ id: string }>()
+  ).results.map((row) => row.id);
+  const renamedReviewAuditIds = oldReviewAuditIds.map((id) => id.split(oldFullName).join(newFullName));
+  if (renamedReviewAuditIds.length > 0) {
+    const placeholders = renamedReviewAuditIds.map(() => "?").join(",");
+    await env.DB.prepare(`DELETE FROM review_audit WHERE id IN (${placeholders})`)
+      .bind(...renamedReviewAuditIds)
+      .run();
+  }
+  await env.DB.prepare("UPDATE review_audit SET id = replace(id, ?, ?), project = ?, target_id = replace(target_id, ?, ?) WHERE project = ?")
+    .bind(oldFullName, newFullName, newFullName, oldFullName, newFullName, oldFullName)
+    .run();
+
+  // contributorGateHistory: same shape as reviewAudit -- PK `id` alone (migrations/0126_contributor_gate_
+  // history.sql), `project` is the repo full name (verified live at its sole writer, contributor-
+  // calibration.ts's recordContributorGateDecision), `target_id` and `id` both embed it the same way.
+  const oldContributorGateHistoryIds = (
+    await env.DB.prepare("SELECT id FROM contributor_gate_history WHERE project = ?").bind(oldFullName).all<{ id: string }>()
+  ).results.map((row) => row.id);
+  const renamedContributorGateHistoryIds = oldContributorGateHistoryIds.map((id) => id.split(oldFullName).join(newFullName));
+  if (renamedContributorGateHistoryIds.length > 0) {
+    const placeholders = renamedContributorGateHistoryIds.map(() => "?").join(",");
+    await env.DB.prepare(`DELETE FROM contributor_gate_history WHERE id IN (${placeholders})`)
+      .bind(...renamedContributorGateHistoryIds)
+      .run();
+  }
+  await env.DB.prepare("UPDATE contributor_gate_history SET id = replace(id, ?, ?), project = ?, target_id = replace(target_id, ?, ?) WHERE project = ?")
+    .bind(oldFullName, newFullName, newFullName, oldFullName, newFullName, oldFullName)
+    .run();
+
+  // submitterStats: no `id` column at all -- PRIMARY KEY (project, submitter) directly (migrations/0046_
+  // submitter_stats.sql). `project` is the repo full name (verified live at its sole writer, submitter-
+  // reputation.ts's recordSubmissionOutcome). Fold on the OTHER half of the composite key, `submitter`,
+  // same single-column inArray shape used for repoSyncSegments/repoLabels above.
+  const collidingSubmitters = (
+    await env.DB.prepare("SELECT submitter FROM submitter_stats WHERE project = ?").bind(oldFullName).all<{ submitter: string }>()
+  ).results.map((row) => row.submitter);
+  if (collidingSubmitters.length > 0) {
+    const placeholders = collidingSubmitters.map(() => "?").join(",");
+    await env.DB.prepare(`DELETE FROM submitter_stats WHERE project = ? AND submitter IN (${placeholders})`)
+      .bind(newFullName, ...collidingSubmitters)
+      .run();
+  }
+  await env.DB.prepare("UPDATE submitter_stats SET project = ? WHERE project = ?").bind(newFullName, oldFullName).run();
+
+  // Deliberately OUT OF SCOPE:
+  //   - The request-scoped AI/LLM result caches (ai_review_cache, ai_slop_cache,
+  //     linked_issue_satisfaction_cache, grounding_file_content_cache). Every one of these is a rebuildable
+  //     CACHE, not identity data: a miss after a rename just re-runs one LLM call at the new name --
+  //     graceful, self-healing, and cheap, unlike an orphaned PR/issue/audit row a contributor or maintainer
+  //     would otherwise need a full GitHub API backfill to recover.
+  //   - review_targets (migrations/0050_review_targets.sql, raw-SQL-only): has NO live writer anywhere in
+  //     this codebase -- src/review/public-stats.ts's own comment confirms "the legacy review_targets
+  //     ledger, which the convergence cutover orphaned (nothing writes it anymore)". Its data is a one-time
+  //     historical bulk copy from reviewbot's original schema, and the table carries TWO different
+  //     repo-identity-shaped columns (`project`, an agent/install-level slug that must NEVER be renamed --
+  //     it is not a per-repo value at all; and `repo`, which current read-side code validates as full
+  //     owner/repo format) whose actual on-disk semantics for that historical data can't be independently
+  //     verified from this codebase. Mutating identity columns on an orphaned table we can't fully verify
+  //     carries real risk of silently corrupting data no writer would ever repair.
+  //   - repo_chunks (migrations/0051_repo_chunks.sql, raw-SQL-only): a rebuildable RAG chunk/embedding
+  //     cache, not identity data -- a miss after a rename just re-indexes at the new name (self-healing,
+  //     same reasoning as the AI/LLM caches above). Its `project`/`repo` columns ALSO don't hold a single
+  //     owner/repo string the way every table above does -- `project` is the bare OWNER only and `repo` is
+  //     the bare REPO NAME only (src/queue/processors.ts's splitRepoForRag / src/review/rag-index.ts's
+  //     splitRepo each independently strip the other half at the write path), and its `id` is a
+  //     LOWERCASED, TRUNCATED-TO-64-CHARS hash of `${project}:${repo}` -- a safe in-place string rename
+  //     isn't mechanically available without risking a silently-corrupted truncated id.
 
   // auditEvents.target_key: an append-only log with no uniqueness on target_key (many rows legitimately
   // share one), so a plain substring rename with no dedupe step is correct and sufficient.

@@ -791,6 +791,127 @@ describe("renameRepositoryIdentity", () => {
     });
   });
 
+  // review_audit, contributor_gate_history, and submitter_stats are raw-SQL-only REES/parity tables (never
+  // added to the Drizzle schema -- see each migration's own header comment), so these seed and verify via
+  // env.DB.prepare() directly, matching how every real writer (parity-wire.ts, outcomes-wire.ts,
+  // contributor-calibration.ts, submitter-reputation.ts) already accesses them -- there's no clean
+  // repositories.ts convenience function to call instead, and their real writers are gated behind
+  // self-host/parity-audit feature flags unrelated to what this migration itself needs to verify.
+  describe("review_audit", () => {
+    it("renames project, target_id, and id for a gate-decision row", async () => {
+      const env = createTestEnv();
+      const targetId = `${OLD}#21`;
+      await env.DB.prepare(
+        "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?, ?, ?, 'gate_decision', 'merge', 'loopover-native', 'sha1', 'clean', CURRENT_TIMESTAMP)",
+      )
+        .bind(`gate:loopover-native:${targetId}@sha1`, OLD, targetId)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const oldRow = await env.DB.prepare("select count(*) as n from review_audit where project = ?").bind(OLD).first<{ n: number }>();
+      expect(oldRow?.n).toBe(0);
+      const renamed = await env.DB.prepare("select id, target_id as targetId from review_audit where project = ?").bind(NEW).first<{ id: string; targetId: string }>();
+      expect(renamed).toEqual({ id: `gate:loopover-native:${NEW}#21@sha1`, targetId: `${NEW}#21` });
+    });
+
+    it("REGRESSION (#repo-rename-migration): folds away a stray new-name row whose id already equals what the old row's id would become", async () => {
+      const env = createTestEnv();
+      const oldId = `gate:loopover-native:${OLD}#21@sha1`; // distinct from strayId at insert time (satisfies the PK)...
+      const strayId = `gate:loopover-native:${NEW}#21@sha1`; // ...but is EXACTLY what oldId becomes after the rename's replace()
+      await env.DB.prepare(
+        "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?, ?, ?, 'gate_decision', 'merge', 'loopover-native', 'sha1', 'original', CURRENT_TIMESTAMP)",
+      )
+        .bind(oldId, OLD, `${OLD}#21`)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?, ?, ?, 'gate_decision', 'close', 'loopover-native', 'sha1', 'stray', CURRENT_TIMESTAMP)",
+      )
+        .bind(strayId, NEW, `${NEW}#21`)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const rows = await env.DB.prepare("select summary from review_audit where id = ?").bind(strayId).all<{ summary: string }>();
+      expect(rows.results).toHaveLength(1);
+      expect(rows.results[0]?.summary).toBe("original");
+    });
+  });
+
+  describe("contributor_gate_history", () => {
+    it("renames project, target_id, and id for a per-contributor gate-decision row", async () => {
+      const env = createTestEnv();
+      const targetId = `${OLD}#9`;
+      await env.DB.prepare(
+        "INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, head_sha, created_at) VALUES (?, 'alice', 'loopover-native', ?, ?, 'merge', 'sha1', CURRENT_TIMESTAMP)",
+      )
+        .bind(`contrib:alice:loopover-native:${targetId}@sha1`, OLD, targetId)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const oldRow = await env.DB.prepare("select count(*) as n from contributor_gate_history where project = ?").bind(OLD).first<{ n: number }>();
+      expect(oldRow?.n).toBe(0);
+      const renamed = await env.DB.prepare("select id, target_id as targetId from contributor_gate_history where project = ?").bind(NEW).first<{ id: string; targetId: string }>();
+      expect(renamed).toEqual({ id: `contrib:alice:loopover-native:${NEW}#9@sha1`, targetId: `${NEW}#9` });
+    });
+
+    it("REGRESSION (#repo-rename-migration): folds away a stray new-name row whose id already equals what the old row's id would become", async () => {
+      const env = createTestEnv();
+      const oldId = `contrib:alice:loopover-native:${OLD}#9@sha1`; // distinct from strayId at insert time (satisfies the PK)...
+      const strayId = `contrib:alice:loopover-native:${NEW}#9@sha1`; // ...but is EXACTLY what oldId becomes after the rename's replace()
+      await env.DB.prepare(
+        "INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, head_sha, created_at) VALUES (?, 'alice', 'loopover-native', ?, ?, 'merge', 'sha1', CURRENT_TIMESTAMP)",
+      )
+        .bind(oldId, OLD, `${OLD}#9`)
+        .run();
+      await env.DB.prepare(
+        "INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, head_sha, created_at) VALUES (?, 'alice', 'loopover-native', ?, ?, 'hold', 'sha1', CURRENT_TIMESTAMP)",
+      )
+        .bind(strayId, NEW, `${NEW}#9`)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const rows = await env.DB.prepare("select decision from contributor_gate_history where id = ?").bind(strayId).all<{ decision: string }>();
+      expect(rows.results).toHaveLength(1);
+      expect(rows.results[0]?.decision).toBe("merge");
+    });
+  });
+
+  describe("submitter_stats", () => {
+    it("renames project for a submitter's outcome-count row", async () => {
+      const env = createTestEnv();
+      await env.DB.prepare("INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, 'bob', 5, 3, 1, 0, CURRENT_TIMESTAMP)")
+        .bind(OLD)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const oldRow = await env.DB.prepare("select count(*) as n from submitter_stats where project = ?").bind(OLD).first<{ n: number }>();
+      expect(oldRow?.n).toBe(0);
+      const renamed = await env.DB.prepare("select submissions, merged from submitter_stats where project = ? and submitter = 'bob'").bind(NEW).first<{ submissions: number; merged: number }>();
+      expect(renamed).toEqual({ submissions: 5, merged: 3 });
+    });
+
+    it("REGRESSION (#repo-rename-migration): folds away a stray new-name row for the same submitter, keeping the pre-existing counts", async () => {
+      const env = createTestEnv();
+      await env.DB.prepare("INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, 'bob', 10, 8, 1, 0, CURRENT_TIMESTAMP)")
+        .bind(OLD)
+        .run();
+      await env.DB.prepare("INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, 'bob', 1, 0, 1, 0, CURRENT_TIMESTAMP)")
+        .bind(NEW)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const rows = await env.DB.prepare("select submissions from submitter_stats where project = ? and submitter = 'bob'").bind(NEW).all<{ submissions: number }>();
+      expect(rows.results).toHaveLength(1);
+      expect(rows.results[0]?.submissions).toBe(10);
+    });
+
+    it("does not disturb a different submitter's row under the new name", async () => {
+      const env = createTestEnv();
+      await env.DB.prepare("INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, 'bob', 5, 3, 1, 0, CURRENT_TIMESTAMP)")
+        .bind(OLD)
+        .run();
+      await env.DB.prepare("INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, 'carol', 2, 1, 0, 0, CURRENT_TIMESTAMP)")
+        .bind(NEW)
+        .run();
+      await renameRepositoryIdentity(env, OLD, NEW);
+      const rows = await env.DB.prepare("select submitter from submitter_stats where project = ? order by submitter").bind(NEW).all<{ submitter: string }>();
+      expect(rows.results.map((r) => r.submitter)).toEqual(["bob", "carol"]);
+    });
+  });
+
   describe("audit_events", () => {
     it("renames every target_key containing the old full name, including composite repo#number keys, leaving unrelated keys untouched", async () => {
       const env = createTestEnv();
