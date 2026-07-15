@@ -643,6 +643,16 @@ export {
   type LoopHealthTier,
   type LoopRunOutcome,
 } from "./loop-escalation.js";
+// The internal ops fleet view (#4808) over the escalation vocabulary re-exported above: it calls the same
+// evaluateEscalation per loop rather than restating what "needs a human" means.
+export {
+  buildActiveLoopFleetSummary,
+  LOOP_HEALTH_TIERS,
+  LOOP_RUN_STATUSES,
+  type ActiveLoopFacts,
+  type ActiveLoopFleetSummary,
+  type FleetLoopRow,
+} from "./loop-fleet-summary.js";
 export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
