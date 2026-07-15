@@ -25,10 +25,12 @@
 // ci_stuck_review_repeat_suppressed).
 //
 // DEFERRED (NOT implemented here): the auto-tune / auto-apply config-mutation self-improve loop. The ported
-// pure logic + D1 store already exist in src/review/auto-apply.ts, but actually CLOSING the loop (mutating a
-// live gate's tunables from the cron) is sensitive — it needs the `tunables_overrides` / `_shadow` /
-// `override_audit` D1 tables (none of which exist in loopover's migrations yet) plus a careful soak/promote
-// design. This module is READ-ONLY observability: it reports drift; it never changes what blocks a live PR.
+// pure logic + D1 store already exist in src/review/auto-apply.ts, and so do the `tunables_overrides` /
+// `_shadow` / `override_audit` tables it reads and writes (#4879's migration 0047_self_improve_tunables.sql).
+// The schema is NOT the remaining blocker: actually CLOSING the loop (mutating a live gate's tunables from the
+// cron) is sensitive and still needs the careful soak/promote design — the shadow-soak-then-promote lifecycle
+// auto-apply.ts's own isStrictlyTightening / evaluateShadowPromotion anticipate. This module is READ-ONLY
+// observability: it reports drift; it never changes what blocks a live PR.
 
 import { findHottestInconclusiveReviewTargetForRepo, findHottestReviewTargetForRepo, listRepositories, sumByokAiUsageForRepoSince } from "../db/repositories";
 import { incr } from "../selfhost/metrics";
