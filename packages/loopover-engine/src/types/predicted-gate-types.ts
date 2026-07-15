@@ -263,6 +263,24 @@ export type IssueQualityReport = {
   issues: Array<{
     number: number;
     title: string;
+    /** Present when built by buildIssueQualityReport (#6057). */
+    lifecycle?: string | undefined;
+    linkage?: {
+      status: string;
+      source: string;
+      solvedByPullRequests: number[];
+      reason: string;
+      warnings: string[];
+    } | undefined;
+    bounty?: {
+      id: string;
+      lifecycle: "active" | "historical" | "completed" | "cancelled" | "stale" | "ambiguous" | "unknown";
+      isActiveOpportunity: boolean;
+      fundingStatus: "funded" | "target_only" | "unknown";
+      consensusRisk: "low" | "medium" | "high";
+      source: Record<string, unknown>;
+      linkedPrs: Array<{ number: number; state: string; isActive: boolean }>;
+    } | undefined;
     status: "ready" | "needs_proof" | "hold" | "do_not_use";
     score: number;
     reasons: string[];

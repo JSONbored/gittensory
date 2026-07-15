@@ -199,7 +199,29 @@ describe("fetchSelfReviewContext (#5145)", () => {
     // high-risk cluster, not any overlap at all.
     expect(result.inDuplicateCluster).toBe(false);
     expect("bounties" in result).toBe(false);
-    expect("issueQuality" in result).toBe(false);
+    expect(result.issueQuality?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 7,
+          title: "Uploads should retry on 5xx",
+          status: expect.any(String),
+        }),
+      ]),
+    );
+  });
+
+  it("populates issueQuality from the live GitHub snapshot without bounty or recent-merged inputs (#6057)", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([issuePayload({ body: "x".repeat(220) })]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    expect(result.issueQuality?.issues).toHaveLength(1);
+    expect(result.issueQuality?.issues[0]).toMatchObject({ number: 7, status: expect.any(String) });
   });
 
   it("flags inDuplicateCluster true when the target issue already has 2+ open PRs referencing it (a real high-risk cluster)", async () => {
