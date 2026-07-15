@@ -1,0 +1,209 @@
+---
+title: Troubleshooting
+description: Start with readiness and logs, then isolate webhook, queue, AI, REES, RAG, or write-suppression problems.
+---
+
+## First checks
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose ps
+docker compose logs --tail=200 loopover
+curl http://localhost:8787/ready
+curl http://localhost:8787/metrics`}
+/>
+
+## No review appears
+
+<FeatureRow
+  items={[
+    {
+      title: "Webhook",
+      description:
+        "Check GitHub App deliveries and confirm /v1/github/webhook receives 2xx responses.",
+    },
+    {
+      title: "Allowlist",
+      description: "Confirm the repo is in LOOPOVER_REVIEW_REPOS for per-PR features.",
+    },
+    {
+      title: "Write mode",
+      description:
+        "SELFHOST_DEPLOYMENT_MODE=dry-run or disabled suppresses writes even when review computes.",
+    },
+    {
+      title: "Policy",
+      description:
+        "gate.aiReview.mode=off or commentMode=off can make AI/comment output intentionally quiet.",
+    },
+  ]}
+/>
+
+## AI summary unavailable
+
+- Confirm `AI_PROVIDER` is set and supported.
+- Confirm the provider key or local endpoint works from inside the container.
+- Set the matching provider model env, such as `ANTHROPIC_AI_MODEL`, `OPENAI_COMPATIBLE_AI_MODEL`, `OLLAMA_AI_MODEL`, `CLAUDE_AI_MODEL`, or `CODEX_AI_MODEL`.
+- Increase the matching provider timeout env, such as `CLAUDE_AI_TIMEOUT_MS` or `CODEX_AI_TIMEOUT_MS`, for large subscription-CLI reviews.
+- For CLI providers, confirm the CLI binary and credential path are available.
+
+## REES is silent
+
+A no-finding REES response can be intentionally invisible. For failures, search logs for `review_context_fetch_failed` with `contextType` set to `enrichment`.
+
+<CodeBlock
+  code={`review_context_fetch_failed
+rees_analyzer_config_invalid`}
+/>
+
+Check [REES enrichment](/docs/self-hosting-rees) for enablement and [REES analyzer reference](/docs/self-hosting-rees-analyzers) for analyzer names, network calls, and token requirements.
+
+## RAG returns no context
+
+- Confirm `LOOPOVER_REVIEW_RAG=true`, the repo is in `LOOPOVER_REVIEW_REPOS` (or has `features.rag: true` in private config), and RAG indexing has run — see [Configuration](/docs/self-hosting-configuration) for the three activation layers (`is_registered` is only required for Gittensor-scored paths, not RAG on a self-host allowlist).
+- Confirm Qdrant or the vector backend is reachable from the app container.
+- Confirm the embedding endpoint and model are running.
+- Confirm the repo has been indexed after enabling the feature.
+
+## Queue stuck or dead jobs
+
+Watch pending, processed, failed, and dead metrics. A high pending count can be webhook replay or maintenance work; dead jobs need direct investigation.
+
+<CodeBlock
+  lang="bash"
+  code={`curl http://localhost:8787/metrics | grep loopover_queue
+docker compose logs loopover | grep selfhost_job_dead`}
+/>
+
+## GitHub rate-limit responses or admission deferrals
+
+Two independent signals cover this: `loopover_github_rest_rate_limit_responses_total` counts actual 403/429 responses from GitHub, and the `loopover_jobs_rate_limit_admission_deferred_total` / `loopover_jobs_rate_limit_budget_deferred_total` / `loopover_jobs_rate_limited_by_type_total` counters track jobs the queue itself held back _before_ making a request, to avoid tripping a limit. All three job-side counters carry the same three labels — `kind` (`webhook` or `background`), `key_scope` (`installation`, `public`, `global`, or `other`), and `job_type` (the queue job's type, e.g. `agent-regate-pr`) — so you can break a spike down to exactly which token pool and which job type is under pressure.
+
+A short burst of deferrals is expected and self-resolving: the queue is deliberately trading a few seconds of delay to avoid a real 429. Treat it as a real problem only once it's **sustained** — which is exactly what `LoopoverGitHubRateLimitResponses` (real 403/429s observed) and `LoopoverQueueRateLimitDeferralsHigh` (a sustained deferral rate, not a blip) are tuned to alert on, rather than firing on every brief admission hold.
+
+<CodeBlock
+  lang="promql"
+  code={`# Deferrals broken down by token pool and job type over the last 10m
+sum by (key_scope, job_type) (rate(loopover_jobs_rate_limit_admission_deferred_total[10m]))
+
+# Is one key_scope (e.g. a single installation token) the bottleneck?
+topk(5, sum by (key_scope) (rate(loopover_jobs_rate_limit_budget_deferred_total[10m])))
+
+# Real rate-limit responses from GitHub itself (not just internal deferrals)
+sum(rate(loopover_github_rest_rate_limit_responses_total[10m]))`}
+/>
+
+If a single `key_scope=installation` pool is consistently the bottleneck, the fix is usually spreading load across more installation tokens (fewer repos per installation) or raising the GitHub App's own rate-limit tier, not code changes here.
+
+## Low GitHub response-cache hit rate
+
+`loopover_github_response_cache_total` (REST) and `loopover_github_graphql_cache_total` (GraphQL) both carry a `result` label — `hit`, `miss`, `set`, `coalesced`, `bypassed`, or `error` — and a `class` label identifying the endpoint family. A healthy cache should show most traffic as `hit` for endpoints that are read repeatedly in one review/maintenance pass (PR reads, check-run lookups); a low hit rate on those specific classes, not the overall average, is the useful signal.
+
+<CodeBlock
+  lang="promql"
+  code={`# REST hit rate by endpoint class over the last 15m
+sum by (class) (rate(loopover_github_response_cache_total{result="hit"}[15m]))
+/
+sum by (class) (rate(loopover_github_response_cache_total[15m]))
+
+# GraphQL hit rate — same shape, separate metric
+sum by (class) (rate(loopover_github_graphql_cache_total{result="hit"}[15m]))
+/
+sum by (class) (rate(loopover_github_graphql_cache_total[15m]))`}
+/>
+
+## Qdrant / vector-store errors
+
+`loopover_qdrant_errors_total` carries an `op` label (`upsert`, `query`, or `delete`) so you can tell whether indexing or retrieval is failing. `LoopoverQdrantErrorRateHigh` fires on a sustained error ratio, not an isolated blip.
+
+- Confirm `QDRANT_URL` (e.g. `http://qdrant:6333`) is reachable from the app container and the `qdrant` Compose profile is running.
+- If Qdrant requires auth, confirm `QDRANT_API_KEY` is set and matches the Qdrant deployment's configuration.
+- A dimension-mismatch error means the existing `loopover` collection (the fixed collection name self-host always uses) was created with a different embedding model than the one currently configured (`AI_EMBED_MODEL`). Recreating it — delete the collection and let the next index run recreate it at the current width — is the fix, but it temporarily removes ALL indexed RAG context for every repo until re-indexing completes, so treat it as a deliberate, disruptive step, not a routine one.
+
+<CodeBlock
+  lang="bash"
+  code={`curl "$QDRANT_URL/collections/loopover"
+docker compose --profile qdrant ps qdrant
+
+# Only after confirming a dimension mismatch is the actual cause:
+curl -X DELETE "$QDRANT_URL/collections/loopover"`}
+/>
+
+## Orb export or relay problems
+
+For brokered self-host deployments, `loopover_orb_events_exported_total` and `loopover_orb_export_errors_total` track the hourly outcome-export loop; `LoopoverOrbExportErrorRateHigh` fires on a sustained error ratio there. The pull-mode relay loop (for installations receiving events outbound from Orb) reports through `loopover_orb_relay_drains_total` (`result=events` when it drained something, `result=empty` otherwise) and `loopover_orb_webhook_total` (`event` + `result` labels) for what happened to each relayed event once enqueued locally.
+
+If exports are failing but the relay itself looks healthy, the export loop's Sentry cron monitor (see [Self-host operations](/docs/self-hosting-operations)) is the fastest way to confirm whether the loop is even running, before digging into the error counters.
+
+`selfhost_orb_relay_register_failed` means the container could not announce itself to the broker at boot. What it means depends on `ORB_RELAY_MODE` (see [choosing a relay mode](/docs/self-hosting-github-app)):
+
+- **Push mode** (default) — logged at `error` and **release-blocking**: the container looks healthy but never receives an event, since there is no fallback delivery path. Check that `PUBLIC_API_ORIGIN` is a real, internet-reachable, TLS-terminated URL — the broker rejects a loopback or private address at registration time, so a misconfigured or unreachable origin fails here every time, not intermittently.
+- **Pull mode** — logged at `warn` and non-fatal: the drain loop (`loopover_orb_relay_drains_total`) keeps retrying on its own schedule regardless, so a transient failure here recovers on its own once the broker is reachable again. A registration failure that never clears across many retries still points at `ORB_ENROLLMENT_SECRET` being wrong, revoked, or not yet provisioned server-side.
+
+Either mode: confirm `ORB_BROKER_URL` is reachable from inside the container first — a broker that is down or unreachable produces the same registration-failed event regardless of relay mode or credential correctness.
+
+## AI provider circuit breaker keeps opening
+
+Each AI provider (self-host `AI_PROVIDER` entries) has its own circuit breaker: after 3 consecutive failures it stops attempting real calls to that provider for 60 seconds, recorded as `loopover_ai_provider_circuit_open_total{provider="..."}` (skipped calls) alongside `loopover_ai_provider_failures_total{provider="..."}` (real failures). It self-heals automatically — there is no manual reset — but it will reopen immediately if the underlying problem is still there.
+
+- Search logs for `circuit_open: provider "..."` to confirm which provider tripped, and `selfhost_ai_provider_failed_in_chain` for the real error each failed attempt hit before the breaker opened.
+- A provider that keeps re-tripping after its cooldown almost always means a persistent problem, not a transient blip: an expired/invalid API key, a CLI binary missing from the image (see `selfhost_ai_cli_missing` at boot), or the endpoint being genuinely unreachable from the container.
+- `LoopoverAiProviderCircuitOpen` fires on any circuit-open event in a 15-minute window — a single trip during a real but brief outage is expected; a rule that keeps firing across multiple windows points at the persistent case above.
+
+## Grafana metrics/dashboards show no data
+
+The metrics path is the app's own `/metrics` (scraped directly by Prometheus) plus, for Claude Code's OTEL telemetry specifically, app or smoke process → OTEL collector → its Prometheus exporter (`:8889`) → Prometheus.
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose --profile observability ps prometheus otel-collector grafana
+docker compose logs --tail=80 prometheus otel-collector grafana
+
+# Send one synthetic OTLP metric through the collector, read it back from its Prometheus exporter,
+# and sanity-check the app's own /metrics HELP/TYPE shape.
+npm run test:smoke:observability:metrics`}
+/>
+
+- If the smoke command fails at `otel-collector:4318/v1/metrics`, the collector is not reachable from the app container.
+- If it pushes successfully but cannot read it back from `otel-collector:8889/metrics`, the collector's Prometheus exporter is unhealthy or the pipeline in `otel/otel-collector-config.yml` is misconfigured.
+- If the app's own `/metrics` check fails, that is unrelated to the OTEL collector — check the app container directly (`docker compose logs loopover`).
+- If the smoke command passes but a Grafana dashboard panel is still blank, check that panel's own PromQL expression against a metric name actually emitted in `src/` — a renamed or removed metric a dashboard still references renders as a permanent zero/no-data, not an error.
+
+## Grafana traces error or show no data
+
+The trace path is app or smoke process → OTEL collector → Tempo → Grafana. Tempo is only started by the observability profile, and app traces are only emitted when `OTEL_TRACES_EXPORTER` includes `otlp`.
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose --profile observability ps tempo otel-collector grafana
+docker compose logs --tail=80 tempo otel-collector grafana
+
+# Send one synthetic span through the collector and read it back from Tempo.
+npm run test:smoke:observability`}
+/>
+
+- If the smoke command fails at `otel-collector:4318/v1/traces`, the collector is not reachable from the app container.
+- If it pushes successfully but cannot read `tempo:3200/api/traces/<trace_id>`, Tempo is unhealthy, not ingesting, or not sharing the Compose network.
+- If the smoke command passes but Grafana Explore fails, check the Tempo data source URL. It should point at `http://tempo:3200`, not the OTLP ingest ports.
+- For a temporary live debugging run, set `OTEL_TRACES_SAMPLER_ARG=1` so every root trace is sampled, then lower it again after diagnosis.
+
+## Readiness fails
+
+<FeatureRow
+  items={[
+    {
+      title: "DB",
+      description:
+        "Check DATABASE_URL or DATABASE_PATH, volume permissions, Postgres reachability, and migrations.",
+    },
+    {
+      title: "Migrations",
+      description: "Read startup logs for migration errors before recreating volumes.",
+    },
+    {
+      title: "Dependencies",
+      description:
+        "If Qdrant or Postgres profiles are enabled, confirm those services are healthy first.",
+    },
+  ]}
+/>

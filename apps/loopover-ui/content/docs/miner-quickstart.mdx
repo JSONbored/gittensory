@@ -1,0 +1,140 @@
+---
+title: Miner quickstart by contribution lane
+description: Choose how you want to contribute, then follow the same loop — install, sign in, doctor, plan, preflight, packet — with the flags that fit your lane. About five minutes per lane.
+---
+
+LoopOver is copilot-only. It ranks and explains your options and drafts public-safe PR packets. It
+does not edit code, open PRs, or post comments for you, it makes no earnings promises, and it
+never predicts a public number. Every command below also accepts `--json` for machine-readable
+output, and your source never leaves your machine — only branch metadata (changed file paths,
+commit messages) is sent to authenticated LoopOver MCP/API responses.
+
+If you are setting up Claude Code or Codex as the miner's coding-agent driver, read [Miner
+coding-agent driver](/docs/miner-coding-agent) first so the env vars match the provider you
+actually plan to run.
+
+## 0. Install and sign in (every lane)
+
+The MCP is published as `@loopover/mcp`. Run it with `npx` or install it globally, then
+authenticate with GitHub Device Flow — LoopOver never asks for a Personal Access Token.
+
+<CodeBlock
+  code={`# install (one-off, or global)
+npx -y @loopover/mcp@latest --help
+npm i -g @loopover/mcp@latest
+
+# sign in, confirm identity, check the session
+loopover-mcp login
+loopover-mcp whoami --json
+loopover-mcp status --json
+
+# verify API, auth, and the local scorer before any analysis
+loopover-mcp doctor --json`}
+/>
+
+<Callout variant="safety">
+  Session tokens are **LoopOver tokens backed by GitHub identity**, not your GitHub PATs. Source
+  upload stays disabled (`LOOPOVER_UPLOAD_SOURCE=false`) and local absolute paths are redacted from
+  anything that leaves your machine. Log out anytime with `loopover-mcp logout`.
+</Callout>
+
+## 1. Choose your lane
+
+Lanes describe _how_ you contribute. Pick the one that matches the work in front of you, then read
+what the target repo actually supports: `agent plan` and `repo-decision` report the repo's
+configured lane so you can align before you start.
+
+<CodeBlock
+  code={`# what should I work on next, and what lane does this repo support?
+loopover-mcp agent plan --login your-login --repo owner/repo --json
+loopover-mcp repo-decision --login your-login --repo owner/repo --json`}
+/>
+
+The repo's configured lane comes back as one of these (it is set by the repo's registry config,
+not by you):
+
+- `direct_pr` — implementation PRs only. Prefer focused PRs with clear evidence, linked context, and low review churn.
+- `issue_discovery` — discovery work only. Focus on high-proof issue reports and avoid self-resolved issue loops.
+- `split` — both paths are active. Pick one intentionally: issue discovery for reports, direct PR for implementation.
+- `inactive` — registered but with no current allocation. Treat it as normal upstream contribution work unless the registry changes.
+- `unknown` — not registered (or no config yet). Do not assume the repo is ready for Gittensor-specific contribution guidance.
+
+## 2. Direct PR lane
+
+You are implementing a change and opening a PR directly. Use this in a `direct_pr` or `split`
+repo. Plan, preflight your branch metadata, then generate the public-safe packet to paste into the
+PR body.
+
+<CodeBlock
+  code={`loopover-mcp agent plan --login your-login --repo owner/repo --json
+loopover-mcp preflight --login your-login --repo owner/repo --base origin/main --validation "passed|npm test|summary" --json
+loopover-mcp agent packet --login your-login --repo owner/repo --base origin/main --json`}
+/>
+
+## 3. Issue-solving PR lane
+
+You are fixing a specific open issue. Same loop as a direct PR, but link the issue in your branch
+so preflight can credit the linked context. Confirm the linked-issue signal in the preflight
+output before opening the PR.
+
+<CodeBlock
+  code={`# branch named/described so the linked issue is detected, e.g. "Fixes #123"
+loopover-mcp agent plan --login your-login --repo owner/repo --json
+loopover-mcp preflight --login your-login --repo owner/repo --base origin/main --branch-eligibility eligible --validation "passed|npm test|summary" --json
+loopover-mcp agent packet --login your-login --repo owner/repo --base origin/main --json`}
+/>
+
+## 4. Issue discovery lane
+
+You are reporting a high-proof issue rather than opening a PR. Use this in an `issue_discovery` or
+`split` repo. Start from the plan to see which discovery work is worth it, and keep reports
+specific and reproducible — avoid self-resolved loops.
+
+<CodeBlock
+  code={`loopover-mcp agent plan --login your-login --repo owner/repo --objective "find a high-proof issue" --json
+loopover-mcp decision-pack --login your-login --json`}
+/>
+
+## 5. Docs and context work
+
+Documentation and context contributions still ship as PRs, so they follow the direct PR loop. Run
+preflight on the branch metadata and generate a packet — the packet is the same public-safe
+artifact regardless of whether the change is code or docs.
+
+<CodeBlock
+  code={`loopover-mcp agent plan --login your-login --repo owner/repo --json
+loopover-mcp preflight --login your-login --repo owner/repo --base origin/main --validation "passed|docs build|summary" --json
+loopover-mcp agent packet --login your-login --repo owner/repo --base origin/main --json`}
+/>
+
+## 6. Repo-specific lanes
+
+Some repos run their own lane policy. Always let the repo tell you: `repo-decision` returns the
+configured lane plus contributor guidance, and `analyze-branch` lets you model a scenario (pending
+merges, expected open PRs) before you commit to a path.
+
+<CodeBlock
+  code={`loopover-mcp repo-decision --login your-login --repo owner/repo --json
+loopover-mcp analyze-branch --login your-login --repo owner/repo --base origin/main --pending-merged-prs 3 --expected-open-prs 0 --scenario-note "after the queue clears" --json`}
+/>
+
+## Validation expectations (every lane)
+
+Before you open anything, the loop should be clean: `doctor` green, your branch metadata
+preflighted, and a validation note attached. Pass what you actually ran via
+`--validation "status|command|summary"` (for example `"passed|npm test|all green"`) so the
+preflight verdict reflects real validation, not a guess.
+
+<CodeBlock
+  code={`loopover-mcp doctor --json
+loopover-mcp preflight --login your-login --repo owner/repo --base origin/main --validation "passed|npm test|summary" --json`}
+/>
+
+<Callout variant="safety">
+  The PR packet from `agent packet` is **public-safe**: it is scrubbed of economic and identity
+  signals (wallet/hotkey, payout, trust-score, ranking, and public-prediction language) before it
+  can be pasted into a public GitHub surface. Pair this page with the [miner
+  workflow](/docs/miner-workflow) for the full loop and [privacy & security](/docs/privacy-security)
+  for the boundary details.
+</Callout>
+<AmsObservabilityCallout />

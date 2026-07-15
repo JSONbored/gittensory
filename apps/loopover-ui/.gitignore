@@ -16,6 +16,9 @@ dist-ssr
 .nitro
 *.local
 
+# fumadocs-mdx generated collection output (source.config.ts -> content/docs)
+.source/
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars

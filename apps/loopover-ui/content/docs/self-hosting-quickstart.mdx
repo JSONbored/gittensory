@@ -1,0 +1,266 @@
+---
+title: Quickstart
+description: A minimal self-host boot path for maintainers -- start the service, verify readiness, and keep the first rollout safe.
+---
+
+## 1. Copy the sample env
+
+`.env.selfhost.example` is the short path: required secrets plus a conservative
+first-boot config, with nothing about the Cloudflare Worker deploy. Copy it and fill in the
+placeholders — keep your real `.env` out of git and prefer mounted secret files
+for multiline values like the GitHub App private key.
+
+<CodeBlock
+  lang="bash"
+  code={`cp .env.selfhost.example .env
+# edit .env`}
+/>
+
+<Callout variant="warn">
+  The webhook secret and static bearer tokens (`GITHUB_WEBHOOK_SECRET`, `LOOPOVER_API_TOKEN`,
+  `LOOPOVER_MCP_TOKEN`, `INTERNAL_JOB_TOKEN`, `SELFHOST_SETUP_TOKEN`) ship commented out on purpose.
+  Generate a distinct random value for each one (e.g. `openssl rand -hex 32`) — never reuse the same
+  string across more than one of them. The app refuses to boot if any of these is left at a
+  known-placeholder or too-short value.
+</Callout>
+
+<Callout variant="note">
+  `.env.selfhost.example` already ships a conservative starting config — `dry-run` mode, a small
+  repo allowlist, unified comments, safety, and grounding, with AI, RAG, and REES left off. Switch
+  to live only after webhook delivery, logs, and review output match expectations. For every
+  optional env var (observability, backup, additional AI providers) see `.env.example`'s self-host
+  section or the [generated reference table](/docs/self-hosting-configuration).
+</Callout>
+
+## 2. Choose your AI provider (optional)
+
+Skip this step for a fully deterministic review (no AI). Otherwise set
+`AI_PROVIDER` to one provider or a fallback chain. The self-host image bundles
+both CLIs by default; credentials and provider choice are runtime-only.
+
+<CodeBlock
+  filename=".env — Claude Code only"
+  code={`AI_PROVIDER=claude-code
+CLAUDE_AI_EFFORT=medium
+CLAUDE_CODE_OAUTH_TOKEN=          # from \`claude setup-token\``}
+/>
+
+<CodeBlock
+  filename=".env — Codex only"
+  code={`AI_PROVIDER=codex
+CODEX_AI_EFFORT=medium
+LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER=1   # required opt-in; see Callout below`}
+/>
+
+<CodeBlock
+  filename=".env — Codex primary, Claude Code fallback"
+  code={`AI_PROVIDER=codex,claude-code
+CODEX_AI_EFFORT=medium
+CLAUDE_AI_EFFORT=medium
+CLAUDE_CODE_OAUTH_TOKEN=
+LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER=1`}
+/>
+
+Set `AI_DUAL_REVIEW=1` only when you deliberately want the first two providers to
+run as independent reviewers instead of a fallback chain.
+
+<Callout variant="warn" title="Codex is fail-closed by default">
+  Codex stores its OAuth credential in `auth.json` on the same filesystem that prompt-influenced
+  reviews can read, so it requires explicit opt-in ( `LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER=1`) and
+  a mounted `/data/codex` auth volume. Claude Code has no equivalent restriction. See [AI
+  providers](/docs/self-hosting-ai-providers) for the full reference.
+</Callout>
+
+## 3. Boot the stack
+
+**Recommended: pull the published image.** No local build, no Node toolchain —
+the script pulls, restarts, and waits for the health check to pass.
+
+<CodeBlock
+  lang="bash"
+  code={`./scripts/deploy-selfhost-image.sh
+curl http://localhost:8787/health
+curl http://localhost:8787/ready`}
+/>
+
+Pin a specific release instead of `:latest`, or point at your own registry:
+
+<CodeBlock
+  lang="bash"
+  code={`./scripts/deploy-selfhost-image.sh ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0
+LOOPOVER_IMAGE=ghcr.io/jsonbored/loopover-selfhost@sha256:... ./scripts/deploy-selfhost-image.sh`}
+/>
+
+`ghcr.io/jsonbored/gittensory-selfhost` (the pre-rename name) is no longer
+published to, but an existing pin to a specific tag or digest under it keeps resolving.
+
+<Callout variant="note" title="Building from source instead">
+  Contributors and anyone customizing the Dockerfile can still build locally — `docker compose up -d
+  --build` builds the `loopover` service from the checkout instead of pulling a published image.
+  Everything else in this quickstart (env, health checks, GitHub App) is identical either way. Two
+  build-args trim the image: `--build-arg INSTALL_AI_CLIS=false` skips the Claude Code/Codex CLIs
+  (default `true`), and `--build-arg INSTALL_VISUAL_REVIEW=true` adds `puppeteer-core` for visual
+  capture (default `false` — needs a `BROWSER_WS_ENDPOINT` at runtime).
+</Callout>
+
+<FeatureRow
+  items={[
+    { title: "/health", description: "Liveness. It confirms the HTTP process is up." },
+    {
+      title: "/ready",
+      description:
+        "Readiness. It returns 200 only after database access, migrations, and every configured backend (Redis, GitHub App auth, the AI provider, and any of Qdrant/Postgres you've enabled) are healthy.",
+    },
+    {
+      title: "/metrics",
+      description: "Prometheus metrics for queue, jobs, HTTP traffic, uptime, and AI usage.",
+    },
+  ]}
+/>
+
+## 4. Install or connect the GitHub App
+
+Point your App webhook to `https://your-host.example/v1/github/webhook`, set the
+same webhook secret in `GITHUB_WEBHOOK_SECRET`, install the App on one test repo,
+and open a small PR. The direct App and Orb modes are covered in
+[GitHub App and Orb](/docs/self-hosting-github-app).
+
+<Callout variant="note">
+  Set `ADMIN_GITHUB_LOGINS` to a comma/whitespace-separated list of GitHub logins before signing in
+  to the control panel — it's the only allowlist for the operator role (operator dashboard, drift
+  status). No login is authorized as operator without it.
+</Callout>
+
+## 5. Watch the first review
+
+Look for these logs during boot and the first webhook:
+
+<CodeBlock
+  code={`selfhost_listening
+selfhost_migrations_applied
+selfhost_ai_provider          # only when AI_PROVIDER is set
+selfhost_job_dead             # investigate immediately if present
+review_context_fetch_failed   # REES/RAG/grounding context failure`}
+/>
+
+A cold first boot on SQLite commonly logs a one-time
+`selfhost_migrations_applied` burst and a brief Redis connection retry while the
+sidecar finishes starting — both are expected and stop once the stack is warm. Anything else
+that looks wrong, or a `/ready` that stays unhealthy past a couple minutes, is
+covered in [Troubleshooting](/docs/self-hosting-troubleshooting).
+
+After the deterministic path is stable, continue with
+[Configuration](/docs/self-hosting-configuration) and then layer in AI, REES,
+or RAG deliberately.
+
+## 6. Activate your first repo
+
+Three separate knobs are easy to conflate — each does something different, and all three
+matter for a smooth first rollout:
+
+<FeatureRow
+  items={[
+    {
+      title: "LOOPOVER_REVIEW_REPOS (env allowlist)",
+      description:
+        "Turns on the per-PR converged review path (unified comment, safety, grounding, RAG, etc.) for named repos. Empty means none — even when the global LOOPOVER_REVIEW_* flags are true.",
+    },
+    {
+      title: "Gate activation (DB or private config)",
+      description:
+        "Turns on the LoopOver check-run and deterministic gate rules for a repo. One-click via the control panel or POST /v1/repos/:owner/:repo/activation; or set gate.checkMode / gate.enabled in a mounted private .loopover.yml.",
+    },
+    {
+      title: "is_registered (Gittensor registry)",
+      description:
+        "Set automatically when your repo appears in the GITTENSOR_REGISTRY_URL snapshot. Needed for Gittensor-scored mining/evidence features, not for basic PR review on a self-host.",
+    },
+  ]}
+/>
+
+**Recommended first-repo path today:** add the repo to
+`LOOPOVER_REVIEW_REPOS`, seed a private global default, then enable advisory gate
+mode once webhook delivery works.
+
+<CodeBlock
+  filename=".env"
+  code={`LOOPOVER_REVIEW_REPOS=owner/my-repo
+SELFHOST_DEPLOYMENT_MODE=dry-run   # keep shadowing until you trust output`}
+/>
+
+Copy the shipped global private default into the compose-mounted config directory (edit your
+copy — never commit real policy to a public repo):
+
+<CodeBlock
+  lang="bash"
+  code={`mkdir -p loopover-config
+cp config/examples/global.loopover.yml loopover-config/.loopover.yml
+# optional per-repo override:
+mkdir -p loopover-config/owner__my-repo
+cp config/examples/global.loopover.yml loopover-config/owner__my-repo/.loopover.yml`}
+/>
+
+Sign in to the control panel (`ADMIN_GITHUB_LOGINS` must include your GitHub
+login), open the repo workspace, preview what LoopOver would have flagged on recent PRs,
+then enable advisory mode in one click — the same patch as:
+
+<CodeBlock
+  lang="bash"
+  code={`curl -X POST "https://reviews.example.com/v1/repos/owner/my-repo/activation" \\
+  -H "Authorization: Bearer <session-or-api-token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{}'`}
+/>
+
+<Callout variant="note">
+  That activation endpoint turns on the gate check plus deterministic rules in **advisory** mode
+  (non-blocking, no auto-merge) — a CodeRabbit-style ramp. AI review stays off until you configure
+  it separately. Full semantics in [Configuration](/docs/self-hosting-configuration).
+</Callout>
+
+<Callout variant="warn" title="Checks: write on the GitHub App">
+  If reviews compute but no `LoopOver Orb Review Agent` check-run appears, open your App's
+  permissions page and confirm **Checks: write** is granted — `checks: read` alone 403s the write
+  silently. New permissions also require a one-time re-approval on each installation; see [GitHub
+  App and Orb](/docs/self-hosting-github-app).
+</Callout>
+
+When output looks right, switch `SELFHOST_DEPLOYMENT_MODE` from
+`dry-run` to unset (live writes). For a shorter future path, see the onboarding
+proposal on [Self-hosted reviews](/docs/maintainer-self-hosting).
+
+## Defaults at a glance
+
+Nothing below needs a flag to start; everything past the first row needs an explicit
+`--profile` (combine freely) or an explicit `AI_PROVIDER`.
+
+<CodeBlock lang="text" code={`ENABLED BY DEFAULT (no flags needed)
+  loopover app + Redis        SQLite database, dry-run-friendly, Orb telemetry (see Callout below)
+
+RECOMMENDED FOR PRODUCTION (opt-in)
+  --profile postgres             shared/multi-instance database (pgvector-capable)
+  --profile pgbouncer            connection pooling in front of Postgres
+  --profile caddy                automatic HTTPS via Let's Encrypt
+  --profile litestream            continuous SQLite backup to S3-compatible storage
+  --profile observability        Prometheus + Alertmanager + Loki + Grafana
+
+OPT-IN, NOT REQUIRED FOR A TRIAL INSTANCE
+  --profile qdrant                dedicated RAG vector store (else sqlite-vec/pgvector)
+  --profile ollama                local model for AI review or embeddings
+  --profile tailscale             private network sidecar
+  --profile runners               self-hosted GitHub Actions runner
+  --profile backup                scheduled backup + backup-exporter jobs
+  AI_PROVIDER=...                 off by default; reviews are deterministic-only until set`} />
+
+<Callout variant="safety">
+  Orb fleet-calibration telemetry (verdict, outcome, cycle time — never repo names, code, or logins)
+  starts automatically once your GitHub App is configured — this is the self-hosting contract, not a
+  flag you turn on. The one way to disable it is the explicit air-gap flag: set `ORB_AIR_GAP=true`
+  for an instance that sends nothing.
+</Callout>
+
+`--profile caddy` gets you real public HTTPS; `--profile tailscale`
+adds private tailnet reachability (it does not remove the default public port on its own —
+see the callout below) — see [Security](/docs/self-hosting-security)'s TLS
+termination section for the full walkthrough of each (Caddyfile setup, DNS prerequisites,
+hardening Tailscale for real isolation, and when to pick one over the other).

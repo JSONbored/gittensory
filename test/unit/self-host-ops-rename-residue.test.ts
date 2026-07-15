@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 // test/unit/miner-docker-compose.test.ts.
 const SELF_HOSTING_OPS_DOC = join(
   process.cwd(),
-  "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx",
+  "apps/loopover-ui/content/docs/self-hosting-operations.mdx",
 );
 const TERRAFORM_MAIN = join(process.cwd(), "packages/loopover-miner/terraform/main.tf");
 const CAPABILITY_AUDIT_DOC = join(process.cwd(), "src/review/repo-agnostic-capability-audit.md");

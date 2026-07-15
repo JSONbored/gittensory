@@ -1,0 +1,175 @@
+---
+title: Beta onboarding by role
+description: "Pick the lane that matches you. Each path ends in a concrete first win — install, configure, or read a report — without treating LoopOver as an official Gittensor product surface."
+---
+
+<Callout>
+  **Product positioning.** LoopOver is a deterministic base-agent and control-plane layer for the
+  Gittensor ecosystem. It is [jsonbored/loopover](https://github.com/jsonbored/loopover),
+  independent of [entrius/gittensor](https://github.com/entrius/gittensor). Use it to plan work,
+  preflight branches, and keep GitHub review surfaces quiet — not as an official Gittensor frontend,
+  wallet UI, or payout dashboard.
+</Callout>
+
+## Miner journey
+
+Miners and contributors use the local MCP package. Source contents stay on your machine but
+branch metadata (such as branch names, SHAs, changed file paths, commit messages, validation
+details, labels, body text, linked issues, and scenario notes) is sent to authenticated
+LoopOver MCP/API responses for analysis and packet preparation.
+
+**1. Install the MCP.** Global install or `npx` — see [Quickstart](/docs/quickstart).
+
+<CodeBlock
+  code={`npm i -g @loopover/mcp@latest
+loopover-mcp --help`}
+/>
+
+**2. Sign in.** GitHub Device Flow — no PAT storage.
+
+<CodeBlock
+  code={`loopover-mcp login
+loopover-mcp whoami`}
+/>
+
+**3. Run diagnostics.** Confirms API reachability, auth, source-upload posture, and optional
+local score-preview wiring.
+
+<CodeBlock code="loopover-mcp doctor" />
+
+**4. Plan next work.** Ranked actions, lane context, and blockers — copilot-only; does not open
+PRs or post comments.
+
+<CodeBlock
+  code={`loopover-mcp agent plan --login your-login --json
+# optional: --repo owner/repo`}
+/>
+
+**5. Preflight the branch.** Branch blockers, queue pressure, and maintainer-fit notes before
+you push.
+
+<CodeBlock
+  code={`loopover-mcp analyze-branch --login your-login --json
+loopover-mcp preflight --login your-login --json`}
+/>
+
+**6. Prepare a public-safe packet.** Maintainer-readable PR description with no private scoring
+language.
+
+<CodeBlock code={`loopover-mcp agent packet --login your-login --repo owner/repo --json`} />
+
+Wire the same tools into Codex, Claude Desktop, or Cursor via
+[MCP client setup](/docs/mcp-clients). Signed-in miners can also use the
+[Workbench](/app/workbench) and [Miner dashboard](/app/miner) in the control panel.
+
+## Maintainer journey
+
+Maintainers self-host the review stack and install a GitHub App, configure per-repo policy,
+preview what could appear on a confirmed-miner PR, then pull context on demand.
+
+**1. Self-host, then install your own App.** Choose repositories and approve permissions —
+default posture is silence. Start with
+[self-hosting setup](/docs/maintainer-self-hosting), which covers the
+direct App's install checklist, then [GitHub App configuration](/docs/github-app) for the
+review behavior (PR panel, checks, gate modes).
+
+**2. Configure settings.** Opt in to at most one configured label and one sticky sanitized
+comment per confirmed-miner PR. Tune repo policy in installation settings or via the API.
+
+**3. Preview the public surface.** Dry-run what would be written to GitHub without mutating
+state. Keep **LoopOver Context** advisory; require **LoopOver Orb Review Agent** only after
+blocking rules are explicitly configured.
+
+<CodeBlock
+  lang="http"
+  code={`POST /v1/repos/:owner/:repo/settings-preview
+# body: sample PR fields + desired policy flags`}
+/>
+
+The signed-in [Maintainer console](/app/maintainer) and [Repos](/app/repos) tab surface the
+same preview diff when live data is available.
+
+**4. Use maintainer commands.** On-demand context in the PR thread — output stays
+maintainer-scoped when appropriate.
+
+<CodeBlock
+  code={`@loopover help
+@loopover preflight
+@loopover blockers
+@loopover duplicate-check
+@loopover miner-context
+@loopover next-action
+@loopover reviewability`}
+/>
+
+Deeper workflow: [Maintainer workflow](/docs/maintainer-workflow). Privacy rules:
+[Privacy & security](/docs/privacy-security).
+
+## Repo owner journey
+
+Repo owners care about registration readiness and sensible `.loopover.yml` configuration before
+promoting labels or maintainer-cut policy.
+
+**1. Run a readiness report.** Blockers, warnings, recommended registration mode, and issue
+policy — private API only.
+
+<CodeBlock lang="http" code={`GET /v1/repos/:owner/:repo/registration-readiness`} />
+
+**2. Review config guidance.** Recommended config diff with reasons and tradeoffs — apply via PR
+when ready.
+
+<CodeBlock lang="http" code={`GET /v1/repos/:owner/:repo/gittensor-config-recommendation`} />
+
+**3. Use the control panel.** Open [Repository owner](/app/owner) (or the Owner tab under
+[Repos](/app/repos)) to inspect the same signals with a live repo selector after you sign in
+with GitHub.
+
+Readiness is separate from upstream drift: a repo can look ready while Gittensor rules are stale.
+Check [Upstream drift](/docs/upstream-drift) when you change scoring assumptions.
+
+## Operator journey
+
+Operators watch deployment health, product usage, value rollups, and upstream drift across
+installations. These surfaces are private and authenticated — never mirrored to public GitHub
+comments.
+
+**1. Open usage & value.** Weekly rollups, activation status, and noise-reduction metrics in the
+control panel.
+
+[Operator dashboard](/app/operator) — backed by `GET /v1/app/operator-dashboard`.
+
+**2. Read the weekly value report.** Summary lines plus rollup freshness and warnings when
+backfills lag or fidelity degrades.
+
+**3. Check drift status.** Compare ruleset snapshots and signal fidelity before trusting miner or
+maintainer guidance.
+
+<CodeBlock
+  lang="http"
+  code={`GET /v1/upstream/drift
+GET /v1/upstream/status
+GET /v1/readiness`}
+/>
+
+When drift is not `current`, treat MCP and API responses as tied to the printed ruleset version.
+See [Upstream drift](/docs/upstream-drift) for semantics.
+
+## Public vs private boundaries
+
+Public GitHub output must never include wallets, hotkeys, payout or reward estimates, raw trust
+scores, public score estimates, private reviewability details, or farming language. Private MCP,
+API, and control-panel surfaces may show authenticated scoreability, blockers, projections, and
+evidence — framed as guidance, not guaranteed outcomes.
+
+<Callout variant="safety">
+  If you are unsure whether copy belongs on a PR thread, start with a maintainer packet or MCP
+  preflight. Public comments stay advisory and sanitized; richer context stays in private channels.
+</Callout>
+
+## Next steps
+
+- Miners: [Quickstart](/docs/quickstart) → [Miner workflow](/docs/miner-workflow)
+- Maintainers: [Self-hosting](/docs/maintainer-self-hosting) →
+  [GitHub App](/docs/github-app) → [Maintainer workflow](/docs/maintainer-workflow)
+- Repo owners: [Owner console](/app/owner) + [Privacy & security](/docs/privacy-security)
+- Operators: [Operator dashboard](/app/operator) + [Upstream drift](/docs/upstream-drift)

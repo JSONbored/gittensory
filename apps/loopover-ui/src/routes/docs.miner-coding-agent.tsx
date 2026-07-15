@@ -1,8 +1,20 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
+import { Suspense } from "react";
 
 import { DocsPage } from "@/components/site/docs-page";
-import { Callout, CodeBlock, FeatureRow } from "@/components/site/primitives";
+import { docsClientLoader } from "@/lib/docs-client-loader";
 
+// Rendered from content/docs/miner-coding-agent.mdx via fumadocs-mdx's browser entry
+// (docsClientLoader), through the existing DocsPage/Callout/CodeBlock/FeatureRow
+// primitives -- not fumadocs-ui's bundled components. See docs-source.ts's comment
+// for why the loader below resolves only a plain, serializable path string.
+//
+// The three arrays below no longer feed this page's own JSX -- their prose was
+// hand-transcribed into the migrated .mdx above -- but they stay exported because
+// docs.miner-coding-agent.test.tsx imports them directly (asserting
+// MINER_CODING_AGENT_PROVIDER_ITEMS against packages/loopover-engine's
+// CODING_AGENT_DRIVER_NAMES, and MINER_CODING_AGENT_ENV_ROWS's env var names). Keep
+// both this data and the corresponding MDX content in sync if either changes.
 export const MINER_CODING_AGENT_PROVIDER_ITEMS: Array<{ title: string; description: string }> = [
   {
     title: "noop",
@@ -86,6 +98,12 @@ export const MINER_CODING_AGENT_TRUST_ROWS: Array<{ title: string; description: 
 ];
 
 export const Route = createFileRoute("/docs/miner-coding-agent")({
+  loader: async () => {
+    const { docsSource } = await import("@/lib/docs-source");
+    const page = docsSource.getPage(["miner-coding-agent"]);
+    if (!page) throw notFound();
+    return { path: page.path, title: page.data.title, description: page.data.description };
+  },
   head: () => ({
     meta: [
       { title: "Miner coding-agent driver — LoopOver docs" },
@@ -108,99 +126,13 @@ export const Route = createFileRoute("/docs/miner-coding-agent")({
 });
 
 export function MinerCodingAgentDriverDocs() {
+  const { path, title, description } = Route.useLoaderData();
+  const Content = docsClientLoader.getComponent(path);
   return (
-    <DocsPage
-      eyebrow="Configuration"
-      title="Miner coding-agent driver"
-      description="Choose a production provider, override the right model and timeout knobs, and recognize credential failures before you chase the wrong layer."
-    >
-      <p>
-        The miner resolves <code>MINER_CODING_AGENT_PROVIDER</code> as a comma-separated preference
-        list. The first configured name wins, unknown names are skipped, and an empty or unset list
-        leaves production construction fail-closed instead of guessing a default backend.
-      </p>
-
-      <Callout variant="note" title="No silent fallback">
-        This seam is explicit on purpose: if you do not configure a provider, the miner does not
-        silently pick one for you.
-      </Callout>
-
-      <h2>Provider selection</h2>
-      <FeatureRow items={MINER_CODING_AGENT_PROVIDER_ITEMS} />
-      <CodeBlock
-        filename=".env"
-        code={`# Prefer Claude Code, fall back to Codex if Claude is unavailable.
-MINER_CODING_AGENT_PROVIDER=claude-cli,codex-cli
-MINER_CODING_AGENT_CLAUDE_MODEL=<optional-claude-model>
-MINER_CODING_AGENT_TIMEOUT_MS=120000
-
-# Prefer Codex, fall back to Claude.
-MINER_CODING_AGENT_PROVIDER=codex-cli,claude-cli
-MINER_CODING_AGENT_CODEX_MODEL=<optional-codex-model>`}
-      />
-      <Callout variant="note">
-        `noop` and <code>agent-sdk</code> ignore the model and timeout knobs. Only the CLI
-        subprocess providers consume them.
-      </Callout>
-
-      <h2>Model and timeout overrides</h2>
-      <p>
-        The only driver-specific knobs today are the provider-specific model overrides and the
-        shared wall-clock timeout. Anything else is task-level orchestration, not provider config.
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-token-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-foreground">
-              <th className="py-2 pr-4 font-medium">Env var</th>
-              <th className="py-2 pr-4 font-medium">Applies to</th>
-              <th className="py-2 pr-4 font-medium">Default</th>
-              <th className="py-2 pr-0 font-medium">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {MINER_CODING_AGENT_ENV_ROWS.map((row) => (
-              <tr key={row.name} className="border-b border-border/60 align-top last:border-b-0">
-                <td className="py-3 pr-4 font-mono text-token-xs text-foreground">{row.name}</td>
-                <td className="py-3 pr-4 text-muted-foreground">{row.appliesTo}</td>
-                <td className="py-3 pr-4 text-muted-foreground">{row.defaultValue}</td>
-                <td className="py-3 pr-0 text-muted-foreground">{row.notes}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <h2>Recognizing a stale or missing credential</h2>
-      <p>
-        The shared troubleshooting table for Claude Code and Codex lives on{" "}
-        <a href="/docs/self-hosting-ai-providers#recognizing-a-stale-or-missing-credential">
-          Self-host AI providers
-        </a>
-        . This page keeps the miner-specific reminder: the credential lives on the operator's
-        machine or mounted volume, not in repo config.
-      </p>
-      <FeatureRow items={MINER_CODING_AGENT_TRUST_ROWS} />
-      <Callout variant="warn" title="Troubleshoot the right layer">
-        If the CLI cannot see its credential, the miner cannot spawn a healthy provider. Fix the
-        operator-owned credential path first, then come back to the miner env vars.
-      </Callout>
-
-      <h2>Related docs</h2>
-      <ul>
-        <li>
-          <Link to="/docs/miner-quickstart">Miner quickstart by lane</Link> — install and verify the
-          miner before you wire a coding agent.
-        </li>
-        <li>
-          <Link to="/docs/miner-workflow">Miner workflow</Link> — the rest of the contributor loop
-          after the driver is configured.
-        </li>
-        <li>
-          <Link to="/docs/self-hosting-ai-providers">Self-host AI providers</Link> — the broader
-          credential and provider reference that shares the troubleshooting table above.
-        </li>
-      </ul>
+    <DocsPage eyebrow="Configuration" title={title} description={description}>
+      <Suspense fallback={<p className="text-token-sm text-muted-foreground">Loading…</p>}>
+        <Content />
+      </Suspense>
     </DocsPage>
   );
 }

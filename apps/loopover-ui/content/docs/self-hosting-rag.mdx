@@ -1,0 +1,89 @@
+---
+title: RAG indexing
+description: RAG adds relevant existing code and docs to the AI reviewer prompt. It is additive and fail-safe.
+---
+
+## Prerequisites
+
+<FeatureRow
+  items={[
+    {
+      title: "Repo activation",
+      description:
+        "LOOPOVER_REVIEW_RAG=true, repo in LOOPOVER_REVIEW_REPOS (or features.rag: true in private config). Gittensor is_registered is not required for self-host RAG when the allowlist covers the repo.",
+    },
+    {
+      title: "Vector backend",
+      description:
+        "SQLite vectors by default, Qdrant with the qdrant profile, or Postgres/pgvector where configured.",
+    },
+    {
+      title: "Embedding provider",
+      description:
+        "An OpenAI-compatible embeddings endpoint with a model whose dimension matches the vector collection.",
+    },
+  ]}
+/>
+
+## Choosing a vector backend
+
+SQLite vectors are the default and need no extra service — fine for a small instance or getting
+started. Qdrant (`QDRANT_URL`, `--profile qdrant`) is the preferred dedicated vector store for
+review context at scale. A third option, `PGVECTOR_ENABLED=true`, uses the Postgres pgvector table
+instead — only relevant if you're already running the `postgres` profile and want to avoid
+standing up a separate Qdrant service. Leave it `false` (the default) when `QDRANT_URL` is set;
+Qdrant remains preferred for RAG at scale.
+
+## Qdrant and Ollama example
+
+<CodeBlock
+  filename=".env"
+  code={`LOOPOVER_REVIEW_RAG=true
+LOOPOVER_REVIEW_REPOS=owner/repo
+QDRANT_URL=http://qdrant:6333
+QDRANT_DIM=768
+AI_EMBED_BASE_URL=http://ollama:11434/v1
+AI_EMBED_MODEL=nomic-embed-text:latest`}
+/>
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose --profile qdrant --profile ollama up -d
+docker compose exec ollama ollama pull nomic-embed-text:latest`}
+/>
+
+Use `QDRANT_DIM=1024` for 1024-dimensional models such as `bge-m3` or `mxbai-embed-large`. If a
+Qdrant collection already exists, recreate it before changing dimensions.
+
+`AI_EMBED_API_KEY` is the bearer credential for `AI_EMBED_BASE_URL`, if that endpoint requires one
+— a local Ollama typically doesn't, but a hosted OpenAI-compatible embeddings endpoint usually
+does. Setting `AI_EMBED_MODEL` alone does nothing without `AI_EMBED_BASE_URL` also set; unset,
+embeddings use the same provider as the rest of the review chain.
+
+## Indexing
+
+RAG needs an index before it can retrieve useful context. A cold or missing index degrades to no
+context; the review still runs.
+
+<CodeBlock
+  lang="bash"
+  code={`curl -X POST http://localhost:8787/v1/internal/jobs/rag-index \\
+  -H "authorization: Bearer $INTERNAL_JOB_TOKEN" \\
+  -H "content-type: application/json" \\
+  -d '{"repoFullName":"owner/repo"}'`}
+/>
+
+## Operational checks
+
+- Boot logs should include `selfhost_embed_provider` when an embedding provider is configured.
+- Qdrant mode should log `selfhost_vectorize` with backend `qdrant`.
+- Empty RAG context usually means the repo is not indexed, the embed model is unavailable, or
+  dimensions do not match.
+
+<Callout variant="note">
+  RAG is context, not authority. The AI reviewer still has to verify every claim against the diff,
+  grounding, and review rules.
+</Callout>
+
+Pair RAG with [AI providers](/docs/self-hosting-ai-providers) and optionally
+[REES](/docs/self-hosting-rees).

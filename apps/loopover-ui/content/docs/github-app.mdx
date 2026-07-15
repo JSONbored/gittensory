@@ -1,0 +1,245 @@
+---
+title: GitHub App configuration
+description: Install a LoopOver GitHub App on a repo so it reviews your pull requests, then choose whether it should stay advisory or enforce repo-configured PR quality rules.
+---
+
+Once installed, a **LoopOver GitHub App reviews every pull request** on the repos you select.
+Self-hosting your own App (see [self-hosting setup](/docs/maintainer-self-hosting)) is the only
+currently available path. Each review produces two surfaces: the **LoopOver Orb Review Agent**
+check run (and the advisory **LoopOver Context** check), and a single review comment posted by
+`loopover[bot]` that updates in place as the PR evolves. The review behavior below this page's
+Install section (PR panel, checks, gate modes, config-as-code) is the same regardless of which
+connection mode your self-hosted App uses.
+
+## Install
+
+**Self-hosting is the only currently available path.** Run the review stack yourself, then
+install your own GitHub App on exactly the repos you choose using the self-host setup wizard. The
+direct App's required permissions and events are covered in
+[GitHub App and Orb](/docs/self-hosting-github-app) — use that page's checklist for a self-hosted
+install.
+
+<Callout variant="note" title="Shared, centrally hosted App: not currently available">
+  LoopOver previously ran a private managed-beta shared App that repo owners could install directly,
+  without self-hosting. That shared install path is currently paused while self-hosted Orb is the
+  primary way to run LoopOver — a new centrally hosted offering is planned for the future. If you
+  previously used the shared managed-beta App, see [self-hosting
+  setup](/docs/maintainer-self-hosting) to move your repos over.
+</Callout>
+
+## First 10 minutes
+
+**1.** Install the app on one test repository first.
+
+**2.** Confirm the installation appears in the private API, then open its health record.
+
+<CodeBlock
+  lang="http"
+  code={`GET /v1/installations
+GET /v1/installations/:id/health
+GET /v1/installations/:id/repair`}
+/>
+
+**3.** Check repo readiness before enabling public output.
+
+<CodeBlock lang="http" code={`GET /v1/repos/:owner/:repo/registration-readiness`} />
+
+**4.** Preview the exact public surface without posting to GitHub.
+
+<CodeBlock
+  lang="http"
+  code={`POST /v1/repos/:owner/:repo/settings-preview
+# body: sample PR fields + desired comment/check/gate settings`}
+/>
+
+**5.** Leave **LoopOver Context** advisory while you tune copy and settings. Make
+**LoopOver Orb Review Agent** required only after the repo explicitly enables blocking rules.
+
+## Default posture
+
+LoopOver is advisory-first. Public comments, labels, the Context check, and the review-agent
+check are controlled per repo. Missing issue links, non-Gittensor contributors, busy queues, and
+weak overlap signals do not block merge by default.
+
+## PR panel
+
+The PR panel is the review comment the LoopOver app posts on each pull request. It is one sticky
+comment authored by `loopover[bot]` that updates in place — the app edits the same comment instead
+of adding new ones. It shows a public-safe readiness score, concrete signal evidence, and short
+actions for linked issues, related work, review load, validation evidence, open PR queue,
+contributor context, and Gate result.
+
+By default the comment is posted only to detected contributors (`commentMode` is
+`detected_contributors_only`). Set `commentMode` to `all_prs` to comment on every PR, or `off` to
+suppress the comment entirely. Operators who have rolled the deployment onto the unified review
+comment (see below) get the single in-place comment shape; otherwise the legacy multi-panel
+comment is used unchanged.
+
+## Checks
+
+The LoopOver app publishes its review as check runs. **LoopOver Orb Review Agent** is the gate
+result, controlled by `reviewCheckMode` (`required` / `visible` / `disabled`). **LoopOver
+Context** is the separate advisory companion, controlled by its own `checkRunMode` (`off` /
+`enabled`) — these two switches are independent axes, not one setting for both checks.
+`checkRunDetailLevel` (`minimal` / `standard`) only affects **LoopOver Context**'s output depth;
+it has no effect on the Orb Review Agent check.
+
+**LoopOver Context** is advisory and should not be required in branch protection. **LoopOver Orb
+Review Agent** is opt-in and can be made required after a repo owner chooses blocking rules.
+
+Branch protection should require **LoopOver Orb Review Agent** only after the repo has verified
+installation health, previewed the public panel, and configured at least one `block` rule. Do not
+require **LoopOver Context**; it is there to inform reviewers, not stop merges.
+
+## Gate modes
+
+The deterministic gate is the heart of the LoopOver review. Its master switch is
+`reviewCheckMode` (`required` / `visible` / `disabled`); each dimension then refines an
+already-enabled gate with a tri-state mode — `off` (not evaluated), `advisory` (surfaced, never
+blocks), or `block` (can become a hard **LoopOver Orb Review Agent** blocker). A configured
+blocker fails the gate for any author identically — confirmed-Gittensor-contributor status does
+not change _who_ can be blocked; it's carried through only for on-chain scoring, a separate
+concern from the gate's own merge/close decision.
+
+- `linkedIssueGateMode` — linked-issue check. Default `advisory`.
+- `duplicatePrGateMode` — duplicate / superseding PR detection. Default `block`.
+- `qualityGateMode` + `qualityGateMinScore` — the PR-quality score gate. Default `advisory`; only
+  blocks when set to `block` with a configured min score.
+- `slopGateMode` + `slopGateMinScore` — the deterministic anti-slop signal. Default `off`;
+  `advisory` surfaces the slop score and warnings, `block` also hard-blocks at or above the min
+  score (engine default band `60`).
+- `mergeReadinessGateMode` — composite merge-readiness gate. Default `off`.
+- `manifestPolicyGateMode` — makes the repo manifest's declared policy (blocked paths, required
+  linked issue, test expectations) enforceable. Default `off`.
+- `aiReviewMode` — AI review. Default `off`; `advisory` posts AI review notes only, `block` lets a
+  dual-model high-confidence consensus defect become a blocker.
+- `sizeGateMode` — PR-size hold. Default `off`; a PR at or above the configured file/line
+  thresholds is held for manual review rather than auto-merged, never a hard failure.
+- `lockfileIntegrityGateMode` — lockfile-tamper-risk check (a resolved/integrity change with no
+  matching version bump, or a dependency pointed off the npm registry). Default `off`.
+- `claGateMode` — CLA / license-compatibility gate. Default `off`.
+- `selfAuthoredLinkedIssueGateMode` — flags or blocks a PR whose author also opened the linked
+  issue. Default `advisory`.
+- `linkedIssueSatisfactionGateMode` — an AI assessment of whether the PR's diff actually satisfies
+  its primary linked issue's intent, distinct from `linkedIssueGateMode` (which only checks a link
+  exists). Default `off`; `advisory` renders in the review comment without blocking, `block`
+  additionally lets a confidence-floor-passing "unaddressed" verdict become a blocker.
+- `moderationGateMode` — whether the moderation-rules engine (contributor cap, blacklist,
+  review-nag feeding a shared cross-repo violation tally) runs on this repo. Default `inherit`
+  (defers to the instance-wide default); `off`/`enabled` force it per repo.
+
+The policy pack (`gatePack`) selects which rule set runs: `gittensor` (registry-aware, tracks
+confirmed-Gittensor-contributor status for scoring) or `oss-anti-slop` (the deterministic rules
+against any author on any repo, with no confirmed-contributor tracking at all).
+
+## Configure as code (`.loopover.yml`)
+
+Every setting can be committed to `.loopover.yml` at the repo root instead of, or layered over,
+the dashboard. Precedence is `.loopover.yml` > repository settings > safe defaults; an unset
+field falls back to the next layer. It only chooses _what_ LoopOver does — a configured blocker
+gates every author identically, regardless of config.
+
+<CodeBlock
+  lang="yaml"
+  code={`# Repository settings as code — any dashboard toggle:
+settings:
+  reviewCheckMode: required     # review-agent check on/off (required|visible|disabled)
+  checkRunMode: enabled         # the advisory Context check on/off
+  commentMode: detected_contributors_only
+  publicSurface: comment_only
+
+# Friendly gate alias (wins over settings: for gate fields):
+gate:
+  enabled: true                 # review-agent check on/off
+  linkedIssue: advisory         # block | advisory | off
+  duplicates: block
+  readiness: { mode: advisory, minScore: 60 }
+
+# Public review-panel content:
+review:
+  footer: { text: "Reviewed by our bot." }   # custom lead — the Gittensor register link is always appended
+  note: "Run npm test before requesting review."
+  fields: { relatedWork: false }              # show/hide individual panel rows`}
+/>
+
+Maintainer-supplied footer and note text is dropped if it contains forbidden public language
+(reward, score, wallet, hotkey, payout, etc.); the Gittensor attribution and register link always
+remain on the footer.
+
+The per-repo settings above choose _what_ LoopOver does on each PR. The next section covers the
+deployment-wide capability switches that turn whole review features on or off.
+
+## Review capability flags (`LOOPOVER_REVIEW_*`)
+
+Beyond per-repo settings, operators turn whole review _capabilities_ on or off with the
+`LOOPOVER_REVIEW_*` worker environment variables. Every flag defaults to **OFF**: when a flag is
+off its code path is inert and the review behaves exactly as if the feature did not exist.
+"Truthy" is one of `1`, `true`, `yes`, or `on`. You roll capabilities forward — and back — one
+flag, and one repo, at a time.
+
+<Callout variant="safety">
+  Per-PR features require **two** conditions: the capability flag is on _and_ the repo is listed in
+  `LOOPOVER_REVIEW_REPOS`. With an empty repo allowlist every per-PR feature stays dormant for
+  everyone, no matter the global flags.
+</Callout>
+
+- `LOOPOVER_REVIEW_REPOS` — per-repo cutover allowlist. Comma-separated `owner/repo` names that
+  may run the per-PR features. Add repos one at a time to roll forward; remove to roll back.
+- `LOOPOVER_REVIEW_SAFETY` — safety scan: defangs untrusted PR title/body/diff (prompt-injection
+  neutralization) before the reviewer sees it, and surfaces a `secret_leak` blocker for leaked
+  secrets in the diff. Per-PR.
+- `LOOPOVER_REVIEW_GROUNDING` — grounds the AI reviewer with the PR's finished CI status and the
+  full post-change content of the changed files, so the model verifies its claims against
+  reality. Per-PR.
+- `LOOPOVER_REVIEW_RAG` — retrieval-augmented context: appends semantically related code/docs from
+  the codebase vector index to the reviewer prompt. Per-PR; inert until a `VECTORIZE` index exists
+  for the repo.
+- `LOOPOVER_REVIEW_REPUTATION` — submitter-reputation spend control: downgrades a new / burst /
+  low-reputation submitter to a deterministic-only review. Internal-only, never surfaced publicly.
+  Per-PR.
+- `LOOPOVER_REVIEW_OPS` — read-only observability: a cron anomaly scan over your own
+  review-outcome data plus a bearer-gated stats aggregate. Global (not scoped by the repo
+  allowlist).
+- `LOOPOVER_REVIEW_SELFTUNE` — self-improvement loop that computes tuning recommendations from
+  review outcomes, shadow-soaks any strictly-tightening recommendation, and can _only ever
+  tighten_ the gate. Global.
+- `LOOPOVER_REVIEW_CONTENT_LANE` — routes content repos (curated lists, registries) through the
+  dedicated content lane instead of the code gate. Global.
+- `LOOPOVER_REVIEW_DRAFT` — public draft-submission flow (contributor draft → GitHub OAuth → fork
+  PR). Global; also needs the draft secrets set.
+
+A safe rollout for a per-PR feature is two flips: set the capability flag truthy, then add the
+repo to `LOOPOVER_REVIEW_REPOS`. Because both must hold, a capability can stay globally enabled
+while remaining dormant everywhere except the repos you have explicitly added.
+
+<CodeBlock
+  lang="bash"
+  code={`# Roll grounding + RAG context onto one repo:
+LOOPOVER_REVIEW_GROUNDING="true"
+LOOPOVER_REVIEW_RAG="true"
+LOOPOVER_REVIEW_REPOS="JSONbored/loopover"`}
+/>
+
+## Dogfood mode
+
+For repos like `JSONbored/loopover` and `awesome-claude`, enable PR comments, labels, Context, and
+Gate together to test the full product surface. If another maintainer agent can merge quickly,
+configure that agent to wait for `LoopOver Orb Review Agent` before merge or close.
+
+## Install diagnostics
+
+After installing, verify your install health from the API. The readiness endpoint separates
+service health from data quality.
+
+If the install route changes, check the deployed `GITHUB_APP_SLUG` before publishing setup copy.
+Self-hosted deployments use whatever slug you chose during setup.
+
+New maintainers should start with [self-hosting setup](/docs/maintainer-self-hosting), then
+continue with [Maintainer workflow](/docs/maintainer-workflow) or the
+[beta onboarding checklist](/docs/beta-onboarding) after the health endpoint reports clean
+permissions and events.
+
+<Callout variant="safety">
+  LoopOver's GitHub App never requests source push, never stores repository contents, and never
+  publishes wallet, hotkey, payout, trust, reward, or private scoring language.
+</Callout>

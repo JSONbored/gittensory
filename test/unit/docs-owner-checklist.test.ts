@@ -5,7 +5,7 @@ import { isPublicSafeText } from "../../src/signals/redaction";
 
 const OWNER_CHECKLIST_PATH = resolve(
   import.meta.dirname,
-  "../../apps/loopover-ui/src/routes/docs.owner-checklist.tsx",
+  "../../apps/loopover-ui/content/docs/owner-checklist.mdx",
 );
 
 describe("docs owner onboarding checklist page", () => {

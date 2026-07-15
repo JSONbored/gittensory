@@ -1,9 +1,20 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
+import { Suspense } from "react";
 
 import { DocsPage } from "@/components/site/docs-page";
-import { CodeBlock, Callout } from "@/components/site/primitives";
+import { docsClientLoader } from "@/lib/docs-client-loader";
 
+// Rendered from content/docs/mcp-clients.mdx via fumadocs-mdx's browser entry
+// (docsClientLoader), through the existing DocsPage/Callout/CodeBlock
+// primitives -- not fumadocs-ui's bundled components. See docs-source.ts's comment
+// for why the loader below resolves only a plain, serializable path string.
 export const Route = createFileRoute("/docs/mcp-clients")({
+  loader: async () => {
+    const { docsSource } = await import("@/lib/docs-source");
+    const page = docsSource.getPage(["mcp-clients"]);
+    if (!page) throw notFound();
+    return { path: page.path, title: page.data.title, description: page.data.description };
+  },
   head: () => ({
     meta: [
       { title: "MCP client setup — LoopOver docs" },
@@ -26,98 +37,13 @@ export const Route = createFileRoute("/docs/mcp-clients")({
 });
 
 function McpClients() {
+  const { path, title, description } = Route.useLoaderData();
+  const Content = docsClientLoader.getComponent(path);
   return (
-    <DocsPage
-      eyebrow="Get started"
-      title="MCP client setup"
-      description="Configure your coding agent to talk to the LoopOver MCP. Pick stdio for local agents, remote for cloud agents."
-    >
-      <h2>Generate config</h2>
-      <p>These commands print config only. They do not mutate your local client files.</p>
-      <CodeBlock
-        lang="bash"
-        code={`loopover-mcp init-client --print codex
-loopover-mcp init-client --print claude
-loopover-mcp init-client --print cursor
-loopover-mcp init-client --print mcp
-loopover-mcp init-client --print vscode`}
-      />
-      <p>
-        <code>--print mcp</code> uses the same JSON snippet as Claude Desktop and Cursor for other
-        stdio MCP hosts that expect the <code>mcpServers</code> shape. Every generated snippet
-        assumes <code>loopover-mcp</code> is on your <code>PATH</code> (install it globally first,
-        per <a href="/docs/quickstart">Quickstart</a>) — pass{" "}
-        <code>--command /absolute/path/to/loopover-mcp</code> if your client doesn't inherit your
-        shell PATH.
-      </p>
-
-      <h2>Codex (OpenAI)</h2>
-      <CodeBlock
-        filename="~/.codex/config.toml"
-        lang="toml"
-        code={`[mcp_servers.loopover]
-command = "loopover-mcp"
-args = ["--stdio"]`}
-      />
-
-      <h2>Claude Desktop</h2>
-      <CodeBlock
-        filename="claude_desktop_config.json"
-        lang="json"
-        code={`{
-  "mcpServers": {
-    "loopover": {
-      "command": "loopover-mcp",
-      "args": ["--stdio"]
-    }
-  }
-}`}
-      />
-
-      <h2>Cursor</h2>
-      <CodeBlock
-        filename=".cursor/mcp.json"
-        lang="json"
-        code={`{
-  "mcpServers": {
-    "loopover": {
-      "command": "loopover-mcp",
-      "args": ["--stdio"]
-    }
-  }
-}`}
-      />
-
-      <h2>VS Code</h2>
-      <p>
-        VS Code's native MCP support uses a <code>servers</code> map with an explicit transport type
-        instead of the <code>mcpServers</code> shape the other JSON hosts use:
-      </p>
-      <CodeBlock
-        filename=".vscode/mcp.json"
-        lang="json"
-        code={`{
-  "servers": {
-    "loopover": {
-      "type": "stdio",
-      "command": "loopover-mcp",
-      "args": ["--stdio"]
-    }
-  }
-}`}
-      />
-
-      <h2>Remote MCP</h2>
-      <p>
-        The Worker also exposes a remote MCP endpoint. Use this when your agent runs in the cloud or
-        you don't want a local Node process.
-      </p>
-      <CodeBlock lang="http" code={`https://api.loopover.ai/mcp`} />
-
-      <Callout variant="safety">
-        Local <code>--stdio</code> is the default recommendation. It keeps auth + analysis on your
-        machine and is the easiest path to log into with GitHub Device Flow.
-      </Callout>
+    <DocsPage eyebrow="Get started" title={title} description={description}>
+      <Suspense fallback={<p className="text-token-sm text-muted-foreground">Loading…</p>}>
+        <Content />
+      </Suspense>
     </DocsPage>
   );
 }

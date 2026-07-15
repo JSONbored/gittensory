@@ -1,0 +1,119 @@
+---
+title: How reviews work
+description: What LoopOver does when a pull request opens — the gate, the dual-AI review and consensus, and the single comment that surfaces it.
+---
+
+## The shape of a review
+
+When a pull request opens or updates, **LoopOver CI** runs a review in two layers and reports the result in one place:
+
+1. **The gate** — a deterministic pass that never asks an AI. It runs a fixed set of rules (duplicates, linked issues, merge-readiness, anti-slop, manifest policy) and each rule is `off`, `advisory`, or `block`.
+2. **The AI review** — a dual-model read of the diff that writes review notes and, when you opt in, lets a high-confidence _consensus_ become a blocker.
+
+comment on the PR, plus an optional **LoopOver Orb Review Agent** check run. The review algorithm is open-source; what changes between repos is the configuration you tune. See [Tuning your reviews](/docs/tuning) for the review options and defaults.
+
+<Callout variant="safety">
+  Defaults are quiet. With no settings and no `.loopover.yml`, the gate is `off`, AI review is
+  `off`, and the comment is posted only to detected contributors. Every capability is an explicit
+  opt-in.
+</Callout>
+
+## 1. The gate: advisory vs. block
+
+The gate is deterministic — same inputs, same verdict, no model in the loop. Its master switch is `reviewCheckMode` (`required` / `visible` / `disabled`). Once enabled, each _dimension_ is independently set to one of three modes:
+
+- `off` — the dimension is not evaluated at all.
+- `advisory` — the finding is **surfaced** in the comment, but it never blocks the merge.
+- `block` — the finding can become a hard **LoopOver Orb Review Agent** blocker.
+
+A `block` outcome fails the gate for any author identically — confirmed- Gittensor-contributor status doesn't change _who_ can be blocked, only the mode chooses _which_ checks are active. Confirmed status is carried through for on-chain scoring, a separate concern from the gate's own merge/close decision.
+
+### The gate dimensions
+
+These are the deterministic rules the gate runs, with their default modes:
+
+- **Duplicate-PR gate** (`duplicatePrGateMode`, default `block`) — detects duplicate or superseding PRs.
+- **Linked-issue gate** (`linkedIssueGateMode`, default `advisory`) — checks the PR references an issue, as strongly as `linkedIssuePolicy` asks.
+- **Quality / merge-readiness score gate** (`qualityGateMode`, default `advisory`) — the PR-quality score; passes at or above `qualityGateMinScore`.
+- **Slop gate** (`slopGateMode`, default `off`) — the deterministic anti-slop signal. `advisory` surfaces the slop score and warnings; `block` also hard-blocks at or above `slopGateMinScore` (engine default band `60`).
+- **Copycat / plagiarism gate** (`copycatGateMode`, default `off`) — a code containment/similarity check against prior art (earlier open or recently merged PRs on the same repo). Escalating tiers: `warn` surfaces an advisory finding only; `label` also applies a label; `block` also closes the PR and counts toward the repeat-offender strikes ledger. The direction is always by submission timestamp, so the earlier (original) author is never flagged.
+- **Merge-readiness gate** (`mergeReadinessGateMode`, default `off`) — a composite readiness check.
+- **Manifest-policy gate** (`manifestPolicyGateMode`, default `off`) — when `block`, the repo's declared policy (required linked issue and test expectations) becomes enforceable. Manual-review path holds are controlled separately by `settings.hardGuardrailGlobs`.
+- **PR-size hold** (`sizeGateMode`, default `off`) — a PR at or above the configured file/line thresholds is held for manual review, never a hard failure.
+- **Lockfile-integrity gate** (`lockfileIntegrityGateMode`, default `off`) — flags a lockfile-tamper-risk finding (a resolved/integrity change with no matching version bump, or a dependency pointed off the npm registry).
+- **CLA / license gate** (`claGateMode`, default `off`) — CLA / license-compatibility check.
+- **Self-authored-linked-issue gate** (`selfAuthoredLinkedIssueGateMode`, default `advisory`) — flags or blocks a PR whose author also opened the linked issue.
+- **Linked-issue satisfaction gate** (`linkedIssueSatisfactionGateMode`, default `off`) — an AI assessment of whether the PR's diff actually satisfies its primary linked issue's intent (distinct from the linked-issue gate above, which only checks that a link exists). `advisory` renders the assessment in the review comment without ever blocking; `block` additionally lets a confidence-floor-passing "unaddressed" verdict become a hard blocker.
+- **Moderation-rules engine** (`moderationGateMode`, default `inherit`) — whether the contributor-cap / blacklist / review-nag mechanisms feed a shared, cross-repo violation tally on this repo; `inherit` defers to the instance-wide default, `off`/`enabled` force it per repo.
+
+Which deterministic rules even apply is set by the **policy pack** (`gatePack`): `gittensor` (registry-aware, tracks confirmed-Gittensor- contributor status for scoring) or `oss-anti-slop` (runs the rules against any author on any repo, with no confirmed-contributor tracking at all).
+
+<CodeBlock
+  filename=".loopover.yml"
+  code={`gate:
+  enabled: true
+  pack: gittensor
+  duplicates: block
+  linkedIssue: advisory
+  readiness:
+    mode: advisory
+    minScore: 70
+  slop:
+    mode: block
+    minScore: 60
+  mergeReadiness: advisory
+  manifestPolicy: block`}
+/>
+
+## 2. The dual-AI review and consensus
+
+AI review is its own dimension (`aiReviewMode`, default `off`). It reads the diff and produces review notes — concrete findings tied to the change, not a vague verdict. Two modes:
+
+- `advisory` — the AI write-up is posted as notes only. It never blocks.
+- `block` — a **dual-model high-confidence consensus** defect is allowed to become a blocker.
+
+By default, the blocking decision runs on a **pair** of free models and only blocks when _both_ models independently agree, with high confidence, on a real defect — no single-model block and no tie-breaker third model, so a confident-but-wrong single model can't block a good PR on its own. An operator can override this per repo (`aiReviewCombine`: `single` / `consensus` / `synthesis`); in `single` mode, one reviewer's verdict is the decision.
+
+### Bring your own model (advisory only)
+
+With `aiReviewByok: true` and a configured provider key, the _advisory_ write-up can use a maintainer's own frontier model (`aiReviewProvider` / `aiReviewModel`, e.g. `claude-3-5-sonnet-latest`). The consensus blocker always stays on the free model pair, so BYOK improves the prose without ever changing _who_ can be blocked.
+
+<Callout variant="note" title="Grounding makes the AI check reality">
+  The `LOOPOVER_REVIEW_GROUNDING` flag grounds the reviewer prompt with the PR's finished CI status
+  and the full post-change content of the changed files — so the model verifies its claims instead
+  of predicting CI or flagging a symbol defined just outside the diff hunk. `LOOPOVER_REVIEW_RAG`
+  adds semantically related existing code and docs as extra context. Both are additive and opt-in.
+</Callout>
+
+## 3. The unified review comment
+
+The result is rendered as **one in-place comment** on the PR — updated in place on each push rather than stacked. It has three parts, top to bottom:
+
+- **The alert** — a one-line headline verdict: whether the gate blocks, what the single most important blocker is, or that the PR is clear. This is the line a reader scans first.
+- **Decision drivers** — a short, always-visible checklist of the signals that actually decided the verdict: the AI code review and the gate result. This is the at-a-glance answer to why the verdict came out the way it did.
+- **Collapsibles** — expandable sections for everything else: a "Context & advisory signals" table (linked issue, related work, validation posture, contributor context — signals that inform but never block the verdict), the AI review notes, slop warnings, duplicate matches, manifest findings. Folded away by default so the comment stays short, opened when a reader wants the evidence.
+
+Who sees the comment, and how much detail it carries, is a repo setting: `commentMode` chooses the audience (`off` / `detected_contributors_only` / `all_prs`), and `publicSignalLevel` (`minimal` / `standard`) controls how much of the signal detail is published. Private review context (`maintainerNotes`) is never published to a public surface.
+
+<Callout variant="safety">
+  Public-facing comments are sanitized before they leave the worker. Private scoring, reward, and
+  reputation language never appears in the PR thread — and reputation-based spend control
+  (`LOOPOVER_REVIEW_REPUTATION`) is never surfaced in any comment, label, or check.
+</Callout>
+
+## 4. The signals behind a verdict
+
+Each row in the advisory signals table comes from a named finding. The common ones you will see:
+
+- `secret_leak` — the safety scan (`LOOPOVER_REVIEW_SAFETY`) found a leaked secret in the diff. The same scan also defangs untrusted PR text before the AI reviewer reads it.
+- `guardrail_hold` — the PR touches a path listed in `settings.hardGuardrailGlobs`. This is a manual-review hold, not an auto-close reason.
+- `manifest_missing_tests` — code changed but the expected test paths (`testExpectations`) did not.
+- **Slop score + warnings** — the deterministic anti-slop signal. With `slopAiAdvisory: true`, a free advisory-only `ai_slop_advisory` finding is added too — it never feeds the score or the gate.
+- **Duplicate match** — the other PR this one duplicates or supersedes.
+- **AI review notes** — the dual-model findings, and (in `block` mode) any consensus defect.
+
+The check run can carry the same signals at adjustable depth — but this is the **LoopOver Context** check, not the Orb Review Agent gate check: `checkRunMode` (`off` / `enabled`) publishes it, and `checkRunDetailLevel` (`minimal` / `standard`) sets how much the check summary spells out. **LoopOver Orb Review Agent** is published separately, controlled by `reviewCheckMode` (see above).
+
+## Putting it together
+
+A pull request flows through the deterministic gate, then the dual-AI review, and the union of both is rendered as one alert + signal table + collapsibles comment. The gate decides _can this merge_ with fixed rules you can read; the AI review adds judgment as advisory notes, escalating to a blocker only on two-model consensus; and the comment is the single, sanitized place a contributor reads the whole verdict. Tune every mode, threshold, and surface in [Tuning your reviews](/docs/tuning).

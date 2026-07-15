@@ -1,0 +1,99 @@
+---
+title: Privacy & security
+description: Privacy is the product. These are hard rules, not best-effort goals.
+---
+
+## Hard rules
+
+- No source upload by default. MCP sends metadata only.
+- No PAT storage. Auth uses GitHub Device Flow.
+- No wallet or hotkey display.
+- No raw trust-score display.
+- No payout/reward guarantees, anywhere.
+- No farming language.
+- No public score estimates.
+- No private reviewability details in public GitHub output.
+
+## Open algorithm, private tuning
+
+LoopOver's review engine is built so the **logic is public but the dial settings are not**. The deterministic gate, the
+scoring signals, the slop detector, the grounding/RAG context builders, and the comment
+renderer all live in the open source tree — anyone can read exactly how a verdict is
+reached. What stays private is the **production tuning**: the thresholds,
+guardrail paths, and gate modes an operator runs in production. That separation is what
+keeps a review from being gameable off the public code.
+
+Tuning lives in two private, repo-scoped places that sit on top of the open algorithm, and
+neither reveals review _direction_:
+
+- **Per-repo settings** — gate modes, score thresholds, and guardrails, stored
+  in the operator's database (set through the dashboard/API) or declared as config-as-code
+  in a repo's `.loopover.yml`. Choosing `gate.slop.minScore` or
+  setting `settings.hardGuardrailGlobs` tightens the gate without telling a
+  contributor how to bypass it.
+- **Operator feature flags** — the `LOOPOVER_REVIEW_*` family of
+  worker environment variables. These switch whole capabilities (safety scanning, CI and
+  full-file grounding, RAG context, reputation-based spend control, the unified comment) on
+  or off for a deployment.
+
+Every feature flag ships **OFF**, and a per-PR capability runs only when its
+own flag is on _and_ the repo is in the `LOOPOVER_REVIEW_REPOS` allowlist
+— so capabilities stay dormant until an operator explicitly converges a repo, one flag and
+one repo at a time.
+
+<CodeBlock
+  code={`# Per-PR features run only when the flag is ON and the repo is allowlisted.
+LOOPOVER_REVIEW_REPOS="JSONbored/loopover"   # per-repo cutover allowlist (default: none)
+LOOPOVER_REVIEW_SAFETY="true"                  # prompt-injection defang + secret-leak scan
+LOOPOVER_REVIEW_GROUNDING="true"               # CI status + full changed-file content
+LOOPOVER_REVIEW_RAG="true"                     # codebase vector-index context (needs index)
+LOOPOVER_REVIEW_IMPACT_MAP="true"              # deterministic impact map (needs review.impact_map too)
+LOOPOVER_REVIEW_CULTURE_PROFILE="true"         # repo quality-culture profile (needs review.culture_profile: true)
+LOOPOVER_REVIEW_MEMORY="true"                  # repeat-false-positive suppression (needs review.memory too)
+LOOPOVER_REVIEW_REPUTATION="true"              # submitter-reputation spend control (never shown)
+LOOPOVER_REVIEW_ENRICHMENT="true"              # external analyzer registry (REES) findings
+LOOPOVER_REVIEW_INLINE_COMMENTS="true"         # diff-anchored inline PR review comments
+LOOPOVER_REVIEW_FIX_HANDOFF="true"             # machine-readable fix-handoff block (contributor-run)
+LOOPOVER_REVIEW_PLANNER="true"                 # @loopover plan on-demand implementation plan
+LOOPOVER_REVIEW_SCREENSHOTS="true"             # before/after visual capture for UI changes
+LOOPOVER_REVIEW_E2E_TESTS="true"               # AI-generated E2E test coverage (needs features.e2eTests too)
+LOOPOVER_REVIEW_IMPROVEMENT_SIGNAL="true"      # read-only PR quality-delta signal (activation only, no-op for now)
+
+# Global (cron / endpoint) flags, not scoped by LOOPOVER_REVIEW_REPOS.
+LOOPOVER_REVIEW_CONTINUOUS="true"              # fleet-wide default: re-review on every push (else one-shot)
+LOOPOVER_REVIEW_OPS="true"                     # read-only anomaly scan + outcome stats endpoint
+LOOPOVER_REVIEW_SELFTUNE="true"                # self-tightening tuning loop, never loosens
+LOOPOVER_REVIEW_PARITY_AUDIT="true"            # shadow-record gate-decision parity readiness
+LOOPOVER_REVIEW_CONTENT_LANE="true"            # dedicated content/registry-repo review lane
+LOOPOVER_REVIEW_DRAFT="true"                   # public draft-submission (contributor fork PR) flow`}
+/>
+
+The internal-only controls never surface publicly. Submitter reputation, for example, can
+downgrade a burst or low-reputation submitter to a deterministic-only review — but no
+comment, label, or check ever shows a reputation value. Reputation thresholds are generic
+anti-abuse defaults that reveal no review direction and are not per-repo tunable.
+
+<Callout variant="safety">
+  Reading the open source tells you **how** a verdict is computed, never **what** an operator's
+  production gate will decide. The deciding inputs — thresholds, guardrail globs, and which
+  `LOOPOVER_REVIEW_*` capabilities are live — are private runtime settings, so reviews cannot be
+  reverse-engineered or gamed from the public code.
+</Callout>
+
+## Public output rules
+
+- At most one sticky sanitized comment per confirmed-miner PR.
+- At most one configured label per confirmed-miner PR.
+- Public comments are maintainer-friendly and non-shaming.
+
+## Auth
+
+- Public endpoint: `GET /health`.
+- Private API uses Bearer / session tokens.
+- MCP CLI uses GitHub OAuth Device Flow.
+- Static bearer tokens remain internal / bootstrap only.
+
+<Callout variant="safety">
+  Website copy may discuss private scoreability and risk reasoning, but it's always framed as
+  **private MCP/API context**. The public web never carries score numbers.
+</Callout>

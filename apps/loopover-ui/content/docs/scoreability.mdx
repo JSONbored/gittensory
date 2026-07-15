@@ -1,0 +1,74 @@
+---
+title: Scoreability
+description: LoopOver projects how scoreable your branch is under several scenarios. These are estimates, never guarantees.
+---
+
+## The seven scenarios
+
+Every preview computes `scenarioPreviews`, an array of exactly seven named
+scenarios, alongside a top-level `effectiveEstimatedScore` and
+`underlyingPotentialScore` for the current state:
+
+- **current** — what's scoreable right now, given all current gates and
+  observed data.
+- **cleanGates** — projection assuming every currently-failing gate (open-PR
+  threshold, credibility floor, review penalty, etc.) clears.
+- **afterPendingMerges** — projection assuming your other open PRs on this repo
+  merge, relieving open-PR collateral.
+- **afterApprovedPrsMerge** — projection assuming only your already-approved
+  open PRs merge.
+- **afterStalePrsClose** — projection assuming your stale open PRs close
+  instead of merging.
+- **linkedIssueFixed** — projection assuming the linked issue is validated and
+  the standard issue multiplier applies.
+- **bestReasonableCase** — the best of the above scenarios; the realistic upper
+  bound across known cleanups.
+
+Each scenario carries its own `scoreEstimate`, `gates`,
+`effectiveEstimatedScore`, `underlyingPotentialScore`,
+`blockedBy`, and a human-readable `deltaExplanation`.
+
+## Language rules
+
+Use `scoreability`, `estimated score`,
+`underlying potential`, and `scoreability status`. Never say
+_guaranteed payout_, _guaranteed reward_, or anything implying outcome
+guarantees.
+
+## Example shape
+
+Trimmed for readability — the real response also includes `laneMath`,
+`gates`, `gateDeltas`, and per-scenario detail:
+
+<CodeBlock
+  lang="json"
+  code={`{
+  "effectiveEstimatedScore": 18.4,
+  "underlyingPotentialScore": 31.2,
+  "scoreabilityStatus": "conditionally_scoreable",
+  "blockedBy": [
+    { "code": "credibility_floor", "severity": "reducer", "detail": "..." }
+  ],
+  "scenarioPreviews": [
+    { "name": "current", "effectiveEstimatedScore": 18.4, "blockedBy": [{ "code": "credibility_floor", "severity": "reducer", "detail": "..." }] },
+    { "name": "cleanGates", "effectiveEstimatedScore": 24.9, "blockedBy": [] },
+    { "name": "afterPendingMerges", "effectiveEstimatedScore": 21.0, "blockedBy": [{ "code": "open_pr_threshold", "severity": "reducer", "detail": "..." }] },
+    { "name": "afterApprovedPrsMerge", "effectiveEstimatedScore": 19.7, "blockedBy": [{ "code": "open_pr_threshold", "severity": "reducer", "detail": "..." }] },
+    { "name": "afterStalePrsClose", "effectiveEstimatedScore": 20.1, "blockedBy": [{ "code": "open_pr_threshold", "severity": "reducer", "detail": "..." }] },
+    { "name": "linkedIssueFixed", "effectiveEstimatedScore": 27.6, "blockedBy": [] },
+    { "name": "bestReasonableCase", "effectiveEstimatedScore": 31.2, "blockedBy": [] }
+  ],
+  "recommendation": { "level": "reasonable_fit", "actions": ["..."] },
+  "warnings": ["..."],
+  "assumptions": ["Advisory preview only; tied to the recorded scoring model snapshot..."]
+}`}
+/>
+
+`scoreabilityStatus` is one of `blocked`,
+`conditionally_scoreable`, `scoreable`, or `hold` (the repo
+itself isn't actively scoreable — unregistered or inactive allocation).
+
+<Callout variant="safety">
+  Scoreability numbers and risk language are **private**. They appear only in MCP/API responses.
+  They are never written to public GitHub surfaces.
+</Callout>

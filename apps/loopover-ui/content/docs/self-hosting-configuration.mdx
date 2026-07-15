@@ -1,0 +1,426 @@
+---
+title: Configuration
+description: "The self-host configuration model: deployment env, private per-repo policy, feature flags, and review modes."
+---
+
+import { SELFHOST_ENV_REFERENCE_MARKDOWN } from "@/lib/selfhost-env-reference";
+
+This page is the exhaustive reference. For the short path — the required secrets plus a conservative first-boot config — start with `.env.selfhost.example` in [Quickstart](/docs/self-hosting-quickstart) instead.
+
+## Config layers
+
+<FeatureRow
+  items={[
+    {
+      title: "Environment",
+      description:
+        "Deployment-wide infrastructure, secrets, feature kill switches, and service URLs. Requires restart or recreate when changed.",
+    },
+    {
+      title: "Private repo config",
+      description:
+        "Mounted LOOPOVER_REPO_CONFIG_DIR files for private per-repo policy. Read fresh each review.",
+    },
+    {
+      title: "Public repo config",
+      description:
+        "The repo .loopover.yml. Useful for transparent policy, but not for thresholds or rules you need to keep private.",
+    },
+    {
+      title: "Built-in defaults",
+      description:
+        "Safe fallback when nothing is configured. Gate off, AI off, and no repo runs per-PR features until allowlisted.",
+    },
+  ]}
+/>
+
+## Precedence
+
+Where policy for a given repo can live is one question; which layer wins when more than one is set is another. Most specific wins, in this order:
+
+- the repo's `.loopover.yml` (public repo config, or the mounted private per-repo config file below if `LOOPOVER_REPO_CONFIG_DIR` is set), then
+- the per-repo database settings (the dashboard), then
+- built-in safe defaults.
+
+Within `.loopover.yml` itself, the typed `gate:` block is an alias for the gate-related fields and wins over the generic `settings:` block for those same fields — so a value written under both `gate.duplicates` and `settings.duplicates` resolves to whatever `gate.duplicates` says. One exception to the whole precedence chain: hard path guardrails (`settings.hardGuardrailGlobs`) are config-as-code only — a configured list ADDS repo-specific globs on top of a fixed set of built-in invariant guardrails (config-as-code files, CI workflows/scripts, and core engine-decision paths) that always apply and can never be disabled. Omitted or empty means only those built-in invariants hold, regardless of what the database row or defaults would otherwise imply.
+
+This page covers the environment layer and the shape of the config file. For the full field list — every `gate:` and `settings:` key, its default, and what it does — see [Tuning your reviews](/docs/tuning), and for copy-paste templates see the table below (also shipped inside the self-host image at `config/examples/`).
+
+## Config templates
+
+Start from a template instead of reverse-engineering env flags, private-config precedence, and the parser. Every template uses the same schema for a public repo-root `.loopover.yml` or a container-private `LOOPOVER_REPO_CONFIG_DIR` mount — only what you put in each file differs.
+
+<FeatureRow
+  items={[
+    {
+      title: "loopover.minimal.yml",
+      description:
+        "Smallest safe starter — gate off, observe-only autonomy, no accidental merge/close/label writes. Copy to the repo root or a private mount.",
+    },
+    {
+      title: "loopover.full.yml",
+      description:
+        "Exhaustive commented reference — every gate:, settings:, review:, and features: field with defaults and allowed values. Body kept in sync with .loopover.yml.example.",
+    },
+    {
+      title: "global.loopover.yml + repo-override.loopover.yml",
+      description:
+        "Private self-host only — illustrative fleet global default and per-repo overlay (deep-merge). Never commit real policy into these example paths.",
+    },
+    {
+      title: "shared.loopover.yml",
+      description:
+        "Private self-host only — lowest-priority cross-repo house policy for an operator running many repos (#1959). Write a default once instead of copy-pasting it into every repo's file.",
+    },
+  ]}
+/>
+
+<CodeBlock
+  lang="bash"
+  code={`# Public repo (contributor-visible)
+cp config/examples/loopover.minimal.yml .loopover.yml
+
+# Self-host private mount (operator-only policy)
+mkdir -p loopover-config
+cp config/examples/global.loopover.yml loopover-config/.loopover.yml`}
+/>
+
+<Callout variant="note">
+  Keep anti-abuse thresholds, maintainer allowlists, and autonomy dials in the **private** mount —
+  not in a public `.loopover.yml` contributors can read. `config/examples/TEMPLATES.md` documents
+  the public-vs-private split and how to apply the templates to `loopover`, `awesome-claude`, and
+  `metagraphed` without committing private policy. Lint before deploy: `npx tsx
+  scripts/loopover-config-lint.ts path/to/.loopover.yml`.
+</Callout>
+
+Authoritative copies in git:
+
+- [`config/examples/loopover.minimal.yml`](https://github.com/JSONbored/loopover/blob/main/config/examples/loopover.minimal.yml)
+- [`config/examples/loopover.full.yml`](https://github.com/JSONbored/loopover/blob/main/config/examples/loopover.full.yml) (same body as [`.loopover.yml.example`](https://github.com/JSONbored/loopover/blob/main/.loopover.yml.example))
+- [`config/examples/TEMPLATES.md`](https://github.com/JSONbored/loopover/blob/main/config/examples/TEMPLATES.md) — catalog + fleet usage notes
+- [`config/examples/README.md`](https://github.com/JSONbored/loopover/blob/main/config/examples/README.md) — the full private-config layout, precedence chain, and deep-merge semantics, including the shared base layer
+
+Several gate-only fields are documented only in the full template comments — see below for the config-as-code blocks with no dashboard equivalent.
+
+## Required baseline env
+
+<CodeBlock
+  filename=".env"
+  code={`PUBLIC_API_ORIGIN=https://reviews.example.com
+GITHUB_APP_ID=123456
+GITHUB_APP_SLUG=my-loopover-app
+GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/github-app-private-key.pem
+GITHUB_WEBHOOK_SECRET=<random-webhook-secret>
+
+GITTENSOR_REGISTRY_URL=https://example.invalid/registry.json
+LOOPOVER_API_TOKEN=<random-32-byte-token>
+LOOPOVER_MCP_TOKEN=<random-32-byte-token>
+INTERNAL_JOB_TOKEN=<random-32-byte-token>`}
+/>
+
+Any `FOO_FILE` is loaded into `FOO` at startup. Explicit `FOO` wins over the file variant.
+
+Every command example on these docs pages hardcodes `:8787` — that's the default, not a fixed port. Set `PORT` to listen on something else; update your compose port mapping and any `curl`/health-check commands to match.
+
+<Callout variant="warn" title="MCP_ACTUATION_REPO_ALLOWLIST">
+  `LOOPOVER_MCP_TOKEN` is a shared, end-user-obtainable CLI credential (the normal alternative to
+  `loopover-mcp login`), so it must not implicitly stage actions (merges, closes, approvals) on
+  every repo the App happens to be installed on. `MCP_ACTUATION_REPO_ALLOWLIST` scopes it to an
+  explicit, comma/whitespace-separated `owner/repo` list — **unset denies all actuation** for this
+  token. Set it to `*` or `all` to opt back into the pre-scoping, any-repo behavior. If you already
+  rely on `LOOPOVER_MCP_TOKEN` for approval-queue actuation, set this variable after upgrading or
+  MCP actuation stops working.
+</Callout>
+
+<CodeBlock
+  filename=".env"
+  code={`# Deny-by-default: unset means the static MCP token cannot stage or decide any action.
+MCP_ACTUATION_REPO_ALLOWLIST=owner/repo-one, owner/repo-two
+# Restore pre-upgrade any-repo behavior:
+# MCP_ACTUATION_REPO_ALLOWLIST=*`}
+/>
+
+`MCP_READ_REPO_ALLOWLIST` is the same fail-closed/wildcard model, kept as a **separate** allowlist so read-only MCP tools (repo context, issue quality, watch subscriptions) can be granted independently of actuation trust. The full `*`/`all` wildcard additionally unlocks the non-repo-scoped contributor/operator tools.
+
+## Data paths
+
+- `MIGRATIONS_DIR` (default `migrations`) — where the self-host runtime looks for SQL migration files to auto-apply at boot. Only relevant for a custom build that ships migrations somewhere other than the default in-image location.
+- `REVIEW_AUDIT_DIR` — when set, persists visual-review screenshot PNGs to this filesystem path so they're served from cache instead of re-rendered on every request. Unset means each screenshot is re-rendered on demand. Only relevant when `BROWSER_WS_ENDPOINT` (see [REES enrichment](/docs/self-hosting-rees)) is also set — visual review is fully inert without it.
+- `REVIEW_AUDIT_S3_BUCKET` / `_ENDPOINT` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` — an alternative to `REVIEW_AUDIT_DIR`: persist screenshots in an S3-compatible bucket (your own Cloudflare R2 bucket, or any other S3-compatible provider) instead of the local filesystem, and set `REVIEW_AUDIT_S3_PUBLIC_URL` to that bucket's own public base URL so screenshots link directly at the bucket instead of proxying through this instance. This matters if your instance sits behind a private network (a VPN, a firewall, no public DNS) — without a public bucket, screenshots embedded in a public PR comment are unreachable by GitHub and by anyone viewing the PR who isn't on that same private network. Takes priority over `REVIEW_AUDIT_DIR` when both are set.
+- `CODEX_HOME` — do not set this for the app container. The Codex provider rejects a container-set `CODEX_HOME` outright (fails closed with `codex_credential_isolation_required`) because `codex exec` reads attacker-controlled PR title/body/diff text, and a mounted OAuth home on the same filesystem could otherwise leak into review output via prompt injection. This is why the Codex subscription path additionally requires the explicit `LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER=1` opt-in — see [AI providers](/docs/self-hosting-ai-providers).
+
+## GitHub API cache
+
+Redis backs shared caching for stable GitHub GET responses, including repeated installation, repo/user metadata, and branch-protection required-status reads. Keys include the caller identity and response-shaping headers, and cold misses are single-flighted so concurrent jobs do not stampede GitHub.
+
+<CodeBlock
+  filename=".env"
+  code={`GITHUB_CACHE_TTL_SECONDS=20
+GITHUB_BRANCH_PROTECTION_CACHE_TTL_SECONDS=1200
+GITHUB_METADATA_CACHE_TTL_SECONDS=600`}
+/>
+
+<Callout variant="note">
+  `GITHUB_CACHE_TTL_SECONDS` is the short default for repeated safe GitHub GETs. Stable repo/user
+  metadata and branch-protection required-status reads use the per-class TTLs above so operators can
+  keep repeated policy reads hot without broadening stale cache risk. Live CI status, check-run,
+  check-suite, pull/issue subresources, pull mergeability, token minting, rate-limit, and
+  collaborator-permission endpoints are never served from this cache. Prometheus exports
+  `loopover_github_response_cache_total`, and the bundled self-host Grafana dashboard includes the
+  hit/miss/coalesced/error breakdown.
+</Callout>
+
+## Queue cadence and startup
+
+`CRON_INTERVAL_MS` (default `120000`, ~2 minutes) is the tick that drives the maintain/sweep and sync cadence — contributor evidence, burden forecasts, RAG re-indexing, drift scans, and notifications all fan out from it. `QUEUE_BACKGROUND_CONCURRENCY` (default `1`) caps how many low-priority background jobs may occupy a `QUEUE_CONCURRENCY` slot at once, independent of live webhook/review work.
+
+`QUEUE_STARTUP_JITTER_MIN_JOBS` (default `8`) sets the pending-job count below which the queue skips its startup jitter delay — useful on a small instance where you'd rather a handful of jobs start processing immediately after boot than wait out a jitter window meant to stagger many instances restarting at once.
+
+## Maintenance and installation backpressure
+
+Two independent, opt-out admission checks run at queue-claim time, on top of GitHub rate-limit deferral, so background work never starves live PR review or overloads the host. Both grew out of real production incidents — an un-jittered cron enqueue and an unbounded per-installation background fan-out — and every value below is optional with a sane default.
+
+<FeatureRow
+  items={[
+    {
+      title: "MAINTENANCE_ADMISSION_* — host/lane pressure",
+      description:
+        "Defers a periodic maintenance job (contributor evidence, burden forecasts, RAG re-index, drift scans, notifications) when live jobs are backed up or host load is high, so maintenance never competes with live webhook/review work for CPU or DB time. A denied job is deferred with jitter, never dropped.",
+    },
+    {
+      title: "GITHUB_INSTALLATION_CONCURRENCY_* — per-install fan-out",
+      description:
+        "Caps how many GitHub-fetching background jobs one installation may run at once, so one installation's sweep or backfill can't claim every background slot and starve every other installation, even when neither is near GitHub's own rate limit.",
+    },
+  ]}
+/>
+
+Tune `MAINTENANCE_ADMISSION_MAX_LIVE_PENDING` (default `5`), `MAINTENANCE_ADMISSION_MAX_LIVE_AGE_MS` (default `120000`), `MAINTENANCE_ADMISSION_MAX_PENDING` (default `15`), `MAINTENANCE_ADMISSION_MAX_HOST_LOAD` (default `1.5`, a 1-minute load-average-per-core ceiling), and `MAINTENANCE_ADMISSION_MAX_BACKLOG_CONVERGENCE_PENDING` (default `10`) if you register many repos or run a busy instance and see maintenance sweeps lagging behind where you'd like. A denial backs off by `MAINTENANCE_ADMISSION_DEFER_MS` (default `180000`, 3 minutes) before jitter, but two escape hatches stop a deferral from becoming a starve: `MAINTENANCE_ADMISSION_MAX_DEFER_AGE_MS` (default `14400000`, 4 hours) force-admits any maintenance job that has waited this long regardless of pressure, and the shorter `MAINTENANCE_ADMISSION_DRAIN_AGE_MS` (default `600000`, 10 minutes, clamped to the 4-hour ceiling) specifically drains the oldest jobs in a backed-up `maintenance_pending_high` lane so it can actually shrink instead of denying every claim for hours. Set `MAINTENANCE_ADMISSION_ENABLED=false` to fully disable the policy and return to the old always-run behavior.
+
+`GITHUB_INSTALLATION_CONCURRENCY_LIMIT` (default `2`) is the per-installation ceiling; `GITHUB_INSTALLATION_CONCURRENCY_DEFER_MS` (default `15000`, 15 seconds) is its base backoff before jitter. Raise the limit if a single large installation's background work is being throttled and you have GitHub rate-limit and host headroom to spare; set `GITHUB_INSTALLATION_CONCURRENCY_ENABLED=false` to disable the check entirely. This check only applies to background jobs that call GitHub — live PR review (`github-webhook`/`agent-regate-pr`) is never subject to it.
+
+<Callout variant="note" title="FOREGROUND_LIVENESS_* — the other direction">
+  Where the two backpressure checks above defer background work, foreground liveness protects live
+  PR-review work FROM unbounded rate-limit deferral (its own worst case is up to ~65 minutes per
+  defer under sustained pressure, e.g. right after a deploy floods a shared REST budget). A periodic
+  sweep force-releases any foreground-priority job that has genuinely waited past
+  `FOREGROUND_LIVENESS_MAX_DEFER_MS` (default `600000`, 10 minutes), checked every
+  `FOREGROUND_LIVENESS_CHECK_INTERVAL_MS` (default `60000`, 1 minute — deliberately not the 1-second
+  poll tick, so a job that is still genuinely rate-limited waits for the next sweep instead of
+  busy-looping), releasing at most `FOREGROUND_LIVENESS_MAX_RELEASE_PER_SWEEP` jobs per tick
+  (default `25`, oldest first, so a large inherited backlog ramps up gradually instead of every
+  released job re-tripping the same rate-limit bucket at once). It also runs once at boot, so a
+  restart self-heals inherited over-deferral. Set `FOREGROUND_LIVENESS_ENABLED=false` to disable the
+  sweep.
+</Callout>
+
+## Tracing and telemetry env
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` overrides the OpenTelemetry collector target only if you're routing to an external collector instead of the bundled one (default `http://otel-collector:4318` under the `observability` profile). `OTEL_SERVICE_NAME` (default `gittensory-selfhost`) is the service name traces and metrics are tagged with — set a distinct value per instance if you run more than one and want to tell them apart in Grafana/Tempo. `OTEL_TRACES_SAMPLER` (default `parentbased_traceidratio`) picks the sampling strategy for app job/provider traces; pair it with `OTEL_TRACES_SAMPLER_ARG` (for example `0.05` to sample 5% of root traces).
+
+## Generated env reference
+
+This table is generated from `process.env.NAME` reads in `src/selfhost/**` and `src/server.ts`. It intentionally includes names and first source references only, never example values.
+
+<CodeBlock filename="self-host env vars" code={SELFHOST_ENV_REFERENCE_MARKDOWN} />
+
+## Repo activation — three layers
+
+Self-host docs and logs use "activation" for more than one mechanism. They stack independently:
+
+<FeatureRow
+  items={[
+    {
+      title: "Feature allowlist (env)",
+      description:
+        "LOOPOVER_REVIEW_REPOS lists which repos run the converged per-PR path (safety, unified comment, grounding, RAG, reputation, …). Empty/unset ⇒ no repo runs those features, regardless of individual LOOPOVER_REVIEW_* flags. Per-repo features: overrides in a private or public .loopover.yml features: block can force on/off per repo (subject to env kill-switches).",
+    },
+    {
+      title: "Gate activation (DB or private config)",
+      description:
+        "The one-click POST …/activation endpoint bundles two independent axes into one advisory-first default: the review-check publish mode (reviewCheckMode: required, checkRunMode: enabled) and the actual per-dimension gate rules (linkedIssueGateMode, duplicatePrGateMode, qualityGateMode: all advisory; AI review still off). .loopover.yml's gate.checkMode / gate.enabled only ever set the first axis (the check-run publish mode) — the dimension rules themselves are configured separately via gate.linkedIssue, gate.duplicates, gate.readiness.mode, etc. (see Tuning your reviews). Gate rule evaluation itself is never gated by checkMode/enabled/checkRunMode; those only control whether/how the check-run publishes on GitHub.",
+    },
+    {
+      title: "Gittensor registration (is_registered)",
+      description:
+        "The registry sync (GITTENSOR_REGISTRY_URL) marks repos present in the upstream snapshot with is_registered=1. That flag gates Gittensor-scored mining, evidence graphs, and several maintainer analytics — not basic webhook review. Brokered Orb installs may keep is_registered=0; listConvergenceRepos still pre-indexes LOOPOVER_REVIEW_REPOS for RAG.",
+    },
+  ]}
+/>
+
+Preview before flipping: `GET /v1/repos/:owner/:repo/activation-preview` runs the deterministic advisory engine over recent cached PRs (no AI cost) and returns a `recommendedAction` of `enable_advisory` when the gate is still off.
+
+## Per-PR feature flags
+
+Most review capabilities need both their own flag and the repo in `LOOPOVER_REVIEW_REPOS` (unless a per-repo `features:` override says otherwise). This gives you a global kill switch and a per-repo rollout switch.
+
+<CodeBlock
+  filename=".env"
+  code={`LOOPOVER_REVIEW_REPOS=owner/repo,owner/another
+LOOPOVER_REVIEW_INLINE_COMMENTS=false
+LOOPOVER_REVIEW_SAFETY=true
+LOOPOVER_REVIEW_GROUNDING=true
+LOOPOVER_REVIEW_RAG=false
+LOOPOVER_REVIEW_ENRICHMENT=false
+LOOPOVER_REVIEW_REPUTATION=false`}
+/>
+
+<Callout variant="safety">
+  Empty `LOOPOVER_REVIEW_REPOS` means no repos run the per-PR feature path, regardless of the
+  individual flags.
+</Callout>
+
+## Private per-repo config
+
+Mount a gitignored directory and point `LOOPOVER_REPO_CONFIG_DIR` at it. If either a per-repo file or the dir-root global default (`.loopover.yml` at the mount root) exists, the public repo `.loopover.yml` is never fetched for that review. With only one of the two present, its contents are used as-is; with both present, they are deep-merged — the per-repo file overlaid onto the global default, nested mappings merging key by key and arrays replacing wholesale.
+
+<CodeBlock
+  filename="config directory"
+  code={`loopover-config/
+  owner__repo/.loopover.yml
+  repo-name/.loopover.yml
+  owner__repo.yml
+  .loopover.yml`}
+/>
+
+<CodeBlock
+  filename="owner__repo/.loopover.yml"
+  code={`gate:
+  checkMode: visible
+  aiReview:
+    mode: advisory
+    allAuthors: true
+settings:
+  commentMode: all_prs
+  includeMaintainerAuthors: true
+  autonomy:
+    merge: observe
+    close: observe
+  agentDryRun: false
+features:
+  safety: true
+  rag: false
+  reputation: false`}
+/>
+
+The `features:` block above overrides a deployment-wide `LOOPOVER_REVIEW_*` flag (rag, reputation, safety) for this one repo, with three states per key: `true` forces the capability on for this repo (still subject to the env flag itself being enabled — it can never turn on a capability the operator has fully disabled at the deployment level); `false` forces it off for this repo regardless of the env flag; and omitting the key entirely falls back to the `LOOPOVER_REVIEW_REPOS` allowlist default, i.e. today's behavior for an operator who hasn't set anything here. See [Tuning your reviews](/docs/tuning) for the full `LOOPOVER_REVIEW_*` flag list this overrides.
+
+## Config-as-code blocks with no dashboard equivalent
+
+Everything above has a dashboard row it mirrors. The fields below exist **only** in `.loopover.yml` — there is no DB column or dashboard toggle for them, so a self-host operator who never reads the example file may not know they exist.
+
+### gate.checkMode
+
+Controls only whether/how the required `LoopOver Orb Review Agent` check-run is published — it never affects gate evaluation, comments, labels, audit records, or autonomous merge/close, all of which run identically in every mode. Takes precedence over the legacy `gate.enabled` boolean when both are set.
+
+<FeatureRow
+  items={[
+    {
+      title: "required",
+      description:
+        "Publish/update the check exactly as before. Use if you keep it as a required branch-protection status check.",
+    },
+    {
+      title: "visible",
+      description:
+        "Publish/update the same check-run for UI visibility only. Never add it to branch protection as required.",
+    },
+    {
+      title: "disabled",
+      description:
+        "Never create/update the check-run. Recommended for high-volume autonomous self-hosting — avoids a perpetually-pending status and cuts GitHub API calls.",
+    },
+  ]}
+/>
+
+<Callout variant="warn" title="Remove the branch-protection requirement first">
+  Before switching to `disabled`, remove `LoopOver Orb Review Agent` from this repo's
+  branch-protection or ruleset required-status-checks list — LoopOver cannot do this on your behalf,
+  and leaving it required with nothing to satisfy it means GitHub shows a pending status forever.
+  Keep your real CI/Codecov/security checks required; this setting only ever affects LoopOver's own
+  check-run.
+</Callout>
+
+For a repo that has never been configured, the default is `disabled`; an already-configured repo keeps its current effective behavior. Self-hosters running high-volume autonomous review should prefer `visible` or `disabled` over `required` — LoopOver's own merge/close decisions never depend on this check either way.
+
+### Other gate-only fields
+
+- `gate.cla` — sub-object for the CLA gate (`gate.claMode`, documented on [Tuning your reviews](/docs/tuning)): `consentPhrase` (a case-insensitive substring LoopOver looks for in the PR description), `checkRunName` (an existing CLA-bot check-run name that also satisfies consent), and `checkRunAppSlug` (the trusted App slug required to have produced that check-run, so a contributor-controlled same-name check can't satisfy a blocking legal gate). Either detection method is enough; both may be set. All default to `null` (not configured).
+- `gate.expectedCiContexts` — CI check/status context names to treat as required when GitHub branch protection returns no readable required-status-checks (unconfigured, or a 403 from a token lacking `administration:read` — common for GitHub App installations, especially self-host). Merged with branch-protection contexts when both are readable; used alone when branch protection is null/empty. Default: not configured, which keeps the fold-all fail-closed behavior when branch protection is also unreadable.
+- `gate.premergeContentRecheck` — when `true`, a PR touching `migrations/**` gets a fresh GitHub read of the base branch's current migration filenames immediately before an agent-driven merge, catching a different PR that merged a same-numbered migration in the meantime. A live collision holds the PR instead of merging blind. Default `false` — costs one extra GitHub API call per migrations-touching PR.
+- `gate.requireFreshRebaseWindow` — when the base branch has advanced within this many minutes of the actual merge decision, forces an `update_branch` + fresh CI recheck before merging, instead of trusting a possibly-stale `mergeable_state: clean` read. A bounded retry cap prevents a fast-moving base from live-locking the PR. Default `null` (never force).
+- `gate.dryRun` — when `true`, the posted check conclusion remains the real non-enforcing verdict while comments/check text may also show the would-be stricter verdict for AI-review blocker mode. It does not disable downstream merge/close planning for failures from already-enforced gates. Default `false`.
+- `gate.firstTimeContributorGrace` — reserved and currently inert: parsed and stored, but the gate does not read it. A first-time contributor with a real blocker is one-shot closed the same as a repeat contributor. Kept for potential future use.
+
+### settings.closeOwnerAuthors and blockedPaths
+
+`settings.closeOwnerAuthors` — by default, the repo owner's own PRs (and `ADMIN_GITHUB_LOGINS` fleet-operator PRs) are never auto-closed; they may still auto-merge when clean and passing, or fall to a manual hold. Set `true` to make owner/admin-authored PRs eligible for auto-close like a contributor's, still gated by the close autonomy class and adverse-signal conditions. Automation-bot PRs stay exempt regardless of this setting. Default `false`.
+
+`blockedPaths` (top-level, alongside `wantedPaths`) is **fully retired** (#2974) — the FocusManifest parser no longer reads this key at all, it produces zero findings, and it is not enforceable under any `gate.manifestPolicy` mode. Setting it in a config produces only a migration warning from `npm run selfhost:config-lint`, nothing else. **The only mechanism that actually holds a PR for a touched path** is `settings.hardGuardrailGlobs` (config-as-code only, described above) — a would-merge PR that touches a configured guardrail glob is held for manual review.
+
+### settings anti-abuse block
+
+A cluster of contributor-abuse guardrails, all config-as-code only, all off/unset by default:
+
+- **Open-item caps** — `contributorOpenPrCap` and `contributorOpenIssueCap` bound how many PRs/issues a single non-owner/non-admin/non-bot contributor may have open at once; a contributor's newest item above the cap is closed with a clear reason, their oldest items up to the cap stay open. Both are unset (no cap) by default. `contributorCapLabel` (default `over-contributor-limit`) is the label applied on close — set it to explicit `null` to close silently. `contributorCapCancelCi` cancels in-flight CI runs on a cap-triggered close (requires the `actions: write` App permission; degrades gracefully without it) and falls back to the `CONTRIBUTOR_CAP_CANCEL_CI_DEFAULT` env var when unset.
+- **Review-nag cooldown** — `reviewNagPolicy` (`off`/`hold`/`close`, default `off`) throttles a contributor who repeatedly pings `@loopover` for review on the same PR/issue, once they exceed `reviewNagMaxPings` (default `3`) within `reviewNagCooldownDays` (default `5`). `reviewNagLabel` (default `review-nag-cooldown`) is applied alongside the hold/close action. `reviewNagMonitoredMentions` extends the same cooldown to specific maintainer logins a contributor keeps tagging directly instead of (or in addition to) `@loopover`.
+- **Exemptions and account age** — `autoCloseExemptLogins` is a shared, repo-scoped list of logins never throttled or closed by these deterministic mechanisms, on top of the standing owner/admin/bot exemption. `accountAgeThresholdDays` (default `null`, off) applies `newAccountLabel` (default `new-account`) to a PR from a below-threshold-age account — friction/visibility only, never an automatic close on account age alone, and never for the owner, admins, or bots.
+- **Command rate limit** — `commandRateLimitPolicy` (`off`/`hold`, default `off`) generalizes the review-nag pattern to every `@loopover` command, not just review-request pings. `commandRateLimitMaxPerWindow` (default `20`) bounds cheap, cache-only commands; `commandRateLimitAiMaxPerWindow` (default `5`) is the tighter limit for AI-cost-bearing commands (ask/blockers/preflight/etc.); `commandRateLimitWindowHours` (default `24`) is the rolling window both limits count against.
+
+### contentLane
+
+Lets a self-hosted maintainer point LoopOver at their own structured registry (a subnet/plugin/package catalog, for example) without a LoopOver code change — reviewing additions to a data file the same way it reviews code. Unconfigured by default; uncomment and set at least `entryFileGlob` and `collectionField` (both required — the whole block is ignored with a warning if either is missing).
+
+<CodeBlock
+  filename=".loopover.yml"
+  lang="yaml"
+  code={`contentLane:
+  entryFileGlob: registry/*.json      # Glob for the structured entry files this lane reviews. Required.
+  collectionField: entries            # The JSON field holding the collection this lane diffs. Required.
+  providerFileGlob: providers/*.ts    # Optional glob for source files the entries are validated against.
+  artifactGlob: dist/registry.json    # Optional glob for a generated/build artifact to cross-check.
+  maxAppendedEntries: 1               # Positive integer cap on new entries per PR. Default: unbounded.
+  duplicateKeyFields: [slug]          # Field name(s) used to detect a duplicate entry. Default: [] (no dedup check).
+  validatorId: my-registry-validator  # Optional identifier for a custom per-entry validator. Default: none.`}
+/>
+
+### repoDocGeneration
+
+Lets LoopOver open a pull request that refreshes this repo's own `AGENTS.md`/`CLAUDE.md` (and, additively, a skill file) on a schedule — never a direct commit. Disabled by default: an unconfigured repo, or an explicit `enabled: false`, means no repo-doc refresh ever runs for it.
+
+<CodeBlock
+  filename=".loopover.yml"
+  lang="yaml"
+  code={`repoDocGeneration:
+  enabled: true                       # Opt in. Default: false (fully disabled).
+  scope: [agents]                     # "agents" (AGENTS.md/CLAUDE.md) and/or "skills". Default: [agents].
+  allowOverwriteExisting: false       # Refresh a file that needs manual review to change. Default: false.
+  refreshIntervalDays: 7              # Minimum days between refreshes. Default: 7.`}
+/>
+
+## Instance-wide write switches (SELFHOST_DEPLOYMENT_MODE)
+
+`SELFHOST_DEPLOYMENT_MODE` forces write suppression for the whole instance, regardless of per-repo autonomy — useful for running a self-host in parallel with the live cloud App on the same webhooks, provably posting nothing until an explicit cutover.
+
+<FeatureRow
+  items={[
+    {
+      title: "Unset (default)",
+      description:
+        "Normal mode. Per-repo autonomy and GitHub permissions decide what can be written.",
+    },
+    {
+      title: "dry-run",
+      description:
+        "Compute reviews and audit as shadow, but suppress comments, checks, labels, merges, and closes.",
+    },
+    {
+      title: "disabled",
+      description: "Suppress writes as denied. Use when you need a hard instance-wide stop.",
+    },
+  ]}
+/>
+
+## Next steps
+
+Configure the GitHub integration in [GitHub App and Orb](/docs/self-hosting-github-app), then add optional context through [AI providers](/docs/self-hosting-ai-providers), [REES](/docs/self-hosting-rees), or [RAG](/docs/self-hosting-rag). For the full gate-mode and per-repo settings reference — including the AI-review combine modes and a complete worked manifest — see [Tuning your reviews](/docs/tuning).

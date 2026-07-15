@@ -38,11 +38,13 @@ import { resolveMinerVersion } from "../lib/version.js";
 // deeper in the call graph) reads plain env vars, so this single early pass is all that's needed for the whole
 // CLI (#5178). A broken secret mount fails the process fast and loud with a clear message, instead of an
 // uncaught-exception stack trace or a silent empty credential surfacing as a confusing GitHub 401 later.
+// Exits 2, not 1: docs/unattended-scheduling.md's contract only defines 0 (success) and 2 (failure -- "Alert
+// on this"), so an operator alerting strictly on 2 would otherwise miss a broken secret mount entirely.
 try {
   loadMinerFileSecrets();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exit(2);
 }
 
 // Opt-in Sentry (#6011): a complete no-op unless the operator sets LOOPOVER_MINER_SENTRY_DSN themselves. Must

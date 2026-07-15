@@ -1,6 +1,6 @@
 # LoopOver Miner UI
 
-Local, read-only dashboard shell for a laptop or fleet miner instance. It mirrors the main
+Local, read-only dashboard for a laptop or fleet miner instance. It mirrors the main
 `apps/loopover-ui/` tooling versions (React 19, TanStack Router, Vite, Tailwind v4) but intentionally
 does **not** adopt that app's Cloudflare Worker deploy model or `@lovable.dev/*` scaffold dependency.
 
@@ -8,7 +8,8 @@ The miner package invariant is client-side only with no required phone-home to b
 (`packages/loopover-miner/DEPLOYMENT.md`). This app is a plain Vite dev server / static build that a
 local miner CLI can serve later — not a Wrangler deploy target.
 
-Phase 6 data views (run history, portfolio cards) land in follow-up issues after this empty shell.
+The Phase 6 data views have shipped: an overview summary (`routes/index.tsx`, #4853) alongside dedicated
+run-history, portfolio, and ledgers views, each fed by the local read-only `/api/*` endpoints below.
 
 ## Configuration
 

@@ -1,0 +1,405 @@
+---
+title: Tuning your reviews
+description: How to configure LoopOver CI and LoopOver review -- gate modes, score thresholds, guardrails, and feature flags -- through .loopover.yml and your repo settings.
+---
+
+## How configuration fits together
+
+**LoopOver review** is the engine that scores, gates, and comments on your pull
+requests. You shape its behavior in two places, and you never have to touch the review
+algorithm itself:
+
+- **Per-repo settings** — gate modes, score thresholds, guardrails, and which
+  surfaces are enabled. Set them in the dashboard, or declare them as config-as-code in a
+  `.loopover.yml` file in the repo.
+- **Feature flags** — the `LOOPOVER_REVIEW_*` family of environment
+  variables on the worker. These switch whole capabilities (safety scanning, grounding, RAG
+  context, the unified comment, the content lane, observability, self-tuning, and more) on
+  or off for the deployment.
+
+The review algorithm — the deterministic gate, the scoring signals, the slop detector, the
+grounding and RAG context builders, and the comment renderer — is open source. Anyone can
+read exactly how a verdict is reached. The settings above sit _on top_ of that open
+algorithm and never reveal review _direction_, so a contributor cannot read them and
+game the gate.
+
+This page covers those fields in depth, for the cloud service or a self-host alike. If
+you're running your own instance, see
+[Self-host configuration](/docs/self-hosting-configuration) for the
+environment layer (deployment-wide flags, secrets, and where config files can live) that
+sits underneath everything below.
+
+<Callout variant="safety" title="Defaults are safe and conservative">
+  Every feature flag ships **OFF**. A repo with no settings and no `.loopover.yml` falls back to a
+  quiet, non-blocking profile: the gate is `off`, AI review is `off`, slop scoring is `off`,
+  comments go only to detected contributors, and no check-run is published. Turning anything on is
+  always an explicit opt-in — you roll capabilities forward, and back, one flag and one repo at a
+  time.
+</Callout>
+
+## Precedence
+
+Most specific wins:
+
+- `.loopover.yml` in the repo, then
+- per-repo database settings, then
+- built-in safe defaults.
+
+Path holds are explicit config-as-code only: a configured
+`settings.hardGuardrailGlobs` ADDS repo-specific globs on top of a fixed set of
+built-in invariant guardrails that always apply and can never be disabled. Omitted or empty
+means only those built-in invariants hold.
+
+The friendly `gate:` block in `.loopover.yml` is a typed alias for the
+gate-related fields and wins over the generic `settings:` block for those same
+fields. LoopOver looks for the manifest at the first match of `.loopover.yml` →
+`.github/loopover.yml` → `.loopover.json` →
+`.github/loopover.json`.
+
+## Feature flags (LOOPOVER*REVIEW*\*)
+
+These are worker environment variables, every one defaulting to **OFF**.
+"Truthy" means one of `1`, `true`, `yes`, or
+`on` (case-insensitive); anything else — including unset, empty, or
+`false` — is OFF. When a flag is OFF its code path is inert: the review behaves
+exactly as if the feature did not exist.
+
+One flag is a **scope** rather than a capability:
+`LOOPOVER_REVIEW_REPOS` is a per-repo allowlist that must _also_ pass for
+any per-PR feature to run on a given repo. So a per-PR feature activates only when
+**its own flag is ON and the repo is allowlisted**.
+
+- `LOOPOVER_REVIEW_REPOS` — the per-repo allowlist. Comma-separated
+  `owner/repo` names that may run the per-PR features (safety, grounding, RAG,
+  reputation, unified comment). Empty or unset means no repos — every per-PR feature stays
+  dormant for everyone regardless of the global flags. Case-insensitive and trimmed; stray
+  commas are ignored. The cron and endpoint flags (ops, self-tune, parity audit, content
+  lane, draft) are **not** scoped by this list.
+- `LOOPOVER_REVIEW_SAFETY` — safety scan in the review path: it neutralizes
+  prompt-injection in untrusted PR title/body/diff before the AI reviewer sees it, and scans
+  the diff for leaked secrets, surfacing a `secret_leak` blocker. Per-PR (also
+  needs the repo in the allowlist).
+- `LOOPOVER_REVIEW_GROUNDING` — grounds the AI reviewer with the PR's
+  _finished_ CI status plus the _full post-change content_ of the changed
+  files, so the model verifies claims against reality instead of predicting CI or flagging
+  symbols defined just outside the diff hunk. Per-PR.
+- `LOOPOVER_REVIEW_E2E_TESTS` — master kill-switch for the opt-in,
+  maintainer-triggered AI-generated E2E test coverage feature. Off by default; a repo also
+  needs its own `features.e2eTests: true` override in `.loopover.yml`
+  before the feature is active for it. Per-PR.
+- `LOOPOVER_REVIEW_IMPROVEMENT_SIGNAL` — master kill-switch for the read-only,
+  advisory PR quality-delta signal (the positive-axis counterpart to the slop risk score).
+  Off by default; config-as-code activation only for now — no tier reads the resolved value
+  yet, so turning this on has no visible effect until a later release wires real behavior
+  behind it. Per-PR.
+- `LOOPOVER_REVIEW_CONTINUOUS` — fleet-wide default AI review re-trigger cadence.
+  Off by default (one-shot): AI-generated content (main review, slop advisory, linked-issue
+  satisfaction) is produced once per PR and never regenerated automatically afterward — only
+  an explicit maintainer retrigger (the PR-panel checkbox, or `@loopover review`
+  as a maintainer) spends a fresh call. Truthy switches the fleet default to continuous —
+  every push/CI-completion/sweep re-runs AI content generation. A repo's own
+  `review.auto_review.cadence` in `.loopover.yml` always overrides
+  this default, in either direction. Never affects the deterministic gate (CI status,
+  mergeability, static-rule blockers), which always re-evaluates regardless.
+- `LOOPOVER_REVIEW_RAG` — retrieval-augmented context: queries the codebase
+  vector index for related code and docs (callers, related modules, existing conventions)
+  and appends a "Relevant existing code / docs" section to the reviewer prompt. Additive
+  only. Inert until a vector index exists for the repo — a cold or missing index degrades to
+  no context. Per-PR.
+- `LOOPOVER_REVIEW_IMPACT_MAP` — deterministic impact map: from the codebase
+  vector index plus the PR's changed exported symbols, computes which other repo files
+  plausibly need re-checking, and renders that as a compact section in the unified review
+  comment (also feeds it to the AI reviewer as additive reference context). ANDed with the
+  per-repo `review.impact_map` opt-in — neither alone is sufficient. Per-PR.
+- `LOOPOVER_REVIEW_CULTURE_PROFILE` — appends a "repo quality-culture profile"
+  reference block to the reviewer prompt: typical merged-PR size and common accepted labels,
+  derived from this repo's own merge history. Additive reference only — never a gate or
+  scoring input. Also requires the per-repo `review.culture_profile: true` opt-in
+  in `.loopover.yml`. Per-PR.
+- `LOOPOVER_REVIEW_MEMORY` — repeat-false-positive suppression: matches an
+  advisory (non-blocking) AI finding against this repo's stored suppression signals (a
+  maintainer's own past false-positive dismissals) and demotes or drops it before the
+  unified comment renders. A maintainer records a signal with
+  `@loopover resolve [finding-code]` (or a whole-PR
+  `@loopover resolve` ack). Advisory-only by construction — never applied to gate
+  blockers, so it can never change the merge/close disposition. Also requires the per-repo
+  `review.memory: true` opt-in in `.loopover.yml`. Per-PR.
+- `LOOPOVER_REVIEW_REPUTATION` — submitter-reputation spend control. A new,
+  burst, or low-reputation submitter is downgraded to a deterministic-only review; good
+  reputation proceeds normally. Never surfaced publicly — no comment, label, or check shows
+  reputation. Per-PR.
+- `LOOPOVER_REVIEW_ENRICHMENT` — runs the review-enrichment analyzer registry
+  (duplication, churn hotspots, blame links, approval integrity, undocumented exports, and
+  more) and folds their findings into the review context. Per-PR.
+- `LOOPOVER_REVIEW_INLINE_COMMENTS` — posts AI-review findings as inline
+  diff-anchored PR review comments instead of (or alongside) the summary comment. Per-PR.
+- `LOOPOVER_REVIEW_FIX_HANDOFF` — renders a review finding as a structured,
+  machine-readable "apply this fix" block for the contributor's own local agent to consume —
+  content only, no server-side write, no execution. Per-PR.
+- `LOOPOVER_REVIEW_PLANNER` — enables `@loopover plan`, an on-demand
+  structured implementation plan posted to the PR thread. Per-PR.
+- `LOOPOVER_REVIEW_SCREENSHOTS` — visual capture: renders and attaches
+  before/after screenshots for PRs that change UI. Per-PR.
+- `LOOPOVER_REVIEW_OPS` — observability, read-only. On the cron tick an anomaly
+  scan over the gate-block ledger and calibration data emits a structured
+  `ops_anomaly` log when something drifts, and a bearer-gated
+  `GET /v1/internal/ops/stats` serves an outcome aggregate. Does not mutate
+  config. Global.
+- `LOOPOVER_REVIEW_SELFTUNE` — the self-improvement loop. On the cron tick it
+  computes tuning recommendations from your own outcome data, shadow-soaks any strictly
+  tightening recommendation, and auto-promotes it only after the soak passes. It can
+  **only ever tighten** the gate — a loosening recommendation is never applied.
+  Global, and safe to leave on.
+- `LOOPOVER_REVIEW_PARITY_AUDIT` — parity readiness, shadow record-only. Records
+  each finalized gate decision and serves a readiness report at
+  `GET /v1/internal/parity`. Changes no review behavior. Global.
+- `LOOPOVER_REVIEW_CONTENT_LANE` — routes content repos (curated lists,
+  registries) through the dedicated content lane — duplicate detection, source-evidence
+  reachability, security scanning, scope classification, registry grounding — instead of the
+  code gate. Global.
+- `LOOPOVER_REVIEW_DRAFT` — the public draft-submission flow (the
+  `/v1/drafts` endpoints: contributor draft → GitHub OAuth → fork PR). With the
+  flag off every draft endpoint 404s. Requires the
+  `DRAFT_TOKEN_ENCRYPTION_SECRET` and `GITHUB_OAUTH_CLIENT_SECRET`
+  secrets. Global.
+- `LOOPOVER_REVIEW_STATS_TOKEN` — the bearer secret for the stats data endpoint.
+  Not an on/off switch; it is the token value. When set, the stats route requires this
+  bearer token.
+
+<Callout variant="note" title="Rolling out a per-PR feature">
+  A safe rollout is two flips: turn the capability flag `true`, then add the repo to
+  `LOOPOVER_REVIEW_REPOS`. Because both must be true, you can leave a capability globally enabled
+  while it stays dormant everywhere except the repos you have explicitly allowlisted — and you roll
+  a single repo back by removing it from the list without disturbing the others.
+</Callout>
+
+## Gate modes
+
+Per-repo behavior is the **effective settings**: the database row for the repo,
+overlaid with the repo's `.loopover.yml`. Most gate dimensions are tri-state:
+
+- `off` — the dimension is not evaluated.
+- `advisory` — the finding is surfaced in the comment or context but never
+  blocks.
+- `block` — the finding can become a hard `LoopOver Orb Review Agent`
+  blocker. A block outcome fails the gate for any author identically —
+  confirmed-Gittensor-contributor status doesn't change _who_ can be blocked,
+  only the mode chooses _which_ deterministic checks are active. Confirmed status is
+  carried through for on-chain scoring, a separate concern from the gate's own
+  merge/close decision.
+
+There is no single gate master switch — each dimension below is independently controlled by
+its own mode field (most default to `off` or `advisory`; see each
+dimension's default below). `gate.enabled` is a legacy, unrelated field: it is
+only a boolean shorthand for `gate.checkMode` (`required` /
+`visible` / `disabled`), which controls solely whether the
+`LoopOver Orb Review Agent` check-run publishes on GitHub. Neither field turns
+gate evaluation, comments, labels, audit, or autonomous merge/close on or off — set the
+dimension modes below directly, and set `gate.checkMode` explicitly instead of
+the ambiguous `gate.enabled`. The main dimensions:
+
+- `gate.pack` — the policy pack: `gittensor` (default; registry-aware,
+  tracks confirmed-Gittensor-contributor status for scoring) or `oss-anti-slop`
+  (runs the deterministic rules against any author on any repo, with no
+  confirmed-contributor tracking at all).
+- `gate.duplicates` — duplicate / superseding-PR detection. Default
+  `block`.
+- `gate.linkedIssue` — what happens when a PR has _no linked issue at all_.
+  Default `advisory` (surfaced in the review panel, never blocks — issues
+  aren't always available). Set `block`, or turn on the dashboard "Require
+  linked issue" toggle, to make a missing issue an explicit opt-in blocker (if the toggle is
+  on but this is still `off`, it is auto-promoted to `block`). This is
+  unrelated to closing a PR that links an _ineligible_ issue (owner-assigned, wrong
+  label, etc.) — that is a separate, deterministic rule, not this gate.
+- `gate.readiness.mode` — the PR-quality / merge-readiness score gate. Default
+  `advisory`. Pair it with `gate.readiness.minScore` (0–100; at or
+  above this score the quality dimension passes; `null` uses the engine's default
+  band).
+- `gate.slop.mode` — the deterministic anti-slop signal. Default `off`
+  (opt-in). `advisory` surfaces the slop score and warnings; `block`
+  also hard-blocks at or above `gate.slop.minScore` (0–100; `null`
+  uses `60`, the "high" band). Set `gate.slop.aiAdvisory: true` to add
+  a free advisory-only `ai_slop_advisory` finding — it never feeds the slop score
+  or the gate.
+- `gate.copycat.mode` — code containment/similarity gate against prior art
+  (earlier open or recently merged PRs on the same repo). Default `off`.
+  Escalating tiers: `warn` surfaces an advisory finding only; `label`
+  also applies a label; `block` also closes the PR and counts toward the
+  repeat-offender strikes ledger. Pair it with `gate.copycat.minScore` (0–100;
+  `null` uses the engine default, `85`). Direction is always by
+  submission timestamp, so the earlier (original) author is never flagged.
+- `gate.mergeReadiness` — composite merge-readiness gate. Default
+  `off`, no min score.
+- `gate.manifestPolicy` — when `block`, the manifest's declared policy
+  (required linked issue and test expectations) becomes an enforceable blocker.
+  Manual-review path holds use `settings.hardGuardrailGlobs` instead. Default
+  `off`.
+- `gate.size` — PR-size hold: flags an oversized diff. Default `off`.
+- `gate.lockfileIntegrity` — flags lockfile-tamper risk (a lockfile changed
+  without its matching manifest, or vice versa). Default `off`.
+- `gate.claMode` — CLA / license-acknowledgment gate. Default `off`.
+- `gate.selfAuthoredLinkedIssue` — whether a PR may link an issue opened by the
+  same author. Default `advisory`.
+- `gate.linkedIssueSatisfaction` — an AI assessment of whether the PR's diff
+  actually satisfies its primary linked issue's intent, distinct from
+  `gate.linkedIssue` (which only checks a link exists). Default `off`.
+  `advisory` renders the assessment in the review comment without blocking;
+  `block` additionally lets a confidence-floor-passing "unaddressed" verdict
+  become a blocker.
+- `settings.moderationGateMode` — whether the moderation-rules engine
+  (contributor cap, blacklist, review-nag feeding a shared cross-repo violation tally) runs
+  on this repo at all. `inherit` (default) defers to the instance-wide
+  `global_moderation_config.enabled`; `off`/`enabled` force
+  this repo regardless of the global default.
+- `gate.aiReview.mode` — AI review. Default `off`.
+  `advisory` posts AI review notes only; `block` lets a dual-model
+  high-confidence consensus defect become a blocker.
+
+### Bring your own model (AI review)
+
+The AI-review write-up can optionally use your own frontier model. By default the blocking
+decision runs on a pair of free built-in models and requires agreement; an operator can
+override this per repo with `aiReviewCombine` (`single` /
+`consensus` / `synthesis`) — in `single` mode, one
+reviewer's verdict is the decision. BYOK changes which model writes the advisory text, not
+this combine behavior.
+
+- `gate.aiReview.byok` — when `true` and a provider key is configured,
+  the advisory write-up uses the maintainer's frontier model. Default `false`.
+- `gate.aiReview.provider` — `anthropic`, `openai`, or
+  `null` (use the stored key's own provider). Must match the stored key's
+  provider or BYOK is skipped and falls back to the built-in pair.
+- `gate.aiReview.model` — model override for the BYOK write-up (for example
+  `claude-3-5-sonnet-latest`); `null` uses the key record's model,
+  else a conservative per-provider default.
+
+<Callout variant="safety">
+  The provider key itself never lives in `.loopover.yml`. It is held only in the encrypted key store
+  and unlocked by the `TOKEN_ENCRYPTION_SECRET` worker secret — absent that secret, BYOK is
+  unavailable and AI review silently falls back to the free built-in model pair.
+</Callout>
+
+## Guardrails and scope
+
+Top-level keys in `.loopover.yml` declare the repo's focus and validation
+expectations. These feed deterministic findings such as `manifest_missing_tests`
+and — when `gate.manifestPolicy: block` — can become enforceable blockers. Manual
+path holds are configured only through `settings.hardGuardrailGlobs`.
+
+- `wantedPaths` — globs for work areas you want; PRs touching these are
+  preferred. Default `[]`.
+- `preferredLabels` — labels you prefer on incoming PRs; a missing one is
+  surfaced. Default `[]`.
+- `linkedIssuePolicy` — `required` / `preferred` /
+  `optional`. How strongly a linked issue is expected. Default
+  `optional`.
+- `testExpectations` — test paths expected to change with code; a
+  `manifest_missing_tests` finding fires when absent. Default `[]`.
+- `issueDiscoveryPolicy` — `encouraged` / `neutral` /
+  `discouraged`. Default `neutral`.
+- `maintainerNotes` — private review context, never published to any public
+  GitHub surface. Default `[]`.
+- `publicNotes` — notes explicitly opted into public output (public-safe
+  filtered; unsafe lines are dropped). Default `[]`.
+
+## Other repo settings
+
+Anything you can toggle in the dashboard can also be set as code under
+`settings:` in `.loopover.yml`. Common ones, all defaulting to the
+safe values shown:
+
+- `commentMode` — comment audience: `off` /
+  `detected_contributors_only` (default) / `all_prs`.
+- `publicAudienceMode` — `oss_maintainer` (default) /
+  `gittensor_only`.
+- `publicSignalLevel` — `minimal` / `standard` (default).
+- `checkRunMode` — publishes the **LoopOver Context** check (not the
+  **Orb Review Agent** gate check, which is `reviewCheckMode`):
+  `off` (default) / `enabled`. Pair with
+  `checkRunDetailLevel` (`minimal` (default) / `standard`).
+- `publicSurface` — `off` / `comment_and_label` (default) /
+  `comment_only` / `label_only`.
+- `autoLabelEnabled` (default `true`), `gittensorLabel`
+  (default `gittensor`), and `createMissingLabel` (default
+  `true`) — the base per-PR context label, shown to the public surface.
+- `typeLabelsEnabled` (default `true`) and `typeLabels` — a
+  separate, independent taxonomy label family: internal triage metadata gated by its own
+  toggle, not by `autoLabelEnabled` above. `typeLabels` is an open
+  `category → label name` map, not fixed to any specific set — the built-in
+  `bug`/`feature`/`priority` categories default to
+  `gittensor:bug`/`gittensor:feature`/`gittensor:priority`
+  (examples, not required names), and you can add any number of your own categories (e.g.
+  `security: area:security`) for your own taxonomy. An explicit
+  `typeLabels: {}` means zero configured categories for the repo.
+- `includeMaintainerAuthors` (default `false`),
+  `requireLinkedIssue` (default `false`), `backfillEnabled`
+  (default `true`), and `badgeEnabled` (README status badge, default
+  `false`), and `publicQualityMetrics` (public review-quality page,
+  default `false`).
+- `agentPaused` (per-repo kill-switch, default `false`) and
+  `agentDryRun` (shadow mode, default `false`).
+- `autonomy` (per-action-class level; default is observe, deny-by-default),
+  `autoMaintain` (`{ mergeMethod, requireApprovals }`; default
+  `squash` / `1`), and `commandAuthorization` (role policy;
+  built-in default).
+
+## Example .loopover.yml
+
+A worked manifest: focus and validation up top, a refined gate, BYOK AI review, and a few
+dashboard-equivalent overrides.
+
+<CodeBlock
+  filename=".loopover.yml"
+  lang="yaml"
+  code={`# Focus / validation
+wantedPaths:
+  - "src/**"
+testExpectations:
+  - "tests/**"
+linkedIssuePolicy: preferred
+
+# Gate policy — checkMode is set explicitly (not the legacy, ambiguous "enabled" alias)
+gate:
+  checkMode: visible
+  pack: gittensor
+  duplicates: block
+  linkedIssue: advisory
+  readiness:
+    mode: advisory
+    minScore: 70
+  slop:
+    mode: block
+    minScore: 60
+    aiAdvisory: true
+  mergeReadiness: advisory
+  manifestPolicy: block
+  aiReview:
+    mode: advisory
+    byok: true
+    provider: anthropic
+    model: claude-3-5-sonnet-latest
+
+# Generic dashboard-equivalent overrides
+settings:
+  commentMode: detected_contributors_only
+  checkRunMode: enabled
+  checkRunDetailLevel: standard
+  badgeEnabled: true
+  # Optional path holds. Omitted or [] means no path guardrails.
+  # hardGuardrailGlobs:
+  #   - "src/selfhost/**"`}
+
+/>
+
+<Callout variant="warn" title="Roll forward one step at a time">
+  Start conservative: enable the gate in `advisory` before `block`, watch the surfaced findings, and
+  only then tighten. Combined with the tightening-only self-tune loop, this keeps the gate from ever
+  blocking a contributor on a setting you have not validated.
+</Callout>
+
+For the privacy guarantees behind these surfaces, see
+[Privacy & security](/docs/privacy-security). For the maintainer install and
+trust flow, see [Install & trust](/docs/maintainer-install-trust). If you're
+self-hosting, see [Self-host configuration](/docs/self-hosting-configuration)
+for the environment layer these settings sit on top of, plus the config-precedence rules and
+a link to the fully-commented `.loopover.yml.example`.

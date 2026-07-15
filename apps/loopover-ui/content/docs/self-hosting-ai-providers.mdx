@@ -1,0 +1,197 @@
+---
+title: AI providers
+description: AI review is optional. The deterministic gate still runs when no provider is configured.
+---
+
+## Provider options
+
+<FeatureRow
+  items={[
+    {
+      title: "anthropic",
+      description: "Native Anthropic Messages API. Requires ANTHROPIC_API_KEY.",
+    },
+    {
+      title: "openai or openai-compatible",
+      description:
+        "OpenAI chat completions shape. Works with OpenAI, gateway providers, vLLM, Ollama, and compatible endpoints.",
+    },
+    {
+      title: "ollama",
+      description:
+        "Local model endpoint. Good for private experiments; quality depends on the pulled model.",
+    },
+    {
+      title: "claude-code",
+      description:
+        "Subscription CLI path. Requires CLI availability and CLAUDE_CODE_OAUTH_TOKEN from an interactive setup.",
+    },
+    {
+      title: "codex",
+      description:
+        "Subscription CLI path. Treat credentials carefully; do not mount prompt-readable auth into untrusted review sandboxes.",
+    },
+  ]}
+/>
+
+## Single provider
+
+<CodeBlock
+  filename=".env"
+  code={`AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=<provider-key>
+ANTHROPIC_AI_MODEL=claude-sonnet-4-6`}
+/>
+
+`ANTHROPIC_AI_BASE_URL` defaults to `https://api.anthropic.com` — set it only to route through a gateway or proxy in front of the real Anthropic API.
+
+## OpenAI API
+
+Distinct from OpenAI-compatible below: this is the native OpenAI API path (`AI_PROVIDER=openai`), for when you have an OpenAI account key rather than a gateway or local endpoint.
+
+<CodeBlock
+  filename=".env"
+  code={`AI_PROVIDER=openai
+OPENAI_API_KEY=<provider-key>
+OPENAI_AI_BASE_URL=https://api.openai.com/v1
+OPENAI_AI_MODEL=gpt-5.5`}
+/>
+
+`OPENAI_AI_BASE_URL` and `OPENAI_AI_MODEL` already default to the values shown — set them only to override the endpoint or model.
+
+## OpenAI-compatible endpoint
+
+<CodeBlock
+  filename=".env"
+  code={`AI_PROVIDER=openai-compatible
+OPENAI_COMPATIBLE_AI_BASE_URL=http://ollama:11434/v1
+OPENAI_COMPATIBLE_AI_API_KEY=
+OPENAI_COMPATIBLE_AI_MODEL=llama3.1`}
+/>
+
+## Ollama (dedicated provider)
+
+`AI_PROVIDER=ollama` is a separate provider id from routing Ollama through `openai-compatible` above — use whichever matches how you want fallback/dual-review chains to identify it. Defaults to a local Ollama at `http://localhost:11434/v1` with no API key.
+
+<CodeBlock
+  filename=".env"
+  code={`AI_PROVIDER=ollama
+OLLAMA_AI_BASE_URL=http://ollama:11434/v1
+OLLAMA_AI_API_KEY=
+OLLAMA_AI_MODEL=llama3.1`}
+/>
+
+Set `OLLAMA_AI_BASE_URL` to `http://ollama:11434/v1` when using the compose `ollama` profile; `OLLAMA_AI_API_KEY` is normally left blank for a local, unauthenticated Ollama instance.
+
+## Fallback and dual review
+
+A comma-list is a fallback chain by default. Use this for subscription CLIs when you want Codex first and Claude Code only when Codex is unavailable or out of tokens.
+
+<CodeBlock
+  filename=".env — fallback chain"
+  code={`AI_PROVIDER=codex,claude-code
+CODEX_AI_EFFORT=medium
+CLAUDE_AI_EFFORT=medium
+CLAUDE_CODE_OAUTH_TOKEN=
+LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER=1`}
+/>
+
+Set `AI_DUAL_REVIEW=1` only when you want the first two providers to run as independent reviewers on every PR. In dual-review mode, `AI_COMBINE` controls how decisions are combined.
+
+<CodeBlock
+  filename=".env — dual review"
+  code={`AI_PROVIDER=anthropic,ollama
+AI_DUAL_REVIEW=1
+AI_COMBINE=synthesis
+AI_ON_MERGE=either`}
+/>
+
+<FeatureRow
+  items={[
+    {
+      title: "single",
+      description:
+        "One reviewer verdict. This is the automatic mode for one provider or a fallback chain.",
+    },
+    {
+      title: "consensus",
+      description:
+        "Block only when both reviewers flag a critical defect. A lone defect holds for human review.",
+    },
+    {
+      title: "synthesis",
+      description:
+        "Both reviewers run, then one merged decision is produced. AI_ON_MERGE controls either or both.",
+    },
+  ]}
+/>
+
+## Claude Code (subscription)
+
+No API key — `claude-code` runs your existing Claude subscription through the `claude` CLI. Generate a long-lived token once with `claude setup-token` and store it as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+<CodeBlock
+  filename=".env"
+  code={`AI_PROVIDER=claude-code
+CLAUDE_CODE_OAUTH_TOKEN=<token from claude setup-token>
+CLAUDE_AI_EFFORT=medium`}
+/>
+
+**Rotating it:** when the subscription's usage limit resets or the token needs replacing, run `claude setup-token` again and paste the new value into `.env`. `CLAUDE_CODE_OAUTH_TOKEN` is baked into the container at creation time, so a plain restart keeps serving the old value — recreate the service instead:
+
+<CodeBlock code={`docker compose up -d --no-deps loopover`} />
+
+Prefer not pasting the raw token into `.env`? Write it into `secrets/claude_code_oauth_token.txt` instead (see [Security](/docs/self-hosting-security)'s secret-file section) and leave `CLAUDE_CODE_OAUTH_TOKEN` unset in `.env` — the same recreate step above picks it up either way.
+
+## Codex (subscription)
+
+Codex has no equivalent of `claude setup-token`. Instead of an environment variable, it stores an OAuth credential file, `auth.json`. Authenticate against the running container so the file lands on the volume the image expects (`/data/codex`, mounted at `~/.codex`):
+
+<CodeBlock code={`docker compose exec loopover codex auth`} />
+
+This also needs the explicit opt-in shown in the fallback example above (`LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER=1`) — see the Subscription CLI safety note below for why it defaults to off.
+
+<Callout variant="note" title="Rotating it needs no restart">
+  Codex reads `auth.json` fresh on every review — each review spawns a new `codex` subprocess. Once
+  `codex auth` succeeds, the very next review authenticates correctly; there is no service to
+  recreate and no env var to change.
+</Callout>
+
+## Recognizing a stale or missing credential
+
+Both subscription CLIs fail loudly in the self-host logs instead of silently degrading the review:
+
+<FeatureRow
+  items={[
+    {
+      title: "claude_code_no_oauth_token",
+      description:
+        "CLAUDE_CODE_OAUTH_TOKEN is unset and no secrets/claude_code_oauth_token.txt file is populated. Set either and recreate the service.",
+    },
+    {
+      title: "claude_code_error_401",
+      description: "The token was rejected. Generate a fresh one with claude setup-token.",
+    },
+    {
+      title: "codex_no_auth",
+      description: "auth.json is missing or expired. Re-run codex auth.",
+    },
+    {
+      title: "codex_credential_isolation_required",
+      description:
+        "LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER is not set to 1, or CODEX_HOME was set on the app container. Remove CODEX_HOME so Codex reads the mounted volume's default path.",
+    },
+  ]}
+/>
+
+## Subscription CLI safety
+
+<Callout variant="warn" title="Credential isolation matters">
+  Subscription CLIs store credentials on disk. Do not mount a writable or prompt-readable CLI home
+  into review execution unless you have isolated it from PR-controlled content. Use an API provider
+  or local OpenAI-compatible endpoint when isolation is not clear.
+</Callout>
+
+## Related context
+
+AI providers produce the review. [REES](/docs/self-hosting-rees) and [RAG](/docs/self-hosting-rag) add context that the reviewer can use.

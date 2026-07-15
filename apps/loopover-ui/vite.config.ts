@@ -4,6 +4,13 @@
 //     componentTagger (dev-only), VITE_* env injection, @ path alias, React/TanStack dedupe,
 //     error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
+//
+// SPIKE (#6037): fumadocs-mdx's Vite plugin is added via the top-level `plugins` option
+// (not nested inside `vite: { plugins: [...] }`) -- the preset appends `options.plugins`
+// to its own internal plugin list before the `vite` passthrough is merged in, so this is
+// the documented extension point for genuinely new plugins, as opposed to the ones listed
+// above that the preset already registers itself.
+import mdx from "fumadocs-mdx/vite";
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 const shouldBuildNitro = process.env.npm_lifecycle_event?.startsWith("build") ?? false;
@@ -56,6 +63,7 @@ export default defineConfig({
         cloudflare: { nodeCompat: true, deployConfig: true },
       }
     : false,
+  plugins: [...mdx()],
   vite: {
     build: {
       ...(sentryBuildSourcemaps ? { sourcemap: "hidden" as const } : {}),

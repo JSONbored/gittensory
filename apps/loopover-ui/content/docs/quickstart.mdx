@@ -1,0 +1,56 @@
+---
+title: Quickstart
+description: Install the MCP, sign in, and run your first analysis. About two minutes.
+---
+
+## 1. Install
+
+The MCP is published as `@loopover/mcp`. You can run it with `npx`, or
+install it globally.
+
+<CodeBlock
+  code={`# one-off
+npx -y @loopover/mcp@latest --help
+
+# install
+npm i -g @loopover/mcp@latest`}
+/>
+
+## 2. Sign in (GitHub Device Flow)
+
+LoopOver never asks for a Personal Access Token. The CLI walks you through GitHub's Device
+Flow and exchanges the result for a LoopOver session token.
+
+<CodeBlock
+  code={`loopover-mcp login
+loopover-mcp whoami
+loopover-mcp status`}
+/>
+
+<Callout variant="safety">
+  Session tokens are **LoopOver tokens backed by GitHub identity**, not your GitHub PATs. You can
+  log out anytime with `loopover-mcp logout`.
+</Callout>
+
+## 3. Run your first analysis
+
+Analyze the current branch with metadata only. No source ever leaves your machine.
+
+<CodeBlock
+  code={`loopover-mcp doctor
+loopover-mcp analyze-branch --login your-login --json
+loopover-mcp preflight --login your-login --json`}
+/>
+
+## 4. Wire it into your coding agent
+
+Print a config snippet for your editor of choice and paste it in. See
+[MCP client setup](/docs/mcp-clients) for the details. For the full miner path
+(plan → preflight → packet) and other roles, see
+[Beta onboarding](/docs/beta-onboarding).
+
+<CodeBlock
+  code={`loopover-mcp init-client --print codex
+loopover-mcp init-client --print claude
+loopover-mcp init-client --print cursor`}
+/>

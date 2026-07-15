@@ -1,0 +1,210 @@
+---
+title: Security
+description: The self-host stack holds maintainer credentials and policy. Keep those boundaries explicit.
+---
+
+## Secret handling
+
+<FeatureRow
+  items={[
+    {
+      title: "Never bake secrets",
+      description:
+        "Images should not contain .env files, private keys, API keys, webhook secrets, REES secrets, or CLI auth files.",
+    },
+    {
+      title: "Prefer secret files",
+      description:
+        "Use FOO_FILE for multiline values and orchestrator-managed secrets where possible.",
+    },
+    {
+      title: "Rotate deliberately",
+      description:
+        "Rotate GitHub webhook secrets, API tokens, REES secrets, and provider keys with a restart window and validation PR.",
+    },
+  ]}
+/>
+
+`docker-compose.yml` ships native Docker Compose `secrets:` mounts for the highest-value secrets (the GitHub App private key, webhook secret, API/MCP/internal-job tokens, the setup token, the two token-encryption master keys, the Orb enrollment secret, the PagerDuty routing key, and the Claude Code subscription token) — file-mounted at `/run/secrets/<name>`, never exposed via `docker inspect` or `docker compose config` the way a plain `environment:`/`env_file` value is. This is purely additive: an inline `.env` value always takes priority if you set both, so you can migrate one secret at a time, or not at all. See `secrets/README.md` for the full file list.
+
+<CodeBlock
+  filename="shell"
+  code={`./scripts/selfhost-init-secrets.sh   # creates empty placeholder files (idempotent)
+printf '%s' 'your-real-secret-value' > secrets/github_webhook_secret.txt
+docker compose up -d --no-deps loopover`}
+/>
+
+## Optional: Infisical secrets management
+
+The hardened default above — `.env` plus Docker Compose `secrets:` — has no rotation, audit trail, or RBAC. If you want secrets-manager-grade rotation, audit logging, and access control on top of that default, you can opt into [Infisical](https://infisical.com) — an open-source, self-hostable secrets manager. This is **strictly optional and additive**: skip this section entirely and the hardened `.env`/Docker secrets default keeps working unchanged.
+
+<Callout variant="note" title="No application code changes">
+  Infisical wires in at the deploy-script level via its own `infisical run -- <command>` wrapper, which injects secrets as real process environment variables at container launch. Nothing under `src/` knows or cares whether a given `env.SOMETHING` value came from Infisical, `.env`, or a Docker secret file.
+</Callout>
+
+### Setup: cloud or self-hosted
+
+**1.** Install the [Infisical CLI](https://infisical.com/docs/cli/overview) on the machine that runs the deploy script (not inside the app container).
+
+**2.** Pick where your secrets live: Infisical Cloud (the default, zero infrastructure of your own) or a self-hosted Infisical instance — if you're already self-hosting LoopOver, you can self-host Infisical alongside it. Either way, run `infisical login` once, then `infisical init` from the repo root to link a local `.infisical.json` to an Infisical project.
+
+**3.** Create an environment inside that project (e.g. `prod`) matching how you think about this deployment, and add the secrets you want Infisical to manage — same variable names your `.env`/`docker-compose.yml` already use (`GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, provider API keys, and so on).
+
+**4.** Opt in when deploying:
+
+<CodeBlock
+  filename="shell"
+  code={`SELFHOST_USE_INFISICAL=1 ./scripts/deploy-selfhost-image.sh
+# or
+SELFHOST_USE_INFISICAL=1 ./scripts/deploy-selfhost-prebuilt.sh`}
+/>
+
+With the flag unset (the default), neither script touches Infisical at all — not even a presence check — so an operator who has never heard of Infisical is completely unaffected. With it set, the restart step (the one that actually launches the container) runs through `infisical run --`; a missing `infisical` binary fails the deploy immediately with a clear error rather than silently deploying without the secrets you asked for.
+
+### Interaction with .env and Docker secrets — do not mix the same variable
+
+<Callout variant="warn" title="Infisical only reaches variables interpolated in docker-compose.yml">
+  `infisical run --` injects secrets into its own child process's environment — in this case, the
+  `docker compose up` invocation. Docker Compose only lets a host shell variable reach the container
+  for an `environment:` entry written as `SOMEVAR: "${SOMEVAR}"`. It does **not** reach a plain
+  `env_file: .env` block, which reads that file's literal contents at container runtime and is never
+  affected by the deploying shell's environment. The GitHub App private key, webhook secret, API/MCP
+  tokens, and the rest of the native-secrets list above are wired through the `_FILE` convention and
+  `env_file: .env`, not through `environment:` interpolation — an Infisical value for one of those
+  exact names, by itself, will **not** reach the container today. Infisical is the right fit for
+  *other* variables you reference via `"${VAR}"` interpolation in your own
+  `docker-compose.override.yml` (a provider API key you add yourself, for example) — not a drop-in
+  override for the pre-wired native-secrets list.
+</Callout>
+
+The safest rule of thumb: for any given variable, pick _one_ source — Infisical or a plain `.env`/Docker secret file, never both for the same name. Setting the same name in both places doesn't error; whichever mechanism the container actually reads for that variable (see the callout above) wins silently, which is easy to misdiagnose later.
+
+## Private policy
+
+Keep sensitive review thresholds, autonomy, maintainer notes, and repo-specific rules in `LOOPOVER_REPO_CONFIG_DIR`, not in public repo config.
+
+<CodeBlock filename=".env" code={`LOOPOVER_REPO_CONFIG_DIR=/config`} />
+
+## Network exposure
+
+- Expose the webhook endpoint only through TLS — see "TLS termination" below for the two shipped ways to get there.
+- Prometheus, Qdrant, Ollama, and the database ports are private by default (bound to `127.0.0.1` or only reachable on the compose network) — but **Grafana is the exception**. Its compose entry publishes `3000:3000`, which binds every interface, not just localhost. Bind it yourself (`127.0.0.1:3000:3000` in a compose override) — the reliable fix — before running the `observability` profile anywhere it isn't already firewalled. Running Tailscale alongside it does **not** narrow this on its own (see "TLS termination" below); combining the two safely still needs the same firewall or `tailscale serve` step.
+- Put an auth layer in front of dashboards and internal admin routes.
+- Use `/ready` for orchestrators, not as a public status surface.
+
+The `observability` profile also runs a `docker-proxy` service that never appears in any dashboard or metric. It fronts the Docker socket for Promtail's container log discovery: a plain `:ro` bind-mount of `/var/run/docker.sock` only protects the socket inode, not the Docker API behind it, so handing Promtail the raw socket is effectively host root — enumerate every container, read each one's environment and secrets, tail every log, or start a privileged container and escape to the host. `docker-proxy` is the only container that touches the socket, exposes just the read-only `/containers/*` and `/networks/*` endpoints Promtail's service discovery needs, denies every mutating call outright, and sits alone on its own Docker network shared only with Promtail — publishing no host port isn't enough on its own, since the default compose network is reachable by every other service in the stack.
+
+## Control-panel access
+
+GitHub sign-in to the control panel (the maintainer/owner dashboard) is gated by `ADMIN_GITHUB_LOGINS` — a comma- or whitespace-separated, case-insensitive allowlist of GitHub logins.
+
+<CodeBlock filename=".env" code={`ADMIN_GITHUB_LOGINS=your-github-login,a-second-maintainer`} />
+
+<Callout variant="warn" title="Fail-closed by design">
+  Unset or empty means NOBODY gets control-panel access — not even the person who just finished
+  setup. This is intentional, not a bug: add your own GitHub login here right after first-run setup,
+  or you will sign in successfully and see zero privileges with no explanation. The same allowlist
+  also exempts these logins from the agent's own-PR auto-close rules and lets them bypass per-repo
+  MCP scope (`MCP_READ_REPO_ALLOWLIST` / `MCP_ACTUATION_REPO_ALLOWLIST`).
+</Callout>
+
+## AI credential boundaries
+
+<Callout variant="warn" title="Subscription CLI credentials">
+  CLI auth files can be readable by the runtime. Do not mount a prompt-readable Claude Code or Codex
+  home into review execution unless you have intentionally isolated it. API-key and local model
+  providers are easier to reason about operationally.
+</Callout>
+
+## REES boundary
+
+REES receives PR diff and file metadata. Use a private network URL when possible, require `REES_SHARED_SECRET`, and remember that the engine treats REES output as untrusted advisory context.
+
+## TLS termination
+
+These are the three shipped ways to get real HTTPS without hand-rolling a reverse proxy — but only Caddy and bring-your-own-proxy give you a _publicly reachable_ origin. If GitHub itself needs to reach this instance (a direct App in push mode, per [GitHub App and Orb](/docs/self-hosting-github-app)), Tailscale's private tailnet address does not satisfy that — GitHub's servers can't reach it. Tailscale is the right fit when only your own team/CI needs access, or as the transport for a [brokered, pull-mode](/docs/self-hosting-github-app) instance that never needs to receive an inbound webhook at all.
+
+<FeatureRow
+  items={[
+    {
+      title: "Caddy (--profile caddy)",
+      description:
+        "A public HTTPS terminator with automatic Let's Encrypt certificates. Required for a direct App in push mode; use this when the instance needs a real internet-facing domain.",
+    },
+    {
+      title: "Tailscale (--profile tailscale)",
+      description:
+        "Adds private tailnet reachability, but with the default port mapping left in place (required — see below), the app stays reachable on every host interface too, not just the tailnet; firewall the host or use tailscale serve for real no-public-port isolation. Also not reachable by GitHub's own webhook delivery — use this for team/CI-only access, or alongside brokered pull mode.",
+    },
+    {
+      title: "Bring your own reverse proxy",
+      description:
+        "Skip both profiles and put an existing nginx/Traefik/ALB in front of the loopover service's own port instead.",
+    },
+  ]}
+/>
+
+### Caddy: automatic HTTPS with Let's Encrypt
+
+The `caddy` profile runs Caddy 2 in front of the `loopover` service, terminating TLS on `80`/`443`/`443/udp` (the last for HTTP/3) and obtaining a Let's Encrypt certificate automatically for whatever domain you set. It needs a real DNS record: point `DOMAIN` at this host's public IP _before_ starting the profile. The shipped Caddyfile has no fallback TLS directive, so if the ACME HTTP-01 challenge fails (DNS not propagated yet, port 80 unreachable), Caddy does **not** silently substitute a self-signed cert for a real domain — it logs the failure and retries with backoff, and the site has no working HTTPS until DNS and ACME both succeed. (A recognized non-public hostname like `localhost`, below, is a deliberately different case — Caddy issues its own internal-CA cert for those automatically, since it can never get a real one.)
+
+<CodeBlock filename=".env" code={`DOMAIN=reviews.yourcompany.com`} />
+
+The shipped `caddy/Caddyfile` reverse-proxies to `loopover:8787` on the compose network, forwards the real client IP, enables compression, sets standard security headers (HSTS, `X-Content-Type-Options`, `X-Frame-Options`, a strict referrer policy), and logs as JSON to stderr:
+
+<CodeBlock
+  filename="caddy/Caddyfile"
+  code={`{$DOMAIN} {
+	reverse_proxy loopover:8787 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
+
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}`}
+/>
+
+Edit this file directly if you need a different upstream, extra headers, or a second site block — Caddy re-reads it on container restart. For local testing without a real domain, set `DOMAIN=localhost`; Caddy issues a self-signed cert and your browser will warn about it, which is expected.
+
+<Callout variant="warn" title="Remove the app's own port mapping">
+  The `loopover` service's compose entry has a direct `ports: ["${PORT:-8787}:8787"]` mapping with a comment marking exactly this: remove it once Caddy is your public listener, or the app stays reachable on `:8787` with no TLS, bypassing the proxy entirely and defeating the whole point of adding it. (This rule is Caddy-specific — the Tailscale profile below needs the *opposite* treatment; see its own callout.)
+</Callout>
+
+Prefer certificates you already manage — an internal CA, a wildcard cert issued elsewhere — instead of Let's Encrypt? Mount your own cert and key into the container and point the `{$DOMAIN}` block at a file-based TLS directive (`tls /path/to/cert /path/to/key`) instead of the automatic-HTTPS default; see [Caddy's `tls` directive docs](https://caddyserver.com/docs/caddyfile/directives/tls) for the syntax.
+
+### Already run a reverse proxy or load balancer?
+
+Skip the `caddy` profile entirely. Remove the same direct `ports:` mapping from the `loopover` service, keep it on the compose network (or publish `8787` bound to a private interface your existing proxy can reach), and terminate TLS the way you already do for everything else — nginx, Traefik, an AWS ALB, a Cloudflare Tunnel. Whatever fronts it just needs to forward to port `8787` and preserve the client IP the same way the shipped Caddyfile does.
+
+### Tailscale: adds tailnet reachability
+
+The `tailscale` profile joins the stack to your tailnet. It runs with `network_mode: host` — Tailscale needs host networking to advertise this machine's address on the tailnet. On its own, this only _adds_ a reachable address; see the callout below before assuming it also removes public reachability.
+
+<CodeBlock
+  filename=".env"
+  code={`TS_AUTHKEY=            # generate at tailscale.com/admin/settings/keys
+TS_EXTRA_ARGS=          # optional, e.g. --advertise-tags=tag:self-host`}
+/>
+
+<Callout variant="warn" title="Unlike Caddy, keep the app's port mapping">
+  Tailscale doesn't replace the `loopover` service's listener the way Caddy does — it adds a new network interface to the *host*. Docker's default `ports: ["${PORT:-8787}:8787"]` mapping publishes to all of the host's interfaces, so once Tailscale is up, that same mapping is what makes port `8787` reachable at the host's tailnet IP too — **removing it, as you would for Caddy, makes the app unreachable everywhere, tailnet included.**
+</Callout>
+
+The tradeoff: leaving the default `0.0.0.0`-bound mapping in place means `8787` is also still reachable from your LAN, and from the public internet if this host has a public interface at all — Tailscale doesn't narrow that on its own. If you want the instance reachable _only_ via the tailnet, either firewall the host to allow `8787` solely from your tailnet's address range, or bind the app's mapping to `127.0.0.1:8787:8787` and use [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve) inside the `tailscale` container (it shares the host's loopback under `network_mode: host`) to proxy that localhost-only port onto the tailnet — check the pinned image's `tailscale serve --help` for the exact current flags. This profile is the right choice when the instance only needs to be reachable by your own team or CI, and you'd rather not manage a domain or certificate at all.
+
+## Public output boundary
+
+Public PR comments and checks must not leak secrets, private policy, provider credentials, private scoring context, or maintainer-only notes. For hosted and self-host boundaries, keep [Privacy and security](/docs/privacy-security) nearby.

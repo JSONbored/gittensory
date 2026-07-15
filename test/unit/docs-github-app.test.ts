@@ -4,11 +4,12 @@ import { describe, expect, it } from "vitest";
 
 const GITHUB_APP_DOCS_PATH = resolve(
   import.meta.dirname,
-  "../../apps/loopover-ui/src/routes/docs.github-app.tsx",
+  "../../apps/loopover-ui/content/docs/github-app.mdx",
 );
 
 describe("docs GitHub App setup page", () => {
   const source = readFileSync(GITHUB_APP_DOCS_PATH, "utf8");
+  const normalizedSource = source.replace(/\s+/g, " ");
 
   it("documents self-hosting as the only currently available install path, and setup verification", () => {
     expect(source).not.toMatch(/https:\/\/github\.com\/apps\/gittensory\/installations\/new/);
@@ -20,9 +21,9 @@ describe("docs GitHub App setup page", () => {
   });
 
   it("keeps Context advisory and Gate opt-in before branch protection", () => {
-    expect(source).toMatch(/LoopOver Context<\/strong> is advisory/);
-    expect(source).toMatch(/LoopOver Orb Review Agent<\/strong> is opt-in/);
-    expect(source).toMatch(/should require <strong>LoopOver Orb Review Agent<\/strong> only after/);
-    expect(source).toMatch(/Do not require <strong>LoopOver Context<\/strong>/);
+    expect(normalizedSource).toMatch(/\*\*LoopOver Context\*\* is advisory/);
+    expect(normalizedSource).toMatch(/\*\*LoopOver Orb Review Agent\*\* is opt-in/);
+    expect(normalizedSource).toMatch(/should require \*\*LoopOver Orb Review Agent\*\* only after/);
+    expect(normalizedSource).toMatch(/Do not require \*\*LoopOver Context\*\*/);
   });
 });

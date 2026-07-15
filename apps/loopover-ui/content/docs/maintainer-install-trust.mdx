@@ -1,0 +1,166 @@
+---
+title: Maintainer install and trust guide
+description: A maintainer-first checklist for self-hosting and installing a GitHub App, keeping public output safe, authorizing commands, using the browser extension, and rejecting weak LoopOver-driven PRs.
+---
+
+import { MAINTAINER_COMMAND_LIST, PUBLIC_COMMAND_LIST } from "@/lib/command-reference";
+
+<Callout variant="safety" title="Trust posture">
+  LoopOver is advisory-first. It may help you review contribution readiness, but it does not replace
+  human maintainer judgment, expose private scoreability signals, or make reward, payout, wallet,
+  hotkey, or trust-score claims in public surfaces.
+</Callout>
+
+## Install the App
+
+**Self-hosting is the only currently available path.** Start from [self-hosting setup](/docs/maintainer-self-hosting) — the direct App's required permissions and events are covered in [GitHub App and Orb](/docs/self-hosting-github-app). Keep the first rollout narrow until the repo owner has verified permissions, webhook delivery, and public copy.
+
+<Callout variant="note" title="Shared, centrally hosted App: not currently available">
+  LoopOver previously ran a private managed-beta shared App with its own install checklist below.
+  That shared install path is currently paused while self-hosted Orb is the primary way to run
+  LoopOver — a new centrally hosted offering is planned for the future. The checklist below reflects
+  the shared App's permission set and is kept for when that offering returns; use the self-hosting
+  checklist above for a self-hosted install today.
+</Callout>
+
+1. Install LoopOver on one test repository or a selected repository set.
+2. Approve `Metadata: read`, `Pull requests: read`, and `Issues: write`. Add `Checks: write` only when Context or review-agent check runs are enabled for the repository.
+3. Keep webhook events enabled for `issues`, `issue_comment`, `pull_request`, and `repository`.
+4. Leave comments, labels, Context checks, and review-agent checks in advisory mode until preview output matches the repo's maintainer policy.
+
+<Callout variant="note">
+  A self-hosted direct App needs `Pull requests: write` (not read) and `Checks: write` is mandatory,
+  not optional — the numbered checklist above is scoped to the shared managed-beta App only.
+</Callout>
+
+<CodeBlock
+  lang="http"
+  code={`GET /v1/installations
+GET /v1/installations/:id/health
+GET /v1/installations/:id/repair
+GET /v1/repos/:owner/:repo/registration-readiness
+POST /v1/repos/:owner/:repo/settings-preview`}
+/>
+
+## Launch verification flow
+
+Treat launch as a controlled trust review. Do not enable public comments or required checks until every step below has a maintainer-visible result.
+
+<CodeBlock
+  lang="text"
+  filename="maintainer-launch-flow.txt"
+  code={`Install selected repos
+  -> verify installation health and webhook delivery
+  -> preview public panel and command output
+  -> confirm private signals stay private
+  -> enable advisory Context, labels, or comments
+  -> capture screenshots/recordings for UI or extension changes
+  -> decide whether the review-agent check should be required in branch protection`}
+/>
+
+## Maintainer controls
+
+<FeatureRow
+  items={[
+    {
+      title: "Public comments",
+      description:
+        "The sticky PR panel is opt-in per repo and must be previewed before posting to GitHub.",
+    },
+    {
+      title: "Labels",
+      description:
+        "Labels are repo-configured and should stay quiet for non-confirmed-miner PRs unless maintainers intentionally enable them.",
+    },
+    {
+      title: "Context check",
+      description: "LoopOver Context is advisory and should not be required by branch protection.",
+    },
+    {
+      title: "Review agent check",
+      description:
+        "LoopOver Orb Review Agent is opt-in. Make it required only after the repo owner chooses blocking rules and validates previews.",
+    },
+    {
+      title: "Command access",
+      description:
+        "PR-thread commands default to maintainers, collaborators, and confirmed miners. Untrusted contributors should not be able to trigger private maintainer packets.",
+    },
+  ]}
+/>
+
+## Command authorization
+
+Commands should be treated like privileged review actions. Use them to fetch context on demand, not to create always-on public scoring. The default authorized roles are **maintainer**, **collaborator**, and **confirmed miner** — a repo can narrow (or further restrict) this per command via `commandAuthorization` in its settings.
+
+<CodeBlock code={PUBLIC_COMMAND_LIST} />
+
+A separate maintainer-only queue-digest command family defaults to maintainers and collaborators only:
+
+<CodeBlock code={MAINTAINER_COMMAND_LIST} />
+
+If a command would include private reviewability, private scoreability, duplicate-risk, or contributor-history context, the result must stay in maintainer-visible surfaces. Public replies should only contain sanitized actions a contributor can safely use.
+
+## Public-safe previews
+
+Preview every public output path before enabling it. The same public-safety boundary applies to GitHub comments, issue bodies, PR bodies, extension-visible public panels, and copied snippets.
+
+- No wallet or hotkey identifiers.
+- No reward, payout, or emission estimates.
+- No trust-score, public score prediction, or private scoreability language.
+- No private reviewability blockers or maintainer-only duplicate-risk notes.
+- No farming instructions, bounty gaming language, or rank-chasing advice.
+
+For the full boundary, keep [Privacy & security](/docs/privacy-security) as the source of truth. For AI-written text, use the [AI summaries policy](/docs/ai-summaries) before posting generated copy.
+
+## Browser extension states
+
+The extension is a maintainer review aid. It should make state and scope obvious instead of implying that a contributor or public viewer can see private packets.
+
+<CodeBlock
+  lang="text"
+  filename="extension-state-map.txt"
+  code={`Signed out
+  -> no repo context, no private packet
+Signed in without repo scope
+  -> prompt for authorized GitHub App installation or browser session
+Authorized maintainer on PR page
+  -> public-safe PR panel + private maintainer blockers
+Unauthorized viewer or stale session
+  -> public-safe state only, no private blockers
+API unavailable or stale data
+  -> degraded state with retry guidance, never guessed scores`}
+/>
+
+UI, frontend, browser-extension, or GitHub-overlay pull requests need maintainer-reviewable screenshots or a short recording that shows the relevant states. A checked template box is not enough evidence.
+
+## Audit expectations
+
+A healthy installation should leave an audit trail that maintainers can reason about without exposing repository source or contributor secrets.
+
+- Installation health shows permissions and webhook readiness.
+- Settings preview shows the exact public copy before posting.
+- Command previews identify the maintainer action that produced them.
+- Extension sessions are scoped to authorized review context.
+- Failures are inspectable through diagnostics instead of silent public output.
+
+## CI checks are not reviewer approval
+
+Keep GitHub CI/check state separate from reviewer and mergeability state. A green CI run or advisory Context check can prove automation completed, but it does not prove the PR is acceptable, non-duplicative, or safe to merge. Human maintainers still decide whether the contribution fits the repo, issue, and subnet goals.
+
+If the repo enables **LoopOver Orb Review Agent**, document which blockers are enforced and why. Otherwise, treat LoopOver output as reviewer context only.
+
+## Reject weak LoopOver-driven PRs
+
+Maintainers should request changes or close PRs that misuse LoopOver output. The tool is a contribution operating layer, not a guarantee that work deserves merge.
+
+- Reject PRs with no linked issue, no reproduction, or no validation evidence.
+- Reject UI or extension PRs that omit screenshots or recordings of changed flows.
+- Reject copied snippets that leak private scoring, reward, trust, wallet, or hotkey text.
+- Reject duplicated work when the PR does not explain overlap and maintainer value.
+- Reject generated broad rewrites that are not scoped to the issue acceptance criteria.
+- Reject PRs that confuse passing CI with maintainer approval.
+
+## Next docs
+
+Continue with [Maintainer workflow](/docs/maintainer-workflow) for daily PR review, [Troubleshooting](/docs/troubleshooting) for install diagnostics, and [Browser extension](/extension) for overlay behavior.

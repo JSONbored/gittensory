@@ -25,6 +25,7 @@ import { Route as ApiIndexRouteImport } from './routes/api.index'
 import { Route as DocsUpstreamDriftRouteImport } from './routes/docs.upstream-drift'
 import { Route as DocsTuningRouteImport } from './routes/docs.tuning'
 import { Route as DocsTroubleshootingRouteImport } from './routes/docs.troubleshooting'
+import { Route as DocsSelfHostingUnifiedAmsOrbRouteImport } from './routes/docs.self-hosting-unified-ams-orb'
 import { Route as DocsSelfHostingTroubleshootingRouteImport } from './routes/docs.self-hosting-troubleshooting'
 import { Route as DocsSelfHostingSecurityRouteImport } from './routes/docs.self-hosting-security'
 import { Route as DocsSelfHostingReleasesRouteImport } from './routes/docs.self-hosting-releases'
@@ -33,7 +34,6 @@ import { Route as DocsSelfHostingReesAnalyzersRouteImport } from './routes/docs.
 import { Route as DocsSelfHostingReesRouteImport } from './routes/docs.self-hosting-rees'
 import { Route as DocsSelfHostingRagRouteImport } from './routes/docs.self-hosting-rag'
 import { Route as DocsSelfHostingQuickstartRouteImport } from './routes/docs.self-hosting-quickstart'
-import { Route as DocsSelfHostingUnifiedAmsOrbRouteImport } from './routes/docs.self-hosting-unified-ams-orb'
 import { Route as DocsSelfHostingOperationsRouteImport } from './routes/docs.self-hosting-operations'
 import { Route as DocsSelfHostingGithubAppRouteImport } from './routes/docs.self-hosting-github-app'
 import { Route as DocsSelfHostingDocsAuditRouteImport } from './routes/docs.self-hosting-docs-audit'
@@ -54,6 +54,7 @@ import { Route as DocsMaintainerInstallTrustRouteImport } from './routes/docs.ma
 import { Route as DocsLoopoverCommandsRouteImport } from './routes/docs.loopover-commands'
 import { Route as DocsHowReviewsWorkRouteImport } from './routes/docs.how-reviews-work'
 import { Route as DocsGithubAppRouteImport } from './routes/docs.github-app'
+import { Route as DocsFumadocsSpikeApiReferenceRouteImport } from './routes/docs.fumadocs-spike-api-reference'
 import { Route as DocsBranchAnalysisRouteImport } from './routes/docs.branch-analysis'
 import { Route as DocsBetaOnboardingRouteImport } from './routes/docs.beta-onboarding'
 import { Route as DocsAiSummariesRouteImport } from './routes/docs.ai-summaries'
@@ -153,6 +154,12 @@ const DocsTroubleshootingRoute = DocsTroubleshootingRouteImport.update({
   path: '/troubleshooting',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsSelfHostingUnifiedAmsOrbRoute =
+  DocsSelfHostingUnifiedAmsOrbRouteImport.update({
+    id: '/self-hosting-unified-ams-orb',
+    path: '/self-hosting-unified-ams-orb',
+    getParentRoute: () => DocsRoute,
+  } as any)
 const DocsSelfHostingTroubleshootingRoute =
   DocsSelfHostingTroubleshootingRouteImport.update({
     id: '/self-hosting-troubleshooting',
@@ -195,12 +202,6 @@ const DocsSelfHostingQuickstartRoute =
   DocsSelfHostingQuickstartRouteImport.update({
     id: '/self-hosting-quickstart',
     path: '/self-hosting-quickstart',
-    getParentRoute: () => DocsRoute,
-  } as any)
-const DocsSelfHostingUnifiedAmsOrbRoute =
-  DocsSelfHostingUnifiedAmsOrbRouteImport.update({
-    id: '/self-hosting-unified-ams-orb',
-    path: '/self-hosting-unified-ams-orb',
     getParentRoute: () => DocsRoute,
   } as any)
 const DocsSelfHostingOperationsRoute =
@@ -311,6 +312,12 @@ const DocsGithubAppRoute = DocsGithubAppRouteImport.update({
   path: '/github-app',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsFumadocsSpikeApiReferenceRoute =
+  DocsFumadocsSpikeApiReferenceRouteImport.update({
+    id: '/fumadocs-spike-api-reference',
+    path: '/fumadocs-spike-api-reference',
+    getParentRoute: () => DocsRoute,
+  } as any)
 const DocsBranchAnalysisRoute = DocsBranchAnalysisRouteImport.update({
   id: '/branch-analysis',
   path: '/branch-analysis',
@@ -430,6 +437,7 @@ export interface FileRoutesByFullPath {
   '/docs/ai-summaries': typeof DocsAiSummariesRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
+  '/docs/fumadocs-spike-api-reference': typeof DocsFumadocsSpikeApiReferenceRoute
   '/docs/github-app': typeof DocsGithubAppRoute
   '/docs/how-reviews-work': typeof DocsHowReviewsWorkRoute
   '/docs/loopover-commands': typeof DocsLoopoverCommandsRoute
@@ -451,7 +459,6 @@ export interface FileRoutesByFullPath {
   '/docs/self-hosting-github-app': typeof DocsSelfHostingGithubAppRoute
   '/docs/self-hosting-operations': typeof DocsSelfHostingOperationsRoute
   '/docs/self-hosting-quickstart': typeof DocsSelfHostingQuickstartRoute
-  '/docs/self-hosting-unified-ams-orb': typeof DocsSelfHostingUnifiedAmsOrbRoute
   '/docs/self-hosting-rag': typeof DocsSelfHostingRagRoute
   '/docs/self-hosting-rees': typeof DocsSelfHostingReesRoute
   '/docs/self-hosting-rees-analyzers': typeof DocsSelfHostingReesAnalyzersRoute
@@ -459,6 +466,7 @@ export interface FileRoutesByFullPath {
   '/docs/self-hosting-releases': typeof DocsSelfHostingReleasesRoute
   '/docs/self-hosting-security': typeof DocsSelfHostingSecurityRoute
   '/docs/self-hosting-troubleshooting': typeof DocsSelfHostingTroubleshootingRoute
+  '/docs/self-hosting-unified-ams-orb': typeof DocsSelfHostingUnifiedAmsOrbRoute
   '/docs/troubleshooting': typeof DocsTroubleshootingRoute
   '/docs/tuning': typeof DocsTuningRoute
   '/docs/upstream-drift': typeof DocsUpstreamDriftRoute
@@ -492,6 +500,7 @@ export interface FileRoutesByTo {
   '/docs/ai-summaries': typeof DocsAiSummariesRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
+  '/docs/fumadocs-spike-api-reference': typeof DocsFumadocsSpikeApiReferenceRoute
   '/docs/github-app': typeof DocsGithubAppRoute
   '/docs/how-reviews-work': typeof DocsHowReviewsWorkRoute
   '/docs/loopover-commands': typeof DocsLoopoverCommandsRoute
@@ -513,7 +522,6 @@ export interface FileRoutesByTo {
   '/docs/self-hosting-github-app': typeof DocsSelfHostingGithubAppRoute
   '/docs/self-hosting-operations': typeof DocsSelfHostingOperationsRoute
   '/docs/self-hosting-quickstart': typeof DocsSelfHostingQuickstartRoute
-  '/docs/self-hosting-unified-ams-orb': typeof DocsSelfHostingUnifiedAmsOrbRoute
   '/docs/self-hosting-rag': typeof DocsSelfHostingRagRoute
   '/docs/self-hosting-rees': typeof DocsSelfHostingReesRoute
   '/docs/self-hosting-rees-analyzers': typeof DocsSelfHostingReesAnalyzersRoute
@@ -521,6 +529,7 @@ export interface FileRoutesByTo {
   '/docs/self-hosting-releases': typeof DocsSelfHostingReleasesRoute
   '/docs/self-hosting-security': typeof DocsSelfHostingSecurityRoute
   '/docs/self-hosting-troubleshooting': typeof DocsSelfHostingTroubleshootingRoute
+  '/docs/self-hosting-unified-ams-orb': typeof DocsSelfHostingUnifiedAmsOrbRoute
   '/docs/troubleshooting': typeof DocsTroubleshootingRoute
   '/docs/tuning': typeof DocsTuningRoute
   '/docs/upstream-drift': typeof DocsUpstreamDriftRoute
@@ -558,6 +567,7 @@ export interface FileRoutesById {
   '/docs/ai-summaries': typeof DocsAiSummariesRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
+  '/docs/fumadocs-spike-api-reference': typeof DocsFumadocsSpikeApiReferenceRoute
   '/docs/github-app': typeof DocsGithubAppRoute
   '/docs/how-reviews-work': typeof DocsHowReviewsWorkRoute
   '/docs/loopover-commands': typeof DocsLoopoverCommandsRoute
@@ -579,7 +589,6 @@ export interface FileRoutesById {
   '/docs/self-hosting-github-app': typeof DocsSelfHostingGithubAppRoute
   '/docs/self-hosting-operations': typeof DocsSelfHostingOperationsRoute
   '/docs/self-hosting-quickstart': typeof DocsSelfHostingQuickstartRoute
-  '/docs/self-hosting-unified-ams-orb': typeof DocsSelfHostingUnifiedAmsOrbRoute
   '/docs/self-hosting-rag': typeof DocsSelfHostingRagRoute
   '/docs/self-hosting-rees': typeof DocsSelfHostingReesRoute
   '/docs/self-hosting-rees-analyzers': typeof DocsSelfHostingReesAnalyzersRoute
@@ -587,6 +596,7 @@ export interface FileRoutesById {
   '/docs/self-hosting-releases': typeof DocsSelfHostingReleasesRoute
   '/docs/self-hosting-security': typeof DocsSelfHostingSecurityRoute
   '/docs/self-hosting-troubleshooting': typeof DocsSelfHostingTroubleshootingRoute
+  '/docs/self-hosting-unified-ams-orb': typeof DocsSelfHostingUnifiedAmsOrbRoute
   '/docs/troubleshooting': typeof DocsTroubleshootingRoute
   '/docs/tuning': typeof DocsTuningRoute
   '/docs/upstream-drift': typeof DocsUpstreamDriftRoute
@@ -625,6 +635,7 @@ export interface FileRouteTypes {
     | '/docs/ai-summaries'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
+    | '/docs/fumadocs-spike-api-reference'
     | '/docs/github-app'
     | '/docs/how-reviews-work'
     | '/docs/loopover-commands'
@@ -653,6 +664,7 @@ export interface FileRouteTypes {
     | '/docs/self-hosting-releases'
     | '/docs/self-hosting-security'
     | '/docs/self-hosting-troubleshooting'
+    | '/docs/self-hosting-unified-ams-orb'
     | '/docs/troubleshooting'
     | '/docs/tuning'
     | '/docs/upstream-drift'
@@ -686,6 +698,7 @@ export interface FileRouteTypes {
     | '/docs/ai-summaries'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
+    | '/docs/fumadocs-spike-api-reference'
     | '/docs/github-app'
     | '/docs/how-reviews-work'
     | '/docs/loopover-commands'
@@ -714,6 +727,7 @@ export interface FileRouteTypes {
     | '/docs/self-hosting-releases'
     | '/docs/self-hosting-security'
     | '/docs/self-hosting-troubleshooting'
+    | '/docs/self-hosting-unified-ams-orb'
     | '/docs/troubleshooting'
     | '/docs/tuning'
     | '/docs/upstream-drift'
@@ -750,6 +764,7 @@ export interface FileRouteTypes {
     | '/docs/ai-summaries'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
+    | '/docs/fumadocs-spike-api-reference'
     | '/docs/github-app'
     | '/docs/how-reviews-work'
     | '/docs/loopover-commands'
@@ -778,6 +793,7 @@ export interface FileRouteTypes {
     | '/docs/self-hosting-releases'
     | '/docs/self-hosting-security'
     | '/docs/self-hosting-troubleshooting'
+    | '/docs/self-hosting-unified-ams-orb'
     | '/docs/troubleshooting'
     | '/docs/tuning'
     | '/docs/upstream-drift'
@@ -915,6 +931,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsTroubleshootingRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/self-hosting-unified-ams-orb': {
+      id: '/docs/self-hosting-unified-ams-orb'
+      path: '/self-hosting-unified-ams-orb'
+      fullPath: '/docs/self-hosting-unified-ams-orb'
+      preLoaderRoute: typeof DocsSelfHostingUnifiedAmsOrbRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/docs/self-hosting-troubleshooting': {
       id: '/docs/self-hosting-troubleshooting'
       path: '/self-hosting-troubleshooting'
@@ -969,13 +992,6 @@ declare module '@tanstack/react-router' {
       path: '/self-hosting-quickstart'
       fullPath: '/docs/self-hosting-quickstart'
       preLoaderRoute: typeof DocsSelfHostingQuickstartRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/docs/self-hosting-unified-ams-orb': {
-      id: '/docs/self-hosting-unified-ams-orb'
-      path: '/self-hosting-unified-ams-orb'
-      fullPath: '/docs/self-hosting-unified-ams-orb'
-      preLoaderRoute: typeof DocsSelfHostingUnifiedAmsOrbRouteImport
       parentRoute: typeof DocsRoute
     }
     '/docs/self-hosting-operations': {
@@ -1116,6 +1132,13 @@ declare module '@tanstack/react-router' {
       path: '/github-app'
       fullPath: '/docs/github-app'
       preLoaderRoute: typeof DocsGithubAppRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/fumadocs-spike-api-reference': {
+      id: '/docs/fumadocs-spike-api-reference'
+      path: '/fumadocs-spike-api-reference'
+      fullPath: '/docs/fumadocs-spike-api-reference'
+      preLoaderRoute: typeof DocsFumadocsSpikeApiReferenceRouteImport
       parentRoute: typeof DocsRoute
     }
     '/docs/branch-analysis': {
@@ -1299,6 +1322,7 @@ interface DocsRouteChildren {
   DocsAiSummariesRoute: typeof DocsAiSummariesRoute
   DocsBetaOnboardingRoute: typeof DocsBetaOnboardingRoute
   DocsBranchAnalysisRoute: typeof DocsBranchAnalysisRoute
+  DocsFumadocsSpikeApiReferenceRoute: typeof DocsFumadocsSpikeApiReferenceRoute
   DocsGithubAppRoute: typeof DocsGithubAppRoute
   DocsHowReviewsWorkRoute: typeof DocsHowReviewsWorkRoute
   DocsLoopoverCommandsRoute: typeof DocsLoopoverCommandsRoute
@@ -1320,7 +1344,6 @@ interface DocsRouteChildren {
   DocsSelfHostingGithubAppRoute: typeof DocsSelfHostingGithubAppRoute
   DocsSelfHostingOperationsRoute: typeof DocsSelfHostingOperationsRoute
   DocsSelfHostingQuickstartRoute: typeof DocsSelfHostingQuickstartRoute
-  DocsSelfHostingUnifiedAmsOrbRoute: typeof DocsSelfHostingUnifiedAmsOrbRoute
   DocsSelfHostingRagRoute: typeof DocsSelfHostingRagRoute
   DocsSelfHostingReesRoute: typeof DocsSelfHostingReesRoute
   DocsSelfHostingReesAnalyzersRoute: typeof DocsSelfHostingReesAnalyzersRoute
@@ -1328,6 +1351,7 @@ interface DocsRouteChildren {
   DocsSelfHostingReleasesRoute: typeof DocsSelfHostingReleasesRoute
   DocsSelfHostingSecurityRoute: typeof DocsSelfHostingSecurityRoute
   DocsSelfHostingTroubleshootingRoute: typeof DocsSelfHostingTroubleshootingRoute
+  DocsSelfHostingUnifiedAmsOrbRoute: typeof DocsSelfHostingUnifiedAmsOrbRoute
   DocsTroubleshootingRoute: typeof DocsTroubleshootingRoute
   DocsTuningRoute: typeof DocsTuningRoute
   DocsUpstreamDriftRoute: typeof DocsUpstreamDriftRoute
@@ -1338,6 +1362,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsAiSummariesRoute: DocsAiSummariesRoute,
   DocsBetaOnboardingRoute: DocsBetaOnboardingRoute,
   DocsBranchAnalysisRoute: DocsBranchAnalysisRoute,
+  DocsFumadocsSpikeApiReferenceRoute: DocsFumadocsSpikeApiReferenceRoute,
   DocsGithubAppRoute: DocsGithubAppRoute,
   DocsHowReviewsWorkRoute: DocsHowReviewsWorkRoute,
   DocsLoopoverCommandsRoute: DocsLoopoverCommandsRoute,
@@ -1359,7 +1384,6 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsSelfHostingGithubAppRoute: DocsSelfHostingGithubAppRoute,
   DocsSelfHostingOperationsRoute: DocsSelfHostingOperationsRoute,
   DocsSelfHostingQuickstartRoute: DocsSelfHostingQuickstartRoute,
-  DocsSelfHostingUnifiedAmsOrbRoute: DocsSelfHostingUnifiedAmsOrbRoute,
   DocsSelfHostingRagRoute: DocsSelfHostingRagRoute,
   DocsSelfHostingReesRoute: DocsSelfHostingReesRoute,
   DocsSelfHostingReesAnalyzersRoute: DocsSelfHostingReesAnalyzersRoute,
@@ -1367,6 +1391,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsSelfHostingReleasesRoute: DocsSelfHostingReleasesRoute,
   DocsSelfHostingSecurityRoute: DocsSelfHostingSecurityRoute,
   DocsSelfHostingTroubleshootingRoute: DocsSelfHostingTroubleshootingRoute,
+  DocsSelfHostingUnifiedAmsOrbRoute: DocsSelfHostingUnifiedAmsOrbRoute,
   DocsTroubleshootingRoute: DocsTroubleshootingRoute,
   DocsTuningRoute: DocsTuningRoute,
   DocsUpstreamDriftRoute: DocsUpstreamDriftRoute,

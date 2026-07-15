@@ -1,0 +1,55 @@
+---
+title: "@loopover command reference"
+description: The full PR and issue-comment control surface -- Q&A verbs, maintainer digests, and PR action commands. Roles reflect the shipped default policy; maintainers can override per command in .loopover.yml.
+---
+
+import {
+  ACTION_COMMAND_ENTRIES,
+  MAINTAINER_COMMAND_ENTRIES,
+  PUBLIC_COMMAND_ENTRIES,
+} from "@/lib/command-reference";
+
+<Callout variant="safety" title="Gate vs auto-review">
+  Commands never flip the gate to advisory and never bypass the one-shot disposition. `pause` and
+  `resume` affect only auto-review scheduling — not gate enforcement. See [How reviews
+  work](/docs/how-reviews-work) for the gate/review split.
+</Callout>
+
+## Syntax
+
+Post a comment on a pull request (or issue thread) mentioning `@loopover` followed by a verb.
+Trailing free text becomes the command argument where noted (for example
+`@loopover ask what should I fix first?`).
+
+<CodeBlock code="@loopover <verb> [argument or reason]" />
+
+<CommandTable title="Public Q&A commands" entries={PUBLIC_COMMAND_ENTRIES} />
+
+<CommandTable title="Maintainer queue digests" entries={MAINTAINER_COMMAND_ENTRIES} />
+
+<CommandTable title="PR action commands" entries={ACTION_COMMAND_ENTRIES} />
+
+## Per-command authorization overrides
+
+Default allowed roles ship in the worker configuration. A maintainer can tighten or widen a single
+verb via `commandAuthorization` in `.loopover.yml` (resolved in the same order as other per-repo
+settings: manifest → database → defaults).
+
+<CodeBlock
+  lang="yaml"
+  code={`commandAuthorization:
+  default: [maintainer, collaborator, confirmed_miner]
+  commands:
+    review: [maintainer, collaborator, confirmed_miner]
+    pause: [maintainer, collaborator]
+    gate-override: [maintainer, collaborator]`}
+/>
+
+Maintainer-only digest verbs ignore a plain `pr_author` role even when widened — only maintainer,
+collaborator, and confirmed_miner survive the clamp for those commands.
+
+## Related docs
+
+- [Maintainer workflow](/docs/maintainer-workflow) — when to invoke commands in a PR thread
+- [How reviews work](/docs/how-reviews-work) — gate, dual-AI review, and unified comment
+- [Tuning your reviews](/docs/tuning) — per-repo review and agent execution modes

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // Drift guard (#1823): the self-host update/rollback docs must stay aligned with the shipped deploy
 // scripts and the post-update verification helper.
 
-const OPERATIONS = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
+const OPERATIONS = "apps/loopover-ui/content/docs/self-hosting-operations.mdx";
 const IMAGE_SCRIPT = "scripts/deploy-selfhost-image.sh";
 const PREBUILT_SCRIPT = "scripts/deploy-selfhost-prebuilt.sh";
 const POST_UPDATE_SCRIPT = "scripts/selfhost-post-update-check.sh";

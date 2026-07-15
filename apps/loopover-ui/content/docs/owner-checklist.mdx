@@ -1,0 +1,105 @@
+---
+title: Repo-owner onboarding checklist
+description: Work through this before you invite LoopOver contribution traffic. It mirrors the readiness report exactly, so each item is something the platform actually checks -- and each comes with the honest tradeoff you are opting into.
+---
+
+LoopOver is **quiet by default**: it installs without posting comments or
+adding labels until you turn those surfaces on. This checklist is what to confirm first.
+Everything owner-only runs through the private API or the [owner console](/app/owner); readiness is reported as bands and statuses,
+never as a raw private number.
+
+Start by pulling your readiness report — it returns `ready` plus a list of
+`blockers`, and drives every item below. You can also wire a review-only agent
+with the `repo-owner-intake` profile (it explains and drafts setup plans; it
+never pushes config, labels issues, or posts comments).
+
+<CodeBlock
+  lang="http"
+  code={`GET /v1/repos/:owner/:repo/registration-readiness
+GET /v1/repos/:owner/:repo/gittensor-config-recommendation`}
+/>
+<CodeBlock code={`loopover-mcp init-client --print claude --agent-profile repo-owner-intake`} />
+
+## 1. Repository registration
+
+Confirm the repo is in the current LoopOver registry. If it is not, that is the first
+`blocker` in the readiness report and nothing else applies yet. Register and
+review from the [owner console](/app/owner).
+
+## 2. Repo policy & config quality
+
+Your policy lives in `.loopover.yml` (sections: `settings`,
+`gate`, `review`). The readiness report grades it as
+`configQuality` (excellent / good / needs_attention / fragile); a
+**fragile** config is a hard blocker. Preview exactly what a given config would
+do on a real PR before you commit it:
+
+<CodeBlock lang="http" code={`POST /v1/repos/:owner/:repo/settings-preview`} />
+
+## 3. Labels & trusted pipeline
+
+The report checks `labelPolicy.trustedPipelineReady` and lists missing or unused
+registry labels. Configure the labels you actually use before turning on
+`labelMultipliers`.
+
+<Callout variant="warn">
+  Honest tradeoff: enabling trusted-label multipliers before your labels are real and applied
+  consistently incentivizes the wrong work. Start without them and add them once the label pipeline
+  is verified.
+</Callout>
+
+## 4. Issue quality
+
+Clear, reproducible, well-scoped issues are the cheapest way to reduce low-quality PR
+pressure: contributors aim at real targets instead of guessing. The issue-quality signal
+feeds the contribution lanes below, so tidy your open issues before broadening intake.
+
+## 5. Contribution lanes
+
+A repo's lane is configured (not chosen by contributors) and the config recommendation
+endpoint suggests one with its tradeoffs. The lane is one of:
+
+- `direct_pr` — implementation PRs only (`issueDiscoveryShare` = 0).
+- `issue_discovery` — discovery/reporting only (`issueDiscoveryShare` = 1).
+- `split` — both lanes active (0 < `issueDiscoveryShare` < 1).
+- `inactive` — registered but with no current allocation.
+- `unknown` — not registered or no config yet.
+
+<Callout variant="warn">
+  Honest tradeoff: the `split` lane is recommended only when contributor intake is healthy and
+  config quality is excellent. Adding an issue-discovery slice surfaces more outside work but adds
+  triage load and duplicate risk — default to `direct_pr` until you have capacity.
+</Callout>
+
+## 6. Validation expectations & gate readiness
+
+Declare your validation commands in `.loopover.yml` so contributors know what
+"done" means, and so the gate can run. The report reports
+`testCoverageHealth` as `gate_ready` or `gate_unknown`;
+gate checks only run when you have explicitly configured them. Until then the gate stays
+advisory.
+
+## 7. Maintainer capacity & queue health
+
+The report grades `queueHealth` (low / medium / high / critical) from your open
+PR/issue burden, and `maintainerCutReadiness` tells you whether the repo is calm
+enough to reserve a maintainer lane.
+
+<Callout variant="warn">
+  Honest tradeoffs: opening more lanes means more triage. A maintainer cut credits upkeep but
+  reduces the miner share. Requiring a linked issue improves traceability but deters quick drive-by
+  PRs. Pick deliberately for the capacity you actually have.
+</Callout>
+
+## 8. Public/private boundaries
+
+Decide what becomes visible: `publicSurface` (comments + labels),
+`commentMode`, and `publicAudienceMode`. Everything that can reach a
+public GitHub surface is run through the sanitizer first, so economic and identity signals
+are stripped — along with local file paths — and nothing is framed as a guaranteed outcome.
+
+<Callout variant="safety">
+  Turning on public comments and labels increases visibility — and the volume of drive-by PRs. Keep
+  surfaces quiet until items 1–7 are green. See [privacy & security](/docs/privacy-security) for the
+  full boundary and the [owner workflow](/docs/beta-onboarding) for the end-to-end setup path.
+</Callout>

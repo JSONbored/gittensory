@@ -1,0 +1,59 @@
+---
+title: Branch analysis
+description: LoopOver analyzes branches using metadata only. Your source code never leaves your machine.
+---
+
+## Inputs
+
+- Repository identity (owner/repo).
+- Branch, base, and head refs.
+- Changed-file _metadata_ — paths, sizes, line counts.
+- Labels and linked issues.
+- Commit messages.
+- Validation summaries (lint/test outcomes, not logs).
+- Optional local scorer output.
+- User-supplied scenario assumptions.
+
+## Outputs
+
+- Lane context (maintainer / contributor / hybrid).
+- Role context for your account.
+- Scoreability scenarios (see [Scoreability](/docs/scoreability)).
+- Branch blockers and account/queue blockers.
+- Maintainer-fit notes.
+- Public-safe PR packet preview.
+- Ranked next actions.
+
+## Example invocation
+
+<CodeBlock
+  lang="http"
+  code={`POST /v1/local/branch-analysis
+Authorization: Bearer ••••••••
+Content-Type: application/json
+
+{
+  "login": "your-github-login",
+  "repoFullName": "entrius/gittensor",
+  "baseRef": "main",
+  "headRef": "feat/scorer-cleanup",
+  "changedFiles": [
+    { "path": "src/scorer.ts", "additions": 42, "deletions": 8, "status": "modified" }
+  ],
+  "labels": ["scorer", "ready-for-review"],
+  "linkedIssues": [421],
+  "commitMessages": ["refactor scorer gating", "fix linked-issue projection"],
+  "validation": [
+    { "command": "npm run typecheck", "status": "passed" }
+  ]
+}`}
+/>
+
+The request body is a strict schema — every field must match a known key exactly (`repoFullName`
+not a nested repo object, `changedFiles` with `additions`/`deletions`, `linkedIssues` not
+`linked_issues`) and unknown keys are rejected rather than ignored.
+
+<Callout variant="safety">
+  File **metadata** is allowed (path, line counts). File contents are not requested, accepted, or
+  stored. The MCP enforces this on the client.
+</Callout>

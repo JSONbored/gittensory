@@ -302,14 +302,14 @@ describe("check-docs-drift script", () => {
         "src/types.ts": buildRepositorySettingsSource(baseSettingsExtraFields),
         "packages/loopover-engine/src/focus-manifest.ts": buildFocusManifestSource(baseFocusManifestReviewFields),
         ".loopover.yml.example": buildYmlExampleText(baseSettingsExtraFields, baseFocusManifestReviewFields),
-        "apps/loopover-ui/src/routes/docs.tuning.tsx": [buildFlagsPageText(baseFlagNames), buildGateModePageText()].join("\n"),
-        "apps/loopover-ui/src/routes/docs.privacy-security.tsx": buildFlagsPageText(baseFlagNames),
-        "apps/loopover-ui/src/routes/docs.maintainer-workflow.tsx": buildDocsPageText(allBaseCommandIds),
-        "apps/loopover-ui/src/routes/docs.maintainer-install-trust.tsx": buildDocsPageText(allBaseCommandIds),
-        "apps/loopover-ui/src/routes/docs.loopover-commands.tsx":
+        "apps/loopover-ui/content/docs/tuning.mdx": [buildFlagsPageText(baseFlagNames), buildGateModePageText()].join("\n"),
+        "apps/loopover-ui/content/docs/privacy-security.mdx": buildFlagsPageText(baseFlagNames),
+        "apps/loopover-ui/content/docs/maintainer-workflow.mdx": buildDocsPageText(allBaseCommandIds),
+        "apps/loopover-ui/content/docs/maintainer-install-trust.mdx": buildDocsPageText(allBaseCommandIds),
+        "apps/loopover-ui/content/docs/loopover-commands.mdx":
           'import { PUBLIC_COMMAND_ENTRIES, MAINTAINER_COMMAND_ENTRIES, ACTION_COMMAND_ENTRIES } from "@/lib/command-reference";',
-        "apps/loopover-ui/src/routes/docs.how-reviews-work.tsx": buildGateModePageText(),
-        "apps/loopover-ui/src/routes/docs.github-app.tsx": buildGateModePageText(),
+        "apps/loopover-ui/content/docs/how-reviews-work.mdx": buildGateModePageText(),
+        "apps/loopover-ui/content/docs/github-app.mdx": buildGateModePageText(),
       };
       return files;
     }
@@ -345,24 +345,24 @@ describe("check-docs-drift script", () => {
     it("catches a docs page missing a known feature flag", () => {
       const files = baseFixtures();
       // Drop one known flag from docs.tuning.tsx.
-      files["apps/loopover-ui/src/routes/docs.tuning.tsx"] = [
+      files["apps/loopover-ui/content/docs/tuning.mdx"] = [
         buildFlagsPageText(baseFlagNames.filter((flag) => flag !== "LOOPOVER_REVIEW_FLAG_3")),
         buildGateModePageText(),
       ].join("\n");
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
-      const hit = result.failures.find((failure) => failure.includes("docs.tuning.tsx") && failure.includes("LOOPOVER_REVIEW_FLAG_3"));
+      const hit = result.failures.find((failure) => failure.includes("tuning.mdx") && failure.includes("LOOPOVER_REVIEW_FLAG_3"));
       expect(hit).toBeDefined();
     });
 
     it("catches a docs page missing a known @loopover command", () => {
       const files = baseFixtures();
-      files["apps/loopover-ui/src/routes/docs.maintainer-workflow.tsx"] = buildDocsPageText(
+      files["apps/loopover-ui/content/docs/maintainer-workflow.mdx"] = buildDocsPageText(
         allBaseCommandIds.filter((id) => id !== "public-5"),
       );
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
-      const hit = result.failures.find((failure) => failure.includes("docs.maintainer-workflow.tsx") && failure.includes("public-5"));
+      const hit = result.failures.find((failure) => failure.includes("maintainer-workflow.mdx") && failure.includes("public-5"));
       expect(hit).toBeDefined();
     });
 
@@ -371,7 +371,7 @@ describe("check-docs-drift script", () => {
       // Replace the page's literal @loopover lines with an import marker only -- none of the individual
       // command ids appear in the page's own source anymore, mirroring docs.maintainer-workflow.tsx after
       // it switched to `import { PUBLIC_COMMAND_LIST, MAINTAINER_COMMAND_LIST } from "@/lib/command-reference"`.
-      files["apps/loopover-ui/src/routes/docs.maintainer-workflow.tsx"] =
+      files["apps/loopover-ui/content/docs/maintainer-workflow.mdx"] =
         'import { PUBLIC_COMMAND_LIST } from "@/lib/command-reference";';
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
@@ -380,12 +380,12 @@ describe("check-docs-drift script", () => {
 
     it("still checks a page for missing commands when it does NOT delegate to the generated command-reference", () => {
       const files = baseFixtures();
-      files["apps/loopover-ui/src/routes/docs.maintainer-install-trust.tsx"] = buildDocsPageText(
+      files["apps/loopover-ui/content/docs/maintainer-install-trust.mdx"] = buildDocsPageText(
         allBaseCommandIds.filter((id) => id !== "maint-2"),
       );
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
-      const hit = result.failures.find((failure) => failure.includes("docs.maintainer-install-trust.tsx") && failure.includes("maint-2"));
+      const hit = result.failures.find((failure) => failure.includes("maintainer-install-trust.mdx") && failure.includes("maint-2"));
       expect(hit).toBeDefined();
     });
 
@@ -394,10 +394,10 @@ describe("check-docs-drift script", () => {
       const withoutSlop = GATE_MODE_MANIFEST.filter((row) => row.field !== "slopGateMode")
         .flatMap((row) => row.aliases)
         .join("\n");
-      files["apps/loopover-ui/src/routes/docs.tuning.tsx"] = [buildFlagsPageText(baseFlagNames), withoutSlop].join("\n");
+      files["apps/loopover-ui/content/docs/tuning.mdx"] = [buildFlagsPageText(baseFlagNames), withoutSlop].join("\n");
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
-      const hit = result.failures.find((failure) => failure.includes("docs.tuning.tsx") && failure.includes("slopGateMode"));
+      const hit = result.failures.find((failure) => failure.includes("tuning.mdx") && failure.includes("slopGateMode"));
       expect(hit).toBeDefined();
     });
 

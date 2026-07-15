@@ -1,0 +1,113 @@
+---
+title: Releases and images
+description: How to consume official self-host images, pin versions, build custom images, and keep source maps aligned.
+---
+
+## Image tags
+
+<FeatureRow
+  items={[
+    {
+      title: "version",
+      description: "Pinned release tag. Use this in production.",
+    },
+    {
+      title: "latest",
+      description:
+        "Moves with the newest STABLE release only — never a prerelease. Useful for trials, not for controlled production.",
+    },
+    {
+      title: "sha",
+      description: "Immutable commit-derived tag for exact provenance and rollback.",
+    },
+  ]}
+/>
+
+<CodeBlock
+  lang="bash"
+  code={`docker pull ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0
+docker pull ghcr.io/jsonbored/loopover-selfhost:latest`}
+/>
+
+<Callout variant="note" title="Renamed from gittensory-selfhost">
+  `ghcr.io/jsonbored/loopover-selfhost` is the only name new releases publish under. The pre-rename
+  `ghcr.io/jsonbored/gittensory-selfhost` is no longer published to, but an existing pin to a
+  specific tag or digest under that name keeps resolving — pull it and switch to the new name at
+  your convenience.
+</Callout>
+
+## Prerelease (beta/rc) images
+
+A tag like `orb-v0.1.0-rc.1` or `orb-v0.1.0-beta.1` runs the identical build/provenance/SBOM/Sentry pipeline as a stable release, but is marked prerelease on GitHub and is never pushed under `latest`. External beta testers should pull the exact prerelease tag, not `latest`.
+
+<CodeBlock lang="bash" code={`docker pull ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0-rc.1`} />
+
+<Callout variant="note">
+  Stable release behavior is unchanged: a plain `X.Y.Z` tag still moves `latest` and publishes an
+  unmarked (non-prerelease) GitHub Release.
+</Callout>
+
+<Callout variant="safety">
+  Before tagging any `orb-v*` release or prerelease, run the [release
+  checklist](/docs/self-hosting-release-checklist) against the built image — CI only smoke-tests the
+  plain SQLite + Redis + direct-App default, not brokered mode, air-gapped mode, or any AI provider.
+</Callout>
+
+## Upgrade flow
+
+**1.** Read release notes for env, migration, or behavior changes.
+
+**2.** Back up the database or confirm Litestream health.
+
+**3.** Pull and restart with `scripts/deploy-selfhost-image.sh` (or rebuild the checkout with `scripts/deploy-selfhost-prebuilt.sh`) — both restart only the `loopover` service (`--no-deps`) and wait for it to report `healthy` before returning, instead of a bare `docker compose up -d` that returns as soon as the container starts.
+
+**4.** Check `/ready`, logs, queue metrics, and one test PR.
+
+<CodeBlock
+  lang="bash"
+  code={`# Recommended: pull a published tag, restart, wait for healthy
+./scripts/deploy-selfhost-image.sh ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0
+curl http://localhost:8787/ready
+
+# Building from the current checkout instead of pulling
+./scripts/deploy-selfhost-prebuilt.sh`}
+/>
+
+<Callout variant="note">
+  Both scripts pin a version: the image script accepts a tag/digest argument or `LOOPOVER_IMAGE`;
+  the prebuilt script derives `SENTRY_RELEASE`/`LOOPOVER_VERSION` from the checked-out commit (`git
+  rev-parse --short=8 HEAD`) unless you set `SENTRY_RELEASE` yourself. A plain `docker compose pull
+  loopover && docker compose up -d loopover` still works, but skips the health-check wait loop and
+  input validation both scripts provide.
+</Callout>
+
+## Custom images
+
+Custom builds are useful for testing local changes, including subscription CLIs, or trimming the image. They should not contain secrets. `INSTALL_AI_CLIS` (default `true`) installs the Claude Code and Codex CLIs; a sibling build-arg, `INSTALL_VISUAL_REVIEW` (default `false`), adds `puppeteer-core` for visual capture.
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose build --build-arg INSTALL_AI_CLIS=true loopover
+docker compose up -d loopover`}
+/>
+
+## Sentry source maps
+
+<Callout variant="note">
+  Official releases align `LOOPOVER_VERSION`, Sentry release ids, and uploaded source maps. For
+  custom images, leave `SENTRY_RELEASE` unset unless you uploaded source maps for that exact built
+  bundle.
+</Callout>
+
+## Rollback
+
+There is no dedicated rollback command. Roll back by re-running `scripts/deploy-selfhost-image.sh` pinned to the prior image tag or digest (or `scripts/deploy-selfhost-prebuilt.sh` against an older checkout) — the same script you upgrade with, pointed backward.
+
+<Callout variant="warn" title="Migrations are forward-only">
+  This repo has no down-migration convention (`scripts/check-migrations.mjs` and `migrations/` only
+  ever add forward). If a migration already ran forward before you need to roll back, reverting the
+  app image does not revert the schema — the rolled-back code now runs against a newer schema than
+  it expects. Keep backups and read release notes for migration changes before upgrading a live
+  maintainer instance, and treat a post-migration rollback as a case that needs a manual schema/data
+  plan, not just an image swap.
+</Callout>

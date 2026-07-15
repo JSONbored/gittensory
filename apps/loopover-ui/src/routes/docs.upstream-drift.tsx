@@ -1,9 +1,20 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
+import { Suspense } from "react";
 
 import { DocsPage } from "@/components/site/docs-page";
-import { CodeBlock, Callout } from "@/components/site/primitives";
+import { docsClientLoader } from "@/lib/docs-client-loader";
 
+// Rendered from content/docs/upstream-drift.mdx via fumadocs-mdx's browser entry
+// (docsClientLoader), through the existing DocsPage/Callout/CodeBlock primitives --
+// not fumadocs-ui's bundled components. See docs-source.ts's comment for why the
+// loader below resolves only a plain, serializable path string.
 export const Route = createFileRoute("/docs/upstream-drift")({
+  loader: async () => {
+    const { docsSource } = await import("@/lib/docs-source");
+    const page = docsSource.getPage(["upstream-drift"]);
+    if (!page) throw notFound();
+    return { path: page.path, title: page.data.title, description: page.data.description };
+  },
   head: () => ({
     meta: [
       { title: "Upstream drift — LoopOver docs" },
@@ -26,53 +37,13 @@ export const Route = createFileRoute("/docs/upstream-drift")({
 });
 
 function UpstreamDrift() {
+  const { path, title, description } = Route.useLoaderData();
+  const Content = docsClientLoader.getComponent(path);
   return (
-    <DocsPage
-      eyebrow="Core concepts"
-      title="Upstream drift"
-      description="Gittensor moves. LoopOver tracks every meaningful change to scoring, registry, and issue-discovery so your decisions stay grounded."
-    >
-      <h2>How drift works</h2>
-      <p>
-        LoopOver stores versioned snapshots of the Gittensor source and ruleset from{" "}
-        <a href="https://github.com/entrius/gittensor" target="_blank" rel="noreferrer">
-          entrius/gittensor:test
-        </a>
-        . Semantic payloads are hashed so we can detect scoring, registry, or issue-discovery drift
-        without re-deriving the whole world.
-      </p>
-
-      <Callout>
-        <strong>Upstream relationship.</strong> <code>entrius/gittensor</code> is the upstream
-        project LoopOver analyzes. LoopOver is{" "}
-        <a href="https://github.com/jsonbored/loopover" target="_blank" rel="noreferrer">
-          jsonbored/loopover
-        </a>{" "}
-        — an independent base-agent layer for the Gittensor ecosystem, not affiliated with the
-        official subnet.
-      </Callout>
-
-      <h2>Signal fidelity vs readiness</h2>
-      <p>
-        The API distinguishes service health from data quality. Readiness can be green while signal
-        fidelity is <code>stale</code>, <code>degraded</code>, or <code>blocked</code>. The MCP
-        surfaces fidelity in every response so agents don't act on stale assumptions.
-      </p>
-
-      <h2>Endpoints</h2>
-      <CodeBlock
-        lang="http"
-        code={`GET /v1/readiness
-GET /v1/sync/status
-GET /v1/upstream/status
-GET /v1/upstream/ruleset
-GET /v1/upstream/drift`}
-      />
-
-      <Callout variant="warn">
-        When drift is detected, the MCP CLI prints a heads-up before any analyze/preflight/plan
-        output. Treat the response as a snapshot tied to the printed ruleset version.
-      </Callout>
+    <DocsPage eyebrow="Core concepts" title={title} description={description}>
+      <Suspense fallback={<p className="text-token-sm text-muted-foreground">Loading…</p>}>
+        <Content />
+      </Suspense>
     </DocsPage>
   );
 }

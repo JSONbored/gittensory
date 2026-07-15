@@ -1,0 +1,38 @@
+---
+title: Upstream drift
+description: Gittensor moves. LoopOver tracks every meaningful change to scoring, registry, and issue-discovery so your decisions stay grounded.
+---
+
+## How drift works
+
+LoopOver stores versioned snapshots of the Gittensor source and ruleset from
+[entrius/gittensor:test](https://github.com/entrius/gittensor). Semantic payloads are hashed so we can detect scoring, registry, or issue-discovery drift
+without re-deriving the whole world.
+
+<Callout>
+  **Upstream relationship.** `entrius/gittensor` is the upstream project LoopOver analyzes. LoopOver
+  is [jsonbored/loopover](https://github.com/jsonbored/loopover) — an independent base-agent layer
+  for the Gittensor ecosystem, not affiliated with the official subnet.
+</Callout>
+
+## Signal fidelity vs readiness
+
+The API distinguishes service health from data quality. Readiness can be green while signal
+fidelity is `stale`, `degraded`, or `blocked`. The MCP
+surfaces fidelity in every response so agents don't act on stale assumptions.
+
+## Endpoints
+
+<CodeBlock
+  lang="http"
+  code={`GET /v1/readiness
+GET /v1/sync/status
+GET /v1/upstream/status
+GET /v1/upstream/ruleset
+GET /v1/upstream/drift`}
+/>
+
+<Callout variant="warn">
+  When drift is detected, the MCP CLI prints a heads-up before any analyze/preflight/plan output.
+  Treat the response as a snapshot tied to the printed ruleset version.
+</Callout>

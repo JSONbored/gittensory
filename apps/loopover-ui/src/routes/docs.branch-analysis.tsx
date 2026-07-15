@@ -1,9 +1,20 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, notFound } from "@tanstack/react-router";
+import { Suspense } from "react";
 
 import { DocsPage } from "@/components/site/docs-page";
-import { CodeBlock, Callout } from "@/components/site/primitives";
+import { docsClientLoader } from "@/lib/docs-client-loader";
 
+// Rendered from content/docs/branch-analysis.mdx via fumadocs-mdx's browser entry
+// (docsClientLoader), through the existing DocsPage/Callout/CodeBlock/FeatureRow
+// primitives -- not fumadocs-ui's bundled components. See docs-source.ts's comment
+// for why the loader below resolves only a plain, serializable path string.
 export const Route = createFileRoute("/docs/branch-analysis")({
+  loader: async () => {
+    const { docsSource } = await import("@/lib/docs-source");
+    const page = docsSource.getPage(["branch-analysis"]);
+    if (!page) throw notFound();
+    return { path: page.path, title: page.data.title, description: page.data.description };
+  },
   head: () => ({
     meta: [
       { title: "Branch analysis — LoopOver docs" },
@@ -26,73 +37,13 @@ export const Route = createFileRoute("/docs/branch-analysis")({
 });
 
 function BranchAnalysis() {
+  const { path, title, description } = Route.useLoaderData();
+  const Content = docsClientLoader.getComponent(path);
   return (
-    <DocsPage
-      eyebrow="Core concepts"
-      title="Branch analysis"
-      description="LoopOver analyzes branches using metadata only. Your source code never leaves your machine."
-    >
-      <h2>Inputs</h2>
-      <ul>
-        <li>Repository identity (owner/repo).</li>
-        <li>Branch, base, and head refs.</li>
-        <li>
-          Changed-file <em>metadata</em> — paths, sizes, line counts.
-        </li>
-        <li>Labels and linked issues.</li>
-        <li>Commit messages.</li>
-        <li>Validation summaries (lint/test outcomes, not logs).</li>
-        <li>Optional local scorer output.</li>
-        <li>User-supplied scenario assumptions.</li>
-      </ul>
-
-      <h2>Outputs</h2>
-      <ul>
-        <li>Lane context (maintainer / contributor / hybrid).</li>
-        <li>Role context for your account.</li>
-        <li>
-          Scoreability scenarios (see <a href="/docs/scoreability">Scoreability</a>).
-        </li>
-        <li>Branch blockers and account/queue blockers.</li>
-        <li>Maintainer-fit notes.</li>
-        <li>Public-safe PR packet preview.</li>
-        <li>Ranked next actions.</li>
-      </ul>
-
-      <h2>Example invocation</h2>
-      <CodeBlock
-        lang="http"
-        code={`POST /v1/local/branch-analysis
-Authorization: Bearer ••••••••
-Content-Type: application/json
-
-{
-  "login": "your-github-login",
-  "repoFullName": "entrius/gittensor",
-  "baseRef": "main",
-  "headRef": "feat/scorer-cleanup",
-  "changedFiles": [
-    { "path": "src/scorer.ts", "additions": 42, "deletions": 8, "status": "modified" }
-  ],
-  "labels": ["scorer", "ready-for-review"],
-  "linkedIssues": [421],
-  "commitMessages": ["refactor scorer gating", "fix linked-issue projection"],
-  "validation": [
-    { "command": "npm run typecheck", "status": "passed" }
-  ]
-}`}
-      />
-      <p>
-        The request body is a strict schema — every field must match a known key exactly (
-        <code>repoFullName</code> not a nested repo object, <code>changedFiles</code> with{" "}
-        <code>additions</code>/<code>deletions</code>, <code>linkedIssues</code> not{" "}
-        <code>linked_issues</code>) and unknown keys are rejected rather than ignored.
-      </p>
-
-      <Callout variant="safety">
-        File <strong>metadata</strong> is allowed (path, line counts). File contents are not
-        requested, accepted, or stored. The MCP enforces this on the client.
-      </Callout>
+    <DocsPage eyebrow="Core concepts" title={title} description={description}>
+      <Suspense fallback={<p className="text-token-sm text-muted-foreground">Loading…</p>}>
+        <Content />
+      </Suspense>
     </DocsPage>
   );
 }

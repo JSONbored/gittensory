@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const MINER_QUICKSTART_PATH = resolve(
   import.meta.dirname,
-  "../../apps/loopover-ui/src/routes/docs.miner-quickstart.tsx",
+  "../../apps/loopover-ui/content/docs/miner-quickstart.mdx",
 );
 
 describe("docs miner quickstart page", () => {
@@ -44,7 +44,7 @@ describe("docs miner quickstart page", () => {
   });
 
   it("cross-links to the miner coding-agent driver page for Claude Code / Codex setup", () => {
-    expect(source).toMatch(/Miner coding-agent driver/);
+    expect(normalizedSource).toMatch(/Miner coding-agent driver/);
     expect(source).toMatch(/\/docs\/miner-coding-agent/);
   });
 

@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest";
 // one-click activation routes, Checks:write re-approval, INSTALL_AI_CLIS, and the re-gate sweep job
 // types — otherwise operators follow stale instructions after the underlying paths change.
 
-const QUICKSTART = "apps/loopover-ui/src/routes/docs.self-hosting-quickstart.tsx";
-const CONFIG = "apps/loopover-ui/src/routes/docs.self-hosting-configuration.tsx";
-const OPERATIONS = "apps/loopover-ui/src/routes/docs.self-hosting-operations.tsx";
-const GITHUB_APP = "apps/loopover-ui/src/routes/docs.self-hosting-github-app.tsx";
-const MAINTAINER = "apps/loopover-ui/src/routes/docs.maintainer-self-hosting.tsx";
+// SPIKE (#6037): this page's prose now lives in the migrated content/docs/*.mdx file, not the
+// route .tsx, which only orchestrates the fumadocs loader + client-loader -- point the drift
+// guard at the actual content source so it still catches real content drift.
+const QUICKSTART = "apps/loopover-ui/content/docs/self-hosting-quickstart.mdx";
+const CONFIG = "apps/loopover-ui/content/docs/self-hosting-configuration.mdx";
+const OPERATIONS = "apps/loopover-ui/content/docs/self-hosting-operations.mdx";
+const GITHUB_APP = "apps/loopover-ui/content/docs/self-hosting-github-app.mdx";
+const MAINTAINER = "apps/loopover-ui/content/docs/maintainer-self-hosting.mdx";
 
 const quickstart = readFileSync(QUICKSTART, "utf8");
 const configuration = readFileSync(CONFIG, "utf8");

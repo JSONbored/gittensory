@@ -1,0 +1,135 @@
+---
+title: Backup and scaling
+description: Choose the right data layout for one node or many, and make sure the review state can be restored.
+---
+
+## Default: SQLite single node
+
+SQLite is the default because it is operationally simple and good enough for a single maintainer instance. The tradeoff is obvious: if the volume is lost, review state is lost.
+
+<Callout variant="warn">
+  Do not treat the default data volume as a backup. Snapshot it or enable continuous backup.
+</Callout>
+
+## Continuous backup with Litestream
+
+<CodeBlock
+  filename=".env"
+  code={`BACKUP_ACKNOWLEDGED=true
+LITESTREAM_ACCESS_KEY_ID=<key>
+LITESTREAM_SECRET_ACCESS_KEY=<secret>
+LITESTREAM_ENDPOINT=s3.example.com
+LITESTREAM_REGION=us-east-1`}
+/>
+
+<CodeBlock lang="bash" code={`docker compose --profile litestream up -d`} />
+
+## Scheduled backups
+
+The bundled `backup` profile writes the active app database to the `loopover-backups` volume. SQLite installs use an online backup; Postgres installs use `pg_dump`. The same run also snapshots Qdrant when it is enabled.
+
+<CodeBlock lang="bash" code={`docker compose --profile backup up -d`} />
+
+### Retention: how many backups are kept
+
+Each run keeps the newest `BACKUP_RETAIN` backups (default **7**) — applied _independently per target_: `postgres/`, `sqlite/`, and `qdrant/` in the `loopover-backups` volume each retain their own newest 7, not 7 combined across all three. Set it in `.env` to change the window:
+
+<CodeBlock filename=".env" code={`BACKUP_RETAIN=14`} />
+
+`scripts/backup.sh`'s `normalize_backup_retain` guards against misconfiguration rather than failing the run: a non-numeric or empty value falls back to 7 with a logged warning, and `BACKUP_RETAIN=0` is coerced up to 1 (a retention window of zero would delete the backup the script just took, so the script refuses that rather than leaving you with nothing).
+
+<Callout variant="warn" title="A failed SQLite backup never prunes">
+  If the SQLite online backup fails verification — the `.backup` command itself fails, the output
+  file is empty, or its `PRAGMA integrity_check` doesn't come back `ok` — the script deletes the bad
+  output, logs the failure, and — critically — **skips the retention prune for the sqlite target on
+  that run**, so a broken backup can never push a known-good one out of the retained window.
+  Postgres and Qdrant retention still run normally on that same pass, since only the SQLite leg
+  failed. The run still exits non-zero so the failure is loud.
+</Callout>
+
+## Multi-instance: Postgres and Redis
+
+<FeatureRow
+  items={[
+    {
+      title: "Postgres",
+      description:
+        "Use DATABASE_URL for a shared database and queue claiming with SKIP LOCKED semantics.",
+    },
+    {
+      title: "Redis",
+      description:
+        "Use REDIS_URL for distributed rate limiting, webhook deduplication, and shared short-lived caches.",
+    },
+    {
+      title: "PgBouncer",
+      description: "Use the pgbouncer profile when many replicas need pooled database connections.",
+    },
+  ]}
+/>
+
+<CodeBlock
+  filename=".env"
+  code={`POSTGRES_PASSWORD=<password>
+DATABASE_URL=postgres://loopover:<password>@pgbouncer:5432/loopover
+REDIS_URL=redis://redis:6379
+QDRANT_URL=http://qdrant:6333`}
+/>
+
+<CodeBlock lang="bash" code={`docker compose --profile pgbouncer --profile qdrant up -d`} />
+
+PgBouncer pools connections _between instances and Postgres_. Each app instance still opens its own connection pool to whatever it's pointed at (PgBouncer or Postgres directly), shared by every HTTP handler and queue worker in that instance — set `PGPOOL_MAX` (default 10) if a single instance needs more headroom than that under real concurrency (many registered repos, higher `QUEUE_CONCURRENCY`). Raise it gradually and watch for `LoopOverPostgresConnectionPressure`: that alert means you're approaching Postgres's own `max_connections`, a different ceiling than this per-instance pool size.
+
+## One-time SQLite to Postgres copy
+
+Existing SQLite installs can copy state into a fresh Postgres database with the bundled migrator. It dry-runs by default and only commits when `--execute` is present.
+
+<CodeBlock
+  lang="bash"
+  code={`export DATABASE_URL=postgres://loopover:<password>@pgbouncer:5432/loopover
+npm run selfhost:postgres:migrate -- --sqlite /data/loopover.sqlite
+npm run selfhost:postgres:migrate -- --sqlite /data/loopover.sqlite --execute`}
+/>
+
+## Restore checks
+
+- Restore to a separate host or volume, never over the live instance first.
+- Boot the app and confirm `/ready` returns 200.
+- Confirm migrations do not fail or reapply incorrectly.
+- Confirm recent review rows and job state are present.
+
+## Verify a backup is restorable
+
+The `backup` profile ships `verify-backup.sh`, which checks the newest backup without touching the live database: Postgres `.dump` archives with `pg_restore --list`, and SQLite `.sqlite.gz` backups with a gzip and `integrity_check` pass. Run it against the newest backup, or a specific file:
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose --profile backup run --rm backup sh /scripts/verify-backup.sh
+docker compose --profile backup run --rm backup sh /scripts/verify-backup.sh /backups/postgres/loopover-<timestamp>.dump`}
+/>
+
+A healthy run ends with `[verify] postgres archive OK: … (N TOC entries)` (or `[verify] sqlite backup OK`), then `[verify] complete`, and exits 0. Corruption, a missing backup, or an empty archive exits non-zero with a `[verify]` reason.
+
+To prove a dump actually restores, opt into a scratch restore into a _throwaway_ database — never the live one:
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose --profile backup run --rm \\
+  -e VERIFY_RESTORE_SCRATCH=1 \\
+  -e LOOPOVER_VERIFY_SCRATCH_DATABASE_URL=postgres://user:pass@host:5432/loopover_verify \\
+  backup sh /scripts/verify-backup.sh`}
+/>
+
+<Callout variant="warn">
+  The scratch restore runs `pg_restore --clean` against `LOOPOVER_VERIFY_SCRATCH_DATABASE_URL`, so
+  point it at a dedicated database you can afford to drop. The script refuses to run when that URL
+  equals the live backup source.
+</Callout>
+
+## Restore drill: what "restore-tested" actually verifies
+
+This exact flow has been run against a real production backup on a live instance: the dump was restored into a throwaway, network-isolated scratch database (a separate container, never the live one), which the script's own identity check confirmed was distinct from the backup source before touching anything. The restore completed cleanly and repopulated the application tables with representative production-scale data — not just an empty schema. Table and row counts will grow over time; treat restore-drill observations as point-in-time results, not invariants.
+
+This proves the backup content and the restore path both work end-to-end against real data. It deliberately stops short of booting a full app instance against the scratch database and polling `/ready`: that endpoint also gates on live Redis, Qdrant, the configured AI provider, Codex auth, and a real GitHub App key (see [Operations](/docs/self-hosting-operations)'s health endpoints section) — reproducing all of those for a disposable scratch instance would mean copying real credentials into new, throwaway infrastructure, which is a bigger risk than the drill is worth. This drill proves the dump can be restored and its contents inspected at the database layer — it does not exercise the app's own `db` readiness probe, migration boot path, or `/ready` response. A full disaster-recovery rehearsal still needs to verify app readiness on the target infrastructure, using the operator's own real credentials.
+
+After scaling, revisit [Operations](/docs/self-hosting-operations) and [Security](/docs/self-hosting-security) because network and credential boundaries change.

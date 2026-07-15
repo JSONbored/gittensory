@@ -1,0 +1,95 @@
+---
+title: Troubleshooting
+description: The MCP ships with diagnostics. Start with doctor, then drill in.
+---
+
+## Health checks
+
+<CodeBlock
+  code={`loopover-mcp doctor
+loopover-mcp status
+loopover-mcp whoami`}
+/>
+
+Or hit the public API endpoint directly to confirm reachability:
+
+<CodeBlock lang="http" code={`GET https://api.loopover.ai/health`} />
+
+## Self-host Docker observability
+
+The Docker stack exposes three different operator signals: structured logs from the
+`loopover` container, Prometheus metrics at `/metrics`, and optional
+OpenTelemetry traces through the observability profile. Metrics answer _how much_
+work is happening; traces answer _where time went_ inside a review job.
+
+<CodeBlock
+  lang="bash"
+  code={`# Enable the collector + Tempo/Grafana stack.
+docker compose --profile observability up -d
+
+# Export app queue-job and AI-provider spans to Tempo.
+OTEL_TRACES_EXPORTER=otlp
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.05
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`}
+/>
+
+App traces are off unless `OTEL_TRACES_EXPORTER` includes `otlp`. When
+enabled, the self-host runtime exports durable queue-job spans and AI-provider attempt spans
+over OTLP/HTTP; the default collector endpoint is normalized to `/v1/traces`.
+Span attributes are bounded to operational labels such as job type, queue backend, provider,
+model, and request kind.
+
+<Callout variant="safety" title="Trace data stays operational">
+  Do not put request bodies, prompts, diffs, credentials, or private config in trace attributes. The
+  built-in self-host spans intentionally avoid those fields.
+</Callout>
+
+## Common issues
+
+### Login hangs on device flow
+
+Confirm you can reach `github.com/login/device` in your browser. Re-run
+`loopover-mcp login` and paste the new code.
+
+### "Stale fidelity" warning
+
+Upstream Gittensor changed. See [Upstream drift](/docs/upstream-drift) for what
+that means and how to interpret cached analysis until fidelity recovers.
+
+### MCP not appearing in my editor
+
+Re-run the appropriate `init-client` command and restart the editor. See
+[MCP client setup](/docs/mcp-clients) for per-editor config locations.
+
+### 401 Unauthorized from the API
+
+Your LoopOver session expired. Run `loopover-mcp login` again. Static bearer
+tokens are not user-facing.
+
+## API status & offline mode [#api-status]
+
+The site continuously monitors the LoopOver API and surfaces problems through a banner under
+the header and a single deduped toast with a **Recheck** button.
+
+### You're offline [#offline]
+
+We detected your browser is offline (`navigator.onLine === false`). Live API
+actions in the API reference are paused. Reconnect and the site auto-rechecks
+`/health` within a few seconds.
+
+### API unreachable [#api-unreachable]
+
+`/health` couldn't be reached at all. This usually means a network problem
+between you and the API edge. Try the **Recheck** button in the banner, or run
+`curl https://api.loopover.ai/health` from your machine to confirm.
+
+### API timing out [#api-timeout]
+
+`/health` didn't respond within the 4-second probe window. The API may be slow or
+restarting. Retry — most timeouts resolve within a minute.
+
+### API degraded [#api-degraded]
+
+`/health` returned a non-2xx response. Some endpoints may still work; check the
+Roadmap for incident notes or wait for the recheck cycle to clear.

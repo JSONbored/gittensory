@@ -216,27 +216,27 @@ export const FOCUS_MANIFEST_ALIAS_MANIFEST = [
 
 // The real current *GateMode fields on RepositorySettings in src/types.ts. Each row maps the field to its
 // .loopover.yml alias(es) (the field's own DB/settings name, plus any config-as-code YAML path it is also
-// known by) and the docs route filenames (relative to apps/loopover-ui/src/routes/) that must document it.
+// known by) and the docs content filenames (relative to apps/loopover-ui/content/docs/) that must document it.
 // Adding a new *GateMode field to src/types.ts without adding a row here is a docs-drift failure by design
 // (see checkDocsDrift step 3) -- the manifest is the single place that maps "a gate dimension exists" to
 // "here is where a maintainer can read about it".
 export const GATE_MODE_MANIFEST = [
-  { field: "linkedIssueGateMode", aliases: ["linkedIssueGateMode", "gate.linkedIssue"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "duplicatePrGateMode", aliases: ["duplicatePrGateMode", "gate.duplicates"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "qualityGateMode", aliases: ["qualityGateMode", "gate.readiness.mode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "slopGateMode", aliases: ["slopGateMode", "gate.slop.mode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "copycatGateMode", aliases: ["copycatGateMode", "gate.copycat.mode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "sizeGateMode", aliases: ["sizeGateMode", "gate.size"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
-  { field: "lockfileIntegrityGateMode", aliases: ["lockfileIntegrityGateMode", "gate.lockfileIntegrity"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
-  { field: "claGateMode", aliases: ["claGateMode", "gate.claMode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
-  { field: "mergeReadinessGateMode", aliases: ["mergeReadinessGateMode", "gate.mergeReadiness"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "manifestPolicyGateMode", aliases: ["manifestPolicyGateMode", "gate.manifestPolicy"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx"] },
-  { field: "selfAuthoredLinkedIssueGateMode", aliases: ["selfAuthoredLinkedIssueGateMode", "gate.selfAuthoredLinkedIssue"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
-  { field: "linkedIssueSatisfactionGateMode", aliases: ["linkedIssueSatisfactionGateMode", "gate.linkedIssueSatisfaction"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
-  { field: "moderationGateMode", aliases: ["moderationGateMode", "settings.moderationGateMode"], pages: ["docs.how-reviews-work.tsx", "docs.tuning.tsx", "docs.github-app.tsx"] },
+  { field: "linkedIssueGateMode", aliases: ["linkedIssueGateMode", "gate.linkedIssue"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "duplicatePrGateMode", aliases: ["duplicatePrGateMode", "gate.duplicates"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "qualityGateMode", aliases: ["qualityGateMode", "gate.readiness.mode"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "slopGateMode", aliases: ["slopGateMode", "gate.slop.mode"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "copycatGateMode", aliases: ["copycatGateMode", "gate.copycat.mode"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "sizeGateMode", aliases: ["sizeGateMode", "gate.size"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
+  { field: "lockfileIntegrityGateMode", aliases: ["lockfileIntegrityGateMode", "gate.lockfileIntegrity"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
+  { field: "claGateMode", aliases: ["claGateMode", "gate.claMode"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
+  { field: "mergeReadinessGateMode", aliases: ["mergeReadinessGateMode", "gate.mergeReadiness"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "manifestPolicyGateMode", aliases: ["manifestPolicyGateMode", "gate.manifestPolicy"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
+  { field: "selfAuthoredLinkedIssueGateMode", aliases: ["selfAuthoredLinkedIssueGateMode", "gate.selfAuthoredLinkedIssue"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
+  { field: "linkedIssueSatisfactionGateMode", aliases: ["linkedIssueSatisfactionGateMode", "gate.linkedIssueSatisfaction"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
+  { field: "moderationGateMode", aliases: ["moderationGateMode", "settings.moderationGateMode"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
 ];
 
-const DOCS_ROUTES_DIR = "apps/loopover-ui/src/routes";
+const DOCS_ROUTES_DIR = "apps/loopover-ui/content/docs";
 
 function defaultReadFile(root, relativePath) {
   return readFileSync(join(root, relativePath), "utf8");
@@ -254,13 +254,13 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
   const failures = [];
   const read = (relativePath) => readFile(root, relativePath);
 
-  // 1. Feature flags: src/env.d.ts vs docs.tuning.tsx + docs.privacy-security.tsx.
+  // 1. Feature flags: src/env.d.ts vs tuning.mdx + privacy-security.mdx.
   const envDtsText = read("src/env.d.ts");
   const flags = extractLoopOverReviewFlags(envDtsText);
   if (flags.length < 10) {
     failures.push(`src/env.d.ts: extraction found only ${flags.length} LOOPOVER_REVIEW_* flags -- expected 10+; the extraction regex may be broken`);
   } else {
-    const flagDocsPages = ["docs.tuning.tsx", "docs.privacy-security.tsx"];
+    const flagDocsPages = ["tuning.mdx", "privacy-security.mdx"];
     for (const flag of flags) {
       for (const page of flagDocsPages) {
         const pageText = read(`${DOCS_ROUTES_DIR}/${page}`);
@@ -271,7 +271,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
     }
   }
 
-  // 2. @loopover commands: src/github/commands.ts vs docs.maintainer-workflow.tsx + docs.maintainer-install-trust.tsx.
+  // 2. @loopover commands: src/github/commands.ts vs maintainer-workflow.mdx + maintainer-install-trust.mdx.
   // A page can satisfy this either by literally mentioning "@loopover <id>" in its own source, or by
   // importing the generated command-reference constants (apps/loopover-ui/src/lib/command-reference.ts,
   // regenerated from the same catalogs via `npm run command-reference:check`) -- once a page delegates to the
@@ -284,7 +284,7 @@ export function checkDocsDrift({ root, readFile = defaultReadFile }) {
   if (allCommandIds.length < 15) {
     failures.push(`src/github/commands.ts: extraction found only ${allCommandIds.length} unique @loopover command ids -- expected 15+; the extraction regex may be broken`);
   } else {
-    const commandDocsPages = ["docs.maintainer-workflow.tsx", "docs.maintainer-install-trust.tsx", "docs.loopover-commands.tsx"];
+    const commandDocsPages = ["maintainer-workflow.mdx", "maintainer-install-trust.mdx", "loopover-commands.mdx"];
     for (const page of commandDocsPages) {
       const pageText = read(`${DOCS_ROUTES_DIR}/${page}`);
       if (pageText.includes("@/lib/command-reference")) continue;

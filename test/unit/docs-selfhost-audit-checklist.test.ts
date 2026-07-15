@@ -11,8 +11,12 @@ import {
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const ROUTES_DIR = resolve(REPO_ROOT, "apps/loopover-ui/src/routes");
-const AUDIT_PAGE = resolve(ROUTES_DIR, "docs.self-hosting-docs-audit.tsx");
-const MAINTAINER_INDEX = resolve(ROUTES_DIR, "docs.maintainer-self-hosting.tsx");
+// SPIKE (#6037): these two pages' prose now lives in the migrated content/docs/*.mdx files, not
+// the route .tsx, which only orchestrates the fumadocs loader + client-loader -- point the drift
+// guard at the actual content source. docs.index.tsx (below, for the docs-hub link check) is the
+// nav page, not migrated, so it stays pointed at the .tsx.
+const AUDIT_PAGE = resolve(REPO_ROOT, "apps/loopover-ui/content/docs/self-hosting-docs-audit.mdx");
+const MAINTAINER_INDEX = resolve(REPO_ROOT, "apps/loopover-ui/content/docs/maintainer-self-hosting.mdx");
 const PACKAGE_JSON = resolve(REPO_ROOT, "package.json");
 
 function repoPath(relativePath: string): string {

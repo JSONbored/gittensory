@@ -1,0 +1,126 @@
+---
+title: Running ORB and AMS together
+description: Run ORB (self-hosted PR review) and AMS (the autonomous miner) together on one host -- shared state, aligned .env, and working AMS Grafana panels in fleet mode.
+---
+
+ORB (self-hosted PR review) and AMS (the autonomous miner) each run on their own, but there is one
+combined setup that closes the loop on a single host — with shared on-disk state so the AMS
+observability panels actually populate.
+
+Two compose files are involved, and they are deliberately separate:
+
+<FeatureRow
+  items={[
+    {
+      title: "ORB — root docker-compose.yml",
+      description:
+        "The self-hosted review service (app + Redis, plus opt-in profiles for Postgres, Caddy, observability, and more).",
+    },
+    {
+      title: "AMS — packages/loopover-miner/docker-compose.miner.yml",
+      description:
+        "The fleet-mode miner: a long-lived worker built from the package Dockerfile, state on a named miner-data volume.",
+    },
+  ]}
+/>
+
+Standing both up on one host is just two `docker compose` invocations. The one thing that needs
+care is **where AMS keeps its SQLite state**, because the ORB `ams-observability` exporter reads
+that state from a host directory — and fleet mode does not write there by default.
+
+## 1. Bring up ORB
+
+Follow the [Self-hosting quickstart](/docs/self-hosting-quickstart) to configure ORB's `.env` and
+boot the stack. For this combined setup, enable both the `observability` profile (Prometheus,
+Alertmanager, Loki, and Grafana) and the `ams-observability` profile (the
+`ams-reporting-exporter` that feeds AMS data into Grafana):
+
+<CodeBlock
+  lang="bash"
+  code={`docker compose --profile observability --profile ams-observability up -d
+curl http://localhost:8787/ready`}
+/>
+
+<Callout variant="note">
+  Grafana itself ships under `--profile observability`; the AMS exporter that populates its AMS
+  datasources ships under `--profile ams-observability`. Enable both, or the AMS panels stay empty
+  even though the rest of the observability stack is up.
+</Callout>
+
+## 2. Bring up AMS in fleet mode
+
+Fleet mode reads credentials from an env file and runs the continuous worker loop. Build and start
+it from the repo root:
+
+<CodeBlock
+  lang="bash"
+  code={`cp packages/loopover-miner/.loopover-miner.env.example packages/loopover-miner/.loopover-miner.env
+# edit .loopover-miner.env: set GITHUB_TOKEN (+ optional provider keys)
+docker compose -f packages/loopover-miner/docker-compose.miner.yml up -d --build`}
+/>
+
+On its own this works — but the miner's SQLite ledgers now live in a Docker **named volume**
+(`miner-data`), whose real host path is a Docker-managed internal detail. The ORB exporter,
+meanwhile, reads the ledgers from a host directory (default `~/.config/loopover-miner`), so the
+two never line up on their own and the Grafana AMS datasources stay **silently empty**.
+
+## 3. Bridge the state so AMS panels populate
+
+The AMS package ships an opt-in override that relocates the fleet miner's `/data/miner` state onto
+the *same* host directory the exporter reads — using the same `LOOPOVER_MINER_CONFIG_DIR`
+variable and default, so there is no `docker volume inspect` archaeology. Copy the example (it is
+gitignored) and run all three compose files together with both profiles:
+
+<CodeBlock
+  lang="bash"
+  code={`cp packages/loopover-miner/docker-compose.miner.override.yml.example \\
+   packages/loopover-miner/docker-compose.miner.override.yml   # edit the host path only for a non-default location
+
+docker compose \\
+  -f docker-compose.yml \\
+  -f packages/loopover-miner/docker-compose.miner.yml \\
+  -f packages/loopover-miner/docker-compose.miner.override.yml \\
+  --profile observability --profile ams-observability up -d`}
+/>
+
+The override bind-mounts `/data/miner` to `${LOOPOVER_MINER_CONFIG_DIR:-~/.config/loopover-miner}`
+— Compose merges by container path, so this *replaces* the base file's `miner-data` named-volume
+mount for the same target rather than adding a second one. The exporter's own bind is the same
+source: `${LOOPOVER_MINER_CONFIG_DIR:-~/.config/loopover-miner}:/ams-ledgers:ro`. Both sides now
+read one location.
+
+<Callout variant="warn" title="The two files must agree on LOOPOVER_MINER_CONFIG_DIR">
+  Leave `LOOPOVER_MINER_CONFIG_DIR` unset on both to use the shared default, or set it once so both
+  the fleet miner and the ORB exporter follow it. If only one side sets it, they diverge again and
+  the AMS panels go empty — this is the mismatch the fleet-mode bridge exists to close.
+</Callout>
+
+## 4. Verify the AMS panels
+
+<FeatureRow
+  items={[
+    {
+      title: "Miner state on the host",
+      description:
+        "Confirm ~/.config/loopover-miner/ (or your LOOPOVER_MINER_CONFIG_DIR) now contains the miner's SQLite files (attempt-log.sqlite3, prediction-ledger.sqlite3, …) written by the fleet container.",
+    },
+    {
+      title: "Exporter is running",
+      description:
+        "`docker compose ps` shows ams-reporting-exporter up; it re-exports the reporting DBs on LOOPOVER_AMS_REPORTING_EXPORT_INTERVAL_SECONDS (default 30s).",
+    },
+    {
+      title: "Grafana AMS datasources",
+      description:
+        "Open Grafana (from the observability profile) and confirm the AMS attempt-log / prediction-ledger panels now show data rather than an empty series.",
+    },
+  ]}
+/>
+
+<Callout variant="note">
+  This is the fleet-mode bridge that `#5805` introduced; the AMS-deployment reference in
+  `packages/loopover-miner/DEPLOYMENT.md` ("Running fleet mode alongside ORB's ams-observability
+  profile") documents the same override for a package-internal audience. Laptop-mode AMS already
+  writes to `~/.config/loopover-miner` directly and needs no override — only fleet mode's named
+  volume does.
+</Callout>
