@@ -25,6 +25,11 @@ describe("docker-compose.miner.yml (#5177)", () => {
     expect(miner.command).toContain("run");
   });
 
+  it("tags the built image loopover-miner:latest, matching the Dockerfile's ENTRYPOINT", () => {
+    const miner = compose.services.miner;
+    expect(miner.image).toBe("loopover-miner:latest");
+  });
+
   it("persists state on a named volume and restarts unless stopped", () => {
     const miner = compose.services.miner;
     expect(miner.restart).toBe("unless-stopped");
