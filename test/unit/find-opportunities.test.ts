@@ -275,4 +275,72 @@ describe("runFindOpportunities", () => {
     expect(allowed.status).toBe("ok");
     expect(allowed.ranked).toHaveLength(1);
   });
+
+  it("returns invalid_request when validation fails inside runFindOpportunities (not just via the direct validator) (#5847)", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const result = await runFindOpportunities(env, {});
+    expect(result).toMatchObject({ status: "invalid_request", reason: "targets_or_search_query_required" });
+  });
+
+  it("applies a goalSpec lane/languages and surfaces appliedLane + appliedMinRankScore in the result (#5847)", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/repos/acme/allowed/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/repos/acme/allowed/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      if (url.includes("/repos/acme/allowed/issues?")) return jsonResponse([issue(7)]);
+      return jsonResponse({}, { status: 404 });
+    });
+    const result = await runFindOpportunities(env, {
+      targets: [{ owner: "acme", repo: "allowed" }],
+      goalSpec: { lane: "docs", languages: ["typescript"], minRankScore: 1 },
+    });
+    expect(result.status).toBe("ok");
+    expect((result as { appliedLane?: string }).appliedLane).toBe("docs");
+    expect((result as { appliedMinRankScore?: number }).appliedMinRankScore).toBe(1);
+  });
+
+  it("falls back through the installation-token loop: skips a repo with no installationId, tries one that has it, swallows the mint failure (#5847)", async () => {
+    const env = createTestEnv(); // no GITHUB_PUBLIC_TOKEN -> installation-token fallback path
+    await upsertRepositoryFromGitHub(env, { name: "installed", full_name: "acme/installed" }, 12345);
+    vi.stubGlobal("fetch", async () => jsonResponse({}, { status: 404 }));
+    const result = await runFindOpportunities(env, {
+      targets: [
+        { owner: "acme", repo: "uninstalled" }, // no installationId -> `continue`
+        { owner: "acme", repo: "installed" }, // installationId 12345 -> createInstallationToken throws (no app key) -> catch/continue
+      ],
+    });
+    // A repo IS installed, so it does not short-circuit to github_token_unavailable; it proceeds with a null token.
+    expect(result.status).toBe("ok");
+  });
+
+  it("uses the searchQuery path (searchCandidateIssuesWithSummary) and re-filters the results via canAccessRepo (#5847)", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "test-token" });
+    const allowedPolicy = readFixture("allowed-silent.md");
+    const searchItem = (number: number, repo: string) => ({
+      number,
+      title: `Issue ${number}`,
+      labels: ["good first issue"],
+      repository_url: `https://api.github.com/repos/acme/${repo}`,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/search/issues")) return jsonResponse({ items: [searchItem(7, "allowed"), searchItem(8, "blocked")] });
+      if (url.includes("/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/contents/CONTRIBUTING.md")) return contentResponse(allowedPolicy);
+      return jsonResponse({}, { status: 404 });
+    });
+    const seen: string[] = [];
+    const result = await runFindOpportunities(
+      env,
+      { searchQuery: "good first issue" },
+      { canAccessRepo: async (repoFullName) => { seen.push(repoFullName); return repoFullName === "acme/allowed"; } },
+    );
+    expect(result.status).toBe("ok");
+    // The searchQuery branch ran (not the targets branch), and the post-search canAccessRepo re-filter kept only the accessible repo.
+    expect(result.ranked.map((e) => `${e.owner}/${e.repo}#${e.issueNumber}`)).toEqual(["acme/allowed#7"]);
+    expect(seen).toContain("acme/allowed");
+    expect(seen).toContain("acme/blocked");
+  });
 });
