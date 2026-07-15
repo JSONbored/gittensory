@@ -141,7 +141,12 @@ describe("loopover-miner governor ledger CLI (#2328)", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(await runGovernorCli("tail", [])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown governor subcommand");
-    expect(String(error.mock.calls[0]?.[0])).toContain("governor pause");
+    expect(String(error.mock.calls[0]?.[0])).toContain(
+      "loopover-miner governor pause [--reason <text>] [--dry-run] [--json]",
+    );
+    expect(String(error.mock.calls[0]?.[0])).toContain(
+      "loopover-miner governor resume [--dry-run] [--json]",
+    );
 
     error.mockClear();
     log.mockClear();

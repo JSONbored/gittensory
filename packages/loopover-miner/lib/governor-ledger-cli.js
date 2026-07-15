@@ -16,8 +16,8 @@ const GOVERNOR_LIST_USAGE =
 
 const GOVERNOR_SUBCOMMAND_USAGE = [
   GOVERNOR_LIST_USAGE,
-  "       loopover-miner governor pause [--reason <text>] [--json]",
-  "       loopover-miner governor resume [--json]",
+  "       loopover-miner governor pause [--reason <text>] [--dry-run] [--json]",
+  "       loopover-miner governor resume [--dry-run] [--json]",
   "       loopover-miner governor status [--json]",
   "       loopover-miner governor metrics",
 ].join("\n");
