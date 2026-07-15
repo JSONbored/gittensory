@@ -128,11 +128,14 @@ function rowResultText(resultCell: string): string {
 }
 
 /** Map the legacy panel signal rows → the unified table's rows (label/state/result/evidence). The
- *  unified renderer adds its own "Code review" row first; these follow it (loopover's gate row included). */
+ *  unified renderer adds its own "Code review" row first; these follow it (loopover's gate row included).
+ *  `gates: true` only for the "Gate result" row (#6067) -- the ONLY row among these that can actually move
+ *  the verdict; every other row's own Evidence/Action text already says it's advisory-only. Drives the split
+ *  between the renderer's always-visible "Decision drivers" list and its collapsed advisory-signals fold. */
 export function panelRowsToSignalRows(rows: PublicPrPanelSignalRow[]): UnifiedSignalRow[] {
   return rows.map((row) => {
     const [label, result, evidence] = row.cells;
-    return { label, state: rowState(result), result: rowResultText(result), evidence };
+    return { label, state: rowState(result), result: rowResultText(result), evidence, gates: row.key === "gateResult" };
   });
 }
 

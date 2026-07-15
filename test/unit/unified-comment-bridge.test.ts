@@ -71,10 +71,19 @@ describe("panelRowsToSignalRows", () => {
   it("derives ok/warn/fail from the leading icon and strips it from the result text", () => {
     const rows = panelRowsToSignalRows(panelRows);
     const linked = rows.find((row) => row.label === "Linked issue");
-    expect(linked).toEqual({ label: "Linked issue", state: "ok", result: "Linked", evidence: "#42" });
+    // gates: false — only the "Gate result" row is ever decision-authoritative (#6067).
+    expect(linked).toEqual({ label: "Linked issue", state: "ok", result: "Linked", evidence: "#42", gates: false });
     const reviewLoad = rows.find((row) => row.label === "Change scope");
     expect(reviewLoad?.state).toBe("warn");
     expect(reviewLoad?.result).toBe("14/20");
+  });
+
+  it("marks ONLY the Gate result row as gates: true (#6067) — every other row is advisory", () => {
+    const rows = panelRowsToSignalRows(panelRows);
+    const gateResult = rows.find((row) => row.label === "Gate result");
+    expect(gateResult?.gates).toBe(true);
+    const everythingElse = rows.filter((row) => row.label !== "Gate result");
+    expect(everythingElse.every((row) => row.gates === false)).toBe(true);
   });
 
   it("maps a ❌ result cell to fail", () => {
