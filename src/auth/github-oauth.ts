@@ -198,7 +198,9 @@ export async function createSessionFromGitHubToken(
   }
   const scopes = Array.isArray(metadata.scopes) ? metadata.scopes.filter((scope): scope is string => typeof scope === "string") : [];
   const githubUser = user.id === undefined ? { login: user.login } : { login: user.login, id: user.id };
-  const { token, session } = await createSessionForGitHubUser(env, githubUser, { scopes, metadata });
+  // #6114: the caller already just used `githubToken` for the identity check above -- pass it through so
+  // it's persisted for later AMS git-operation use, instead of discarding it once identity is confirmed.
+  const { token, session } = await createSessionForGitHubUser(env, githubUser, { scopes, metadata, githubToken });
   return { token, login: session.login, expiresAt: session.expiresAt, scopes: session.scopes };
 }
 

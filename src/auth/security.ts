@@ -3,6 +3,7 @@ import {
   getAuthSessionByTokenHash,
   recordAuditEvent,
   revokeAuthSession,
+  storeSessionGitHubToken,
   touchAuthSession,
 } from "../db/repositories";
 import type { AuthSessionRecord, JsonValue } from "../types";
@@ -229,7 +230,10 @@ function shouldUseSecureCookie(requestUrl: string): boolean {
 export async function createSessionForGitHubUser(
   env: Env,
   user: { login: string; id?: number | null },
-  options: { scopes?: string[]; metadata?: Record<string, JsonValue> } = {},
+  // `githubToken` (#6114): the raw GitHub user-to-server token this session's login exchange minted, if any.
+  // Persisted encrypted so a CLI/AMS process can fetch it later (see storeSessionGitHubToken) -- NEVER placed
+  // in `metadata` (that's a plaintext JSON blob) or otherwise logged/audited alongside this session.
+  options: { scopes?: string[]; metadata?: Record<string, JsonValue>; githubToken?: string } = {},
 ): Promise<{ token: string; session: AuthSessionRecord }> {
   const token = createOpaqueToken();
   const issuedAt = nowIso();
@@ -246,6 +250,7 @@ export async function createSessionForGitHubUser(
     metadata: options.metadata ?? {},
   };
   await createAuthSession(env, session);
+  if (options.githubToken) await storeSessionGitHubToken(env, session.id, options.githubToken);
   await recordAuditEvent(env, {
     eventType: "auth.session_created",
     actor: user.login,

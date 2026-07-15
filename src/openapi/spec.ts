@@ -898,6 +898,17 @@ export function buildOpenApiSpec() {
     },
   });
   registry.registerPath({
+    method: "post",
+    path: "/v1/auth/github/token",
+    summary: "Fetch the current session's live GitHub token (for AMS git operations)",
+    responses: {
+      200: { description: "The session's GitHub token", content: { "application/json": { schema: z.object({ token: z.string() }) } } },
+      403: { description: "A browser session is required" },
+      404: { description: "No GitHub token is available for this session" },
+      429: { description: "Rate limited" },
+    },
+  });
+  registry.registerPath({
     method: "get",
     path: "/v1/app/overview",
     summary: "Live app overview assembled from backend data",
@@ -1242,7 +1253,7 @@ function applySecurityMetadata(document: GeneratedOpenApiDocument): GeneratedOpe
 
 function isProtectedPath(path: string): boolean {
   if (path === "/health" || path === "/openapi.json" || path === "/mcp" || path === "/v1/mcp/compatibility" || path === "/v1/public/stats" || path === "/v1/public/github/repos/{owner}/{repo}/stats" || path === "/v1/public/repos/{owner}/{repo}/quality") return false;
-  if (path.startsWith("/v1/auth/")) return path === "/v1/auth/extension/session";
+  if (path.startsWith("/v1/auth/")) return path === "/v1/auth/extension/session" || path === "/v1/auth/github/token";
   if (path === "/v1/github/webhook") return false;
   return path.startsWith("/v1/");
 }

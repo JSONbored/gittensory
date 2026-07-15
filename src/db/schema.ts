@@ -1143,6 +1143,20 @@ export const authSessions = sqliteTable(
   }),
 );
 
+// The GitHub user-to-server token minted at login (#6114), encrypted at rest -- same AES-256-GCM envelope as
+// repositoryAiKeys/repositoryLinearKeys above (src/utils/crypto.ts), isolated in its own table for the same
+// reason: the main auth_sessions lookup (every authenticated request) never touches this column, so it can't
+// leak via a future bug that serializes a full session row. One row per session; deleted on revocation.
+export const authSessionGithubTokens = sqliteTable("auth_session_github_tokens", {
+  sessionId: text("session_id").primaryKey(),
+  ciphertext: text("ciphertext").notNull(),
+  iv: text("iv").notNull(),
+  salt: text("salt"),
+  keyVersion: integer("key_version").notNull().default(2),
+  createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
+});
+
 export const digestSubscriptions = sqliteTable(
   "digest_subscriptions",
   {

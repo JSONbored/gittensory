@@ -10,6 +10,7 @@ import {
   agentRecommendationOutcomes,
   agentRuns,
   auditEvents,
+  authSessionGithubTokens,
   authSessions,
   bounties,
   bountyLifecycleEvents,
@@ -1809,6 +1810,62 @@ export async function touchAuthSession(env: Env, sessionId: string): Promise<voi
 export async function revokeAuthSession(env: Env, sessionId: string): Promise<void> {
   const db = getDb(env.DB);
   await db.update(authSessions).set({ revokedAt: nowIso(), lastSeenAt: nowIso() }).where(eq(authSessions.id, sessionId));
+  await deleteSessionGitHubToken(env, sessionId);
+}
+
+// ─── Session-scoped GitHub token (#6114) ────────────────────────────────────────────────────────
+// The GitHub user-to-server token minted at login, persisted encrypted so a CLI/AMS process can fetch it
+// on demand instead of needing a separately-configured GITHUB_TOKEN PAT. Same isolated-table,
+// encrypted-at-rest shape as repositoryAiKeys/repositoryLinearKeys above (reuses TOKEN_ENCRYPTION_SECRET +
+// encryptSecret/decryptSecret) -- never serialized by the session/auth GET surfaces, only ever readable via
+// getDecryptedSessionGitHubToken.
+
+/**
+ * Persist a session's live GitHub token, encrypted at rest. Best-effort: unlike the BYOK/Linear key stores,
+ * this must never block session creation (ORB/MCP login must keep working even when a self-hoster hasn't
+ * configured TOKEN_ENCRYPTION_SECRET) -- absence of the key is warned about, not thrown, so the gap is
+ * visible/alertable rather than silently unrecoverable (there is no "re-mint on demand" fallback for a
+ * user's own OAuth token the way src/orb/broker.ts has for installation tokens).
+ */
+export async function storeSessionGitHubToken(env: Env, sessionId: string, token: string): Promise<void> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) {
+    console.warn(JSON.stringify({ level: "warn", event: "session_github_token_persist_skipped", sessionId, message: "TOKEN_ENCRYPTION_SECRET is not set; the session's GitHub token was not persisted. AMS git operations for this session will fall back to a manually-configured GITHUB_TOKEN." }));
+    return;
+  }
+  const { ciphertext, iv, salt, version } = await encryptSecret(token, secret);
+  const updatedAt = nowIso();
+  const db = getDb(env.DB);
+  await db
+    .insert(authSessionGithubTokens)
+    .values({ sessionId, ciphertext, iv, salt, keyVersion: version, updatedAt })
+    .onConflictDoUpdate({ target: authSessionGithubTokens.sessionId, set: { ciphertext, iv, salt, keyVersion: version, updatedAt } });
+}
+
+/**
+ * Decrypt a session's stored GitHub token. Returns null when no key is configured OR none was ever stored
+ * (e.g. TOKEN_ENCRYPTION_SECRET was unset at login time) OR decryption fails (e.g. a rotated encryption key) --
+ * so a misconfiguration or a session that predates this feature never crashes the caller, only degrades to
+ * "unavailable, fall back to a manual PAT."
+ */
+export async function getDecryptedSessionGitHubToken(env: Env, sessionId: string): Promise<string | null> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) return null;
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(authSessionGithubTokens).where(eq(authSessionGithubTokens.sessionId, sessionId)).limit(1);
+  if (!row) return null;
+  try {
+    return await decryptSecret(row.ciphertext, row.iv, secret, row.salt);
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a session's stored GitHub token. Called from revokeAuthSession so logout/revocation removes the
+ *  credential too, not just the loopover session. No-op (not an error) when none was ever stored. */
+export async function deleteSessionGitHubToken(env: Env, sessionId: string): Promise<void> {
+  const db = getDb(env.DB);
+  await db.delete(authSessionGithubTokens).where(eq(authSessionGithubTokens.sessionId, sessionId));
 }
 
 export async function countActiveAuthSessions(env: Env): Promise<number> {

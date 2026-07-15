@@ -17896,6 +17896,48 @@
         ],
         "summary": "Import a bounty snapshot"
       }
+    },
+    "/v1/auth/github/token": {
+      "post": {
+        "summary": "Fetch the current session's live GitHub token (for AMS git operations)",
+        "responses": {
+          "200": {
+            "description": "The session's GitHub token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A browser session is required"
+          },
+          "404": {
+            "description": "No GitHub token is available for this session"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
     }
   },
   "servers": [
