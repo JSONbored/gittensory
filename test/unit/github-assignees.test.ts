@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import { ensurePullRequestAssignee } from "../../src/github/assignees";
 import { createTestEnv } from "../helpers/d1";
 
 describe("GitHub PR assignees (#3182)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearInstallationTokenCacheForTest();
   });
 
   it("rejects invalid repository names before making GitHub calls", async () => {
@@ -131,6 +133,38 @@ describe("GitHub PR assignees (#3182)", () => {
     const result = await ensurePullRequestAssignee(createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() }), 123, "JSONbored/gittensory", 4, "alice");
 
     expect(result).toEqual({ applied: false });
+  });
+
+  it("ensurePullRequestAssignee: evicts a stale installation token and retries once on 401 (#6191)", async () => {
+    clearInstallationTokenCacheForTest();
+    let tokenMints = 0;
+    let issueGetAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) {
+        tokenMints += 1;
+        return Response.json({ token: `token-${tokenMints}` });
+      }
+      if (url.includes("/issues/4") && !url.includes("/assignees") && method === "GET") {
+        issueGetAttempts += 1;
+        if (issueGetAttempts === 1) return Response.json({ message: "Bad credentials" }, { status: 401 });
+        return Response.json({ assignees: [{ login: "alice" }] });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    const result = await ensurePullRequestAssignee(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() }),
+      998877,
+      "JSONbored/gittensory",
+      4,
+      "alice",
+    );
+
+    expect(result).toEqual({ applied: true });
+    expect(issueGetAttempts).toBe(2);
+    expect(tokenMints).toBe(2);
   });
 });
 

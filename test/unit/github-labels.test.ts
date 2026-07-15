@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
+import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github/labels";
 import { createTestEnv } from "../helpers/d1";
 
 describe("GitHub PR labels", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearInstallationTokenCacheForTest();
   });
 
   it("rejects invalid repository names before making GitHub calls", async () => {
@@ -109,6 +111,65 @@ describe("GitHub PR labels", () => {
     await expect(
       removePullRequestLabel(createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() }), 123, "JSONbored/gittensory", 4, "gittensor"),
     ).resolves.toBeUndefined();
+  });
+
+  it("ensurePullRequestLabel: evicts a stale installation token and retries once on 401 (#6191)", async () => {
+    clearInstallationTokenCacheForTest();
+    let tokenMints = 0;
+    let labelGetAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) {
+        tokenMints += 1;
+        return Response.json({ token: `token-${tokenMints}` });
+      }
+      if (url.includes("/issues/4/labels") && method === "GET") {
+        labelGetAttempts += 1;
+        if (labelGetAttempts === 1) return Response.json({ message: "Bad credentials" }, { status: 401 });
+        return Response.json([{ name: "gittensor" }]);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    const result = await ensurePullRequestLabel(
+      createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() }),
+      998877,
+      "JSONbored/gittensory",
+      4,
+      "gittensor",
+      { createMissingLabel: true },
+    );
+
+    expect(result).toEqual({ applied: false, created: false });
+    expect(labelGetAttempts).toBe(2);
+    expect(tokenMints).toBe(2);
+  });
+
+  it("removePullRequestLabel: evicts a stale installation token and retries once on 401 (#6191)", async () => {
+    clearInstallationTokenCacheForTest();
+    let tokenMints = 0;
+    let deleteAttempts = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) {
+        tokenMints += 1;
+        return Response.json({ token: `token-${tokenMints}` });
+      }
+      if (url.includes("/issues/4/labels/") && method === "DELETE") {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) return Response.json({ message: "Bad credentials" }, { status: 401 });
+        return new Response(null, { status: 204 });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    await expect(
+      removePullRequestLabel(createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() }), 998877, "JSONbored/gittensory", 4, "gittensor"),
+    ).resolves.toBeUndefined();
+    expect(deleteAttempts).toBe(2);
+    expect(tokenMints).toBe(2);
   });
 
   it("does nothing when the label is already applied", async () => {

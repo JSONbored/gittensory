@@ -1,4 +1,4 @@
-import { createInstallationToken } from "./app";
+import { withInstallationTokenRetry } from "./app";
 import { githubRateLimitAdmissionKeyForInstallation, makeInstallationOctokit } from "./client";
 import type { AgentActionMode } from "../settings/agent-execution";
 
@@ -28,45 +28,48 @@ export async function ensurePullRequestLabel(
 ): Promise<{ applied: boolean; created: boolean }> {
   const { owner, repo } = parseRepoFullName(repoFullName);
 
-  const token = await createInstallationToken(env, installationId);
-  // Non-live mode suppresses the label create + apply writes; the GET dedup probe below still runs.
-  const octokit = makeInstallationOctokit(env, token, options.mode ?? "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-  const existing = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-    owner,
-    repo,
-    issue_number: pullNumber,
-    per_page: 100,
-  });
-  const labels = existing.data as GitHubLabel[];
-  if (labels.some((label) => label.name?.toLowerCase() === labelName.toLowerCase())) {
-    return { applied: false, created: false };
-  }
-
-  let created = false;
-  if (options.createMissingLabel) {
-    try {
-      await octokit.request("POST /repos/{owner}/{repo}/labels", {
-        owner,
-        repo,
-        name: labelName,
-        color: "7ee787",
-        description: "Gittensor contributor context",
-      });
-      created = true;
-    } catch (error) {
-      const e = error as { status?: number; message?: string };
-      // Only swallow the specific "already_exists" duplicate; other 422s (e.g. invalid name) must propagate.
-      if (e.status !== 422 || !e.message?.includes("already_exists")) throw error;
+  // Wrap the whole write path in withInstallationTokenRetry so a stale cached installation token self-heals
+  // exactly once — matching comments.ts / pr-actions.ts (#6191).
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    // Non-live mode suppresses the label create + apply writes; the GET dedup probe below still runs.
+    const octokit = makeInstallationOctokit(env, token, options.mode ?? "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    const existing = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+      owner,
+      repo,
+      issue_number: pullNumber,
+      per_page: 100,
+    });
+    const labels = existing.data as GitHubLabel[];
+    if (labels.some((label) => label.name?.toLowerCase() === labelName.toLowerCase())) {
+      return { applied: false, created: false };
     }
-  }
 
-  await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-    owner,
-    repo,
-    issue_number: pullNumber,
-    labels: [labelName],
+    let created = false;
+    if (options.createMissingLabel) {
+      try {
+        await octokit.request("POST /repos/{owner}/{repo}/labels", {
+          owner,
+          repo,
+          name: labelName,
+          color: "7ee787",
+          description: "Gittensor contributor context",
+        });
+        created = true;
+      } catch (error) {
+        const e = error as { status?: number; message?: string };
+        // Only swallow the specific "already_exists" duplicate; other 422s (e.g. invalid name) must propagate.
+        if (e.status !== 422 || !e.message?.includes("already_exists")) throw error;
+      }
+    }
+
+    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+      owner,
+      repo,
+      issue_number: pullNumber,
+      labels: [labelName],
+    });
+    return { applied: true, created };
   });
-  return { applied: true, created };
 }
 
 /** Remove a single label from a PR if present. Best-effort — a 404 (label not on the PR) is ignored; any other
@@ -81,18 +84,21 @@ export async function removePullRequestLabel(env: Env, installationId: number, r
   } catch {
     return;
   }
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, mode, githubRateLimitAdmissionKeyForInstallation(installationId));
-  try {
-    await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", {
-      owner,
-      repo,
-      issue_number: pullNumber,
-      name: labelName,
-    });
-  } catch (error) {
-    const e = error as { status?: number };
-    // Only swallow the documented "label not on the PR" 404; other failures must propagate (#6192).
-    if (e.status !== 404) throw error;
-  }
+  // Self-heal a stale cached installation token once before giving up (#6191).
+  await withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, mode, githubRateLimitAdmissionKeyForInstallation(installationId));
+    try {
+      await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", {
+        owner,
+        repo,
+        issue_number: pullNumber,
+        name: labelName,
+      });
+    } catch (error) {
+      const e = error as { status?: number };
+      // Only swallow the documented "label not on the PR" 404; other failures must propagate (#6192).
+      // Note: a 401 bad_credentials here is NOT swallowed — withInstallationTokenRetry sees it and retries once.
+      if (e.status !== 404) throw error;
+    }
+  });
 }
