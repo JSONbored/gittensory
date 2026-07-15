@@ -149,6 +149,9 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("`no blockers`");
     expect(md).toContain("`readiness 93/100`");
     expect(md).toContain("`CI green`");
+    // The Suggested Action verdict is nested one level deeper than the rest of the alert body (#6066) — a
+    // second `> ` on top of asAlert's own per-line prefix, giving it a visually distinct bordered sub-block.
+    expect(md).toContain("> > **✅ Suggested Action - Approve/Merge**");
     expect(md).toContain("**Review summary**");
     expect(md).toContain("| **Code review** | ✅ No blockers | 2 reviewers, synthesized |");
     expect(md).toContain("| Linked issue | ✅ Linked | #1372 |");
@@ -226,6 +229,9 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("Why this is blocked");
     expect(md).toContain("Introduces a hardcoded secret.");
     expect(md).toContain("| **Code review** | ❌ 1 blocker |");
+    // #6066: the advisory-only readiness score is hidden on a non-"ready" verdict — "readiness 93/100" next
+    // to "fixes required" reads as contradictory, since the score never feeds the gate either way.
+    expect(md).not.toContain("readiness 93/100");
   });
 
   it("held state uses the warning alert and amber bar", () => {
@@ -233,6 +239,7 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("> [!WARNING]");
     expect(md).toContain("🟨");
     expect(md).toContain("Suggested Action - Manual Review");
+    expect(md).not.toContain("readiness 93/100"); // #6066: hidden outside the "ready" status
   });
 
   it("advisory state uses the note alert and blue bar", () => {
@@ -240,6 +247,27 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("> [!NOTE]");
     expect(md).toContain("🟦");
     expect(md).toContain("Suggested Action - Advisory Only");
+  });
+
+  it("never renders the old repeated-square banner row (#6066 — redundant with the alert's own color/icon)", () => {
+    for (const decision of ["merge", "manual", "close", "comment"] as const) {
+      const md = renderUnifiedReviewComment({ ...base, decision }, ctx);
+      // Every STATUS_META square is exactly 2 code units (emoji + variation selector); a banner would show up
+      // as one square repeated 12x in a row with no other characters — the legend line below uses each square
+      // only ONCE per status name, so this pattern can only match a leftover banner.
+      expect(md).not.toMatch(/(🟩|🟦|🟨|🟥){12}/);
+    }
+  });
+
+  it("only shows the readiness-score chip when the verdict is ready, regardless of how high the score is", () => {
+    const readyMd = renderUnifiedReviewComment({ ...base, decision: "merge" }, ctx);
+    expect(readyMd).toContain("`readiness 93/100`");
+    const heldMd = renderUnifiedReviewComment({ ...base, decision: "manual" }, ctx);
+    expect(heldMd).not.toContain("readiness 93/100");
+    const blockedMd = renderUnifiedReviewComment({ ...base, decision: "close", blockers: ["x"] }, ctx);
+    expect(blockedMd).not.toContain("readiness 93/100");
+    const advisoryMd = renderUnifiedReviewComment({ ...base, decision: "comment", recommendations: [] }, ctx);
+    expect(advisoryMd).not.toContain("readiness 93/100");
   });
 
   it("dedupes repeated blockers and nits", () => {

@@ -391,12 +391,15 @@ function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
-function statusChips(input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
+function statusChips(input: UnifiedReviewInput, ctx: UnifiedCommentContext, status: UnifiedCommentStatus): string {
   const chips: string[] = [`\`${plural(input.changedFiles, "file")}\``];
   if (input.reviewerCount > 0) chips.push(`\`${plural(input.reviewerCount, "AI reviewer")}\``);
   const blockerCount = (input.blockers ?? []).length;
   chips.push(blockerCount ? `\`${plural(blockerCount, "blocker")}\`` : "`no blockers`");
-  if (typeof ctx.readinessScore === "number") chips.push(`\`readiness ${Math.round(ctx.readinessScore)}/100\``);
+  // The readiness score is advisory-only and NEVER feeds the gate (see deriveUnifiedStatus's own comments) —
+  // showing it next to a non-"ready" verdict reads as contradictory (e.g. "readiness 93/100" beside "fixes
+  // required"). Only surface the number when the verdict itself agrees with a high score.
+  if (status === "ready" && typeof ctx.readinessScore === "number") chips.push(`\`readiness ${Math.round(ctx.readinessScore)}/100\``);
   if (input.readiness) {
     const ci = input.readiness.ciState;
     chips.push(ci === "passed" ? "`CI green`" : ci === "failed" ? "`CI failing`" : "`CI pending`");
@@ -408,6 +411,20 @@ function statusChips(input: UnifiedReviewInput, ctx: UnifiedCommentContext): str
   return chips.join(" · ");
 }
 
+/** Nest a block one level deeper inside the outer alert blockquote (an extra `> ` per line). Gives the
+ *  Suggested Action verdict — the single most load-bearing line in the comment — its own visually distinct
+ *  bordered sub-block instead of a plain bold paragraph lost in the body flow. Pure markdown (a nested
+ *  blockquote), no custom HTML/CSS — `asAlert` re-prefixes every line with its own `> ` afterward, so this
+ *  produces ordinary two-deep blockquote nesting, which GitHub already renders with a second indent/border.
+ *  Unlike `asAlert`, every caller-supplied line here is always non-empty (a bold verdict line, optionally
+ *  followed by `- reason` bullets — never a blank separator), so no blank-line special case is needed. */
+function nestedBox(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+}
+
 function verdictLine(status: UnifiedCommentStatus, input: UnifiedReviewInput, ctx: UnifiedCommentContext): string {
   const icon = STATUS_META[status].icon;
   const reasons = (defaultReason?: string) => {
@@ -416,21 +433,23 @@ function verdictLine(status: UnifiedCommentStatus, input: UnifiedReviewInput, ct
   };
   switch (status) {
     case "ready":
-      return input.merged
-        ? `**${icon} Suggested Action - Approve/Merge**${reasons("auto-merged")}`
-        : `**${icon} Suggested Action - Approve/Merge**${reasons("safe to merge")}`;
+      return nestedBox(
+        input.merged
+          ? `**${icon} Suggested Action - Approve/Merge**${reasons("auto-merged")}`
+          : `**${icon} Suggested Action - Approve/Merge**${reasons("safe to merge")}`,
+      );
     case "advisory":
-      return `**${icon} Suggested Action - Advisory Only**${reasons("no action taken")}`;
+      return nestedBox(`**${icon} Suggested Action - Advisory Only**${reasons("no action taken")}`);
     case "held":
-      return `**${icon} Suggested Action - Manual Review**${reasons()}`;
+      return nestedBox(`**${icon} Suggested Action - Manual Review**${reasons()}`);
     case "blocked":
       if (ctx.neverClosed) {
-        return `**${icon} Suggested Action - Manual Review**${reasons()}`;
+        return nestedBox(`**${icon} Suggested Action - Manual Review**${reasons()}`);
       }
       if (input.decision === "close" && !ctx.neverClosed) {
-        return `**${icon} Suggested Action - Reject/Close**${reasons()}`;
+        return nestedBox(`**${icon} Suggested Action - Reject/Close**${reasons()}`);
       }
-      return `**${icon} Suggested Action - Fix Blockers**${reasons()}`;
+      return nestedBox(`**${icon} Suggested Action - Fix Blockers**${reasons()}`);
   }
 }
 
@@ -653,10 +672,11 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
   const collapsiblesOpen = verbosity === "detailed";
 
   const blocks: string[] = [
-    meta.square.repeat(12),
+    // No repeated-square banner row here (dropped, #6066) — the alert blockquote below already renders a
+    // colored border + icon for the same status; a 12x-emoji row on top of that was pure decoration.
     `### ${meta.icon} ${brand} result - ${headlineLabel(status, input, ctx)}${status === "ready" && input.merged ? " · auto-merged" : ""}`,
     ...(reviewTimestamp ? [`<sub>Review updated: ${reviewTimestamp}</sub>`] : []),
-    statusChips(input, ctx),
+    statusChips(input, ctx, status),
     verdictLine(status, input, ctx),
   ];
 
