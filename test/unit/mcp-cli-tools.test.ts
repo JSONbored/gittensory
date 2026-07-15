@@ -74,4 +74,11 @@ describe("loopover-mcp CLI — tools", () => {
       expect(tool.description.trim().length).toBeGreaterThan(0);
     }
   });
+
+  it("documents LOOPOVER_LOGIN / GITHUB_LOGIN in the --help Environment block (#5930)", () => {
+    const help = run(["--help"]);
+    expect(help).toContain("Environment:");
+    // Six subcommands resolve the login from LOOPOVER_LOGIN (then GITHUB_LOGIN); help must list it.
+    expect(help).toMatch(/LOOPOVER_LOGIN or GITHUB_LOGIN/);
+  });
 });

@@ -2603,6 +2603,7 @@ function printHelp() {
   LOOPOVER_PROFILE
   LOOPOVER_CONFIG_PATH or LOOPOVER_CONFIG_DIR
   LOOPOVER_API_TOKEN, LOOPOVER_MCP_TOKEN, LOOPOVER_TOKEN, or a session from loopover-mcp login
+  LOOPOVER_LOGIN or GITHUB_LOGIN (default --login for analyze-branch, preflight, review-pr, decision-pack, repo-decision, and agent plan/packet)
   GITHUB_TOKEN for non-interactive login bootstrap
   GITTENSOR_SCORE_PREVIEW_CMD
   GITTENSOR_ROOT
