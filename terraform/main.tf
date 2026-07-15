@@ -66,6 +66,20 @@ resource "hcloud_firewall" "gittensory" {
     port       = "8787"
     source_ips = var.admin_ip_allowlist
   }
+
+  # Grafana (`docker compose --profile observability`, which publishes 3000:3000 on the host). Opt-in via
+  # var.expose_grafana because the observability profile is itself opt-in — a default-open port for a service
+  # most operators never start would widen the attack surface for nothing. Left off, Grafana stays reachable
+  # over an SSH tunnel (see README.md). Allowlist-scoped like 8787, never 0.0.0.0/0 like the Caddy ports.
+  dynamic "rule" {
+    for_each = var.expose_grafana ? [1] : []
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = "3000"
+      source_ips = var.admin_ip_allowlist
+    }
+  }
 }
 
 # ── Persistent volume for /data (SQLite DB + Litestream WAL) ──────────────────

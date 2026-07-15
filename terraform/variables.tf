@@ -32,3 +32,9 @@ variable "admin_ip_allowlist" {
   type        = list(string)
   default     = ["0.0.0.0/0", "::/0"]
 }
+
+variable "expose_grafana" {
+  description = "Open Grafana's port (3000) to admin_ip_allowlist for `docker compose --profile observability`. Defaults to false: observability is itself an opt-in profile, and Grafana is otherwise reachable over an SSH tunnel (see README.md). Never opened publicly — the rule is always allowlist-scoped."
+  type        = bool
+  default     = false
+}
