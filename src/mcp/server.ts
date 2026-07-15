@@ -63,7 +63,10 @@ import {
   upsertRepositorySettings,
   listOpenPullRequests,
   listPullRequests,
+  listPullRequestFiles,
+  listPullRequestReviews,
   listRecentMergedPullRequests,
+  listSignalSnapshots,
   listRepoSyncSegments,
   listRepoSyncStates,
   listRepositories,
@@ -139,6 +142,7 @@ import { PUBLIC_SURFACE_SKIP_REASONS, skippedPrAuditRemediation, type PublicSurf
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { computeLocalScorerTokens } from "../signals/local-scorer";
+import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import {
   buildApplyLabelsSpec,
   buildCreateBranchSpec,
@@ -193,6 +197,12 @@ function decisionPackSummary(login: string, freshness: string, rebuildEnqueued: 
 const ownerRepoShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
+};
+
+const ownerRepoPullShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  number: z.number().int().positive(),
 };
 
 const ownerRepoWindowShape = {
@@ -2119,6 +2129,17 @@ export class LoopoverMcp {
     );
 
     server.registerTool(
+      "loopover_get_pr_reviewability",
+      {
+        description:
+          "Return the cached or freshly-computed reviewability report for an open PR: how ready it is to review/merge, the blocking or advisory signals against it, and its lane/duplicate/linked-issue context. Metadata-only, repo-scoped, no GitHub writes.",
+        inputSchema: ownerRepoPullShape,
+        outputSchema: freshnessResponseOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getPrReviewability(input)),
+    );
+
+    server.registerTool(
       "loopover_validate_linked_issue",
       {
         description:
@@ -2946,6 +2967,73 @@ export class LoopoverMcp {
           ? `LoopOver issue quality for ${fullName} (cached).`
           : `LoopOver issue quality for ${fullName} (computed from cached metadata).`,
       data: response as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getPrReviewability(input: { owner: string; repo: string; number: number }): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access PR reviewability for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    // Prefer the persisted snapshot the /reviewability route writes (signal type "pr-reviewability", keyed by
+    // `${fullName}#${number}`), mirroring how getIssueQuality serves the cached snapshot before recomputing.
+    const cached = (await listSignalSnapshots(this.env, "pr-reviewability", `${fullName}#${input.number}`))[0];
+    if (cached) {
+      const payload = cached.payload as unknown as PullRequestReviewability;
+      return {
+        summary: `LoopOver PR reviewability for ${fullName}#${input.number} (cached).`,
+        data: {
+          status: "ready",
+          source: "snapshot",
+          repoFullName: fullName,
+          generatedAt: cached.generatedAt || payload.generatedAt || new Date().toISOString(),
+          report: payload,
+        } as unknown as Record<string, unknown>,
+      };
+    }
+    const [repo, pullRequest] = await Promise.all([getRepository(this.env, fullName), getPullRequest(this.env, fullName, input.number)]);
+    if (!repo || !pullRequest) {
+      return {
+        summary: `LoopOver has no cached PR reviewability for ${fullName}#${input.number}.`,
+        data: { status: "not_found", repoFullName: fullName },
+      };
+    }
+    const [issues, pullRequests, files, reviews, checks, recentMergedPullRequests] = await Promise.all([
+      listIssues(this.env, fullName),
+      listPullRequests(this.env, fullName),
+      listPullRequestFiles(this.env, fullName, input.number),
+      listPullRequestReviews(this.env, fullName, input.number),
+      listCheckSummaries(this.env, fullName, input.number),
+      listRecentMergedPullRequests(this.env, fullName),
+    ]);
+    const contributor = pullRequest.authorLogin;
+    const contributorContext = contributor ? await this.loadContributorFastContext(contributor) : null;
+    const report = buildPullRequestReviewability({
+      repo,
+      pullRequest,
+      issues,
+      pullRequests,
+      files,
+      reviews,
+      checks,
+      recentMergedPullRequests,
+      repoFullName: fullName,
+      pullNumber: input.number,
+      profile: contributorContext?.profile,
+      outcomeHistory: contributorContext?.outcomeHistory,
+    });
+    return {
+      summary: `LoopOver PR reviewability for ${fullName}#${input.number} (computed from cached metadata).`,
+      data: {
+        status: "ready",
+        source: "computed",
+        repoFullName: fullName,
+        generatedAt: report.generatedAt,
+        report,
+      } as unknown as Record<string, unknown>,
     };
   }
 

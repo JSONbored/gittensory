@@ -477,6 +477,20 @@ export async function startFixtureServer(
       response.end(JSON.stringify({ generatedAt: "2026-05-30T00:00:00.000Z", limit: 20, hasMore: false, items: [{ prNumber: 7, reason: "duplicate", remediation: "link the canonical PR" }] }));
       return;
     }
+    if (request.url === "/v1/repos/owner/repo/pulls/7/reviewability" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          pullNumber: 7,
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          readiness: "ready",
+          blockers: [],
+          advisories: [],
+          summary: "PR 7 is ready to review.",
+        }),
+      );
+      return;
+    }
     response.statusCode = 404;
     response.end(JSON.stringify({ error: "not_found" }));
   });
