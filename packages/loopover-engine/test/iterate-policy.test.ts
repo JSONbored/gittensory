@@ -50,6 +50,52 @@ test("handoff: the ONLY path is a clean self-review pass", () => {
   assert.ok(decision.reason.length > 0);
 });
 
+test("autonomy (#6560) auto: a passing self-review hands off unconditionally, no requiresApproval", () => {
+  const decision = decideNextActionWithReason(baseState({ selfReview: { kind: "pass" }, autonomyLevel: "auto" }));
+  assert.equal(decision.action, "handoff");
+  assert.equal(decision.requiresApproval, undefined);
+});
+
+test("autonomy (#6560) auto_with_approval: a passing self-review still hands off, but with requiresApproval:true", () => {
+  const decision = decideNextActionWithReason(baseState({ selfReview: { kind: "pass" }, autonomyLevel: "auto_with_approval" }));
+  assert.equal(decision.action, "handoff");
+  assert.equal(decision.requiresApproval, true);
+  assert.ok(decision.reason.length > 0);
+});
+
+test("autonomy (#6560) observe: a passing self-review abandons observe-only with autonomy_observe_only", () => {
+  const decision = decideNextActionWithReason(baseState({ selfReview: { kind: "pass" }, autonomyLevel: "observe" }));
+  assert.equal(decision.action, "abandon");
+  assert.equal(decision.abandonReason, "autonomy_observe_only");
+  assert.equal(decision.requiresApproval, undefined);
+  // The reason must note the pass WAS reached (distinct from the ambiguous/other abandon wording).
+  assert.match(decision.reason, /clean predicted-gate pass/);
+  assert.match(decision.reason, /observe-only/);
+});
+
+test("autonomy (#6560) REGRESSION: an unset autonomyLevel is byte-identical to an explicit \"auto\" on a passing self-review", () => {
+  const omitted = decideNextActionWithReason(baseState({ selfReview: { kind: "pass" } }));
+  const explicitAuto = decideNextActionWithReason(baseState({ selfReview: { kind: "pass" }, autonomyLevel: "auto" }));
+  assert.equal(omitted.action, "handoff");
+  assert.deepEqual(omitted, explicitAuto);
+});
+
+test("autonomy (#6560): rejectionSignaled wins over ANY autonomy level, including observe (step 1 unreachable-by-autonomy)", () => {
+  for (const autonomyLevel of ["auto", "auto_with_approval", "observe"] as const) {
+    const decision = decideNextActionWithReason(baseState({ selfReview: { kind: "pass" }, rejectionSignaled: true, autonomyLevel }));
+    assert.equal(decision.action, "abandon");
+    assert.equal(decision.abandonReason, "rejection_signaled");
+  }
+});
+
+test("autonomy (#6560): an ambiguous self-review wins over ANY autonomy level, including observe (step 2 unreachable-by-autonomy)", () => {
+  for (const autonomyLevel of ["auto", "auto_with_approval", "observe"] as const) {
+    const decision = decideNextActionWithReason(baseState({ selfReview: { kind: "ambiguous" }, autonomyLevel }));
+    assert.equal(decision.action, "abandon");
+    assert.equal(decision.abandonReason, "self_review_ambiguous");
+  }
+});
+
 test("abandon (rejection_signaled): wins over EVERYTHING else, including an otherwise-passing self-review", () => {
   const state = baseState({ selfReview: { kind: "pass" }, rejectionSignaled: true });
   const decision = decideNextActionWithReason(state);

@@ -20,6 +20,7 @@
 // once `.loopover-miner.yml` defines autonomy fields -- that wiring is explicitly left to a later phase; this
 // module's `decideNextAction` is autonomy-level-agnostic today.
 
+import type { AutonomyLevel } from "../types/manifest-deps-types.js";
 import type { SelfReviewVerdict } from "./self-review-adapter.js";
 
 /** The three outcomes `decideNextAction` may reach. */
@@ -35,7 +36,11 @@ export type AbandonReason =
   | "no_progress"
   /** Mid-attempt emergency stop (#5670): kill-switch (or operator pause acting as a stop signal) tripped
    *  between iterate-loop iterations — cooperative, not a hard SIGKILL of an in-flight driver call. */
-  | "kill_switch_engaged";
+  | "kill_switch_engaged"
+  /** A clean predicted-gate pass WAS reached, but the operator's configured self-loop autonomy level is
+   *  `"observe"` -- loopover watches without handing off (#6560). Distinct from any failing/ambiguous
+   *  self-review abandon: nothing was wrong with the attempt, the level simply keeps the loop observe-only. */
+  | "autonomy_observe_only";
 
 /**
  * The self-review outcome as the policy needs it -- narrower than the full {@link SelfReviewVerdict} (self-
@@ -75,6 +80,12 @@ export type IterationState = {
    *  tracks. Optional and defaults to not-reached, so `IterationState` fixtures that predate this field remain
    *  valid. */
   costCeilingReached?: boolean | undefined;
+  /** The operator's configured self-loop autonomy level (#6560), resolved by the caller from
+   *  `AmsPolicySpec.selfLoopAutonomy` and threaded through unchanged. Gates ONLY the pass->handoff
+   *  transition (step 3): `"observe"` abandons observe-only, `"auto_with_approval"` hands off pending
+   *  approval, `"auto"` hands off unconditionally. Optional and defaults to treated-as-`"auto"` when
+   *  `undefined`, so `IterationState` fixtures that predate this field remain valid with unchanged output. */
+  autonomyLevel?: AutonomyLevel | undefined;
   selfReview: SelfReviewOutcome;
   /** The prior iteration's `fail` blocker codes, for the no-progress detector -- `null` when there is no prior
    *  iteration to compare (the first iteration, or the prior iteration did not reach a `fail` outcome). */
@@ -115,6 +126,10 @@ export type IterateLoopDecision = {
   reason: string;
   /** Populated only when `action === "abandon"`. */
   abandonReason?: AbandonReason | undefined;
+  /** Populated only for a `"handoff"` reached under `autonomyLevel === "auto_with_approval"` (#6560): the
+   *  handoff is authorized but must clear a human approval gate before it submits, mirroring
+   *  `autonomyRequiresApproval` (settings/autonomy.ts). Absent (`undefined`) means no approval gate. */
+  requiresApproval?: true | undefined;
 };
 
 function blockerSetsEqual(current: readonly string[], previous: readonly string[]): boolean {
@@ -132,7 +147,11 @@ function blockerSetsEqual(current: readonly string[], previous: readonly string[
  * Precedence (each check short-circuits the ones below it):
  * 1. `rejectionSignaled` -- ALWAYS abandons, even over an otherwise-passing self-review (disengage silently).
  * 2. `selfReview.kind === "ambiguous"` -- abandons; never optimistically continues or hands off on ambiguity.
- * 3. `selfReview.kind === "pass"` -- the ONLY path to `"handoff"`.
+ * 3. `selfReview.kind === "pass"` -- the ONLY path to `"handoff"`, narrowed by the effective autonomy level
+ *    (`state.autonomyLevel ?? "auto"`, #6560): `"auto"` hands off unconditionally, `"auto_with_approval"`
+ *    hands off with `requiresApproval: true`, `"observe"` abandons observe-only (`autonomy_observe_only`).
+ *    Steps 1 and 2 still win over any autonomy level, so a pass is never even consulted after a rejection or
+ *    ambiguity.
  * 4. `iterationNumber >= maxIterations` -- abandons at the hard ceiling regardless of whether the blocker set
  *    was still changing (genuine incremental progress does not buy unlimited iterations).
  * 5. `costCeilingReached` -- abandons at the hard cost ceiling, same rationale as the iteration ceiling above.
@@ -152,6 +171,17 @@ export function decideNextActionWithReason(state: IterationState): IterateLoopDe
     };
   }
   if (state.selfReview.kind === "pass") {
+    const effectiveLevel: AutonomyLevel = state.autonomyLevel ?? "auto";
+    if (effectiveLevel === "observe") {
+      return {
+        action: "abandon",
+        abandonReason: "autonomy_observe_only",
+        reason: "Self-review reached a clean predicted-gate pass, but the configured self-loop autonomy level is observe-only; watching without handing off.",
+      };
+    }
+    if (effectiveLevel === "auto_with_approval") {
+      return { action: "handoff", requiresApproval: true, reason: "Self-review reached a clean predicted-gate pass; handing off pending human approval." };
+    }
     return { action: "handoff", reason: "Self-review reached a clean predicted-gate pass." };
   }
   if (state.iterationNumber >= state.maxIterations) {

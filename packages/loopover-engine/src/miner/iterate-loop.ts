@@ -28,6 +28,7 @@
 // return value. A logging failure never alters the loop's decision (mirrors the governor-ledger and
 // pretooluse-hook append-failure handling elsewhere in this package).
 
+import type { AutonomyLevel } from "../types/manifest-deps-types.js";
 import type { CodingAgentDriver, CodingAgentDriverResult, CodingAgentDriverTask } from "./coding-agent-driver.js";
 import { codingAgentModeExecutes, type CodingAgentExecutionMode } from "./coding-agent-mode.js";
 import { invokeCodingAgentDriver } from "./coding-agent-invoke.js";
@@ -86,6 +87,12 @@ export type IterateLoopInput = {
    *  automated contributions -- resolved by the caller (AI-policy-map / rejection-state-machine), consumed
    *  as-is. See iterate-policy.ts's own `IterationState.rejectionSignaled` doc comment. */
   rejectionSignaled: boolean;
+
+  /** The operator's configured self-loop autonomy level (#6560), resolved by the caller from
+   *  `AmsPolicySpec.selfLoopAutonomy` and passed through unchanged to each iteration's `IterationState`. Gates
+   *  ONLY the pass->handoff transition; omitted defaults to treated-as-`"auto"`. See iterate-policy.ts's own
+   *  `IterationState.autonomyLevel` doc comment. */
+  autonomyLevel?: AutonomyLevel | undefined;
 };
 
 /** Optional cooperative abort probed BEFORE every driver invocation (#5670). A bare `true` or
@@ -452,6 +459,7 @@ async function runIterateLoopCore(input: IterateLoopInput, deps: IterateLoopDeps
       selfReview,
       previousBlockerCodes,
       rejectionSignaled: input.rejectionSignaled,
+      autonomyLevel: input.autonomyLevel,
     };
     const decision = decideNextActionWithReason(state);
     logDecision(input, deps, iterationNumber, decision, []);

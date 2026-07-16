@@ -5,7 +5,7 @@ vi.mock("@loopover/engine", async () => {
 });
 
 import { buildAttemptGovernorContext, buildAttemptLoopInput } from "../../packages/loopover-miner/lib/attempt-input-builder.js";
-import { DEFAULT_AMS_POLICY_SPEC, evaluateGovernorChokepoint, parseFocusManifest } from "../../packages/loopover-engine/src/index";
+import { DEFAULT_AMS_POLICY_SPEC, evaluateGovernorChokepoint, parseFocusManifest, type AmsPolicySpec } from "../../packages/loopover-engine/src/index";
 
 function codingTaskSpec(overrides: Record<string, unknown> = {}) {
   return {
@@ -177,6 +177,38 @@ describe("buildAttemptLoopInput (#5132)", () => {
     });
     expect(loopInput.rejectionSignaled).toBe(true);
     expect(loopInput.mode).toBe("live");
+  });
+
+  it("threads amsPolicySpec.selfLoopAutonomy through to IterateLoopInput.autonomyLevel unchanged (#6560)", () => {
+    const loopInput = buildAttemptLoopInput({
+      codingTaskSpec: codingTaskSpec(),
+      reviewContext: reviewContext(),
+      worktreePath: "/fake",
+      attemptId: "a1",
+      mode: "live",
+      repoFullName: "acme/widgets",
+      minerLogin: "alice",
+      rejectionSignaled: false,
+      // selfLoopAutonomy is the sibling config-schema issue's addition to AmsPolicySpec; this issue only reads
+      // it, so cast the operator-configured value onto the spec until that field lands on the type.
+      amsPolicySpec: { ...DEFAULT_AMS_POLICY_SPEC, selfLoopAutonomy: "observe" } as AmsPolicySpec,
+    });
+    expect(loopInput.autonomyLevel).toBe("observe");
+  });
+
+  it("leaves autonomyLevel undefined when amsPolicySpec has no selfLoopAutonomy set (#6560)", () => {
+    const loopInput = buildAttemptLoopInput({
+      codingTaskSpec: codingTaskSpec(),
+      reviewContext: reviewContext(),
+      worktreePath: "/fake",
+      attemptId: "a1",
+      mode: "dry_run",
+      repoFullName: "acme/widgets",
+      minerLogin: "alice",
+      rejectionSignaled: false,
+      amsPolicySpec: DEFAULT_AMS_POLICY_SPEC,
+    });
+    expect(loopInput.autonomyLevel).toBeUndefined();
   });
 
   it("uses AmsPolicySpec's real maxIterations/maxTurnsPerIteration, not hardcoded literals", () => {

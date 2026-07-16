@@ -99,5 +99,10 @@ export function buildAttemptLoopInput(input) {
     branchRef: input.branchRef,
     reviewContext: input.reviewContext,
     rejectionSignaled: input.rejectionSignaled,
+    // The operator's own `.loopover-ams.yml` self-loop autonomy level (#6560): threaded straight through the
+    // same as rejectionSignaled above, so a clean self-review pass hands off unconditionally / pending approval
+    // / stays observe-only per what the operator configured. Unset (older config) stays undefined, which
+    // iterate-policy treats as "auto" -- byte-identical to pre-this-field behavior.
+    autonomyLevel: input.amsPolicySpec.selfLoopAutonomy,
   };
 }
