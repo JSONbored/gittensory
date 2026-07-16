@@ -66,4 +66,25 @@ describe("isVisualPath (web-visible-only capture gate)", () => {
     // A .ts (backend) must still be false even upper-cased — it is not a web-visible extension.
     expect(isVisualPath("src/Worker.TS")).toBe(false);
   });
+
+  it("does NOT match a bare .ts file under an app's own src/ tree (#6322 — logic/hooks/tests, never a route)", () => {
+    // The exact JSONbored/metagraphed#6036 case: a non-visual data-layer fix that still burned capture
+    // budget before this fix, on files the bot's own screenshot-table-gate correctly called out of scope.
+    expect(isVisualPath("apps/ui/src/lib/metagraphed/queries.ts")).toBe(false);
+    expect(isVisualPath("apps/ui/src/lib/metagraphed/queries.test.ts")).toBe(false);
+    expect(isVisualPath("apps/loopover-ui/src/hooks/useSession.ts")).toBe(false);
+    expect(isVisualPath("apps/loopover-ui/src/types.ts")).toBe(false);
+    // Case-insensitivity applies to the exclusion too, not just the positive matches above.
+    expect(isVisualPath("APPS/UI/SRC/LIB/QUERIES.TS")).toBe(false);
+  });
+
+  it("still matches everything the exclusion must NOT touch", () => {
+    // A .tsx file under the same src/ tree is a route/component -- the exclusion only strips bare .ts.
+    expect(isVisualPath("apps/ui/src/lib/metagraphed/Queries.tsx")).toBe(true);
+    // An app-ROOT .ts config file (not under src/) can genuinely affect rendered output -- still in scope.
+    expect(isVisualPath("apps/ui/tailwind.config.ts")).toBe(true);
+    expect(isVisualPath("apps/loopover-ui/vite.config.ts")).toBe(true);
+    // A non-.ts file under src/ (docs, json, etc.) is untouched by this exclusion.
+    expect(isVisualPath("apps/ui/src/lib/metagraphed/README.md")).toBe(true);
+  });
 });
