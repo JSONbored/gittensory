@@ -6787,6 +6787,72 @@ describe("api routes", () => {
     const unauth = await app.request("/v1/repos/entrius/allways-ui/gate-config/effective", {}, env);
     expect(unauth.status).toBe(401);
   });
+
+  it("exposes field-limited snake_case live gate thresholds for the AMS probe (#6486)", async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    // No live or shadow override yet → not-found, matching the issue-quality-route not-found convention.
+    const missing = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", { headers: apiHeaders(env) }, env);
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toEqual({ error: "live_gate_thresholds_not_found", repoFullName: "entrius/allways-ui" });
+
+    // A live override surfaces as flat snake_case fields; audit rows and shadow queue detail must never leak.
+    const storageEnv = env as unknown as StorageEnv;
+    await writeLiveOverride(storageEnv, "entrius/allways-ui", { confidenceFloor: 0.91, scopeCap: { files: 8, lines: 250 } });
+    await writeShadowOverride(storageEnv, "entrius/allways-ui", { confidenceFloor: 0.4 }, "2099-01-01T00:00:00.000Z");
+    await recordOverrideAudit(storageEnv, "entrius/allways-ui", "apply", { note: "must-never-surface-on-6486" });
+    const live = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", { headers: apiHeaders(env) }, env);
+    expect(live.status).toBe(200);
+    const liveBody = (await live.json()) as unknown;
+    expect(liveBody).toEqual({
+      repoFullName: "entrius/allways-ui",
+      confidence_floor: 0.91,
+      scope_cap_files: 8,
+      scope_cap_lines: 250,
+    });
+    expect(JSON.stringify(liveBody)).not.toMatch(/override_audit|applied_at|clear_at|must-never-surface|shadowPending|effective/i);
+
+    // A soaking shadow's queued override fills in when live is absent (#6209's decision: AMS should see a
+    // pending tightening too, not just a promoted one) — and a floor-only override nulls both scope_cap fields.
+    const shadowOnlyEnv = createTestEnv();
+    await writeShadowOverride(shadowOnlyEnv as unknown as StorageEnv, "entrius/allways-ui", { confidenceFloor: 0.66 }, "2099-01-01T00:00:00.000Z");
+    const shadowed = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", { headers: apiHeaders(shadowOnlyEnv) }, shadowOnlyEnv);
+    expect(shadowed.status).toBe(200);
+    await expect(shadowed.json()).resolves.toEqual({
+      repoFullName: "entrius/allways-ui",
+      confidence_floor: 0.66,
+      scope_cap_files: null,
+      scope_cap_lines: null,
+    });
+
+    // A live override carrying only a scope cap (no confidence floor) still resolves confidence_floor to null.
+    const scopeCapOnlyEnv = createTestEnv();
+    await writeLiveOverride(scopeCapOnlyEnv as unknown as StorageEnv, "entrius/allways-ui", { scopeCap: { files: 4, lines: 120 } });
+    const scopeCapOnly = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", { headers: apiHeaders(scopeCapOnlyEnv) }, scopeCapOnlyEnv);
+    expect(scopeCapOnly.status).toBe(200);
+    await expect(scopeCapOnly.json()).resolves.toEqual({
+      repoFullName: "entrius/allways-ui",
+      confidence_floor: null,
+      scope_cap_files: 4,
+      scope_cap_lines: 120,
+    });
+
+    // A static mcp credential within the allowlist reads successfully (default MCP_READ_REPO_ALLOWLIST is "*").
+    const mcpAllowed = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", { headers: mcpHeaders(env) }, env);
+    expect(mcpAllowed.status).toBe(200);
+    await expect(mcpAllowed.json()).resolves.toMatchObject({ confidence_floor: 0.91 });
+
+    // The shared static mcp credential is scoped to MCP_READ_REPO_ALLOWLIST, same precedent as gate-config/effective.
+    const forbiddenEnv = createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" });
+    await writeLiveOverride(forbiddenEnv as unknown as StorageEnv, "entrius/allways-ui", { confidenceFloor: 0.9 });
+    const forbidden = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", { headers: mcpHeaders(forbiddenEnv) }, forbiddenEnv);
+    expect(forbidden.status).toBe(403);
+    await expect(forbidden.json()).resolves.toMatchObject({ error: "forbidden_repo" });
+
+    // Unauthenticated calls are rejected before any repo lookup.
+    const unauth = await app.request("/v1/repos/entrius/allways-ui/live-gate-thresholds", {}, env);
+    expect(unauth.status).toBe(401);
+  });
 });
 
 async function signWebhook(body: string, secret: string | undefined): Promise<string> {

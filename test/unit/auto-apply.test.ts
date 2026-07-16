@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type AutoApplyContext,
   applyOverrideRecommendation,
+  authoritativeGateOverride,
   deleteLiveOverride,
   deleteShadowOverride,
   describeOverride,
@@ -16,13 +17,66 @@ import {
   runAutoApplyRecommendations,
   sanitizeOverridePayload,
   SHADOW_PROMOTION_MIN_DECIDED,
+  type ShadowOverride,
   type StorageEnv,
   type StorageLike,
+  toLiveGateThresholdFields,
   type TunableOverride,
   writeLiveOverride,
   writeShadowOverride,
 } from "../../src/review/auto-apply";
 import type { TuningRec } from "../../src/review/auto-tune";
+
+describe("authoritativeGateOverride (#6486)", () => {
+  const live: TunableOverride = { confidenceFloor: 0.9 };
+  const shadow: ShadowOverride = { override: { confidenceFloor: 0.5 }, validatedUntil: null };
+
+  it("prefers a present live override over a present shadow override", () => {
+    expect(authoritativeGateOverride(live, shadow)).toBe(live);
+  });
+
+  it("falls through to the shadow's queued override when live is absent", () => {
+    expect(authoritativeGateOverride(null, shadow)).toBe(shadow.override);
+  });
+
+  it("returns null when neither a live nor a shadow override is active", () => {
+    expect(authoritativeGateOverride(null, null)).toBeNull();
+  });
+});
+
+describe("toLiveGateThresholdFields (#6486)", () => {
+  it("returns null for a null override", () => {
+    expect(toLiveGateThresholdFields(null)).toBeNull();
+  });
+
+  it("returns null for an override with neither confidenceFloor nor scopeCap set", () => {
+    expect(toLiveGateThresholdFields({})).toBeNull();
+  });
+
+  it("projects confidenceFloor-only into confidence_floor, nulling both scope_cap fields", () => {
+    expect(toLiveGateThresholdFields({ confidenceFloor: 0.85 })).toEqual({
+      confidence_floor: 0.85,
+      scope_cap_files: null,
+      scope_cap_lines: null,
+    });
+  });
+
+  it("projects scopeCap-only into scope_cap_files/scope_cap_lines, nulling confidence_floor", () => {
+    expect(toLiveGateThresholdFields({ scopeCap: { files: 6, lines: 180 } })).toEqual({
+      confidence_floor: null,
+      scope_cap_files: 6,
+      scope_cap_lines: 180,
+    });
+  });
+
+  it("projects both fields when both confidenceFloor and scopeCap are set", () => {
+    expect(toLiveGateThresholdFields({ confidenceFloor: 0.7, scopeCap: { files: 3, lines: 90 } })).toEqual({
+      confidence_floor: 0.7,
+      scope_cap_files: 3,
+      scope_cap_lines: 90,
+    });
+  });
+});
 
 describe("rowToOverride (#273 — D1 row → validated override)", () => {
   it("maps a full row", () => {

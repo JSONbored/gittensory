@@ -264,7 +264,7 @@ import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { computeOpsStats, isOpsEnabled, resolveOpsManifestOverride } from "../review/ops-wire";
-import { deleteLiveOverride, listOverrideAudit, loadOverride, loadShadowOverride, sanitizeOverridePayload, type StorageEnv } from "../review/auto-apply";
+import { authoritativeGateOverride, deleteLiveOverride, listOverrideAudit, loadOverride, loadShadowOverride, sanitizeOverridePayload, toLiveGateThresholdFields, type StorageEnv } from "../review/auto-apply";
 import { handleInternalCalibration, handleInternalDecision, type OpsAgentConfig } from "../review/ops";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
 import { computePredictedGateAgreement } from "../review/predicted-gate-agreement";
@@ -3016,6 +3016,25 @@ export function createApp() {
       },
       shadowPending: shadow !== null,
     });
+  });
+
+  // AMS probe surface for a repo's live self-tuned gate thresholds (#6486, implementing #6209's decision).
+  // Distinct from gate-config/effective above: a field-limited, snake_case-only payload (no shadowPending, no
+  // nested effective object) matching tunables_overrides' own column names 1:1, and the live row wins but a
+  // soaking shadow's queued value fills in when live is absent -- #6209 decided AMS should see a pending
+  // tightening too, not just a promoted one. Never includes applied_at/clear_at or override_audit history.
+  app.get("/v1/repos/:owner/:repo/live-gate-thresholds", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const identity = await authenticateRequestIdentity(c);
+    // Only the shared, end-user-obtainable static `mcp` token is allowlist-scoped; every other identity
+    // (an authenticated session, or an operator-only api/internal static token) stays trusted, matching the
+    // intelligence/issue-quality/reviewability precedent routes above.
+    if (identity?.kind === "static" && identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
+    const storageEnv = c.env as unknown as StorageEnv;
+    const [live, shadow] = await Promise.all([loadOverride(storageEnv, fullName), loadShadowOverride(storageEnv, fullName)]);
+    const fields = toLiveGateThresholdFields(authoritativeGateOverride(live, shadow));
+    if (!fields) return c.json({ error: "live_gate_thresholds_not_found", repoFullName: fullName }, 404);
+    return c.json({ repoFullName: fullName, ...fields });
   });
 
   app.get("/v1/repos/:owner/:repo/outcome-patterns", async (c) => {

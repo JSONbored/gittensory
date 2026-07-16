@@ -1739,6 +1739,17 @@ export const IssueQualityResponseSchema = z
   })
   .openapi("IssueQualityResponse");
 
+/** Field-limited AMS/MCP probe payload for a repo's live gate thresholds (#6486) — snake_case column names
+ *  matching `tunables_overrides` 1:1; deliberately excludes applied_at/clear_at and override_audit history. */
+export const LiveGateThresholdsResponseSchema = z
+  .object({
+    repoFullName: z.string(),
+    confidence_floor: z.number().nullable(),
+    scope_cap_files: z.number().int().nullable(),
+    scope_cap_lines: z.number().int().nullable(),
+  })
+  .openapi("LiveGateThresholdsResponse");
+
 export const BurdenForecastSchema = z
   .object({
     repoFullName: z.string(),

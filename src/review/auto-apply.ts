@@ -276,6 +276,33 @@ export async function deleteShadowOverride(env: StorageEnv, project: string): Pr
   await storage(env).prepare("DELETE FROM tunables_overrides_shadow WHERE project = ?").bind(project).run();
 }
 
+/** PURE: prefer a project's LIVE override; when absent, fall through to a soaking SHADOW override's queued
+ *  value (#6486/#6209 — AMS probes this so a repo mid-soak still reports its pending threshold, not "none"). */
+export function authoritativeGateOverride(live: TunableOverride | null, shadow: ShadowOverride | null): TunableOverride | null {
+  return live ?? shadow?.override ?? null;
+}
+
+/** Field-limited AMS/MCP payload for a repo's live gate thresholds (#6486). Snake_case names match the
+ *  tunables_overrides column names AMS probes for; deliberately excludes applied_at/clear_at and the
+ *  override_audit history — only the resolved effective values ever leave this projection. */
+export type LiveGateThresholdFields = {
+  confidence_floor: number | null;
+  scope_cap_files: number | null;
+  scope_cap_lines: number | null;
+};
+
+/** PURE: project an authoritative TunableOverride into the exact snake_case allowlist, or null when the
+ *  override carries neither a confidenceFloor nor a scopeCap (nothing to report). */
+export function toLiveGateThresholdFields(override: TunableOverride | null): LiveGateThresholdFields | null {
+  if (!override) return null;
+  if (override.confidenceFloor === undefined && override.scopeCap === undefined) return null;
+  return {
+    confidence_floor: override.confidenceFloor ?? null,
+    scope_cap_files: override.scopeCap?.files ?? null,
+    scope_cap_lines: override.scopeCap?.lines ?? null,
+  };
+}
+
 /** Record one override-lifecycle event to the dedicated (target-free) audit table. Fail-safe: a write error
  *  never breaks the apply path, but it IS surfaced at error level (this is the operator's ONLY visibility
  *  into an autonomous config change — a silently-dropped log line here defeats that entirely). */
