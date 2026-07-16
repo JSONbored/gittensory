@@ -55,6 +55,11 @@ describe("live gate threshold projection (#6486)", () => {
       scope_cap_files: 4,
       scope_cap_lines: 120,
     });
+    expect(toLiveGateThresholdFields({ confidenceFloor: 0.81 })).toEqual({
+      confidence_floor: 0.81,
+      scope_cap_files: null,
+      scope_cap_lines: null,
+    });
     expect(toLiveGateThresholdFields({})).toBeNull();
   });
 });
