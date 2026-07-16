@@ -105,7 +105,10 @@ describe("buildRegistrationReadiness", () => {
       githubApp: { installed: true, quietByDefault: true },
     });
     expect(report.queueHealth.level).toBe("low");
-    expect(report.testCoverageHealth.requiredGate).toContain("npm run test:ci");
+    expect(report.testCoverageHealth.requiredGate).toEqual([
+      "npm run test:ci",
+      "patch (changed-lines) coverage >= 99%",
+    ]);
     expect(report.blockers).toHaveLength(0);
     expect(report.githubApp.warnings).toHaveLength(0);
     expect(report.labelPolicy.trustedPipelineReady).toBe(true);
