@@ -429,6 +429,18 @@ export type RepoTimeDecayOverrides = {
   minMultiplier?: number | null | undefined;
 };
 
+/**
+ * Subnet-funded pool association for a registered repo (#6099's entity model; part of #6101). Present only
+ * when the registry marks a repo as backed by a Bittensor subnet's reward pool; `poolId` matches #6098's
+ * `SettlementBackend.poolId`, `subnetId` is the funding subnet's netuid. Both are required for a valid
+ * association — a partial one (only one field) is treated as no association, so an organic (non-pool) repo
+ * carries no pool fields and round-trips byte-identical to today. Read it via `getRepoPoolAssociation`.
+ */
+export type RepoPoolAssociation = {
+  poolId: string;
+  subnetId: number;
+};
+
 export type RegistryRepoConfig = {
   repo: string;
   emissionShare: number;
@@ -441,6 +453,8 @@ export type RegistryRepoConfig = {
   eligibilityMode?: string | null;
   /** Per-repo time-decay curve overrides (#703); null/absent = use the global defaults for every field. */
   timeDecay?: RepoTimeDecayOverrides | null;
+  /** Subnet-funded pool association (#6099); null/absent = an organic repo with no funding pool (#6320). */
+  poolAssociation?: RepoPoolAssociation | null;
   raw: Record<string, JsonValue>;
 };
 

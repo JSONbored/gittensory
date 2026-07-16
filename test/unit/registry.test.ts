@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRepository, upsertRepositoryFromGitHub } from "../../src/db/repositories";
-import { normalizeRegistryPayload } from "../../src/registry/normalize";
+import { getRepoPoolAssociation, normalizeRegistryPayload } from "../../src/registry/normalize";
 import { DEFAULT_ISSUE_DISCOVERY_SHARE } from "../../src/scoring/model";
 import { getLatestRegistrySnapshot, persistRegistrySnapshot, refreshRegistry } from "../../src/registry/sync";
 import { createTestEnv } from "../helpers/d1";
@@ -94,6 +94,45 @@ describe("registry normalization", () => {
     });
     expect(byName["other/repo"]!.timeDecay ?? null).toBeNull();
     expect(byName["empty/decay"]!.timeDecay ?? null).toBeNull();
+  });
+
+  it("parses a subnet-funded pool association and leaves organic repos with none (#6320)", () => {
+    const snapshot = normalizeRegistryPayload(
+      {
+        // A subnet-funded repo carries both a pool id and a subnet netuid → a full association reads back intact.
+        "JSONbored/funded": { emission_share: 0.02, pool_id: "pool-74", subnet_id: 74 },
+        // An organic repo has no pool fields → no association, byte-identical to today.
+        "JSONbored/organic": { emission_share: 0.01 },
+        // A partial association (pool id but no subnet) is not a valid association → null, not a half-populated object.
+        "JSONbored/pool-only": { emission_share: 0.01, pool_id: "pool-9" },
+        // A partial association (subnet but no pool id) is likewise dropped.
+        "JSONbored/subnet-only": { emission_share: 0.01, subnet_id: 12 },
+      },
+      { kind: "raw-github", url: "https://example.test/master_repositories.json" },
+      "2026-05-22T00:00:00.000Z",
+    );
+    const byName = Object.fromEntries(snapshot.repositories.map((r) => [r.repo, r]));
+    expect(byName["JSONbored/funded"]!.poolAssociation).toEqual({ poolId: "pool-74", subnetId: 74 });
+    expect(byName["JSONbored/organic"]!.poolAssociation ?? null).toBeNull();
+    expect(byName["JSONbored/pool-only"]!.poolAssociation ?? null).toBeNull();
+    expect(byName["JSONbored/subnet-only"]!.poolAssociation ?? null).toBeNull();
+  });
+
+  it("getRepoPoolAssociation reads a repo's pool association or null (#6320)", () => {
+    const snapshot = normalizeRegistryPayload(
+      {
+        "JSONbored/funded": { emission_share: 0.02, pool_id: "pool-74", subnet_id: 74 },
+        "JSONbored/organic": { emission_share: 0.01 },
+      },
+      { kind: "raw-github", url: "https://example.test/master_repositories.json" },
+      "2026-05-22T00:00:00.000Z",
+    );
+    const byName = Object.fromEntries(snapshot.repositories.map((r) => [r.repo, r]));
+    expect(getRepoPoolAssociation(byName["JSONbored/funded"])).toEqual({ poolId: "pool-74", subnetId: 74 });
+    expect(getRepoPoolAssociation(byName["JSONbored/organic"])).toBeNull();
+    // A missing/undefined config (an unregistered repo) reads back as no association, never throws.
+    expect(getRepoPoolAssociation(null)).toBeNull();
+    expect(getRepoPoolAssociation(undefined)).toBeNull();
   });
 
   it("normalizes repository-list and array payload shapes defensively", () => {

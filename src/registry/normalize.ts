@@ -1,5 +1,5 @@
 import { DEFAULT_ISSUE_DISCOVERY_SHARE } from "../scoring/model";
-import type { JsonValue, RegistryRepoConfig, RegistrySnapshot, RepoTimeDecayOverrides } from "../types";
+import type { JsonValue, RegistryRepoConfig, RegistrySnapshot, RepoPoolAssociation, RepoTimeDecayOverrides } from "../types";
 
 type RawRepoConfig = Record<string, JsonValue>;
 
@@ -76,8 +76,26 @@ function normalizeRepo(repo: string, config: RawRepoConfig): RegistryRepoConfig 
     fixedBaseScore: numberValue(config.fixed_base_score),
     eligibilityMode: stringValue(config.eligibility_mode),
     timeDecay: parseTimeDecayOverrides(config.scoring),
+    poolAssociation: parsePoolAssociation(config),
     raw: config,
   };
+}
+
+// Subnet-funded pool association (#6099/#6320), from the registry's flat `pool_id`/`subnet_id` fields. Both
+// must be present and well-formed (non-empty pool id, finite subnet netuid) for an association to exist —
+// a repo missing either (i.e. every organic repo) parses to null and stays byte-identical to today.
+function parsePoolAssociation(config: RawRepoConfig): RepoPoolAssociation | null {
+  const poolId = stringValue(config.pool_id);
+  const subnetId = numberValue(config.subnet_id);
+  if (poolId === null || subnetId === null) return null;
+  return { poolId, subnetId };
+}
+
+// Read accessor for a repo's pool association (#6320): returns the association a repo was registered with, or
+// null for an organic repo / a repo with no config. The read side #6314's PayoutEligibleEvent construction and
+// #6099's pool-state reporting UI consume — the single place downstream code asks "is this repo pool-funded?".
+export function getRepoPoolAssociation(config: RegistryRepoConfig | null | undefined): RepoPoolAssociation | null {
+  return config?.poolAssociation ?? null;
 }
 
 // Per-repo time-decay overrides (#703), from the registry's nested `scoring.time_decay` (the same source
