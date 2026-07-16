@@ -10,6 +10,7 @@ import {
   resolvePlanStoreDbPath,
 } from "../../packages/loopover-miner/lib/plan-store.js";
 import type { PlanDag } from "../../packages/loopover-miner/lib/plan-store.js";
+import { readSchemaVersion } from "../../packages/loopover-miner/lib/schema-version.js";
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
@@ -171,5 +172,73 @@ describe("loopover-miner plan store (#2318)", () => {
     stores.push(store);
     expect(() => store.loadPlan("p1")).toThrow("corrupted_plan_row");
     expect(() => store.listPlans()).toThrow("corrupted_plan_row");
+  });
+
+  describe("schema migrations", () => {
+    it("stamps user_version 2 on a fresh store (baseline 1 plus the tenant_id migration)", () => {
+      const store = tempStore();
+      const readonly = new DatabaseSync(store.dbPath, { readOnly: true });
+      expect(readSchemaVersion(readonly)).toBe(2);
+      const columns = readonly.prepare("PRAGMA table_info(miner_plans)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      readonly.close();
+    });
+
+    it("v1 -> v2 (#4939): upgrades a pre-existing file in place, adding tenant_id NULL and preserving every row", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-plan-store-legacy-v1-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-v1.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_plans (
+          plan_id TEXT PRIMARY KEY,
+          plan_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+          updated_at TEXT NOT NULL
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 1");
+      legacy
+        .prepare("INSERT INTO miner_plans VALUES (?, ?, ?, ?)")
+        .run("p1", JSON.stringify(PLAN), "running", "2026-01-01T00:00:00.000Z");
+      legacy.close();
+
+      const store = openPlanStore(dbPath);
+      stores.push(store);
+      // The pre-existing row survives the upgrade and reads back unchanged.
+      expect(store.loadPlan("p1")?.status).toBe("running");
+      const readonly = new DatabaseSync(dbPath, { readOnly: true });
+      expect(readSchemaVersion(readonly)).toBe(2);
+      const columns = readonly.prepare("PRAGMA table_info(miner_plans)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      const row = readonly.prepare("SELECT tenant_id FROM miner_plans WHERE plan_id = 'p1'").get() as {
+        tenant_id: string | null;
+      };
+      expect(row.tenant_id).toBeNull();
+      readonly.close();
+    });
+
+    it("REGRESSION: a v1 file that (unusually) already carries tenant_id is not re-altered into a duplicate-column error", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-plan-store-legacy-partial-v2-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-partial-v2.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_plans (
+          plan_id TEXT PRIMARY KEY,
+          plan_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+          updated_at TEXT NOT NULL,
+          tenant_id TEXT
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 1");
+      legacy.close();
+
+      expect(() => {
+        const store = openPlanStore(dbPath);
+        stores.push(store);
+      }).not.toThrow();
+    });
   });
 });

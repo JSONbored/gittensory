@@ -15,6 +15,7 @@ import {
   readGovernorEvents,
   resolveGovernorLedgerDbPath,
 } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { readSchemaVersion } from "../../packages/loopover-miner/lib/schema-version.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
@@ -191,6 +192,82 @@ describe("loopover-miner governor ledger (#2328)", () => {
       const ledger = tempLedger();
       expect(() => ledger.purgeByRepo(undefined as never)).toThrow("invalid_repo_full_name");
       expect(() => ledger.purgeByRepo("no-slash")).toThrow("invalid_repo_full_name");
+    });
+  });
+
+  describe("schema migrations", () => {
+    it("stamps user_version 2 on a fresh store (baseline 1 plus the tenant_id migration)", () => {
+      const ledger = tempLedger();
+      const readonly = new DatabaseSync(ledger.dbPath, { readOnly: true });
+      expect(readSchemaVersion(readonly)).toBe(2);
+      const columns = readonly.prepare("PRAGMA table_info(governor_events)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      readonly.close();
+    });
+
+    it("v1 -> v2 (#4939): upgrades a pre-existing file in place, adding tenant_id NULL and preserving every row", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-legacy-v1-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-v1.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE governor_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          repo_full_name TEXT,
+          action_class TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          payload_json TEXT NOT NULL
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 1");
+      legacy.exec(
+        "INSERT INTO governor_events (ts, event_type, repo_full_name, action_class, decision, reason, payload_json) VALUES ('2026-01-01T00:00:00.000Z', 'allowed', 'acme/widgets', 'analyze', 'allow', 'within budget', '{}')",
+      );
+      legacy.close();
+
+      const ledger = initGovernorLedger(dbPath);
+      ledgers.push(ledger);
+      // The pre-existing row survives the upgrade and reads back unchanged.
+      expect(ledger.readGovernorEvents().map((event) => event.reason)).toEqual(["within budget"]);
+      const readonly = new DatabaseSync(dbPath, { readOnly: true });
+      expect(readSchemaVersion(readonly)).toBe(2);
+      const columns = readonly.prepare("PRAGMA table_info(governor_events)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      const row = readonly
+        .prepare("SELECT tenant_id FROM governor_events WHERE repo_full_name = 'acme/widgets'")
+        .get() as { tenant_id: string | null };
+      expect(row.tenant_id).toBeNull();
+      readonly.close();
+    });
+
+    it("REGRESSION: a v1 file that (unusually) already carries tenant_id is not re-altered into a duplicate-column error", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-legacy-partial-v2-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-partial-v2.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE governor_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          repo_full_name TEXT,
+          action_class TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          tenant_id TEXT
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 1");
+      legacy.close();
+
+      expect(() => {
+        const ledger = initGovernorLedger(dbPath);
+        ledgers.push(ledger);
+      }).not.toThrow();
     });
   });
 
