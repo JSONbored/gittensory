@@ -1289,7 +1289,9 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     await repositoriesModule.setGlobalAgentFrozen(env, true);
     await processJob(env, { type: "github-webhook", deliveryId: "draft-frozen", eventName: "pull_request", payload: draftPayload("contributor") });
     expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false); // never closed under freeze
-    expect(await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ n: number }>()).toMatchObject({ n: 0 });
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("agent actions paused -- draft-dodge close not enforced for contributor");
   });
 
   it("dry-run: audits a would-be draft-dodge close without touching GitHub (#killswitch-gap)", async () => {
@@ -1464,7 +1466,7 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     expect(calls.some((c) => c.includes("PATCH") && c.includes("/pulls/42"))).toBe(false);
   });
 
-  it("no-ops when the agent is paused (agentPaused=true)", async () => {
+  it("no-ops when the agent is paused (agentPaused=true) and audits the paused stand-down (#6604)", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -1480,6 +1482,9 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
     await processJob(env, { type: "github-webhook", deliveryId: "draft-paused", eventName: "pull_request", payload: draftPayload("contributor") });
 
     expect(calls.some((c) => c.includes("PATCH") && c.includes("/pulls/42"))).toBe(false);
+    const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ outcome: string; detail: string }>();
+    expect(audit?.outcome).toBe("denied");
+    expect(audit?.detail).toContain("agent actions paused -- draft-dodge close not enforced for contributor");
   });
 
   it("no-ops when the agent autonomy is not configured (autonomy=null)", async () => {

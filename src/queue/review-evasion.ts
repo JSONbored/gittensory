@@ -77,8 +77,8 @@ type CloseEnforcementGateResult =
  *  `permissionReadiness: null` skips the write-permission-readiness step entirely -- the reopen-reclose
  *  guard has never had this check (a pre-existing gap distinct from #4602/#4637's close-autonomy gap; not
  *  introduced or fixed by this extraction, since a refactor must not change behavior).
- *  `paused: null` records NO audit event on a paused/frozen repo -- draft-dodge's existing, preserved gap
- *  (every other guard here DOES audit a paused stand-down; draft-dodge simply never has). */
+ *  Every caller passes a real `paused` object so a paused/frozen stand-down is audited the same way for all
+ *  five close-enforcement guards (#6604). */
 async function evaluateCloseEnforcementGate(args: {
   env: Env;
   installationId: number;
@@ -276,9 +276,10 @@ async function closeDraftDodgeAttemptIfBlocked(
         detail: `dry-run: would close draft-dodge attempt by ${draftDodgeAuthor} — prior gate failure on headSha ${pr.headSha} stands`,
         metadata: { ...gateMetadata, mode: "dry_run" },
       },
-      // Draft-dodge is the one guard of the 5 that records NO audit event on a paused/frozen repo -- a
-      // pre-existing gap this extraction preserves rather than fixes (a refactor must not change behavior).
-      paused: null,
+      paused: {
+        detail: `agent actions paused -- draft-dodge close not enforced for ${draftDodgeAuthor}`,
+        metadata: gateMetadata,
+      },
       permissionReadiness: {
         detail: `denied draft-dodge close for ${draftDodgeAuthor} — pull_requests: write not granted`,
         metadata: gateMetadata,
