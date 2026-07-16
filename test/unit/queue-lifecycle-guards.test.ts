@@ -1765,6 +1765,149 @@ function closedPayload(sender: string, author = sender, headSha = "abc123"): any
   };
 }
 
+describe("converted_to_draft CI-cancel (#6670, resource-waste)", () => {
+  beforeEach(() => clearInstallationTokenCacheForTest());
+  afterEach(() => {
+    clearInstallationTokenCacheForTest();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function draftConvertPayload(headSha = "abc123"): any {
+    return {
+      action: "converted_to_draft",
+      installation: { id: 123 },
+      repository: { id: 1, name: "gittensory", full_name: "JSONbored/gittensory", private: false, default_branch: "main", owner: { login: "JSONbored" } },
+      sender: { login: "contributor", type: "User" },
+      pull_request: {
+        id: 4242,
+        number: 42,
+        state: "open",
+        title: "Some PR",
+        body: "Body.",
+        user: { login: "contributor" },
+        head: { sha: headSha, ref: "fix", repo: { full_name: "contributor/gittensory", owner: { login: "contributor" } } },
+        base: { sha: "base123", ref: "main", repo: { full_name: "JSONbored/gittensory", owner: { login: "JSONbored" } } },
+        draft: true,
+        merged: false,
+        mergeable_state: "clean",
+        created_at: "2026-05-27T00:00:00Z",
+        updated_at: "2026-05-27T00:00:00Z",
+      },
+    };
+  }
+
+  async function setupRepo(env: ReturnType<typeof createTestEnv>, overrides: Record<string, unknown> = {}): Promise<void> {
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { close: "auto" }, agentPaused: false, ...overrides });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { reviewCheckMode: "required" } });
+  }
+
+  function stubDraftCiCancelFetch(seen: { cancelledIds: number[]; listedStatuses: string[] }, runListResponses: { in_progress?: number[]; queued?: number[] } = {}, cancelResponse: () => Response = () => new Response(null, { status: 202 })) {
+    return async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/actions/runs?head_sha=abc123&status=in_progress")) { seen.listedStatuses.push("in_progress"); return Response.json({ workflow_runs: (runListResponses.in_progress ?? []).map((id) => ({ id, event: "pull_request", pull_requests: [{ number: 42 }] })) }); }
+      if (url.includes("/actions/runs?head_sha=abc123&status=queued")) { seen.listedStatuses.push("queued"); return Response.json({ workflow_runs: (runListResponses.queued ?? []).map((id) => ({ id, event: "pull_request", pull_requests: [{ number: 42 }] })) }); }
+      if (url.includes("/actions/runs/") && url.endsWith("/cancel") && method === "POST") {
+        seen.cancelledIds.push(Number(url.match(/\/actions\/runs\/(\d+)\/cancel/)?.[1]));
+        return cancelResponse();
+      }
+      return new Response("not found", { status: 404 });
+    };
+  }
+
+  it("cancels in-flight CI runs for the PR's head SHA when it is converted to draft", async () => {
+    const seen = { cancelledIds: [] as number[], listedStatuses: [] as string[] };
+    vi.stubGlobal("fetch", stubDraftCiCancelFetch(seen, { in_progress: [401], queued: [402] }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env);
+
+    await processJob(env, { type: "github-webhook", deliveryId: "draft-convert-ci-cancel", eventName: "pull_request", payload: draftConvertPayload() });
+
+    expect(seen.listedStatuses.sort()).toEqual(["in_progress", "queued"]);
+    expect(seen.cancelledIds.sort()).toEqual([401, 402]);
+    const audit = await env.DB.prepare("select detail from audit_events where event_type = ?").bind("github_app.draft_convert_ci_cancelled").first<{ detail: string }>();
+    expect(audit?.detail).toContain("cancelled 2 of 2");
+  });
+
+  it("degrades gracefully when the cancel attempt fails — a genuine error is recorded, nothing throws", async () => {
+    const seen = { cancelledIds: [] as number[], listedStatuses: [] as string[] };
+    vi.stubGlobal("fetch", stubDraftCiCancelFetch(seen, { in_progress: [403] }, () => new Response(null, { status: 500 })));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env);
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "draft-convert-ci-cancel-failed", eventName: "pull_request", payload: draftConvertPayload() }),
+    ).resolves.toBeUndefined();
+
+    const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.draft_convert_ci_cancel_failed").first<{ n: number }>();
+    expect(audit?.n).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not attempt to cancel CI while the agent is paused — records a dry-run-shaped skip instead", async () => {
+    const seen = { cancelledIds: [] as number[], listedStatuses: [] as string[] };
+    vi.stubGlobal("fetch", stubDraftCiCancelFetch(seen, { in_progress: [404] }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env, { agentPaused: true });
+
+    await processJob(env, { type: "github-webhook", deliveryId: "draft-convert-ci-cancel-paused", eventName: "pull_request", payload: draftConvertPayload() });
+
+    expect(seen.listedStatuses).toEqual([]);
+    expect(seen.cancelledIds).toEqual([]);
+    const audit = await env.DB.prepare("select detail, outcome from audit_events where event_type = ?").bind("github_app.draft_convert_ci_cancel_skipped").first<{ detail: string; outcome: string }>();
+    expect(audit?.outcome).toBe("completed");
+    expect(audit?.detail).toContain("dry-run: would cancel");
+  });
+
+  it("swallows a failing audit write on the paused/dry-run skip path — the handler still completes without throwing", async () => {
+    const seen = { cancelledIds: [] as number[], listedStatuses: [] as string[] };
+    vi.stubGlobal("fetch", stubDraftCiCancelFetch(seen, { in_progress: [405] }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env, { agentPaused: true });
+    const originalRecordAuditEvent = repositoriesModule.recordAuditEvent;
+    const auditSpy = vi.spyOn(repositoriesModule, "recordAuditEvent").mockImplementation(async (auditEnv, event) => {
+      if (event.eventType === "github_app.draft_convert_ci_cancel_skipped") throw new Error("audit DB down");
+      await originalRecordAuditEvent(auditEnv, event);
+    });
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "draft-convert-ci-cancel-paused-audit-fail", eventName: "pull_request", payload: draftConvertPayload() }),
+    ).resolves.toBeUndefined();
+    auditSpy.mockRestore();
+    expect(seen.listedStatuses).toEqual([]);
+  });
+
+  it("swallows a failing audit write on the successful-cancel path — the handler still completes without throwing", async () => {
+    const seen = { cancelledIds: [] as number[], listedStatuses: [] as string[] };
+    vi.stubGlobal("fetch", stubDraftCiCancelFetch(seen, { in_progress: [406] }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+    await setupRepo(env);
+    const originalRecordAuditEvent = repositoriesModule.recordAuditEvent;
+    const auditSpy = vi.spyOn(repositoriesModule, "recordAuditEvent").mockImplementation(async (auditEnv, event) => {
+      if (event.eventType === "github_app.draft_convert_ci_cancelled") throw new Error("audit DB down");
+      await originalRecordAuditEvent(auditEnv, event);
+    });
+
+    await expect(
+      processJob(env, { type: "github-webhook", deliveryId: "draft-convert-ci-cancel-success-audit-fail", eventName: "pull_request", payload: draftConvertPayload() }),
+    ).resolves.toBeUndefined();
+    auditSpy.mockRestore();
+    expect(seen.cancelledIds).toEqual([406]);
+  });
+});
+
 describe("review-evasion protection (#review-evasion-protection)", () => {
   beforeEach(() => clearInstallationTokenCacheForTest());
   afterEach(() => {

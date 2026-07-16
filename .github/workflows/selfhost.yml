@@ -20,6 +20,10 @@ on:
       - "test/integration/selfhost-pg*"
       - ".github/workflows/selfhost.yml"
   pull_request:
+    # Explicit list because the default (opened/synchronize/reopened) omits ready_for_review -- once
+    # build-boot below skips draft PRs, marking a PR ready must itself trigger a real run (#6670), not
+    # wait for the next push. Mirrors ci.yml's pull_request.types comment/list exactly.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/selfhost/**"
       - "src/server.ts"
@@ -49,6 +53,12 @@ concurrency:
 jobs:
   build-boot:
     name: build + boot smoke test
+    # Skip draft PRs (#6670, anti-abuse): this job boots a real Postgres service, does a full npm ci, and
+    # runs two docker buildx builds plus a container smoke test -- real minutes on every push, including a
+    # force-push, to a PR nobody has marked ready for review yet. Mirrors ci.yml's validate-code guard;
+    # draft != true also gates push runs correctly (github.event.pull_request is unset there, so the
+    # property access evaluates to null, and null != true is true).
+    if: ${{ github.event_name == 'push' || github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:

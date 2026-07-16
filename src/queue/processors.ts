@@ -123,6 +123,7 @@ import {
   type OfficialGittensorMinerDetection,
 } from "../gittensor/api";
 import {
+  cancelInFlightWorkflowRunsForHeadSha,
   createInstallationToken,
   createOrUpdateCheckRun,
   createOrUpdateErroredGateCheckRun,
@@ -5584,6 +5585,48 @@ async function maybeHandleIssueCommentCommandWebhookEvent(
   return false;
 }
 
+/** CI-run cancellation on a draft conversion (#6670, anti-abuse/resource-waste): a PR converted to draft
+ *  stops burning CI minutes on whatever was already queued/in-progress for its current head SHA, mirroring
+ *  the contributor_cap/blacklist close-time cancellation in agent-action-executor.ts (#2462/#6659) --
+ *  duplicated rather than shared because this fires on the webhook path itself, before any planner/executor
+ *  action exists to hang the cancel off of. Respects the same global-freeze/agentPaused/dry-run mode every
+ *  other mutating action in this file respects (#2130 follow-up: "this close path previously bypassed
+ *  pause/freeze/dry-run entirely" in review-evasion.ts is exactly the bug class a real GitHub-mutating
+ *  side effect here must not reintroduce) -- a paused/frozen/dry-run install records what WOULD have been
+ *  cancelled instead of actually calling the Actions API. Never throws -- every recordAuditEvent call is
+ *  best-effort (`.catch(() => undefined)`), since a failure to WRITE the audit record must not affect the
+ *  rest of this webhook delivery's processing. */
+async function recordDraftConversionCiCancelOutcome(env: Env, installationId: number, repoFullName: string, pullNumber: number, headSha: string, settings: RepositorySettings): Promise<void> {
+  const targetKey = `${repoFullName}#${pullNumber}`;
+  const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
+  if (mode !== "live") {
+    await recordAuditEvent(env, {
+      eventType: "github_app.draft_convert_ci_cancel_skipped",
+      actor: "loopover",
+      targetKey,
+      outcome: "completed",
+      detail: `dry-run: would cancel in-flight CI for headSha ${headSha}`,
+      metadata: { repoFullName, headSha, mode },
+    }).catch(() => undefined);
+    return;
+  }
+  const outcome = await cancelInFlightWorkflowRunsForHeadSha(env, installationId, repoFullName, headSha, pullNumber);
+  if (outcome.kind === "cancelled") {
+    const detail = `cancelled ${outcome.cancelledCount} of ${outcome.totalFound} in-flight workflow run(s)`;
+    await recordAuditEvent(env, {
+      eventType: "github_app.draft_convert_ci_cancelled",
+      actor: "loopover",
+      targetKey,
+      outcome: "completed",
+      detail,
+      metadata: { repoFullName, headSha, cancelledCount: outcome.cancelledCount, totalFound: outcome.totalFound },
+    }).catch(() => undefined);
+    return;
+  }
+  const eventType = outcome.kind === "permission_missing" ? "github_app.draft_convert_ci_cancel_permission_missing" : "github_app.draft_convert_ci_cancel_failed";
+  await recordAuditEvent(env, { eventType, actor: "loopover", targetKey, outcome: "error", detail: outcome.warning, metadata: { repoFullName, headSha, reason: outcome.kind } }).catch(() => undefined);
+}
+
 /**
  * Handles a webhook payload that carries a `pull_request` object: PR-outcome/reversal signal recording,
  * reviews-cache invalidation, mergeable-state cache invalidation, review-evasion-tracking invalidation,
@@ -5912,6 +5955,16 @@ async function handlePullRequestWebhookEvent(
         settings,
         draftConversionCount,
       );
+    }
+    // CI-run cancellation on a draft conversion (#6670, resource-waste): converting an already-open PR to
+    // draft stops burning CI minutes on whatever GitHub Actions already queued for its current head SHA --
+    // unconditional (no config toggle), fires regardless of whether any of the review-evasion guards above
+    // also acted, and independent of pr.state (a PR the guards above just closed still had CI queued for
+    // its head SHA the moment this webhook fired, so the cancel is still worth attempting). Best-effort:
+    // cancelInFlightWorkflowRunsForHeadSha never throws, so a missing actions:write grant never affects the
+    // rest of this webhook delivery's processing.
+    if (payload.action === "converted_to_draft" && installationId && pr.headSha) {
+      await recordDraftConversionCiCancelOutcome(env, installationId, repoFullName, pr.number, pr.headSha, settings);
     }
     // Review-evasion protection: the "closed" half of the active-review-tracking cleanup (the
     // "synchronize" half runs earlier, alongside invalidatePrStateCache). Deliberately placed AFTER the

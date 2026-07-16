@@ -151,9 +151,14 @@ export type AutoReviewEligibilityInput = {
   reviewedCommitCount: number;
 };
 
-/** Evaluate `review.auto_review` eligibility. Returns a quiet skip reason string, or null when AI review should proceed. (#1954) */
+/** Evaluate `review.auto_review` eligibility. Returns a quiet skip reason string, or null when AI review should proceed. (#1954)
+ *  `skipDrafts` defaults to ON fleet-wide as of #6670 (resource-waste): `null`/unset now skips the AI-review
+ *  call the same as an explicit `true` -- only an explicit `skip_drafts: false` in a repo's manifest opts
+ *  back into reviewing drafts. This is the AI-review call ONLY; gate evaluation and check-run creation
+ *  always run regardless (#3698/#security) -- a contributor cannot use draft status to dodge a real gate
+ *  verdict, only to skip the (non-authoritative) AI commentary. */
 export function evaluateAutoReviewSkipReason(config: AutoReviewConfig, input: AutoReviewEligibilityInput): string | null {
-  if (config.skipDrafts === true && input.isDraft) return "review skipped (draft)";
+  if (config.skipDrafts !== false && input.isDraft) return "review skipped (draft)";
   if (input.author && config.ignoreAuthors.length > 0) {
     const author = input.author.toLowerCase();
     if (config.ignoreAuthors.some((glob) => matchesManifestPath(author, glob.toLowerCase()))) {

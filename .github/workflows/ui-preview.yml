@@ -12,7 +12,10 @@ name: UI Preview Build
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # Explicit list because the default (opened/synchronize/reopened) omits ready_for_review -- once the
+    # build job below skips draft PRs, marking a PR ready must itself trigger a real preview build (#6670),
+    # not wait for the next push. Mirrors ci.yml's pull_request.types comment/list exactly.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "apps/loopover-ui/**"
       - "packages/**"
@@ -27,6 +30,12 @@ concurrency:
 jobs:
   build:
     name: Build UI preview artifact
+    # Skip draft PRs (#6670, anti-abuse): a full npm ci + UI build on every push, including a force-push, to
+    # a PR nobody has marked ready for review yet. Mirrors ci.yml's validate-code guard; draft != true also
+    # gates push runs correctly (github.event.pull_request is unset there, so the property access evaluates
+    # to null, and null != true is true) -- kept even though this workflow has no push trigger today, so the
+    # condition stays correct if one is ever added.
+    if: ${{ github.event_name == 'push' || github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

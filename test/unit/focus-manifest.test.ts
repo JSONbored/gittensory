@@ -4610,10 +4610,15 @@ describe("review.auto_review (#1954 / #2038–#2041)", () => {
     expect(resolveAutoReviewConfig(null)).toEqual({ ...EMPTY_AUTO_REVIEW_CONFIG });
   });
 
-  it("evaluateAutoReviewSkipReason: byte-identical when unset; skips with deterministic reasons when configured", () => {
+  it("evaluateAutoReviewSkipReason: byte-identical when unset (except skipDrafts, on-by-default since #6670); skips with deterministic reasons when configured", () => {
     const empty = { ...EMPTY_AUTO_REVIEW_CONFIG };
-    const input = { isDraft: true, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], addedLineCount: 0, changedFileCount: 0, baseRef: "develop", reviewedCommitCount: 0 };
+    // isDraft: false here so every OTHER assertion below (which reuses this fixture without overriding
+    // isDraft) reaches its own intended check instead of short-circuiting on the now-default-on draft skip.
+    const input = { isDraft: false, author: "dependabot[bot]", title: "WIP: bump deps", labels: [] as string[], changedPaths: [] as string[], addedLineCount: 0, changedFileCount: 0, baseRef: "develop", reviewedCommitCount: 0 };
     expect(evaluateAutoReviewSkipReason(empty, input)).toBeNull();
+    // #6670: an unset skipDrafts (null) now skips a draft PR's AI-review call the same as an explicit
+    // `true` -- only an explicit `skip_drafts: false` opts back in (covered two assertions below).
+    expect(evaluateAutoReviewSkipReason(empty, { ...input, isDraft: true })).toBe("review skipped (draft)");
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: true })).toBe("review skipped (draft)");
     expect(evaluateAutoReviewSkipReason({ ...empty, skipDrafts: true }, { ...input, isDraft: false })).toBeNull();
     expect(evaluateAutoReviewSkipReason({ ...empty, ignoreAuthors: ["*[bot]"] }, input)).toBe("review skipped (ignored author)");
