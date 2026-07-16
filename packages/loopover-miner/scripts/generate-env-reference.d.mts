@@ -15,6 +15,7 @@ export type WriteMinerEnvReferenceOptions = MinerEnvReferenceOptions & {
 };
 
 export declare const DEFAULT_OUTPUT_PATH: string;
+export declare const DEFAULT_MODULE_OUTPUT_PATH: string;
 export declare const DEFAULT_SOURCE_ROOTS: readonly string[];
 
 export declare function isMinerEnvVar(name: string): boolean;
@@ -31,6 +32,16 @@ export declare function collectMinerEnvVars(
 export declare function renderMinerEnvReferenceMarkdown(rows: MinerEnvReferenceRow[]): string;
 
 export declare function writeMinerEnvReference(
+  options?: WriteMinerEnvReferenceOptions,
+): {
+  changed: boolean;
+  outputPath: string;
+  rows: MinerEnvReferenceRow[];
+};
+
+export declare function renderMinerEnvReferenceModule(rows: MinerEnvReferenceRow[]): string;
+
+export declare function writeMinerEnvReferenceModule(
   options?: WriteMinerEnvReferenceOptions,
 ): {
   changed: boolean;
