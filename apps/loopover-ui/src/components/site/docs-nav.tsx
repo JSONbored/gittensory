@@ -74,7 +74,10 @@ export const docsNav: DocsGroup[] = [
       },
       {
         title: "AMS: deployment",
-        items: [{ to: "/docs/ams-deployment", label: "Deployment guide" }],
+        items: [
+          { to: "/docs/ams-deployment", label: "Deployment guide" },
+          { to: "/docs/ams-operations-runbook", label: "Operations runbook" },
+        ],
       },
     ],
   },

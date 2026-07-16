@@ -1,0 +1,280 @@
+---
+title: AMS operations runbook
+description: Recover from SQLite lock contention, ledger corruption, and post-upgrade schema migrations in loopover-miner's local state.
+---
+
+Operator-facing runbook for **local SQLite state**: what the concurrency guarantees actually mean,
+how to recover from corruption, what to do when two miner processes collide on the same files, and
+how schema upgrades migrate your on-disk ledgers after a package update.
+
+<Callout variant="note">
+  Scope: AMS local stores only. For laptop/fleet deployment layout see [AMS deployment
+  guide](/docs/ams-deployment). This runbook does **not** cover the self-hosted **review stack**
+  (Orb/API/LoopOver DB).
+</Callout>
+
+## Local state at a glance
+
+Every miner keeps **independent SQLite files** under one state directory (default
+`~/.config/loopover-miner/`, override with `LOOPOVER_MINER_CONFIG_DIR`). Each store has its own
+file, table, and optional per-store env override. Files are created with **`0700` directories /
+`0600` database files** on first open.
+
+Common files you will touch in incidents:
+
+- `laptop-state.sqlite3` — bootstrap metadata (`loopover-miner init`)
+- `claim-ledger.sqlite3` — soft issue claims on this machine
+- `event-ledger.sqlite3` — append-only manage-loop audit trail
+- `portfolio-queue.sqlite3` — per-repo portfolio queue
+- `run-state.sqlite3` — discover/plan/prepare phase markers
+- `attempt-log.sqlite3` — per-attempt coding-agent driver events
+- `prediction-ledger.sqlite3` — predicted gate verdicts for self-improve
+- `plan-store.sqlite3` — persisted MCP plan DAGs
+- `governor-ledger.sqlite3` — governor allow/deny/throttle decisions
+
+## SQLite concurrency — what busy_timeout guarantees
+
+Every store opened through the miner's local-store layer sets:
+
+<CodeBlock lang="sql" code={`PRAGMA busy_timeout = 5000;`} />
+
+Default **5000 ms**; overridable per-test only — production stores always use the default.
+
+<FeatureRow
+  items={[
+    {
+      title: "Two short-lived writers, same file",
+      description:
+        "E.g. a CLI command finishing while loop is idle, or Grafana reading while the miner appends. SQLite waits up to 5 seconds for the lock, then proceeds or surfaces \"database is locked\".",
+    },
+    {
+      title: "Append-only ledgers",
+      description:
+        "event-ledger, attempt-log, and similar stores write with BEGIN IMMEDIATE (or equivalent single-statement atomicity) so sequence allocation cannot interleave.",
+    },
+    {
+      title: "Claim / queue stores",
+      description:
+        "INSERT … ON CONFLICT and UPDATE … RETURNING patterns avoid read-then-write races within one file.",
+    },
+    {
+      title: "Two long-running loop daemons, same config dir",
+      description:
+        "Unsupported. busy_timeout reduces transient lock errors; it does not make multi-process loop workers safe on one volume.",
+    },
+  ]}
+/>
+
+<Callout variant="warn">
+  **Invariant:** one active loop (or one intentional writer set) per state directory. Horizontal
+  scale = **isolated state dirs** — separate compose projects, separate
+  `LOOPOVER_MINER_CONFIG_DIR`, or the Kubernetes StatefulSet pattern in the [AMS deployment
+  guide](/docs/ams-deployment).
+</Callout>
+
+Quick health check — `doctor` includes `laptop-state-sqlite` (file exists + readable) and
+`state-dir-writable`, and performs **no network I/O**:
+
+<CodeBlock
+  lang="bash"
+  code={`loopover-miner doctor --json
+loopover-miner status --json`}
+/>
+
+## Scenario: two miners collided
+
+**Symptoms:** `database is locked` / `SQLITE_BUSY` in logs or stderr; duplicate or out-of-order
+event sequences after an unclean shutdown; two systemd units, two `docker compose --scale
+miner=N` replicas, or a manual `loop` plus a supervised `loop` sharing one config dir; claims or
+queue rows flipping unexpectedly.
+
+**Diagnosis.** List processes using the state dir, confirm only one long-lived miner should own
+it, then inspect soft claims and the queue without mutating anything:
+
+<CodeBlock
+  lang="bash"
+  code={`STATE_DIR="$(loopover-miner status --json | jq -r .stateDir)"
+ls -la "$STATE_DIR"
+# Linux: lsof +D "$STATE_DIR" 2>/dev/null || fuser -v "$STATE_DIR"/*.sqlite3 2>/dev/null
+
+loopover-miner claim list --json
+loopover-miner queue list --json
+loopover-miner ledger list --json | tail -20`}
+/>
+
+**Remediation.** Stop all but one miner process targeting that state dir (`systemctl stop`,
+`docker compose down`, kill stray `loop`). For N parallel workers, give each an isolated state
+path instead of sharing one volume:
+
+<CodeBlock
+  lang="bash"
+  code={`# Example: two isolated compose projects
+docker compose -p miner-a -f docker-compose.miner.yml up -d
+docker compose -p miner-b -f docker-compose.miner.yml up -d
+# Or set a distinct LOOPOVER_MINER_CONFIG_DIR per worker.`}
+/>
+
+Re-run `loopover-miner doctor`. If locks persist with a single process, see **Ledger corrupted**
+below.
+
+<Callout variant="note">
+  Claims are local bookkeeping only. Two miners on different machines claiming the same GitHub
+  issue is a **fleet coordination** problem (duplicate-cluster adjudication in the engine), not
+  something SQLite resolves — split state dirs and use operational claim hygiene.
+</Callout>
+
+## Backup and restore
+
+Proactive tooling, not just the reactive "ledger corrupted" scenario below — run
+`backup-miner.sh` on a schedule (cron, systemd timer, etc.) so a good restore point always exists
+before anything goes wrong.
+
+`scripts/backup-miner.sh` backs up every `*.sqlite3` file currently present under
+`LOOPOVER_MINER_CONFIG_DIR` into a new timestamped directory, using SQLite's own online `.backup`
+command (safe even while the miner is running) plus a `PRAGMA integrity_check` on each resulting
+file before it's kept. Stores are discovered by glob, not a hardcoded list, so a newly added store
+is backed up automatically.
+
+<CodeBlock
+  lang="bash"
+  code={`sh scripts/backup-miner.sh
+# Env overrides: LOOPOVER_MINER_CONFIG_DIR (source), LOOPOVER_MINER_BACKUP_DIR (default
+# $LOOPOVER_MINER_CONFIG_DIR/backups), LOOPOVER_MINER_BACKUP_RETAIN (default 7 -- oldest backups
+# beyond this count are pruned after a fully successful run; a run with any failed store skips
+# pruning so no older, good backup is ever lost to make room for a bad one).`}
+/>
+
+`scripts/restore-miner.sh` is the read side. **Stop the miner first** (it does not detect a
+running process). It validates every store file in the chosen backup with `PRAGMA
+integrity_check` **before** copying anything into place — a half-good backup can never produce a
+half-restored state directory. Requires an explicit `--yes` flag and defaults to the newest
+backup when no directory is given:
+
+<CodeBlock
+  lang="bash"
+  code={`sh scripts/restore-miner.sh --yes                          # newest backup
+sh scripts/restore-miner.sh --yes /path/to/backups/<ts>     # a specific one
+loopover-miner doctor --json                              # verify afterward`}
+/>
+
+It also removes any leftover `-wal`/`-shm` sidecar files from the live directory after restoring
+each store — those hold in-flight writes from *before* the restore, and leaving them in place
+would let SQLite silently replay stale pre-restore writes back on top of the freshly restored
+file on next open.
+
+## Scenario: ledger corrupted
+
+**Symptoms:** a command throws `corrupted_*_row` (`corrupted_attempt_log_row`,
+`corrupted_governor_row`, `corrupted_plan_row`, `corrupted_prediction_row`, …); `loopover-miner
+doctor` reports `laptop-state-sqlite` not readable; `sqlite3` reports `database disk image is
+malformed`; partial writes after disk full, forced kill during a migration transaction, or
+copying a live `.sqlite3` while the miner is writing.
+
+**Diagnosis.** Identify which file fails, then run a read-only probe and check the filesystem:
+
+<CodeBlock
+  lang="bash"
+  code={`DB="$STATE_DIR/event-ledger.sqlite3"   # example
+sqlite3 "$DB" "PRAGMA integrity_check;"
+sqlite3 "$DB" "PRAGMA user_version;"`}
+/>
+
+Check disk space, permissions (`0600` file, `0700` parent), and backup tools copying mid-write.
+
+**Remediation.** Stop the miner, then back up the whole state directory (even damaged files help
+post-mortems):
+
+<CodeBlock
+  lang="bash"
+  code={`cp -a "$STATE_DIR" "\${STATE_DIR}.bak.$(date +%Y%m%d%H%M%S)"`}
+/>
+
+Choose a recovery tier:
+
+<FeatureRow
+  items={[
+    {
+      title: "A — single store reset",
+      description:
+        "One ledger is corrupt; others healthy; you accept losing that store's history. Remove only the bad *.sqlite3 (and any -wal/-shm siblings). The next command recreates an empty store.",
+    },
+    {
+      title: "B — restore from backup",
+      description:
+        "You have a recent backup from backup-miner.sh. Stop miner -> sh scripts/restore-miner.sh --yes -> restart.",
+    },
+    {
+      title: "C — full re-init",
+      description:
+        "Multiple files suspect or state is disposable. Archive the dir -> loopover-miner init -> reconfigure env/goals. Rebuild claims/plans from GitHub metadata as needed.",
+    },
+  ]}
+/>
+
+<Callout variant="warn">
+  Never copy a live SQLite file from a running miner as backup — stop first, or use SQLite's own
+  `.backup` command: <code>{`sqlite3 "$DB" ".backup '\${DB}.safe-copy'"`}</code>
+</Callout>
+
+After recovery, run `loopover-miner doctor --json` and spot-check read-only listings (`claim
+list`, `ledger list`). Append-only stores **do not repair individual bad rows** in place —
+corrupted payload JSON is rejected on read by design so bad data cannot silently propagate.
+
+## Scenario: migrate ledgers after a package upgrade
+
+Stores use a lightweight schema-version convention: bootstrap `CREATE TABLE IF NOT EXISTS …` is
+schema **version 1**; each store may register post-baseline migrations that run on every open;
+the version is stamped in SQLite's **`PRAGMA user_version`**; migrations run **once**, in order,
+inside a transaction, and a failed migration rolls back and retries on next open.
+**Downgrade is not supported** — older miner versions may not read files written by newer
+migrations.
+
+**Before upgrading** the `@loopover/miner` package (npm, image tag, or git pull), snapshot state:
+
+<CodeBlock
+  lang="bash"
+  code={`loopover-miner doctor --json > /tmp/miner-pre-upgrade-doctor.json
+STATE_DIR="$(loopover-miner status --json | jq -r .stateDir)"
+tar -czf "/tmp/loopover-miner-state-$(date +%Y%m%d).tar.gz" -C "$(dirname "$STATE_DIR")" "$(basename "$STATE_DIR")"`}
+/>
+
+**Stop** supervised loops (`systemctl stop loopover-miner.service`, `docker compose stop
+miner`, etc.), then **install** the new version. The CLI prints a one-line npm upgrade nudge when
+behind registry latest — informational only.
+
+**Migrate**, before starting any miner process, so every existing store is brought up to date in
+one deliberate pass instead of relying on whichever command happens to open a given store first:
+
+<CodeBlock lang="bash" code={`loopover-miner migrate --json`} />
+
+<Callout variant="note">
+  Pending migrations still apply automatically on first open regardless — `migrate` is the
+  proactive, explicit alternative to waiting for that implicit path. A store file that hasn't been
+  created yet is reported as skipped, not created; `migrate` never bootstraps fresh state.
+</Callout>
+
+**Start** one miner process, then **verify**:
+
+<CodeBlock
+  lang="bash"
+  code={`loopover-miner doctor --json
+loopover-miner status --json
+loopover-miner migrate --json   # re-run: every store should now report "up-to-date"`}
+/>
+
+If a migration throws on startup, **do not delete files immediately** — restore the pre-upgrade
+tarball, pin the previous package version, and file an issue with the failing `user_version` and
+store filename.
+
+<Callout variant="note" title="Rolling fleet upgrades">
+  Upgrade and restart **one worker/state dir at a time** so isolated workers never share a
+  directory mid-migration.
+</Callout>
+
+## Related docs
+
+- [AMS deployment guide](/docs/ams-deployment) — laptop vs fleet, volumes, systemd, scaling rules
+- [`packages/loopover-miner/README.md`](https://github.com/JSONbored/loopover/blob/main/packages/loopover-miner/README.md#local-storage) — store inventory
+- [`packages/loopover-miner/docs/env-reference.md`](https://github.com/JSONbored/loopover/blob/main/packages/loopover-miner/docs/env-reference.md) — per-store path overrides
+- [`packages/loopover-miner/docs/coding-agent-driver.md`](https://github.com/JSONbored/loopover/blob/main/packages/loopover-miner/docs/coding-agent-driver.md) — attempt log semantics
+- [`packages/loopover-miner/docs/discovery-plane-operator-guide.md`](https://github.com/JSONbored/loopover/blob/main/packages/loopover-miner/docs/discovery-plane-operator-guide.md) — optional hosted plane (distinct from local ledger ops)
