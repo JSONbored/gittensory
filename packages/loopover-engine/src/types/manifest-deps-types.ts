@@ -360,6 +360,11 @@ export type RepositorySettings = {
    *  override the global default in either direction for this repo. No DB column -- config-as-code only, set
    *  via `.loopover.yml settings.openPrFileCollisionMode`. */
   openPrFileCollisionMode?: "inherit" | "off" | "enabled" | undefined;
+  /** Issue-planning command (#issue-coding-plan): per-repo override of the `@loopover plan` issue command.
+   *  `"inherit"` defers to the `LOOPOVER_REVIEW_PLANNER` global env default (itself default-OFF); `"off"`/
+   *  `"enabled"` fully override the global default in either direction for this repo. No DB column --
+   *  config-as-code only, set via `.loopover.yml settings.plannerMode`. */
+  plannerMode?: "inherit" | "off" | "enabled" | undefined;
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;

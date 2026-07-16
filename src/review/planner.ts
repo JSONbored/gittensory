@@ -3,9 +3,11 @@
 // (or their agent) has a concrete starting point.
 //
 // SAFETY CONTRACT:
-//   • flag-OFF (default) → isPlannerEnabled is false, the handler short-circuits BEFORE parsing, and the worker
-//     is byte-identical to today (`@loopover plan` falls through to the existing mention path → help card).
-//   • flag-ON → only a MAINTAINER can trigger it; the model sees only the (already-public) issue title + body;
+//   • disabled (fleet default OFF, and no repo `settings.plannerMode: enabled` override, #issue-coding-plan-config)
+//     → the handler (maybeProcessPlanCommand, queue/processors.ts) short-circuits BEFORE classifying the request,
+//     and the worker is byte-identical to today (`@loopover plan` falls through to the existing mention path →
+//     help card).
+//   • enabled → only a MAINTAINER can trigger it; the model sees only the (already-public) issue title + body;
 //     shared AI budget accounting runs before the configured reviewer (self-host Codex/Claude Code/etc, or the
 //     legacy Workers-AI pair); the output is public-safe-sanitized before posting; any model/error degrades to
 //     a no-plan no-op.
@@ -17,8 +19,11 @@ import { AGENT_COMMAND_COMMENT_MARKER } from "../github/comments";
 import { loopoverFooter, type LoopOverFooterEnv } from "../github/footer";
 import type { GitHubWebhookPayload } from "../types";
 
-/** True when the issue-planning command is enabled. Flag-OFF (default) → every export below is unreachable from
- *  the webhook path. Truthy follows the codebase convention (`/^(1|true|yes|on)$/i`, same as isSelfTuneEnabled). */
+/** True when the issue-planning command is enabled FLEET-WIDE (the global default). A repo can still override
+ *  this in either direction via `.loopover.yml settings.plannerMode` -- see `resolvePlannerEnabled`
+ *  (settings/planner-mode.ts), the per-repo resolver half of this pair (mirrors
+ *  isDuplicateWinnerEnabledGlobally/resolveDuplicateWinnerEnabled's split, settings/duplicate-winner-mode.ts).
+ *  Truthy follows the codebase convention (`/^(1|true|yes|on)$/i`, same as isSelfTuneEnabled). */
 export function isPlannerEnabled(env: {
   LOOPOVER_REVIEW_PLANNER?: string | undefined;
 }): boolean {

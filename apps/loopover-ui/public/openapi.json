@@ -9681,6 +9681,14 @@
               "off",
               "enabled"
             ]
+          },
+          "plannerMode": {
+            "type": "string",
+            "enum": [
+              "inherit",
+              "off",
+              "enabled"
+            ]
           }
         },
         "required": [

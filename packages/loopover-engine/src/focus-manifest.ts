@@ -406,6 +406,7 @@ export type FocusManifestSettings = Partial<
     | "skipAutomationBotAuthors"
     | "duplicateWinnerMode"
     | "openPrFileCollisionMode"
+    | "plannerMode"
     | "autoLabelEnabled"
     | "typeLabelsEnabled"
     | "badgeEnabled"
@@ -2268,6 +2269,10 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   // default -- "inherit" defers to it, "off"/"enabled" override in either direction for this repo.
   const openPrFileCollisionMode = normalizeOptionalEnum(r.openPrFileCollisionMode, "settings.openPrFileCollisionMode", ["inherit", "off", "enabled"] as const, warnings);
   if (openPrFileCollisionMode !== null) out.openPrFileCollisionMode = openPrFileCollisionMode;
+  // Issue-planning command (#issue-coding-plan): per-repo override of the global LOOPOVER_REVIEW_PLANNER
+  // default -- "inherit" defers to it, "off"/"enabled" override in either direction for this repo.
+  const plannerMode = normalizeOptionalEnum(r.plannerMode, "settings.plannerMode", ["inherit", "off", "enabled"] as const, warnings);
+  if (plannerMode !== null) out.plannerMode = plannerMode;
   // Moderation-rules engine (#selfhost-mod-engine): per-repo override of the global moderation config.
   const moderationGateMode = normalizeOptionalEnum(r.moderationGateMode, "settings.moderationGateMode", ["inherit", "off", "enabled"] as const, warnings);
   if (moderationGateMode !== null) out.moderationGateMode = moderationGateMode;

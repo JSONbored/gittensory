@@ -538,6 +538,7 @@ import {
   isPlanCommand,
   isPlannerEnabled,
 } from "../review/planner";
+import { resolvePlannerEnabled } from "../settings/planner-mode";
 import { classifyConfigurationCommandRequest } from "../github/configuration-command";
 import { summarizeEffectiveConfig } from "../settings/effective-config-summary";
 import { makeGithubFileFetcher } from "../review/grounding-wire";
@@ -11364,25 +11365,39 @@ async function recordConfigurationSkip(
 }
 
 /**
- * `@loopover plan` (#issue-coding-plan, flag-gated by LOOPOVER_REVIEW_PLANNER). On a MAINTAINER's comment on
- * an ISSUE (not a PR), generate a concise implementation plan from the issue text via Workers AI and post it as an
- * issue comment so a contributor has a concrete starting point. Flag-OFF (default) returns false immediately
- * (BEFORE any parse), so `@loopover plan` falls through to the existing mention path → byte-identical. Returns
- * true once it owns the event (so the caller records it processed and stops). Fail-safe: a model/post error is
- * recorded as a skip and never throws into the webhook loop. A per-actor/per-repo cooldown prevents repeated
- * maintainer comments from spending shared AI quota in a burst.
+ * `@loopover plan` (#issue-coding-plan, gated by LOOPOVER_REVIEW_PLANNER + the per-repo `settings.plannerMode`
+ * override, #issue-coding-plan-config). On a MAINTAINER's comment on an ISSUE (not a PR), generate a concise
+ * implementation plan from the issue text via Workers AI and post it as an issue comment so a contributor has a
+ * concrete starting point. Disabled (fleet default OFF and no repo override) returns false before any classify/
+ * parse, so `@loopover plan` falls through to the existing mention path → byte-identical. Returns true once it
+ * owns the event (so the caller records it processed and stops). Fail-safe: a model/post error is recorded as a
+ * skip and never throws into the webhook loop. A per-actor/per-repo cooldown prevents repeated maintainer comments
+ * from spending shared AI quota in a burst.
  */
 async function maybeProcessPlanCommand(
   env: Env,
   deliveryId: string,
   payload: GitHubWebhookPayload,
 ): Promise<boolean> {
-  if (!isPlannerEnabled(env)) return false; // flag-OFF → not handled here; the worker is byte-identical to today
+  // Cheap synchronous checks FIRST: an unrelated comment or a PR-thread comment never pays for a manifest load
+  // below, matching the pre-#issue-coding-plan-config behavior byte-for-byte for both cases.
   if (!isPlanCommand(payload.comment?.body)) return false;
   // #22: planning is ISSUE-only. A `@loopover plan` on a PR is not a plan request, so DON'T consume it — fall
-  // through to the generic mention handler so it posts the help card, exactly as the flag-OFF path does. Without
-  // this the flag-ON worker swallowed a PR-thread `plan` mention and the contributor saw nothing.
+  // through to the generic mention handler so it posts the help card, exactly as the disabled path does. Without
+  // this the enabled worker swallowed a PR-thread `plan` mention and the contributor saw nothing.
   if (payload.issue?.pull_request) return false;
+  // Per-repo override (#issue-coding-plan-config): `.loopover.yml settings.plannerMode` can turn the command ON
+  // for a repo even when the fleet default (LOOPOVER_REVIEW_PLANNER) is off, or OFF even when the fleet default
+  // is on — mirrors resolveDuplicateWinnerEnabled's inherit/off/enabled shape. repoFullName is read directly off
+  // the payload (the same one-liner classifyPlanCommandRequest below uses) rather than running the classifier
+  // just to get it, since the classifier also needs installationId/actor this cheap gate doesn't. No repo name
+  // at all (edge case) ⇒ no manifest to load, so the fleet-only default decides. loadRepoFocusManifest is
+  // fail-safe on its own, but a webhook handler must never let a manifest-load blip throw into the queue loop —
+  // same `.catch(() => null)` convention every other manifest-driven feature in this file uses (e.g.
+  // runReviewRecapJob, resolveVisualCaptureConfig).
+  const repoFullName = payload.repository?.full_name ?? null;
+  const manifest = repoFullName ? await loadRepoFocusManifest(env, repoFullName).catch(() => null) : null;
+  if (!resolvePlannerEnabled(isPlannerEnabled(env), manifest?.settings.plannerMode)) return false;
   // All eligibility guards live in the PURE classifier (exhaustively unit-tested); here we carry one ok branch.
   const req = classifyPlanCommandRequest(payload, getInstallationId(payload));
   if (!req.ok) {

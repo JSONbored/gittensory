@@ -884,6 +884,13 @@ settings:
   # inherit | off | enabled. Default: inherit.
   # openPrFileCollisionMode: inherit
 
+  # `@loopover plan` issue command (#issue-coding-plan): on a maintainer's request, generates a concise
+  # implementation plan from an issue's text and posts it as a comment. "inherit" defers to the self-host
+  # operator's LOOPOVER_REVIEW_PLANNER env default (itself off by default); "off"/"enabled" override that
+  # default in either direction for this repo.
+  # inherit | off | enabled. Default: inherit.
+  # plannerMode: inherit
+
   # Hard manual-review path guardrails are config-as-code only. Safe by default (#3943): whatever you list
   # here is ADDED to a fixed, built-in invariant set (CI workflows/scripts, deploy config, config-as-code
   # files, core engine-decision paths — see DEFAULT_HARD_GUARDRAIL_GLOBS in src/review/guardrail-config.ts)

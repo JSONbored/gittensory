@@ -1233,6 +1233,13 @@ export type RepositorySettings = {
    *  (itself default-OFF); `"off"`/`"enabled"` fully override the global default in either direction for this
    *  repo. No DB column -- config-as-code only, set via `.loopover.yml settings.openPrFileCollisionMode`. */
   openPrFileCollisionMode?: "inherit" | "off" | "enabled" | undefined;
+  /** Issue-planning command (#issue-coding-plan): per-repo override of the `@loopover plan` issue command,
+   *  gated globally by `LOOPOVER_REVIEW_PLANNER` (itself default-OFF -- see `review/planner.ts`'s
+   *  `isPlannerEnabled` doc comment). `"inherit"` (the default, mirrors duplicateWinnerMode/
+   *  openPrFileCollisionMode's shape) defers to the global env default; `"off"`/`"enabled"` fully override
+   *  the global default in either direction for this repo. No DB column -- config-as-code only, set via
+   *  `.loopover.yml settings.plannerMode`. */
+  plannerMode?: "inherit" | "off" | "enabled" | undefined;
   /** Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN
    *  PR to draft while loopover has an ACTIVE review pass running against it is dodging the one-shot
    *  review process. The effective default is `"close"` as of #4011 (see `normalizeReviewEvasionProtection`

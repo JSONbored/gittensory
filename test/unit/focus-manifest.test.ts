@@ -310,6 +310,7 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
     closeOwnerAuthors: "closeOwnerAuthors:",
     duplicateWinnerMode: "duplicateWinnerMode:",
     openPrFileCollisionMode: "openPrFileCollisionMode:",
+    plannerMode: "plannerMode:",
     autoLabelEnabled: "autoLabelEnabled:",
     typeLabelsEnabled: "typeLabelsEnabled:",
     badgeEnabled: "badgeEnabled:",

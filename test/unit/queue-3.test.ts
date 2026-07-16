@@ -500,6 +500,123 @@ describe("queue processors", () => {
     expect(skip?.detail).toBe("no_plan_generated");
   });
 
+  it("planner (#issue-coding-plan-config): a per-repo plannerMode: enabled override turns the command ON even when LOOPOVER_REVIEW_PLANNER is unset (fleet default off)", async () => {
+    const run = vi.fn(async () => ({ response: "## Summary\nPer-repo override plan." }));
+    // LOOPOVER_REVIEW_PLANNER deliberately absent -- the fleet default is off, so this proves the repo override
+    // (not the env var) is what turns the command on.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai });
+    await setupPlannerRepo(env);
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { plannerMode: "enabled" } }, "repo_file");
+    let postedBody: string | undefined;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/issues/77/comments")) {
+        postedBody = init?.body ? JSON.parse(init.body.toString()).body : undefined;
+        return Response.json({ id: 5 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, plannerWebhook("@loopover plan", "maintainer1"));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(postedBody).toContain("Per-repo override plan");
+  });
+
+  it("planner (#issue-coding-plan-config): a per-repo plannerMode: off override turns the command OFF even when LOOPOVER_REVIEW_PLANNER=true (fleet default on)", async () => {
+    const run = vi.fn(async () => ({ response: "should not run" }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_PLANNER: "true", AI: { run } as unknown as Ai });
+    await setupPlannerRepo(env);
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { plannerMode: "off" } }, "repo_file");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" });
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(env, plannerWebhook("@loopover plan", "maintainer1"));
+    expect(run).not.toHaveBeenCalled();
+    // Not consumed at all (byte-identical to the fleet-off path) -- falls through, no skip audit either.
+    const planAudits = await env.DB.prepare("select count(*) as n from audit_events where event_type in (?, ?)").bind("github_app.issue_plan_skipped", "github_app.issue_plan_generated").first<{ n: number }>();
+    expect(planAudits?.n).toBe(0);
+  });
+
+  it("planner (#issue-coding-plan-config): plannerMode: inherit explicitly defers to the fleet default (both directions)", async () => {
+    const runOff = vi.fn(async () => ({ response: "should not run" }));
+    const envOff = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_PLANNER: "false", AI: { run: runOff } as unknown as Ai });
+    await setupPlannerRepo(envOff);
+    await upsertRepoFocusManifest(envOff, "JSONbored/gittensory", { settings: { plannerMode: "inherit" } }, "repo_file");
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await processJob(envOff, plannerWebhook("@loopover plan", "maintainer1"));
+    expect(runOff).not.toHaveBeenCalled();
+
+    const runOn = vi.fn(async () => ({ response: "## Summary\nInherit-on plan." }));
+    const envOn = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_PLANNER: "true", AI: { run: runOn } as unknown as Ai });
+    await setupPlannerRepo(envOn);
+    await upsertRepoFocusManifest(envOn, "JSONbored/gittensory", { settings: { plannerMode: "inherit" } }, "repo_file");
+    let postedBody: string | undefined;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/issues/77/comments")) {
+        postedBody = init?.body ? JSON.parse(init.body.toString()).body : undefined;
+        return Response.json({ id: 5 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await processJob(envOn, plannerWebhook("@loopover plan", "maintainer1"));
+    expect(runOn).toHaveBeenCalledTimes(1);
+    expect(postedBody).toContain("Inherit-on plan");
+  });
+
+  it("planner (#issue-coding-plan-config): a manifest-load failure degrades to the fleet-only default (fail-safe), never throws into the webhook loop", async () => {
+    const run = vi.fn(async () => ({ response: "## Summary\nFail-safe plan." }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_PLANNER: "true", AI: { run } as unknown as Ai });
+    await setupPlannerRepo(env);
+    const loadSpy = vi.spyOn(focusManifestLoaderModule, "loadRepoFocusManifest").mockRejectedValueOnce(new Error("manifest unavailable"));
+    let postedBody: string | undefined;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/") && url.includes("/permission")) return Response.json({ permission: "admin" });
+      if (url.includes("/issues/77/comments")) {
+        postedBody = init?.body ? JSON.parse(init.body.toString()).body : undefined;
+        return Response.json({ id: 5 }, { status: 201 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await expect(processJob(env, plannerWebhook("@loopover plan", "maintainer1"))).resolves.not.toThrow();
+    // A rejected manifest load degrades to the fleet-only default (LOOPOVER_REVIEW_PLANNER=true here), so the
+    // command still runs -- the failure never blocks or throws.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(postedBody).toContain("Fail-safe plan");
+    loadSpy.mockRestore();
+  });
+
+  it("planner (#issue-coding-plan-config): no repository on the payload falls back to the global-only default without attempting a manifest load", async () => {
+    const run = vi.fn(async () => ({ response: "should not run" }));
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_PLANNER: "false", AI: { run } as unknown as Ai });
+    await setupPlannerRepo(env);
+    const loadSpy = vi.spyOn(focusManifestLoaderModule, "loadRepoFocusManifest");
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "plan-no-repo",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        issue: { number: 77, title: "Issue", state: "open", user: { login: "reporter" }, body: "b" },
+        comment: { body: "@loopover plan", user: { login: "maintainer1", type: "User" } },
+        sender: { login: "maintainer1", type: "User" },
+      },
+    } as unknown as Parameters<typeof processJob>[1]);
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    loadSpy.mockRestore();
+  });
+
   it("configuration (#2168): a maintainer @loopover configuration posts the effective resolved config", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await setupPlannerRepo(env);
