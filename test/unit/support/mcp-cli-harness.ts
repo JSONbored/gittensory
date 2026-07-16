@@ -154,6 +154,7 @@ export async function startFixtureServer(
     onApiRequest?: (request: IncomingMessage) => void;
     validateConfigWarnings?: string[];
     intakeStatus?: number;
+    localBranchAnalysisStatus?: number;
   } = {},
 ) {
   server = createServer(async (request, response) => {
@@ -283,6 +284,11 @@ export async function startFixtureServer(
     }
     if (request.url === "/v1/local/branch-analysis" && request.method === "POST") {
       await readJsonRequest(request);
+      if (options.localBranchAnalysisStatus && options.localBranchAnalysisStatus >= 400) {
+        response.statusCode = options.localBranchAnalysisStatus;
+        response.end(JSON.stringify({ error: "local_branch_analysis_unavailable" }));
+        return;
+      }
       response.end(JSON.stringify(options.localBranchAnalysis ?? localBranchAnalysisFixture()));
       return;
     }
@@ -592,6 +598,15 @@ export function localBranchAnalysisFixture() {
       rerunWhen: "Rerun after account/queue maturity blockers clear.",
     },
     dataQuality: { signalFidelity: { status: "complete" } },
+    predictedGate: {
+      pack: "gittensor",
+      conclusion: "advisory_pass",
+      title: "Predicted gate: advisory pass",
+      summary: "No hard blockers predicted for this planned PR.",
+      readinessScore: 72,
+      blockers: [],
+      warnings: [],
+    },
   };
 }
 
