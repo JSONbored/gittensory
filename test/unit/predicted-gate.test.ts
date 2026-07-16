@@ -169,30 +169,11 @@ describe("buildPredictedGateVerdict", () => {
     expect(noGate.blockers.some((b) => b.code === "missing_linked_issue")).toBe(false);
   });
 
-  it("does not let public gate.firstTimeContributorGrace soften duplicate blockers", () => {
-    const newcomer = verdict({
-      gate: { duplicates: "block", firstTimeContributorGrace: true },
-      pullRequests: [openPr(42, "Retry uploads on 5xx responses", [7], "someone-else")],
-    });
-    expect(newcomer.conclusion).toBe("failure");
-    expect(newcomer.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
-
-    const returning = verdict({
-      gate: { duplicates: "block", firstTimeContributorGrace: true },
-      pullRequests: [
-        openPr(42, "Retry uploads on 5xx responses", [7], "someone-else"),
-        { ...openPr(9, "Earlier fix", [], "miner1"), state: "merged", mergedAt: "2026-06-01T00:00:00.000Z" },
-      ],
-    });
-    expect(returning.conclusion).toBe("failure");
-    expect(returning.blockers.some((b) => b.code === "duplicate_pr_risk")).toBe(true);
-  });
-
   it("matches author history case-insensitively, like the live gate (#audit-§4)", () => {
     // The merged PR's author is "MINER1" (different case from the contributor "miner1"). The predictor still
-    // counts it as history, but blocker disposition no longer depends on first-time grace.
+    // counts it as history, but blocker disposition never depends on it (#2411).
     const mixedCase = verdict({
-      gate: { duplicates: "block", firstTimeContributorGrace: true },
+      gate: { duplicates: "block" },
       pullRequests: [
         openPr(42, "Retry uploads on 5xx responses", [7], "someone-else"),
         { ...openPr(9, "Earlier fix", [], "MINER1"), state: "merged", mergedAt: "2026-06-01T00:00:00.000Z" },
@@ -209,7 +190,7 @@ describe("buildPredictedGateVerdict", () => {
       state: "closed",
     });
     const result = verdict({
-      gate: { duplicates: "block", firstTimeContributorGrace: true },
+      gate: { duplicates: "block" },
       pullRequests: [
         openPr(42, "Retry uploads on 5xx responses", [7], "someone-else"),
         closedUnmerged(11, "Abandoned attempt one"),
@@ -225,7 +206,7 @@ describe("buildPredictedGateVerdict", () => {
     // The prior PR has state "closed" yet carries a mergedAt timestamp, so it is still counted as merge history.
     // Blocker disposition no longer depends on first-time grace, so the gate blocks either way.
     const result = verdict({
-      gate: { duplicates: "block", firstTimeContributorGrace: true },
+      gate: { duplicates: "block" },
       pullRequests: [
         openPr(42, "Retry uploads on 5xx responses", [7], "someone-else"),
         { ...openPr(9, "Earlier merged fix", [], "miner1"), state: "closed", mergedAt: "2026-06-01T00:00:00.000Z" },

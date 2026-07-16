@@ -56,8 +56,8 @@ type ToggleFieldDef = {
   kind: "toggle";
   hint?: string;
   // Renders greyed-out and non-interactive with the hint as the disclosure -- for a field that is real
-  // and DB-backed but currently wired to nothing (e.g. firstTimeContributorGrace, #2266/#2411), so a
-  // maintainer can't be misled into thinking the toggle has an effect.
+  // and DB-backed but currently wired to nothing, so a maintainer can't be misled into thinking the
+  // toggle has an effect.
   disabled?: boolean;
 };
 type NumberFieldDef = {
@@ -115,13 +115,6 @@ const GATE_FIELDS: FieldDef[] = [
     label: "Focus-manifest policy",
     kind: "select",
     options: GATE_MODE_OPTIONS,
-  },
-  {
-    key: "firstTimeContributorGrace",
-    label: "First-time-contributor grace",
-    kind: "toggle",
-    hint: "Reserved — currently has no effect on gate decisions (#2266)",
-    disabled: true,
   },
 ];
 

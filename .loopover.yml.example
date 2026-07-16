@@ -325,14 +325,6 @@ gate:
   # conclusion; it does NOT stop the agent action layer from real writes.
   dryRun: false
 
-  # First-time-contributor grace. RESERVED / currently INERT: this value is
-  # parsed and stored, but the gate does not read it — a first-time
-  # contributor with a real blocker is one-shot closed the same as a
-  # repeat contributor (blocker findings must remain closure outcomes).
-  # Setting this to true has no effect today; kept for potential future
-  # use. Bool. Default: false.
-  firstTimeContributorGrace: false
-
   # Live premerge migrations/** collision recheck (#2550, anti-abuse-adjacent safety net). When true, a PR
   # touching migrations/** gets a fresh GitHub read of the base branch's CURRENT migration filenames
   # immediately before an agent-driven merge (not just at CI time against this PR's own branch snapshot) —

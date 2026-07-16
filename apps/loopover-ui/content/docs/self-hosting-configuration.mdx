@@ -350,7 +350,6 @@ For a repo that has never been configured, the default is `disabled`; an already
 - `gate.premergeContentRecheck` — when `true`, a PR touching `migrations/**` gets a fresh GitHub read of the base branch's current migration filenames immediately before an agent-driven merge, catching a different PR that merged a same-numbered migration in the meantime. A live collision holds the PR instead of merging blind. Default `false` — costs one extra GitHub API call per migrations-touching PR.
 - `gate.requireFreshRebaseWindow` — when the base branch has advanced within this many minutes of the actual merge decision, forces an `update_branch` + fresh CI recheck before merging, instead of trusting a possibly-stale `mergeable_state: clean` read. A bounded retry cap prevents a fast-moving base from live-locking the PR. Default `null` (never force).
 - `gate.dryRun` — when `true`, the posted check conclusion remains the real non-enforcing verdict while comments/check text may also show the would-be stricter verdict for AI-review blocker mode. It does not disable downstream merge/close planning for failures from already-enforced gates. Default `false`.
-- `gate.firstTimeContributorGrace` — reserved and currently inert: parsed and stored, but the gate does not read it. A first-time contributor with a real blocker is one-shot closed the same as a repeat contributor. Kept for potential future use.
 
 ### settings.closeOwnerAuthors and blockedPaths
 

@@ -1024,11 +1024,11 @@ describe("api routes", () => {
     // malformed-body guard.
     const settingsAdminUpdate = await app.request(
       "/v1/repos/entrius/allways-ui/settings",
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ manifestPolicyGateMode: "advisory", firstTimeContributorGrace: true }) },
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ manifestPolicyGateMode: "advisory" }) },
       env,
     );
     expect(settingsAdminUpdate.status).toBe(200);
-    await expect(settingsAdminUpdate.json()).resolves.toMatchObject({ manifestPolicyGateMode: "advisory", firstTimeContributorGrace: true });
+    await expect(settingsAdminUpdate.json()).resolves.toMatchObject({ manifestPolicyGateMode: "advisory" });
     const settingsMalformed = await app.request("/v1/repos/entrius/allways-ui/settings", { method: "PUT", headers: apiHeaders(env), body: "{" }, env);
     expect(settingsMalformed.status).toBe(400);
 

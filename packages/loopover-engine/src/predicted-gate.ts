@@ -299,7 +299,6 @@ export function buildPredictedGateVerdict(args: {
     claGateMode: gate.claMode ?? undefined,
     readinessScore: readiness.total,
     confirmedContributor: effectiveConfirmedContributor,
-    firstTimeContributorGrace: gate.firstTimeContributorGrace ?? undefined,
     authorMergedPrCount: authorHistory.filter((pr) => pr.state === "merged" || pr.mergedAt).length,
     authorClosedUnmergedPrCount: authorHistory.filter((pr) => pr.state === "closed" && !pr.mergedAt).length,
     // Size-hold + guardrail-hold parity (#2458): only meaningful when changed paths were supplied — changedPaths

@@ -30,7 +30,6 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
     linkedIssueSatisfactionGateMode: "off",
-    firstTimeContributorGrace: false,
     slopAiAdvisory: false,
     qualityGateMinScore: null,
     autoLabelEnabled: true,

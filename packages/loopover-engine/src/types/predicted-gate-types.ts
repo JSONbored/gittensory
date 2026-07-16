@@ -309,7 +309,6 @@ export type FocusManifestGateConfig = {
   manifestPolicy: GateRuleMode | null;
   selfAuthoredLinkedIssue: GateRuleMode | null;
   dryRun: boolean | null;
-  firstTimeContributorGrace: boolean | null;
   premergeContentRecheck: boolean | null;
   requireFreshRebaseWindowMinutes: number | null;
   claMode: GateRuleMode | null;

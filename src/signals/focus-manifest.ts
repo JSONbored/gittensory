@@ -517,7 +517,6 @@ function applyGateConfigOverrides(effective: RepositorySettings, gate: FocusMani
   if (gate.selfAuthoredLinkedIssue !== null) effective.selfAuthoredLinkedIssueGateMode = gate.selfAuthoredLinkedIssue;
   if (gate.linkedIssueSatisfaction !== null) effective.linkedIssueSatisfactionGateMode = gate.linkedIssueSatisfaction;
   if (gate.dryRun !== null) effective.gateDryRun = gate.dryRun;
-  if (gate.firstTimeContributorGrace !== null) effective.firstTimeContributorGrace = gate.firstTimeContributorGrace;
   if (gate.premergeContentRecheck !== null) effective.premergeContentRecheck = gate.premergeContentRecheck;
   if (gate.requireFreshRebaseWindowMinutes !== null) effective.requireFreshRebaseWindowMinutes = gate.requireFreshRebaseWindowMinutes;
   if (gate.claMode !== null) effective.claGateMode = gate.claMode;

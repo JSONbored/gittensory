@@ -72,7 +72,6 @@ export const repositorySettings = sqliteTable("repository_settings", {
   // confidence-floor "unaddressed" verdict additionally becomes a hard blocker. See src/rules/advisory.ts's
   // isConfiguredGateBlocker (linked_issue_scope_mismatch) and loopover-gate-setting-wiring for the pattern.
   linkedIssueSatisfactionGateMode: text("linked_issue_satisfaction_gate_mode").notNull().default("off"),
-  firstTimeContributorGrace: integer("first_time_contributor_grace", { mode: "boolean" }).notNull().default(false),
   slopGateMinScore: integer("slop_gate_min_score"),
   slopAiAdvisory: integer("slop_ai_advisory", { mode: "boolean" }).notNull().default(false),
   aiReviewMode: text("ai_review_mode").notNull().default("off"),

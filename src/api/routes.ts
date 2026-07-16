@@ -712,9 +712,9 @@ const maintainerSettingsSchema = z
     linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
     // #6443: mergeTrainMode/gittensorLabel/blacklistLabel/createMissingLabel removed -- no longer DB-backed,
     // config-as-code only via .loopover.yml's settings: block now.
-    firstTimeContributorGrace: z
-      .boolean()
-      .describe("Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."),
+    // #6446: firstTimeContributorGrace removed -- a dead, never-wired RESERVED/INERT field (#2266); deleted
+    // rather than wired in, since the gate's one-shot design deliberately never softens a blocker for a
+    // newcomer.
     slopGateMode: z.enum(["off", "advisory", "block"]),
     slopGateMinScore: z.number().int().min(0).max(100).nullable(),
     slopAiAdvisory: z.boolean(),

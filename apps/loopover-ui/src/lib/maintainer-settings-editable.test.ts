@@ -15,7 +15,6 @@ const SETTINGS: MaintainerSettingsEditable = {
   qualityGateMinScore: null,
   mergeReadinessGateMode: "off",
   manifestPolicyGateMode: "off",
-  firstTimeContributorGrace: false,
   slopGateMode: "off",
   slopGateMinScore: null,
   slopAiAdvisory: false,

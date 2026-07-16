@@ -8928,10 +8928,6 @@
               "block"
             ]
           },
-          "firstTimeContributorGrace": {
-            "type": "boolean",
-            "description": "Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."
-          },
           "slopGateMinScore": {
             "type": "number",
             "nullable": true
@@ -9717,7 +9713,6 @@
           "manifestPolicyGateMode",
           "selfAuthoredLinkedIssueGateMode",
           "linkedIssueSatisfactionGateMode",
-          "firstTimeContributorGrace",
           "slopAiAdvisory",
           "aiReviewMode",
           "aiReviewByok",
@@ -10316,10 +10311,6 @@
                   "block"
                 ]
               },
-              "firstTimeContributorGrace": {
-                "type": "boolean",
-                "description": "Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."
-              },
               "slopGateMinScore": {
                 "type": "number",
                 "nullable": true
@@ -10444,7 +10435,6 @@
               "manifestPolicyGateMode",
               "selfAuthoredLinkedIssueGateMode",
               "linkedIssueSatisfactionGateMode",
-              "firstTimeContributorGrace",
               "autoLabelEnabled",
               "typeLabelsEnabled",
               "gittensorLabel",

@@ -6615,8 +6615,9 @@ async function loadGateAuthorHistory(
       pullNumber,
     );
   } catch {
-    // Fail closed for firstTimeContributorGrace: if complete author history cannot be determined,
-    // make the author ineligible for grace rather than publishing a would-be blocking gate as neutral.
+    // Fail closed: if complete author history cannot be determined, report a non-first-timer profile
+    // rather than an artificially clean one (#2266's RESERVED/INERT authorMergedPrCount/
+    // authorClosedUnmergedPrCount counts still need a safe fallback here).
     return { mergedPrCount: 1, closedUnmergedPrCount: 3 };
   }
 }

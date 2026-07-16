@@ -29,7 +29,6 @@ const ADVISORY_SETTINGS = {
   qualityGateMinScore: null,
   mergeReadinessGateMode: "off" as const,
   manifestPolicyGateMode: "off" as const,
-  firstTimeContributorGrace: false,
   slopGateMode: "off" as const,
   slopGateMinScore: null,
   slopAiAdvisory: false,

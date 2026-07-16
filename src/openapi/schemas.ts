@@ -699,9 +699,6 @@ export const RepositorySettingsSchema = z
     manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
     selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
-    firstTimeContributorGrace: z
-      .boolean()
-      .describe("Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."),
     slopGateMinScore: z.number().nullable().optional(),
     slopAiAdvisory: z.boolean(),
     aiReviewMode: z.enum(["off", "advisory", "block"]),
@@ -911,9 +908,6 @@ export const RepoSettingsPreviewSchema = z
       manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
       selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
       linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
-      firstTimeContributorGrace: z
-        .boolean()
-        .describe("Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."),
       slopGateMinScore: z.number().nullable().optional(),
       autoLabelEnabled: z.boolean(),
       typeLabelsEnabled: z.boolean(),

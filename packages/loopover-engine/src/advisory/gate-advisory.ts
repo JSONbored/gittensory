@@ -83,15 +83,11 @@ export type GateCheckPolicy = {
    *  conclusion) confirms consent — becomes a hard blocker. `off` (default) = no finding at all; `advisory` =
    *  the finding surfaces but never blocks. Independent of every other gate dimension, like manifestPolicy. */
   claGateMode?: GateRuleMode | undefined;
-  /** First-time-contributor grace (#552). RESERVED / currently INERT (#2266): threaded through from config,
-   *  but evaluateGateCheckCore never reads it (see the removal note below) — a would-be blocker gates a
-   *  genuine newcomer exactly like a repeat contributor. Kept for potential future use. */
-  firstTimeContributorGrace?: boolean | undefined;
-  /** The PR author's merged PR count in THIS repo. RESERVED / currently INERT (#2266) alongside
-   *  firstTimeContributorGrace above — populated but never read by the gate evaluator today. */
+  /** The PR author's merged PR count in THIS repo. RESERVED / currently INERT (#2266) — populated but never
+   *  read by the gate evaluator today. */
   authorMergedPrCount?: number | undefined;
-  /** The PR author's closed-unmerged PR count in THIS repo. RESERVED / currently INERT (#2266) alongside
-   *  firstTimeContributorGrace above — populated but never read by the gate evaluator today. */
+  /** The PR author's closed-unmerged PR count in THIS repo. RESERVED / currently INERT (#2266) — populated
+   *  but never read by the gate evaluator today. */
   authorClosedUnmergedPrCount?: number | undefined;
   /** The PR author's confirmed-Gittensor status. Carried for context/telemetry only — it no longer
    *  changes the gate verdict (every author is gated identically; a configured blocker fails the gate

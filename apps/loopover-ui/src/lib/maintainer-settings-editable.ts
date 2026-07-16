@@ -27,7 +27,6 @@ export type MaintainerSettingsEditable = {
   qualityGateMinScore: number | null;
   mergeReadinessGateMode: GateMode;
   manifestPolicyGateMode: GateMode;
-  firstTimeContributorGrace: boolean;
   slopGateMode: GateMode;
   slopGateMinScore: number | null;
   slopAiAdvisory: boolean;
@@ -53,7 +52,6 @@ export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEd
   "qualityGateMinScore",
   "mergeReadinessGateMode",
   "manifestPolicyGateMode",
-  "firstTimeContributorGrace",
   "slopGateMode",
   "slopGateMinScore",
   "slopAiAdvisory",

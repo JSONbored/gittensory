@@ -264,11 +264,6 @@ export type RepositorySettings = {
    *  opened the linked issue (`pr.authorLogin === issue.authorLogin`). Defaults to `advisory` — the finding
    *  is surfaced in the review panel but never blocks unless the maintainer opts in. */
   selfAuthoredLinkedIssueGateMode: GateRuleMode;
-  /** First-time-contributor grace (#552). RESERVED / currently INERT (#2266): parsed, clamped, and threaded
-   *  end-to-end, but the gate evaluator never reads it — a genuine newcomer with a real blocker is still
-   *  one-shot closed exactly like a repeat contributor (blocker findings must remain closure outcomes).
-   *  Setting this true has no runtime effect today; kept for potential future use. Default false. */
-  firstTimeContributorGrace: boolean;
   /** Slop-risk threshold (0-100) at/above which `slopGateMode: block` blocks. Default 60 (the `high` band). */
   slopGateMinScore?: number | null | undefined;
   /** AI-assisted slop advisory (the `slopAiAdvisory` capability). When true AND `slopGateMode != off`, a

@@ -155,7 +155,6 @@ export type FocusManifestGateConfig = {
    *  cross-reference. */
   linkedIssueSatisfaction: GateRuleMode | null;
   dryRun: boolean | null;
-  firstTimeContributorGrace: boolean | null;
   /** `gate.premergeContentRecheck` (#2550): for a PR touching `migrations/**`, re-verify against a live,
    *  freshly-fetched tip of the base branch — unioned with this PR's own new migration filenames — for a
    *  migration-number collision immediately before an agent-driven merge, not just at CI time against the
@@ -1166,7 +1165,6 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   selfAuthoredLinkedIssue: null,
   linkedIssueSatisfaction: null,
   dryRun: null,
-  firstTimeContributorGrace: null,
   premergeContentRecheck: null,
   requireFreshRebaseWindowMinutes: null,
   claMode: null,
@@ -1629,7 +1627,6 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     selfAuthoredLinkedIssue: normalizeOptionalGateMode(record.selfAuthoredLinkedIssue, "gate.selfAuthoredLinkedIssue", warnings),
     linkedIssueSatisfaction: normalizeOptionalGateMode(record.linkedIssueSatisfaction, "gate.linkedIssueSatisfaction", warnings),
     dryRun: normalizeOptionalBoolean(record.dryRun, "gate.dryRun", warnings),
-    firstTimeContributorGrace: normalizeOptionalBoolean(record.firstTimeContributorGrace, "gate.firstTimeContributorGrace", warnings),
     premergeContentRecheck: normalizeOptionalBoolean(record.premergeContentRecheck, "gate.premergeContentRecheck", warnings),
     requireFreshRebaseWindowMinutes: normalizeOptionalPositiveInteger(record.requireFreshRebaseWindow, "gate.requireFreshRebaseWindow", warnings),
     claMode: normalizeOptionalGateMode(record.claMode, "gate.claMode", warnings),
@@ -1642,13 +1639,6 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     copycatMode: normalizeOptionalEnum(copycatRecord?.mode, "gate.copycat.mode", ["off", "warn", "label", "block"] as const, warnings),
     copycatMinScore: normalizeOptionalScore(copycatRecord?.minScore, "gate.copycat.minScore", warnings),
   };
-  // #2266: the flag is parsed, clamped, and threaded end-to-end, but the gate evaluator never reads it — a
-  // maintainer who sets it to true believing it softens a blocker for newcomers gets no such effect. Surface
-  // that inertness at parse time rather than leaving it silently no-op; `false`/unset matches the (also inert)
-  // default, so only an explicit `true` is worth flagging.
-  if (gate.firstTimeContributorGrace === true) {
-    warnings.push(`Manifest field "gate.firstTimeContributorGrace" is currently reserved/inert — it does not soften a blocker outcome for first-time contributors.`);
-  }
   // gate.enabled only controls whether the "LoopOver Orb Review Agent" check-run publishes (the legacy
   // enabled -> reviewCheckMode alias in applyGateConfigOverrides) -- it does NOT gate spend, merge, comment,
   // label, or close behavior, and it cannot express checkMode's "visible" state. checkMode always wins when
@@ -1692,7 +1682,6 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.selfAuthoredLinkedIssue !== null ||
     gate.linkedIssueSatisfaction !== null ||
     gate.dryRun !== null ||
-    gate.firstTimeContributorGrace !== null ||
     gate.premergeContentRecheck !== null ||
     gate.requireFreshRebaseWindowMinutes !== null ||
     gate.claMode !== null ||
@@ -1774,7 +1763,6 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   if (gate.selfAuthoredLinkedIssue !== null) out.selfAuthoredLinkedIssue = gate.selfAuthoredLinkedIssue;
   if (gate.linkedIssueSatisfaction !== null) out.linkedIssueSatisfaction = gate.linkedIssueSatisfaction;
   if (gate.dryRun !== null) out.dryRun = gate.dryRun;
-  if (gate.firstTimeContributorGrace !== null) out.firstTimeContributorGrace = gate.firstTimeContributorGrace;
   if (gate.premergeContentRecheck !== null) out.premergeContentRecheck = gate.premergeContentRecheck;
   if (gate.requireFreshRebaseWindowMinutes !== null) out.requireFreshRebaseWindow = gate.requireFreshRebaseWindowMinutes;
   if (gate.claMode !== null) out.claMode = gate.claMode;
