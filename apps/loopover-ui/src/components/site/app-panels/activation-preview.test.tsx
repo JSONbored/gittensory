@@ -100,58 +100,14 @@ describe("ActivationPreview", () => {
     await waitFor(() => expect(screen.getByText(/No recent pull requests yet/i)).toBeTruthy());
   });
 
-  it("shows the enable-advisory action, posts activation, and reflects the enabled state after the round-trip", async () => {
-    apiFetch.mockResolvedValueOnce({ ok: true, data: BASE_PREVIEW });
+  it("shows informational (non-actionable) status instead of an activation button when not yet enabled (#6444)", async () => {
+    apiFetch.mockResolvedValue({ ok: true, data: BASE_PREVIEW });
     render(<ActivationPreview reviewability={REVIEWABILITY} />);
     await waitFor(() => expect(screen.getByText(BASE_PREVIEW.summary)).toBeTruthy());
 
-    const activateButton = screen.getByRole("button", { name: /enable advisory mode/i });
-
-    apiFetch.mockResolvedValueOnce({
-      ok: true,
-      data: {
-        repoFullName: "acme/widgets",
-        reviewCheckMode: "required",
-        checkRunMode: "enabled",
-        linkedIssueGateMode: "advisory",
-        duplicatePrGateMode: "advisory",
-        qualityGateMode: "advisory",
-      },
-    });
-    // Reload after activation reports the gate is now on — the button should disappear.
-    apiFetch.mockResolvedValueOnce({
-      ok: true,
-      data: { ...BASE_PREVIEW, currentReviewCheckMode: "required", recommendedAction: null },
-    });
-
-    fireEvent.click(activateButton);
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Advisory mode enabled\. LoopOver will now surface guidance/i),
-      ).toBeTruthy(),
-    );
-    await waitFor(() => expect(screen.getByText(/Advisory mode is already enabled/i)).toBeTruthy());
     expect(screen.queryByRole("button", { name: /enable advisory mode/i })).toBeNull();
-
-    const postCall = apiFetch.mock.calls.find(
-      ([, opts]) => (opts as { method?: string })?.method === "POST",
-    );
-    expect(postCall?.[0]).toContain("/v1/repos/acme/widgets/activation");
-  });
-
-  it("surfaces the error message inline when activation fails, without touching the preview data", async () => {
-    apiFetch.mockResolvedValueOnce({ ok: true, data: BASE_PREVIEW });
-    render(<ActivationPreview reviewability={REVIEWABILITY} />);
-    await waitFor(() => expect(screen.getByText(BASE_PREVIEW.summary)).toBeTruthy());
-
-    apiFetch.mockResolvedValueOnce({ ok: false, message: "403 Forbidden" });
-
-    fireEvent.click(screen.getByRole("button", { name: /enable advisory mode/i }));
-
-    await waitFor(() => expect(screen.getByText("403 Forbidden")).toBeTruthy());
-    // Still showing the previously-loaded preview, unchanged.
-    expect(screen.getByText(BASE_PREVIEW.summary)).toBeTruthy();
+    expect(screen.getByText(/Not yet enabled/i)).toBeTruthy();
+    expect(document.body.textContent).toContain("gate.checkMode: required");
   });
 
   it("falls back to a manual owner/repo entry when no repos are registered yet", () => {

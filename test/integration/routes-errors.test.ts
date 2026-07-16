@@ -1103,12 +1103,13 @@ describe("api route guards and error branches", () => {
       ).status,
     ).toBe(200);
 
+    // reviewCheckMode is gone from repositorySettingsSchema entirely (#6444) -- probe a still-real field instead.
     expect(
       (
         await app.request("/v1/internal/repos/JSONbored/gittensory/settings", {
           method: "POST",
           headers: internalHeaders(env),
-          body: JSON.stringify({ reviewCheckMode: "bad" }),
+          body: JSON.stringify({ gatePack: "bad" }),
         }, env)
       ).status,
     ).toBe(400);

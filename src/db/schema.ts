@@ -45,28 +45,10 @@ export const repositories = sqliteTable("repositories", {
 
 export const repositorySettings = sqliteTable("repository_settings", {
   repoFullName: text("repo_full_name").primaryKey(),
-  reviewCheckMode: text("review_check_mode").notNull().default("disabled"),
   gatePack: text("gate_pack").notNull().default("gittensor"),
-  // Missing a linked issue is advisory-only by default -- issues aren't always available, so it only
-  // blocks when a repo explicitly sets linkedIssueGateMode: "block". The sibling requireLinkedIssue
-  // toggle does NOT block on its own: it only surfaces the missing_linked_issue advisory finding, and
-  // the one path where it promotes to a real block (resolveEffectiveSettings in
-  // signals/focus-manifest.ts) only fires when linkedIssueGateMode is explicitly "off" -- never at this
-  // "advisory" default. This default was "block" until #selfhost-
-  // linked-issue-gate-drift, which also backfills any row an earlier migration (0023/0025) persisted as
-  // "block" without an explicit opt-in (migrations/0102_fix_linked_issue_gate_mode_default.sql). The raw
-  // SQLite column still has a DEFAULT 'block' from migration 0023 -- SQLite has no ALTER COLUMN SET DEFAULT,
-  // so fixing that requires a full table rebuild, not done here since no write path ever omits this field
-  // (see test/unit/schema-timestamp-defaults.test.ts). This .default("advisory") is what actually applies,
-  // client-side, on any insert that omits the field.
-  linkedIssueGateMode: text("linked_issue_gate_mode").notNull().default("advisory"),
-  duplicatePrGateMode: text("duplicate_pr_gate_mode").notNull().default("block"),
-  qualityGateMode: text("quality_gate_mode").notNull().default("advisory"),
-  qualityGateMinScore: integer("quality_gate_min_score"),
   slopGateMode: text("slop_gate_mode").notNull().default("off"),
   mergeReadinessGateMode: text("merge_readiness_gate_mode").notNull().default("off"),
   manifestPolicyGateMode: text("manifest_policy_gate_mode").notNull().default("off"),
-  selfAuthoredLinkedIssueGateMode: text("self_authored_linked_issue_gate_mode").notNull().default("advisory"),
   // Linked-issue satisfaction gate (#1961/#3906). off = the assessment never runs (byte-identical to today,
   // and the default); advisory = it runs and renders in the comment but never blocks; block = an above-
   // confidence-floor "unaddressed" verdict additionally becomes a hard blocker. See src/rules/advisory.ts's
@@ -74,11 +56,6 @@ export const repositorySettings = sqliteTable("repository_settings", {
   linkedIssueSatisfactionGateMode: text("linked_issue_satisfaction_gate_mode").notNull().default("off"),
   slopGateMinScore: integer("slop_gate_min_score"),
   slopAiAdvisory: integer("slop_ai_advisory", { mode: "boolean" }).notNull().default(false),
-  aiReviewMode: text("ai_review_mode").notNull().default("off"),
-  aiReviewByok: integer("ai_review_byok", { mode: "boolean" }).notNull().default(false),
-  aiReviewProvider: text("ai_review_provider"),
-  aiReviewModel: text("ai_review_model"),
-  aiReviewAllAuthors: integer("ai_review_all_authors", { mode: "boolean" }).notNull().default(false),
   // AI-review low-confidence disposition (#4603): one_shot | hold_for_review | advisory_only. Governs a
   // sub-aiReviewCloseConfidence-floor ai_consensus_defect/ai_review_split finding. Default hold_for_review --
   // see migrations/0140_ai_review_low_confidence_disposition.sql and src/rules/advisory.ts's

@@ -24,7 +24,6 @@ import { ContributorQualityTable } from "@/components/site/app-panels/contributo
 import type { MaintainerTopContributor } from "@/components/site/app-panels/contributor-quality-table-model";
 import { GateOutcomeCard } from "@/components/site/app-panels/gate-outcome-card";
 import type { GateOutcomeCardData } from "@/components/site/app-panels/gate-outcome-card-model";
-import { GateRampControl } from "@/components/site/app-panels/gate-ramp-control";
 import {
   McpToolUsageCard,
   type McpToolUsageSummary,
@@ -456,7 +455,10 @@ function MaintainerDashboardView({
 
           <AmsMinerCohortCard reviewability={data.reviewability} />
 
-          <GateRampControl reviewability={data.reviewability} />
+          {/* GateRampControl (advisory -> blocking one-click ramp) was removed here: it ramped
+              linkedIssueGateMode/duplicatePrGateMode/qualityGateMode (plus reviewCheckMode for its
+              on/off check) all config-as-code only now (Batch C, loopover#6444) -- writing them via
+              PUT /settings is a silent no-op, so the switch had nothing left to do. */}
 
           <SurfacePreview
             reviewability={data.reviewability}

@@ -661,27 +661,30 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     checkRunMode: "off",
     checkRunDetailLevel: "minimal",
     regateSweepOrderMode: "staleness",
-    reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
+    // Config-as-code only (Batch C, loopover#6444): no DB column backs these 11 fields anymore -- the
+    // built-in default here is unconditional (not row-dependent), matching the !row branch above.
+    // resolveEffectiveSettings still overlays a repo's .loopover.yml settings./gate.* value over this default.
+    reviewCheckMode: "disabled",
     // Config-as-code only (loopover#6445): see the comment on the autoMaintain block below.
     autoProjectMilestoneMatch: "off",
     autoProjectMilestoneMatchBackend: "github",
     gatePack: parseGatePack(row.gatePack),
-    linkedIssueGateMode: parseGateRuleMode(row.linkedIssueGateMode),
-    duplicatePrGateMode: parseGateRuleMode(row.duplicatePrGateMode),
-    qualityGateMode: parseGateRuleMode(row.qualityGateMode),
-    qualityGateMinScore: normalizeQualityGateMinScore(row.qualityGateMinScore),
+    linkedIssueGateMode: "advisory",
+    duplicatePrGateMode: "block",
+    qualityGateMode: "advisory",
+    qualityGateMinScore: null,
     slopGateMode: parseGateRuleMode(row.slopGateMode),
     mergeReadinessGateMode: parseGateRuleMode(row.mergeReadinessGateMode),
     manifestPolicyGateMode: parseGateRuleMode(row.manifestPolicyGateMode),
-    selfAuthoredLinkedIssueGateMode: parseGateRuleMode(row.selfAuthoredLinkedIssueGateMode),
+    selfAuthoredLinkedIssueGateMode: "advisory",
     linkedIssueSatisfactionGateMode: parseGateRuleMode(row.linkedIssueSatisfactionGateMode),
     slopGateMinScore: normalizeQualityGateMinScore(row.slopGateMinScore),
     slopAiAdvisory: row.slopAiAdvisory,
-    aiReviewMode: parseGateRuleMode(row.aiReviewMode),
-    aiReviewByok: row.aiReviewByok,
-    aiReviewProvider: normalizeAiReviewProvider(row.aiReviewProvider),
-    aiReviewModel: row.aiReviewModel ?? null,
-    aiReviewAllAuthors: row.aiReviewAllAuthors,
+    aiReviewMode: "off",
+    aiReviewByok: false,
+    aiReviewProvider: null,
+    aiReviewModel: null,
+    aiReviewAllAuthors: false,
     aiReviewLowConfidenceDisposition: parseAiReviewLowConfidenceDisposition(row.aiReviewLowConfidenceDisposition),
     closeOwnerAuthors: row.closeOwnerAuthors,
     autoLabelEnabled: row.autoLabelEnabled,
@@ -793,27 +796,31 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     checkRunMode: "off",
     checkRunDetailLevel: "minimal",
     regateSweepOrderMode: "staleness",
-    reviewCheckMode: settings.reviewCheckMode ?? "disabled",
+    // Config-as-code only (Batch C, loopover#6444): no DB column backs these 11 fields anymore -- any
+    // caller-supplied value is a silent no-op (there is nothing left to persist it to), so this always
+    // returns the same built-in default getRepositorySettings would, regardless of `settings.X` input.
+    // Configure these via a repo's .loopover.yml settings./gate.* block instead.
+    reviewCheckMode: "disabled",
     // Config-as-code only (loopover#6445): see the comment on the autoMaintain block below.
     autoProjectMilestoneMatch: "off",
     autoProjectMilestoneMatchBackend: "github",
     gatePack: parseGatePack(settings.gatePack),
-    linkedIssueGateMode: settings.linkedIssueGateMode ?? "advisory",
-    duplicatePrGateMode: settings.duplicatePrGateMode ?? "block",
-    qualityGateMode: settings.qualityGateMode ?? "advisory",
-    qualityGateMinScore: normalizeQualityGateMinScore(settings.qualityGateMinScore),
+    linkedIssueGateMode: "advisory",
+    duplicatePrGateMode: "block",
+    qualityGateMode: "advisory",
+    qualityGateMinScore: null,
     slopGateMode: settings.slopGateMode ?? "off",
     mergeReadinessGateMode: settings.mergeReadinessGateMode ?? "off",
     manifestPolicyGateMode: settings.manifestPolicyGateMode ?? "off",
-    selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode ?? "advisory",
+    selfAuthoredLinkedIssueGateMode: "advisory",
     linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode ?? "off",
     slopGateMinScore: normalizeQualityGateMinScore(settings.slopGateMinScore),
     slopAiAdvisory: settings.slopAiAdvisory ?? false,
-    aiReviewMode: settings.aiReviewMode ?? "off",
-    aiReviewByok: settings.aiReviewByok ?? false,
-    aiReviewProvider: normalizeAiReviewProvider(settings.aiReviewProvider),
-    aiReviewModel: typeof settings.aiReviewModel === "string" && settings.aiReviewModel.trim() ? settings.aiReviewModel.trim() : null,
-    aiReviewAllAuthors: settings.aiReviewAllAuthors ?? false,
+    aiReviewMode: "off",
+    aiReviewByok: false,
+    aiReviewProvider: null,
+    aiReviewModel: null,
+    aiReviewAllAuthors: false,
     aiReviewLowConfidenceDisposition: parseAiReviewLowConfidenceDisposition(settings.aiReviewLowConfidenceDisposition),
     closeOwnerAuthors: settings.closeOwnerAuthors ?? false,
     autoLabelEnabled: settings.autoLabelEnabled ?? true,
@@ -879,24 +886,13 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     .insert(repositorySettings)
     .values({
       repoFullName: resolved.repoFullName,
-      reviewCheckMode: resolved.reviewCheckMode,
       gatePack: resolved.gatePack,
-      linkedIssueGateMode: resolved.linkedIssueGateMode,
-      duplicatePrGateMode: resolved.duplicatePrGateMode,
-      qualityGateMode: resolved.qualityGateMode,
-      qualityGateMinScore: resolved.qualityGateMinScore,
       slopGateMode: resolved.slopGateMode,
       mergeReadinessGateMode: resolved.mergeReadinessGateMode,
       manifestPolicyGateMode: resolved.manifestPolicyGateMode,
-      selfAuthoredLinkedIssueGateMode: resolved.selfAuthoredLinkedIssueGateMode,
       linkedIssueSatisfactionGateMode: resolved.linkedIssueSatisfactionGateMode,
       slopGateMinScore: resolved.slopGateMinScore,
       slopAiAdvisory: resolved.slopAiAdvisory,
-      aiReviewMode: resolved.aiReviewMode,
-      aiReviewByok: resolved.aiReviewByok,
-      aiReviewProvider: resolved.aiReviewProvider,
-      aiReviewModel: resolved.aiReviewModel,
-      aiReviewAllAuthors: resolved.aiReviewAllAuthors,
       aiReviewLowConfidenceDisposition: resolved.aiReviewLowConfidenceDisposition,
       closeOwnerAuthors: resolved.closeOwnerAuthors,
       autoLabelEnabled: resolved.autoLabelEnabled,
@@ -921,26 +917,15 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     .onConflictDoUpdate({
       target: repositorySettings.repoFullName,
       set: {
-        reviewCheckMode: resolved.reviewCheckMode,
         gatePack: resolved.gatePack,
-        linkedIssueGateMode: resolved.linkedIssueGateMode,
-        duplicatePrGateMode: resolved.duplicatePrGateMode,
-        qualityGateMode: resolved.qualityGateMode,
-        qualityGateMinScore: resolved.qualityGateMinScore,
         // slop_* were previously absent from the UPDATE branch (only INSERT), so slop settings did not
         // persist on update of an existing row. Restored here alongside the new slopAiAdvisory field.
         slopGateMode: resolved.slopGateMode,
         mergeReadinessGateMode: resolved.mergeReadinessGateMode,
         manifestPolicyGateMode: resolved.manifestPolicyGateMode,
-        selfAuthoredLinkedIssueGateMode: resolved.selfAuthoredLinkedIssueGateMode,
         linkedIssueSatisfactionGateMode: resolved.linkedIssueSatisfactionGateMode,
         slopGateMinScore: resolved.slopGateMinScore,
         slopAiAdvisory: resolved.slopAiAdvisory,
-        aiReviewMode: resolved.aiReviewMode,
-        aiReviewByok: resolved.aiReviewByok,
-        aiReviewProvider: resolved.aiReviewProvider,
-        aiReviewModel: resolved.aiReviewModel,
-        aiReviewAllAuthors: resolved.aiReviewAllAuthors,
         aiReviewLowConfidenceDisposition: resolved.aiReviewLowConfidenceDisposition,
         closeOwnerAuthors: resolved.closeOwnerAuthors,
         autoLabelEnabled: resolved.autoLabelEnabled,
@@ -7694,10 +7679,6 @@ function parseAgentRecommendationOutcomeConfidence(value: string): AgentRecommen
   return "medium";
 }
 
-function parseReviewCheckMode(value: string): RepositorySettings["reviewCheckMode"] {
-  return value === "required" || value === "visible" ? value : "disabled";
-}
-
 function parseGatePack(value: string | null | undefined): RepositorySettings["gatePack"] {
   return value === "oss-anti-slop" ? "oss-anti-slop" : "gittensor";
 }
@@ -7705,10 +7686,6 @@ function parseGatePack(value: string | null | undefined): RepositorySettings["ga
 function parseGateRuleMode(value: string): RepositorySettings["linkedIssueGateMode"] {
   if (value === "off" || value === "block") return value;
   return "advisory";
-}
-
-function normalizeAiReviewProvider(value: string | null | undefined): "anthropic" | "openai" | null {
-  return value === "anthropic" || value === "openai" ? value : null;
 }
 
 // AI-review low-confidence disposition (#4603): one_shot | hold_for_review | advisory_only. Unrecognized/absent

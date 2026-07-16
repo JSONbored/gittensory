@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../../src/services/maintainer-activation";
+import { buildMaintainerActivationPreview } from "../../src/services/maintainer-activation";
 import type { PullRequestRecord, RepositoryRecord, RepositorySettings } from "../../src/types";
 
 const repo: RepositoryRecord = {
@@ -231,16 +231,5 @@ describe("buildMaintainerActivationPreview", () => {
     });
     const open = preview.samples.find((sample) => sample.number === 1)!;
     expect(open.findings.map((finding) => finding.code)).not.toContain("duplicate_pr_risk");
-  });
-});
-
-describe("recommendedAdvisoryActivationSettings", () => {
-  it("enables the gate + deterministic rules in advisory (non-blocking) mode", () => {
-    expect(recommendedAdvisoryActivationSettings()).toEqual({
-      reviewCheckMode: "required",
-      linkedIssueGateMode: "advisory",
-      duplicatePrGateMode: "advisory",
-      qualityGateMode: "advisory",
-    });
   });
 });

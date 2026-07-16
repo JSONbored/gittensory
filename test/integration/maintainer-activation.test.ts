@@ -13,7 +13,7 @@ const mockedPermission = vi.mocked(getRepositoryCollaboratorPermission);
 
 const FULL_NAME = "owner/repo";
 const PATH_PREVIEW = "/v1/repos/owner/repo/activation-preview";
-const PATH_ACTIVATE = "/v1/repos/owner/repo/activation";
+const PATH_SETTINGS = "/v1/repos/owner/repo/settings";
 
 async function seedRepo(env: Env, owner: string, name: string, installationId: number): Promise<void> {
   await upsertInstallation(env, {
@@ -33,7 +33,7 @@ function stubMinerFetch() {
 describe("maintainer activation routes", () => {
   afterEach(() => vi.unstubAllGlobals());
   beforeEach(() => mockedPermission.mockReset());
-  it("lets a maintainer preview activation and flip on advisory mode in one action", async () => {
+  it("lets a maintainer preview activation (reviewCheckMode is config-as-code only now, #6444)", async () => {
     const app = createApp();
     const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "operator-admin" });
     const { token } = await createSessionForGitHubUser(env, { login: "operator-admin", id: 1 });
@@ -44,61 +44,10 @@ describe("maintainer activation routes", () => {
     const previewBody = (await preview.json()) as { repoFullName: string; recommendedAction: string | null; currentReviewCheckMode: string; evaluatedCount: number };
     expect(previewBody).toMatchObject({ repoFullName: FULL_NAME, recommendedAction: "enable_advisory", currentReviewCheckMode: "disabled", evaluatedCount: 0 });
 
-    const activate = await app.request(PATH_ACTIVATE, { method: "POST", headers, body: "{}" }, env);
-    expect(activate.status).toBe(200);
-    expect(await activate.json()).toMatchObject({
-      repoFullName: FULL_NAME,
-      reviewCheckMode: "required",
-      linkedIssueGateMode: "advisory",
-      duplicatePrGateMode: "advisory",
-      qualityGateMode: "advisory",
-    });
-
-    // The flip persisted, and the preview now reports nothing left to enable.
-    expect((await getRepositorySettings(env, FULL_NAME)).reviewCheckMode).toBe("required");
-    const afterPreview = await app.request(PATH_PREVIEW, { headers }, env);
-    expect((await afterPreview.json() as { recommendedAction: string | null }).recommendedAction).toBeNull();
-  });
-
-
-  it("forbids read-only repo collaborators from activating advisory checks", async () => {
-    const app = createApp();
-    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
-    await seedRepo(env, "owner", "repo", 201);
-    await upsertPullRequestFromGitHub(env, FULL_NAME, {
-      number: 7,
-      title: "docs tweak",
-      state: "open",
-      user: { login: "reader" },
-      author_association: "COLLABORATOR",
-      head: { sha: "abc123", ref: "docs" },
-      base: { ref: "main" },
-      labels: [],
-    });
-    stubMinerFetch();
-    mockedPermission.mockResolvedValue("read");
-    const { token } = await createSessionForGitHubUser(env, { login: "reader", id: 777 });
-    const headers = { cookie: `loopover_session=${token}`, "content-type": "application/json" };
-
-    const preview = await app.request(PATH_PREVIEW, { headers }, env);
-    expect(preview.status).toBe(200);
-
-    const activate = await app.request(PATH_ACTIVATE, { method: "POST", headers, body: "{}" }, env);
-    expect(activate.status).toBe(403);
-    expect(await activate.json()).toMatchObject({ error: "insufficient_repo_permission" });
+    // POST /activation (the one-click "enable advisory mode" action) was removed here: reviewCheckMode/
+    // linkedIssueGateMode/duplicatePrGateMode/qualityGateMode are all config-as-code only now (Batch C,
+    // loopover#6444) -- there was nothing left for a DB-write action to meaningfully do.
     expect((await getRepositorySettings(env, FULL_NAME)).reviewCheckMode).toBe("disabled");
-  });
-
-  it("allows a session with GitHub write permission to activate advisory checks", async () => {
-    const app = createApp();
-    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
-    await seedRepo(env, "owner", "repo", 201);
-    stubMinerFetch();
-    mockedPermission.mockResolvedValue("write");
-    const { token } = await createSessionForGitHubUser(env, { login: "owner", id: 201 });
-    const response = await app.request(PATH_ACTIVATE, { method: "POST", headers: { cookie: `loopover_session=${token}`, "content-type": "application/json" }, body: "{}" }, env);
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ repoFullName: FULL_NAME, reviewCheckMode: "required" });
   });
 
   it("forbids read-only repo collaborators from writing agent settings", async () => {
@@ -120,7 +69,7 @@ describe("maintainer activation routes", () => {
     const { token } = await createSessionForGitHubUser(env, { login: "reader", id: 777 });
     const headers = { cookie: `loopover_session=${token}`, "content-type": "application/json" };
 
-    const update = await app.request(`${PATH_ACTIVATE.replace("/activation", "/settings")}`, {
+    const update = await app.request(PATH_SETTINGS, {
       method: "PUT",
       headers,
       body: JSON.stringify({ autonomy: { merge: "auto" }, autoMaintain: { requireApprovals: 0, mergeMethod: "merge" } }),
@@ -140,7 +89,7 @@ describe("maintainer activation routes", () => {
     stubMinerFetch();
     mockedPermission.mockResolvedValue("write");
     const { token } = await createSessionForGitHubUser(env, { login: "owner", id: 201 });
-    const response = await app.request(`${PATH_ACTIVATE.replace("/activation", "/settings")}`, {
+    const response = await app.request(PATH_SETTINGS, {
       method: "PUT",
       headers: { cookie: `loopover_session=${token}`, "content-type": "application/json" },
       // autoMaintain moved off the DB entirely (config-as-code, loopover#6445) -- no longer a writable key on
@@ -152,26 +101,27 @@ describe("maintainer activation routes", () => {
     expect(await response.json()).toMatchObject({ autonomy: { merge: "auto_with_approval" } });
   });
 
-  it("persists selfAuthoredLinkedIssueGateMode from the settings PUT (API/OpenAPI parity)", async () => {
-    // The dashboard save path (maintainerSettingsSchema) omitted this DB-backed gate mode, so a maintainer
-    // setting it to `block` via the API had it silently stripped by the validator — while its OpenAPI schema
-    // and config-as-code path both accept it, and the gate genuinely enforces `block`. Prove the round-trip.
+  it("ignores selfAuthoredLinkedIssueGateMode on the settings PUT -- config-as-code only now (#6444)", async () => {
+    // selfAuthoredLinkedIssueGateMode was removed from maintainerSettingsSchema in Batch C
+    // (loopover#6444): it's config-as-code only via .loopover.yml's gate.selfAuthoredLinkedIssue block
+    // now, so a dashboard save attempting to set it is silently dropped (unknown key on a non-strict
+    // partial schema), not persisted, and the response reflects the hardcoded "advisory" default.
     const app = createApp();
     const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
     await seedRepo(env, "owner", "repo", 202);
     stubMinerFetch();
     mockedPermission.mockResolvedValue("write");
     const { token } = await createSessionForGitHubUser(env, { login: "owner", id: 202 });
-    const response = await app.request(`${PATH_ACTIVATE.replace("/activation", "/settings")}`, {
+    const response = await app.request(PATH_SETTINGS, {
       method: "PUT",
       headers: { cookie: `loopover_session=${token}`, "content-type": "application/json" },
       body: JSON.stringify({ selfAuthoredLinkedIssueGateMode: "block" }),
     }, env);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ selfAuthoredLinkedIssueGateMode: "block" });
+    expect(await response.json()).toMatchObject({ selfAuthoredLinkedIssueGateMode: "advisory" });
     const persisted = await getRepositorySettings(env, FULL_NAME);
-    expect(persisted.selfAuthoredLinkedIssueGateMode).toBe("block");
+    expect(persisted.selfAuthoredLinkedIssueGateMode).toBe("advisory");
   });
 
   it("forbids a non-maintainer session from the activation preview", async () => {

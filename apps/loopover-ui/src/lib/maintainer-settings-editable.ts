@@ -17,14 +17,7 @@ export type AgentActionClass =
   "review" | "request_changes" | "approve" | "merge" | "close" | "label";
 
 export type MaintainerSettingsEditable = {
-  // #4618/#5373: a prior gateCheckMode field was a deprecated computed read-back, since removed entirely --
-  // reviewCheckMode is the real, writable authority for whether the review-agent check-run publishes.
-  reviewCheckMode: "required" | "visible" | "disabled";
   gatePack: "gittensor" | "oss-anti-slop";
-  linkedIssueGateMode: GateMode;
-  duplicatePrGateMode: GateMode;
-  qualityGateMode: GateMode;
-  qualityGateMinScore: number | null;
   mergeReadinessGateMode: GateMode;
   manifestPolicyGateMode: GateMode;
   slopGateMode: GateMode;
@@ -33,6 +26,8 @@ export type MaintainerSettingsEditable = {
   autoLabelEnabled: boolean;
   // #6443: gittensorLabel/createMissingLabel removed -- no longer DB-backed, config-as-code only via
   // .loopover.yml's settings: block now (the dashboard can no longer write them).
+  // #6444: reviewCheckMode/linkedIssueGateMode/duplicatePrGateMode/qualityGateMode/qualityGateMinScore
+  // removed for the same reason -- config-as-code only via .loopover.yml's gate.* block now.
   requireLinkedIssue: boolean;
   commandAuthorization: CommandAuthorization;
   autonomy: Partial<Record<AgentActionClass, AutonomyLevel>>;
@@ -44,12 +39,7 @@ export type MaintainerSettingsEditable = {
 
 // The maintainer-editable subset, sent verbatim to PUT /settings (which merges onto current settings).
 export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEditable> = [
-  "reviewCheckMode",
   "gatePack",
-  "linkedIssueGateMode",
-  "duplicatePrGateMode",
-  "qualityGateMode",
-  "qualityGateMinScore",
   "mergeReadinessGateMode",
   "manifestPolicyGateMode",
   "slopGateMode",
