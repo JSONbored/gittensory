@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { MaintainerPanel } from "@/components/site/app-panels/maintainer-panel";
+import { McpUsagePanel } from "@/components/site/app-panels/mcp-usage-panel";
 import { PageHeader } from "@/components/site/primitives";
 
 const searchSchema = z.object({
@@ -24,6 +25,7 @@ function MaintainerRoute() {
         description="Inspect install health, public-surface previews, and quiet-by-default maintainer controls directly."
       />
       <MaintainerPanel initialRepoFullName={repo} />
+      <McpUsagePanel />
     </div>
   );
 }
