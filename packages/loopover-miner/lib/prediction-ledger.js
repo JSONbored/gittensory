@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { openLocalStoreDb } from "./local-store.js";
+import { applySchemaMigrations } from "./schema-version.js";
 import {
   PREDICTION_LEDGER_PURGE_SPEC,
   PREDICTION_LEDGER_RETENTION_SPEC,
@@ -128,6 +129,19 @@ function rowToEntry(row) {
   };
 }
 
+// v1 -> v2 (#4939): additive tenant-scoping column, a prerequisite for any hosted, multi-tenant use of this
+// same store's logic. NULL for every row today -- self-host behavior is byte-identical, since nothing reads or
+// writes it yet (no consumer exists until a future hosted deployment populates it). Same defensive
+// column-presence guard as this file's sibling stores' own additive migrations (e.g. event-ledger.js's and
+// run-state.js's own tenant_id additions), so re-running it against an already-migrated file is a no-op.
+function addTenantIdColumn(db) {
+  const hasTenantIdColumn = db
+    .prepare("PRAGMA table_info(predictions)")
+    .all()
+    .some((column) => column.name === "tenant_id");
+  if (!hasTenantIdColumn) db.exec("ALTER TABLE predictions ADD COLUMN tenant_id TEXT");
+}
+
 /**
  * Opens the append-only prediction ledger, creating the table on first use. Rows are returned in ascending `id`
  * order (insertion order). (#4263)
@@ -151,6 +165,8 @@ export function initPredictionLedger(dbPath = resolvePredictionLedgerDbPath()) {
     )
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_predictions_repo ON predictions (repo_full_name, id)");
+  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations.
+  applySchemaMigrations(db, [addTenantIdColumn]);
   // Opt-in retention (#4834): prune aged/excess rows when an operator has enabled it; a no-op by default.
   pruneLedgerByRetention(db, PREDICTION_LEDGER_RETENTION_SPEC, resolveLedgerRetentionPolicy(), Date.now());
 
