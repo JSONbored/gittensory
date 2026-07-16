@@ -8,6 +8,12 @@ import { expect } from "vitest";
 export const bin = join(process.cwd(), "packages/loopover-mcp/bin/loopover-mcp.js");
 let server: Server | null = null;
 
+/** #6261: put `injection` in every free-text field of a slop assessment that reaches plain-text output. */
+function withTerminalInjection<T extends { band?: unknown; findings?: unknown }>(fixture: T, injection?: string): T {
+  if (!injection) return fixture;
+  return { ...fixture, band: injection, findings: [{ title: injection, detail: injection }] };
+}
+
 export async function closeFixtureServer() {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
   server = null;
@@ -126,6 +132,9 @@ export function readDecisionPackCacheText(configDir: string) {
 
 export async function startFixtureServer(
   options: {
+    /** #6261: when set, the routes whose free text reaches plain-text terminal output return this string in
+     *  those fields, standing in for a hostile API. Tests assert it can't reach the terminal un-neutered. */
+    terminalInjection?: string;
     latestVersion?: string;
     latestRecommendedMcpVersion?: string;
     minMcpVersion?: string;
@@ -230,7 +239,13 @@ export async function startFixtureServer(
         response.end(options.decisionPackErrorBody ?? JSON.stringify({ error: "decision_pack_unavailable" }));
         return;
       }
-      response.end(JSON.stringify(decisionPackFixture()));
+      response.end(
+        JSON.stringify(
+          options.terminalInjection
+            ? { ...decisionPackFixture(), summary: options.terminalInjection, cache: { rerunGuidance: options.terminalInjection } }
+            : decisionPackFixture(),
+        ),
+      );
       return;
     }
     if (request.url === "/v1/contributors/JSONbored/repos/JSONbored/gittensory/decision" && request.method === "GET") {
@@ -240,7 +255,16 @@ export async function startFixtureServer(
         response.end(options.repoDecisionErrorBody ?? JSON.stringify({ error: "repo_decision_unavailable" }));
         return;
       }
-      response.end(JSON.stringify({ status: "ready", login: "JSONbored", repoFullName: "JSONbored/gittensory", decision: decisionPackFixture().repoDecisions[0] }));
+      const repoDecision = decisionPackFixture().repoDecisions[0];
+      response.end(
+        JSON.stringify({
+          status: "ready",
+          login: "JSONbored",
+          repoFullName: "JSONbored/gittensory",
+          decision: options.terminalInjection ? { ...repoDecision, nextActions: [options.terminalInjection] } : repoDecision,
+          ...(options.terminalInjection ? { cache: { rerunGuidance: options.terminalInjection } } : {}),
+        }),
+      );
       return;
     }
     if (request.url === "/v1/agent/plan-next-work" && request.method === "POST") {
@@ -299,12 +323,12 @@ export async function startFixtureServer(
         tests?: string[];
         testFiles?: string[];
       };
-      response.end(JSON.stringify(slopRiskFixture(body)));
+      response.end(JSON.stringify(withTerminalInjection(slopRiskFixture(body), options.terminalInjection)));
       return;
     }
     if (request.url === "/v1/lint/issue-slop" && request.method === "POST") {
       const body = (await readJsonRequest(request)) as { title?: string; body?: string };
-      response.end(JSON.stringify(issueSlopFixture(body)));
+      response.end(JSON.stringify(withTerminalInjection(issueSlopFixture(body), options.terminalInjection)));
       return;
     }
     if (request.url === "/v1/opportunities/find" && request.method === "POST") {
@@ -352,7 +376,13 @@ export async function startFixtureServer(
     }
     // #784 maintainer controls (agent approval queue + kill-switch).
     if (request.url === "/v1/repos/owner/repo/agent/pending-actions" && request.method === "GET") {
-      response.end(JSON.stringify({ repoFullName: "owner/repo", pendingActions: [{ id: "pa-1", actionClass: "merge", pullNumber: 7, reason: "clean", status: "pending" }] }));
+      const action = { id: "pa-1", actionClass: "merge", pullNumber: 7, reason: "clean", status: "pending" };
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          pendingActions: [options.terminalInjection ? { ...action, reason: options.terminalInjection, actionClass: options.terminalInjection } : action],
+        }),
+      );
       return;
     }
     if (request.url === "/v1/repos/owner/repo/maintainer-noise" && request.method === "GET") {

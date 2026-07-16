@@ -2282,7 +2282,18 @@ async function maintainCli(args) {
   if (subcommand === "status") {
     const payload = await apiGet(queueBase);
     const actions = payload.pendingActions ?? [];
-    emit(payload, [`Agent approval queue for ${repoFullName}: ${actions.length} pending.`, ...actions.map((action) => `- ${action.id}  ${action.actionClass} on #${action.pullNumber}  ${action.reason ?? ""}`)].join("\n"));
+    // #6261: every field here is the API's. `emit` sends this string to the terminal only on the plain-text path
+    // (--json re-serializes `payload` instead), so sanitizing the composed line costs the JSON contract nothing.
+    emit(
+      payload,
+      [
+        `Agent approval queue for ${repoFullName}: ${actions.length} pending.`,
+        ...actions.map(
+          (action) =>
+            `- ${sanitizePlainTextTerminalOutput(action.id)}  ${sanitizePlainTextTerminalOutput(action.actionClass)} on #${sanitizePlainTextTerminalOutput(action.pullNumber)}  ${sanitizePlainTextTerminalOutput(action.reason ?? "")}`,
+        ),
+      ].join("\n"),
+    );
     return;
   }
   // #2236 — explicit queue listing so maintainers can discover ids for approve/reject (alias: pending).
@@ -2294,10 +2305,12 @@ async function maintainCli(args) {
       [
         `Pending agent actions for ${repoFullName}: ${actions.length}.`,
         ...actions.map((action) => {
-          const kind = action.actionClass ?? action.kind ?? "unknown";
-          const target = action.pullNumber != null ? `#${action.pullNumber}` : (action.target ?? "—");
-          const summary = action.reason ?? action.summary ?? "";
-          return `- ${action.id}  ${kind}  ${target}${summary ? `  ${summary}` : ""}`;
+          // #6261: sanitize each field as it is read, so the fallback chains can't smuggle an escape in through
+          // whichever branch happens to win (`kind` alone has three sources).
+          const kind = sanitizePlainTextTerminalOutput(action.actionClass ?? action.kind ?? "unknown");
+          const target = action.pullNumber != null ? `#${sanitizePlainTextTerminalOutput(action.pullNumber)}` : sanitizePlainTextTerminalOutput(action.target ?? "—");
+          const summary = sanitizePlainTextTerminalOutput(action.reason ?? action.summary ?? "");
+          return `- ${sanitizePlainTextTerminalOutput(action.id)}  ${kind}  ${target}${summary ? `  ${summary}` : ""}`;
         }),
       ].join("\n"),
     );
@@ -2560,6 +2573,18 @@ async function lintPrTextCli(args) {
   for (const fix of payload.fixes ?? []) process.stdout.write(`- ${fix}\n`);
 }
 
+// Strip ANSI escapes + control characters from text this CLI prints as plain text. Rule (#6261): every value that
+// reaches a terminal from a source the user does not control -- an API response, or free text the API echoed back
+// from a third-party issue/PR -- goes through this first. Otherwise a hostile string can repaint the screen,
+// rewrite earlier lines, or fake a success next to a real failure, since the terminal cannot tell our text from
+// the payload's.
+//
+// Two things deliberately do NOT go through it:
+//   - `--json` output. JSON.stringify escapes U+001B (and the rest of U+0000-U+001F) as a \u001b literal, so an escape
+//     sequence cannot survive into the printed document -- and sanitizing there would corrupt the machine-readable
+//     contract callers parse.
+//   - Our own literals, and values the user themself passed in (--login, --repo). Those are already the user's,
+//     and the CLI prints no colour of its own -- there is no intentional ANSI in this file to preserve.
 function sanitizePlainTextTerminalOutput(value) {
   return String(value)
     .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*(?:\x1b\\)|[@-_])/g, "")
@@ -2657,8 +2682,11 @@ async function slopRiskCli(args) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
-  process.stdout.write(`Slop risk: ${payload.slopRisk} (${payload.band})\n`);
-  for (const finding of payload.findings ?? []) process.stdout.write(`- ${finding.title}: ${finding.detail}\n`);
+  // #6261: the whole payload is the API's, so the score line is sanitized alongside the findings -- leaving `band`
+  // raw would keep this exact command exploitable by the exact response the findings are being protected from.
+  process.stdout.write(`Slop risk: ${sanitizePlainTextTerminalOutput(payload.slopRisk)} (${sanitizePlainTextTerminalOutput(payload.band)})\n`);
+  for (const finding of payload.findings ?? [])
+    process.stdout.write(`- ${sanitizePlainTextTerminalOutput(finding.title)}: ${sanitizePlainTextTerminalOutput(finding.detail)}\n`);
 }
 
 function printIssueSlopHelp() {
@@ -2690,8 +2718,11 @@ async function issueSlopCli(args) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
-  process.stdout.write(`Issue slop risk: ${payload.slopRisk} (${payload.band})\n`);
-  for (const finding of payload.findings ?? []) process.stdout.write(`- ${finding.title}: ${finding.detail}\n`);
+  // #6261: same as slop-risk, and the sharper case of the two -- the body being assessed is routinely a THIRD
+  // party's issue text, so a hostile issue is the expected input here, not a hypothetical one.
+  process.stdout.write(`Issue slop risk: ${sanitizePlainTextTerminalOutput(payload.slopRisk)} (${sanitizePlainTextTerminalOutput(payload.band)})\n`);
+  for (const finding of payload.findings ?? [])
+    process.stdout.write(`- ${sanitizePlainTextTerminalOutput(finding.title)}: ${sanitizePlainTextTerminalOutput(finding.detail)}\n`);
 }
 
 function printDecisionPackHelp() {
@@ -2716,9 +2747,12 @@ async function decisionPackCli(options) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
+  // #6261: decisionPackToolSummary is left alone -- verified, not assumed. It interpolates `login` (the user's own
+  // --login/env value) and `payload.freshness`, and freshness only ever reaches the string inside an equality guard
+  // against the literals "stale"/"rebuilding", so the API cannot route text of its own choosing through it.
   process.stdout.write(`${decisionPackToolSummary(login, payload)}\n`);
-  if (payload.summary) process.stdout.write(`${payload.summary}\n`);
-  if (payload.cache?.rerunGuidance) process.stdout.write(`Rerun when: ${payload.cache.rerunGuidance}\n`);
+  if (payload.summary) process.stdout.write(`${sanitizePlainTextTerminalOutput(payload.summary)}\n`);
+  if (payload.cache?.rerunGuidance) process.stdout.write(`Rerun when: ${sanitizePlainTextTerminalOutput(payload.cache.rerunGuidance)}\n`);
 }
 
 function printRepoDecisionHelp() {
@@ -2746,10 +2780,12 @@ async function repoDecisionCli(options) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
+  // #6261: repoDecisionToolSummary is left alone for the same reason -- it interpolates only `login` and
+  // `repoFullName`, both of which the user typed on their own command line. No payload text reaches it.
   process.stdout.write(`${repoDecisionToolSummary(login, repoFullName, payload)}\n`);
   const actions = payload.decision?.nextActions ?? payload.decision?.publicNextActions ?? [];
-  for (const action of actions.slice(0, 3)) process.stdout.write(`- ${action}\n`);
-  if (payload.cache?.rerunGuidance) process.stdout.write(`Rerun when: ${payload.cache.rerunGuidance}\n`);
+  for (const action of actions.slice(0, 3)) process.stdout.write(`- ${sanitizePlainTextTerminalOutput(action)}\n`);
+  if (payload.cache?.rerunGuidance) process.stdout.write(`Rerun when: ${sanitizePlainTextTerminalOutput(payload.cache.rerunGuidance)}\n`);
 }
 
 function runCacheCli(args) {
@@ -3708,9 +3744,15 @@ async function doctor(options) {
         if (group.nextCommand?.command) process.stdout.write(`  ${group.nextCommand.command}\n`);
         continue;
       }
+      // #6261: a check's `detail` is the one field here that carries text this CLI didn't write -- an API error
+      // message, an npm-registry error, a compatibility report's `error`. Some of those already pass through
+      // sanitizeDiagnosticText, but that redacts tokens and local paths; it is indifferent to escape sequences. So
+      // the terminal pass belongs here at the print boundary, where it covers every check source at once.
       for (const check of group.checks ?? []) {
-        process.stdout.write(`- ${check.status}: ${check.name} - ${check.detail}\n`);
-        if (check.remediation) process.stdout.write(`  ${check.remediation}\n`);
+        process.stdout.write(
+          `- ${sanitizePlainTextTerminalOutput(check.status)}: ${sanitizePlainTextTerminalOutput(check.name)} - ${sanitizePlainTextTerminalOutput(check.detail)}\n`,
+        );
+        if (check.remediation) process.stdout.write(`  ${sanitizePlainTextTerminalOutput(check.remediation)}\n`);
       }
     }
   }
