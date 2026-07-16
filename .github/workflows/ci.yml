@@ -364,6 +364,50 @@ jobs:
       - name: REES build, source-map validation, and tests
         if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
         run: npm --prefix review-enrichment test
+      # review-enrichment's node:test suite runs against the built dist/, so its real coverage was invisible
+      # to Codecov (which only ever saw vitest's src/** lcov). `npm run rees:coverage` re-runs that suite under
+      # c8 (v8 coverage) and remaps the dist hits back to review-enrichment/src/** through the build's source
+      # maps, producing an lcov Codecov can gate. The authoritative pass/fail for REES stays the uninstrumented
+      # step above: c8's instrumentation inflates that suite's timing-sensitive linear-time/ReDoS-guard
+      # assertions past their (uninstrumented) budgets, so a non-zero child exit here is expected -- this
+      # harvest only needs to emit lcov, and a genuinely broken suite is already caught above (and would show
+      # as ~0% patch anyway). The verify step below fails CI if no report lands.
+      - name: REES coverage
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
+        run: npm run rees:coverage || true
+      - name: Verify REES coverage report exists
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.rees == 'true' }}
+        run: |
+          if [ ! -s review-enrichment/coverage/lcov.info ]; then
+            echo "::error title=REES coverage::review-enrichment/coverage/lcov.info is missing or empty"
+            exit 1
+          fi
+      # Separate `rees` flag so codecov/patch actually gates review-enrichment/** changes -- before this the
+      # package was in no coverage report at all, so a REES-only PR got a vacuous patch check. Same trusted vs.
+      # fork-tokenless split and override_* handling as the shard uploads in validate-tests below.
+      - name: Upload REES coverage to Codecov
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.rees == 'true') && github.event.pull_request.head.repo.fork != true }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./review-enrichment/coverage/lcov.info
+          flags: rees
+          disable_search: true
+          override_branch: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
+          override_commit: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          override_pr: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
+          fail_ci_if_error: true
+      - name: Upload REES coverage to Codecov (fork PR tokenless)
+        if: ${{ (github.event_name == 'push' || needs.changes.outputs.rees == 'true') && github.event.pull_request.head.repo.fork == true }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./review-enrichment/coverage/lcov.info
+          flags: rees
+          disable_search: true
+          override_branch: ${{ github.event.pull_request.head.repo.owner.login }}:${{ github.event.pull_request.head.ref }}
+          override_commit: ${{ github.event.pull_request.head.sha }}
+          override_pr: ${{ github.event.pull_request.number }}
+          fail_ci_if_error: true
       - name: OpenAPI drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.uiContract == 'true' }}
         run: npm run ui:openapi:check
@@ -452,7 +496,13 @@ jobs:
   validate-tests:
     name: validate-tests
     needs: changes
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && needs.changes.outputs.backend == 'true') }}
+    # Also runs on REES-only changes: Codecov holds codecov/patch until `after_n_builds` (6) coverage uploads
+    # land (codecov.yml), and REES-only PRs don't otherwise touch `backend`, so without the shards a REES PR
+    # would upload only its single `rees` report and the patch status would never post -- the same vacuous
+    # check this issue fixes. Running the shards guarantees the 6 uploads so Codecov posts a real patch verdict
+    # that now includes the review-enrichment/** diff (covered by the `rees` flag from validate-code).
+    # Draft PRs still skip the whole fan-out (#6448), so the REES trigger only applies to ready PRs.
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:

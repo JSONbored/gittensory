@@ -30,7 +30,10 @@ export default defineConfig({
         "src/**/*.ts",
         "packages/loopover-engine/src/**/*.ts",
         "packages/loopover-miner/lib/**/*.js",
-        "review-enrichment/src/analyzers/codeowners.ts",
+        // review-enrichment is a standalone (non-workspace) package with its own node:test suite; its
+        // coverage is collected separately via `npm run rees:coverage` (c8 over the built dist, remapped
+        // to src through source maps) and uploaded to Codecov under the `rees` flag -- vitest never runs
+        // it, so it must not be listed here (an entry here just reports 0% for files vitest can't reach).
       ],
       exclude: ["src/env.d.ts", "apps/**"],
       // Emit lcov for Codecov to compute patch (changed-lines) coverage.

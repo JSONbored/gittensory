@@ -19,6 +19,12 @@ codecov:
     # the GH Actions run's own conclusion, it says nothing about upload completeness. Waiting for all
     # 6 coverage uploads (JUnit test_results uploads are a separate stream and don't count here) before
     # posting a status removes that premature-fail/premature-pass window entirely.
+    #
+    # Stays 6, not 7, even though review-enrichment adds a `rees` upload on REES PRs: 6 is the count that
+    # ALWAYS lands whenever validate-tests runs (the minimum floor), while the `rees` upload only exists on
+    # REES PRs. The `rees` report is produced by validate-code, which finishes its REES steps in seconds and
+    # so uploads well before any ~10-minute shard -- it is already merged in by the time the 6th shard trips
+    # this threshold, so no premature window opens for the review-enrichment diff either.
     after_n_builds: 6
 
 coverage:
@@ -35,13 +41,25 @@ coverage:
       default:
         informational: true
 
+# review-enrichment ships its coverage under its own flag (produced + uploaded by validate-code, ci.yml).
+# Scoping the flag to review-enrichment/ keeps its project trend honest, and carryforward keeps that trend
+# stable on PRs that don't re-run REES (its coverage is unchanged then, so nothing re-uploads under this flag).
+# Patch gating (codecov/patch above) is unaffected by carryforward -- patch is computed on the PR's own diff,
+# so a review-enrichment/** change is gated against this flag's fresh upload for that PR.
+flags:
+  rees:
+    paths:
+      - review-enrichment/
+    carryforward: true
+
 comment:
   layout: "condensed_header, diff, flags, files"
   require_changes: false
 
 # Coverage is collected by vitest (v8) over src/**, packages/loopover-engine/src/**,
-# and packages/loopover-miner/lib/**; mirror its exclusions so the Codecov total
-# matches the local report.
+# and packages/loopover-miner/lib/** (plus review-enrichment/src/** via the standalone
+# `rees` flag, c8 over its built dist remapped through source maps); mirror vitest's
+# exclusions here so the Codecov total matches the local report.
 ignore:
   - "src/env.d.ts"
   - "apps/**"
