@@ -99,9 +99,13 @@ describe("PortfolioQueueView (#4306, per-repo detail added by #4846)", () => {
     expect(screen.getByRole("alert").textContent).toContain("connection refused");
   });
 
-  it("renders the loading state before the first result arrives", () => {
+  it("renders a content-shaped skeleton before the first result arrives", () => {
+    // #6511: the flat "Loading local portfolio queue…" sentence is replaced by StateBoundary's skeleton, so
+    // this now asserts the placeholder rather than the removed literal text.
     render(<PortfolioQueueView result={null} />);
-    expect(screen.getByText(/Loading local portfolio queue/i)).toBeTruthy();
+    expect(screen.getByTestId("portfolio-queue-skeleton")).toBeTruthy();
+    // Shaped like the real thing, not one generic bar: the status cards and the repo-table rows.
+    expect(screen.queryByRole("table")).toBeNull();
   });
 });
 

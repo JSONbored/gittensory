@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@loopover/ui-kit/components/button";
 import { Card, CardContent, CardHeader } from "@loopover/ui-kit/components/card";
+import { Skeleton } from "@loopover/ui-kit/components/skeleton";
+import { StateBoundary } from "@loopover/ui-kit/components/state-views";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@loopover/ui-kit/components/table";
 
 import {
@@ -35,61 +37,98 @@ const STATUS_TONE: Record<QueueStatus, string> = {
   done: "text-[var(--success)]",
 };
 
-export function PortfolioQueueView({ result }: { result: PortfolioQueueResult | null }) {
-  if (result === null) {
-    return <p className="text-token-sm text-muted-foreground">Loading local portfolio queue…</p>;
-  }
-  if (!result.ok) {
-    return (
-      <p role="alert" className="text-token-sm text-[var(--danger)]">
-        Could not read the local portfolio queue: {result.error}
-      </p>
-    );
-  }
-  const summary = result.summary;
-  if (summary.total === 0) {
-    return (
-      <p className="text-token-sm text-muted-foreground">
-        No queued work yet — the cards fill in once the miner enqueues its first portfolio item.
-      </p>
-    );
-  }
+/** Placeholder shaped like the real summary -- three status cards over a five-column repo table -- so the
+ *  layout doesn't jump when the 10s poll lands. A single generic bar would just move the jump later. */
+function PortfolioQueueSkeleton() {
   return (
-    <div className="grid gap-6">
+    <div className="grid gap-6" data-testid="portfolio-queue-skeleton">
       <dl className="grid gap-4 sm:grid-cols-3">
-        {(Object.keys(STATUS_LABELS) as QueueStatus[]).map((status) => (
-          <Card key={status}>
+        {[0, 1, 2].map((slot) => (
+          <Card key={slot}>
             <CardContent className="p-4">
-              <dt className="text-token-2xs uppercase tracking-wider text-muted-foreground">{STATUS_LABELS[status]}</dt>
-              <dd className={`mt-1 text-token-3xl font-display font-semibold ${STATUS_TONE[status]}`}>
-                {summary.byStatus[status]}
-              </dd>
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="mt-2 h-8 w-12" />
             </CardContent>
           </Card>
         ))}
       </dl>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Repository</TableHead>
-            <TableHead>Queued</TableHead>
-            <TableHead>In progress</TableHead>
-            <TableHead>Done</TableHead>
-            <TableHead>Total</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {summary.repos.map((repo) => (
-            <TableRow key={repo.repoFullName}>
-              <TableCell className="font-mono text-foreground">{repo.repoFullName}</TableCell>
-              <TableCell>{repo.byStatus.queued}</TableCell>
-              <TableCell>{repo.byStatus.in_progress}</TableCell>
-              <TableCell>{repo.byStatus.done}</TableCell>
-              <TableCell>{repo.total}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <div className="grid gap-2">
+        {[0, 1, 2].map((row) => (
+          <Skeleton key={row} className="h-8 w-full" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function PortfolioQueueView({ result }: { result: PortfolioQueueResult | null }) {
+  const summary = result?.ok ? result.summary : null;
+  return (
+    <StateBoundary
+      isLoading={result === null}
+      isError={result !== null && !result.ok}
+      isEmpty={summary !== null && summary.total === 0}
+      loadingTitle="Loading local portfolio queue…"
+      loadingSkeleton={<PortfolioQueueSkeleton />}
+      // Same words as the sentence this replaces, split across ErrorState's title/description -- which is the
+      // point of adopting the shared primitive. ErrorState renders role="alert" itself, so the failure keeps
+      // announcing exactly as the hand-rolled <p role="alert"> did.
+      errorTitle="Could not read the local portfolio queue"
+      errorDescription={result !== null && !result.ok ? result.error : undefined}
+      emptyTitle="No queued work yet"
+      emptyDescription="The cards fill in once the miner enqueues its first portfolio item."
+    >
+      {summary === null ? null : (
+        <div className="grid gap-6">
+          <dl className="grid gap-4 sm:grid-cols-3">
+            {(Object.keys(STATUS_LABELS) as QueueStatus[]).map((status) => (
+              <Card key={status}>
+                <CardContent className="p-4">
+                  <dt className="text-token-2xs uppercase tracking-wider text-muted-foreground">
+                    {STATUS_LABELS[status]}
+                  </dt>
+                  <dd className={`mt-1 text-token-3xl font-display font-semibold ${STATUS_TONE[status]}`}>
+                    {summary.byStatus[status]}
+                  </dd>
+                </CardContent>
+              </Card>
+            ))}
+          </dl>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Repository</TableHead>
+                <TableHead>Queued</TableHead>
+                <TableHead>In progress</TableHead>
+                <TableHead>Done</TableHead>
+                <TableHead>Total</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {summary.repos.map((repo) => (
+                <TableRow key={repo.repoFullName}>
+                  <TableCell className="font-mono text-foreground">{repo.repoFullName}</TableCell>
+                  <TableCell>{repo.byStatus.queued}</TableCell>
+                  <TableCell>{repo.byStatus.in_progress}</TableCell>
+                  <TableCell>{repo.byStatus.done}</TableCell>
+                  <TableCell>{repo.total}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </StateBoundary>
+  );
+}
+
+/** Placeholder shaped like the queue-actions table's rows, for the same reason as the summary's. */
+function QueueActionsSkeleton() {
+  return (
+    <div className="grid gap-2" data-testid="queue-actions-skeleton">
+      {[0, 1, 2].map((row) => (
+        <Skeleton key={row} className="h-8 w-full" />
+      ))}
     </div>
   );
 }
@@ -115,48 +154,52 @@ export function PortfolioQueueActionsSection({
           Queue action failed: {actionResult.error}
         </p>
       ) : null}
-      {result === null ? (
-        <p className="text-token-sm text-muted-foreground">Loading actionable queue items…</p>
-      ) : !result.ok ? (
-        <p role="alert" className="text-token-sm text-[var(--danger)]">
-          Could not read actionable queue items: {result.error}
-        </p>
-      ) : result.items.length === 0 ? (
-        <p className="text-token-sm text-muted-foreground">
-          No in-progress or completed items to release or requeue right now.
-        </p>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Repository</TableHead>
-              <TableHead>Identifier</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {result.items.map((item) => (
-              <TableRow key={`${item.apiBaseUrl}:${item.repoFullName}:${item.identifier}`}>
-                <TableCell className="font-mono text-foreground">{item.repoFullName}</TableCell>
-                <TableCell className="font-mono">{item.identifier}</TableCell>
-                <TableCell>{STATUS_LABELS[item.status]}</TableCell>
-                <TableCell>
-                  {item.status === "in_progress" ? (
-                    <Button size="sm" variant="outline" disabled={pending} onClick={() => onRelease(item)}>
-                      Release
-                    </Button>
-                  ) : (
-                    <Button size="sm" variant="outline" disabled={pending} onClick={() => onRequeue(item)}>
-                      Requeue
-                    </Button>
-                  )}
-                </TableCell>
+      {/* Its own boundary, deliberately: this fetch is independent of the summary above, so a failure here
+          must not blank the whole page -- and a summary failure must not hide the actions. */}
+      <StateBoundary
+        isLoading={result === null}
+        isError={result !== null && !result.ok}
+        isEmpty={result !== null && result.ok && result.items.length === 0}
+        loadingTitle="Loading actionable queue items…"
+        loadingSkeleton={<QueueActionsSkeleton />}
+        errorTitle="Could not read actionable queue items"
+        errorDescription={result !== null && !result.ok ? result.error : undefined}
+        emptyTitle="No in-progress or completed items"
+        emptyDescription="Nothing to release or requeue right now."
+      >
+        {result === null || !result.ok || result.items.length === 0 ? null : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Repository</TableHead>
+                <TableHead>Identifier</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Action</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+            </TableHeader>
+            <TableBody>
+              {result.items.map((item) => (
+                <TableRow key={`${item.apiBaseUrl}:${item.repoFullName}:${item.identifier}`}>
+                  <TableCell className="font-mono text-foreground">{item.repoFullName}</TableCell>
+                  <TableCell className="font-mono">{item.identifier}</TableCell>
+                  <TableCell>{STATUS_LABELS[item.status]}</TableCell>
+                  <TableCell>
+                    {item.status === "in_progress" ? (
+                      <Button size="sm" variant="outline" disabled={pending} onClick={() => onRelease(item)}>
+                        Release
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled={pending} onClick={() => onRequeue(item)}>
+                        Requeue
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </StateBoundary>
     </section>
   );
 }

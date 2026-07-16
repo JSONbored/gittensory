@@ -52,7 +52,8 @@ describe("PortfolioQueueActionsSection (#4857)", () => {
         onRequeue={() => undefined}
       />,
     );
-    expect(screen.getByText(/Loading actionable queue items/i)).toBeTruthy();
+    // #6511: replaced by StateBoundary's skeleton, so assert the placeholder, not the removed literal text.
+    expect(screen.getByTestId("queue-actions-skeleton")).toBeTruthy();
   });
 
   it("renders an error message when the local API is unreachable", () => {
