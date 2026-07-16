@@ -6,6 +6,7 @@ import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildFeasibilityVerdict } from "@loopover/engine";
+import { buildFocusManifestValidation } from "@loopover/engine/focus-manifest-validation";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -819,7 +820,10 @@ registerStdioTool(
     description: stdioToolDescription("loopover_validate_config"),
     inputSchema: validateConfigShape,
   },
-  async (input) => toolResult("LoopOver manifest validation.", await apiPost("/v1/validate/focus-manifest", input)),
+  // Computed in-process via @loopover/engine (#6269): the focus-manifest parser + validation result builder
+  // are deterministic and source-free, so the local server validates a .loopover.yml fully offline — no
+  // apiPost round-trip. The remote server keeps computing the identical result through its own import.
+  async (input) => toolResult("LoopOver manifest validation.", buildFocusManifestValidation(input)),
 );
 
 registerStdioTool(

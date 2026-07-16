@@ -43,6 +43,10 @@
       "types": "./dist/scoring/pending-pr-scenarios.d.ts",
       "default": "./dist/scoring/pending-pr-scenarios.js"
     },
+    "./focus-manifest-validation": {
+      "types": "./dist/focus-manifest-validation.d.ts",
+      "default": "./dist/focus-manifest-validation.js"
+    },
     "./signals/test-evidence": {
       "types": "./dist/signals/test-evidence.d.ts",
       "default": "./dist/signals/test-evidence.js"
