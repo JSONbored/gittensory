@@ -93,16 +93,18 @@ describe("api routes", () => {
     expect(dynamicPreflight.status).toBe(204);
     expect(dynamicPreflight.headers.get("access-control-allow-origin")).toBe("https://preview.gittensory.test");
 
-    // REGRESSION: gittensory-ui's dev server (@lovable.dev/vite-tanstack-config) binds 8080, not Vite's 5173
-    // default — without this in DEFAULT_CORS_ORIGINS, every local/preview dev server is CORS-blocked from
-    // /health and the ApiStatusBanner falsely reports "API unreachable" even when the API is healthy.
+    // /health is one of the unauthenticated, cookie-free public-no-credential routes (#ops-anomaly-preview-cors)
+    // -- open to ANY origin (never just the DEFAULT_CORS_ORIGINS allowlist), so gittensory-ui's dev server
+    // (port 8080) and every other local/preview dev server or *.workers.dev/*.pages.dev preview build all get
+    // through without CORS-blocking the ApiStatusBanner. See routes-cors.test.ts for the dedicated coverage of
+    // this behavior (including confirming it stays scoped to just this small route set, not every route).
     const devPortPreflight = await app.request("/health", { method: "OPTIONS", headers: { origin: "http://localhost:8080" } }, env);
     expect(devPortPreflight.status).toBe(204);
-    expect(devPortPreflight.headers.get("access-control-allow-origin")).toBe("http://localhost:8080");
+    expect(devPortPreflight.headers.get("access-control-allow-origin")).toBe("*");
 
     const devPortLoopbackPreflight = await app.request("/health", { method: "OPTIONS", headers: { origin: "http://127.0.0.1:8080" } }, env);
     expect(devPortLoopbackPreflight.status).toBe(204);
-    expect(devPortLoopbackPreflight.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:8080");
+    expect(devPortLoopbackPreflight.headers.get("access-control-allow-origin")).toBe("*");
 
     const health = await app.request("/health", {}, env);
     expect(health.status).toBe(200);
@@ -147,9 +149,11 @@ describe("api routes", () => {
       return Response.json({ full_name: "JSONbored/gittensory", html_url: "https://github.com/JSONbored/gittensory", stargazers_count: 12, forks_count: 3 });
     });
 
+    // Also one of the public-no-credential routes (#ops-anomaly-preview-cors) -- open to any origin, not just
+    // the requesting origin reflected back from the strict allowlist.
     const response = await app.request("/v1/public/github/repos/JSONbored/gittensory/stats", { headers: { origin: "https://loopover.ai" } }, env);
     expect(response.status).toBe(200);
-    expect(response.headers.get("access-control-allow-origin")).toBe("https://loopover.ai");
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
     expect(response.headers.get("cache-control")).toContain("max-age=600");
     await expect(response.json()).resolves.toMatchObject({
       repoFullName: "JSONbored/gittensory",

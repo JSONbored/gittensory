@@ -953,15 +953,32 @@ export function createApp() {
   }
   /* v8 ignore stop */
   app.use("*", async (c, next) => {
-    const allowedOrigin = allowedCorsOrigin(c.env, c.req.header("origin"));
-    if (allowedOrigin) {
-      c.header("Access-Control-Allow-Origin", allowedOrigin);
-      c.header("Access-Control-Allow-Credentials", "true");
-      c.header("Access-Control-Allow-Headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");
-      c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-      c.header("Access-Control-Expose-Headers", "x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset, retry-after");
+    const origin = c.req.header("origin");
+    if (origin && isPublicNoCredentialRoute(c.req.path)) {
+      // These specific routes are unauthenticated, cookie-free, aggregate-only public data (health check,
+      // homepage stats counter, per-repo badge stats) -- open to ANY origin, including a fresh
+      // <alias>-loopover-ui.<sub>.workers.dev preview build (ui-preview-deploy.yml), which a static
+      // exact-match allowlist can never enumerate since the hostname is random per deploy. Deliberately
+      // NEVER sets Access-Control-Allow-Credentials here (mirrors src/review/stats.ts's handleStats, the
+      // same "*" + no-credentials pattern already used for this exact class of endpoint) -- browsers reject
+      // a credentialed response against a wildcard origin anyway, but the real safety property is that this
+      // branch never reaches the credentialed allowlist path below at all, so it can't accidentally grant a
+      // third-party *.workers.dev/*.pages.dev site cookie-riding access to anything session-gated.
+      c.header("Access-Control-Allow-Origin", "*");
+      c.header("Access-Control-Allow-Headers", "authorization, content-type");
+      c.header("Access-Control-Allow-Methods", "GET, OPTIONS");
       c.header("Access-Control-Max-Age", "600");
-      c.header("Vary", "Origin", { append: true });
+    } else {
+      const allowedOrigin = allowedCorsOrigin(c.env, origin);
+      if (allowedOrigin) {
+        c.header("Access-Control-Allow-Origin", allowedOrigin);
+        c.header("Access-Control-Allow-Credentials", "true");
+        c.header("Access-Control-Allow-Headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");
+        c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        c.header("Access-Control-Expose-Headers", "x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset, retry-after");
+        c.header("Access-Control-Max-Age", "600");
+        c.header("Vary", "Origin", { append: true });
+      }
     }
     if (c.req.method === "OPTIONS") return c.body(null, 204);
     return next();
@@ -5954,6 +5971,19 @@ function requiresApiToken(path: string): boolean {
   if (path === "/v1/ams/ingest") return false;
   if (path.startsWith("/v1/internal/")) return false;
   return path.startsWith("/v1/");
+}
+
+// Unauthenticated, cookie-free, aggregate-only public GET endpoints (health check, homepage stats counter,
+// per-repo public stats badge) -- open to any origin via a separate, credential-free CORS branch above.
+// Every other route stays on the strict exact-match allowlist + Access-Control-Allow-Credentials, since a
+// wildcard origin there would let any third party hosted on the SAME shared platform (a fresh
+// *.workers.dev/*.pages.dev preview build isn't the only thing that can land on those suffixes) ride an
+// authenticated user's session cookie cross-origin.
+function isPublicNoCredentialRoute(path: string): boolean {
+  if (path === "/health") return true;
+  if (path === "/v1/public/stats") return true;
+  if (/^\/v1\/public\/github\/repos\/[^/]+\/[^/]+\/stats$/.test(path)) return true;
+  return false;
 }
 
 const DEFAULT_CORS_ORIGINS = [
