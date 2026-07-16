@@ -38,6 +38,12 @@ describe("MCP miner write-tools (#780)", () => {
       { name: "loopover_post_eligibility_comment", args: { repoFullName: "o/r", number: 7, body: "hi" }, expect: "gh issue comment 7 --repo 'o/r' --body 'hi'" },
       { name: "loopover_create_branch", args: { branch: "feat/x", base: "main" }, expect: "git switch -c 'feat/x' 'main'" },
       { name: "loopover_delete_branch", args: { branch: "feat/x", remote: true }, expect: "git branch -D 'feat/x' && git push origin --delete 'feat/x'" },
+      { name: "loopover_close_pr", args: { repoFullName: "o/r", number: 7 }, expect: "gh pr close 7 --repo 'o/r'" },
+      {
+        name: "loopover_close_pr",
+        args: { repoFullName: "o/r", number: 7, comment: "dup" },
+        expect: "gh pr close 7 --repo 'o/r' && gh pr comment 7 --repo 'o/r' --body 'dup'",
+      },
     ];
     for (const testCase of cases) {
       const result = await client.callTool({ name: testCase.name, arguments: testCase.args });

@@ -40,6 +40,7 @@ const WRITE_TOOLS = [
   "loopover_delete_branch",
   "loopover_generate_tests",
   "loopover_file_follow_up_issue",
+  "loopover_close_pr",
 ];
 
 function spec(result: unknown): { action: string; command: string; boundary: string } {
@@ -47,7 +48,7 @@ function spec(result: unknown): { action: string; command: string; boundary: str
 }
 
 describe("loopover-mcp write-tools (#6149)", () => {
-  it("registers all 8 write-tools on the local stdio server", async () => {
+  it("registers all 9 write-tools on the local stdio server", async () => {
     const names = new Set((await client.listTools()).tools.map((t) => t.name));
     for (const name of WRITE_TOOLS) expect(names, `missing ${name}`).toContain(name);
   });
@@ -84,6 +85,25 @@ describe("loopover-mcp write-tools (#6149)", () => {
     expect(spec(result).action).toBe("apply_labels");
     expect(spec(result).command).toContain("gh issue edit 7 --repo 'acme/widgets'");
     expect(spec(result).command).toContain("--add-label");
+  });
+
+  it("loopover_close_pr composes a gh pr close spec, optionally with a follow-up comment", async () => {
+    const noComment = await client.callTool({
+      name: "loopover_close_pr",
+      arguments: { repoFullName: "acme/widgets", number: 7 },
+    });
+    expect(noComment.isError).toBeFalsy();
+    expect(spec(noComment).action).toBe("close_pr");
+    expect(spec(noComment).command).toBe("gh pr close 7 --repo 'acme/widgets'");
+
+    const withComment = await client.callTool({
+      name: "loopover_close_pr",
+      arguments: { repoFullName: "acme/widgets", number: 7, comment: "superseded by a fresh PR" },
+    });
+    expect(withComment.isError).toBeFalsy();
+    expect(spec(withComment).command).toBe(
+      "gh pr close 7 --repo 'acme/widgets' && gh pr comment 7 --repo 'acme/widgets' --body 'superseded by a fresh PR'",
+    );
   });
 
   it("loopover_post_eligibility_comment composes a gh issue comment spec", async () => {

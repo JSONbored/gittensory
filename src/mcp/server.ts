@@ -146,6 +146,7 @@ import { computeLocalScorerTokens } from "../signals/local-scorer";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import {
   buildApplyLabelsSpec,
+  buildClosePrSpec,
   buildCreateBranchSpec,
   buildDeleteBranchSpec,
   buildFileIssueSpec,
@@ -421,6 +422,11 @@ const applyLabelsShape = {
   repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
   number: z.number().int().positive(),
   labels: z.array(z.string().min(1).max(100)).min(1).max(20),
+};
+const closePrShape = {
+  repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
+  number: z.number().int().positive(),
+  comment: z.string().max(WRITE_TOOL_BODY_MAX).optional(),
 };
 const postEligibilityCommentShape = {
   repoFullName: z.string().min(3).max(SCENARIO_MAX_REPO_FULL_NAME_CHARS),
@@ -1772,6 +1778,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_delete_branch: "agent",
   loopover_generate_tests: "agent",
   loopover_file_follow_up_issue: "agent",
+  loopover_close_pr: "agent",
   loopover_build_plan: "agent",
   loopover_plan_status: "agent",
   loopover_record_step_result: "agent",
@@ -2428,6 +2435,11 @@ export class LoopoverMcp {
         outputSchema: localWriteActionOutputSchema,
       },
       async (input) => this.toolResult(this.localWriteSpec(buildFollowUpIssueSpec(input))),
+    );
+    register(
+      "loopover_close_pr",
+      { description: "Build a LOCAL-execution spec to close a pull request, optionally with a comment (run it with your own gh creds; loopover never performs the write).", inputSchema: closePrShape, outputSchema: localWriteActionOutputSchema },
+      async (input) => this.toolResult(this.localWriteSpec(buildClosePrSpec(input))),
     );
 
     // #783 multi-step plan DAG — stateless: pass the plan back each call.
