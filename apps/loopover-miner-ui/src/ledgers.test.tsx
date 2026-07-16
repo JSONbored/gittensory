@@ -93,8 +93,34 @@ describe("LedgersView (#4855)", () => {
     expect(screen.getByText("Active", { selector: "dt" }).nextSibling?.textContent).toBe("2");
     expect(screen.getByText("Released", { selector: "dt" }).nextSibling?.textContent).toBe("1");
     expect(screen.getByText("rate_limit_deferred")).toBeTruthy();
-    expect(screen.getByText("attempt_succeeded")).toBeTruthy();
+    // attempt_succeeded now appears twice: once in the events-by-type breakdown and once in the recent feed.
+    expect(screen.getAllByText("attempt_succeeded").length).toBeGreaterThan(0);
     expect(screen.getAllByText("acme/widgets").length).toBeGreaterThan(0);
+  });
+
+  it("renders an events-by-type breakdown table for events.byType (#6184)", () => {
+    const summary: LedgersSummary = {
+      ...fixtureSummary,
+      events: {
+        total: 5,
+        // attempt_failed is present only in the aggregate breakdown, never in the recent feed below,
+        // so finding it proves the byType table (not the recent-events list) rendered it.
+        byType: { attempt_started: 3, attempt_failed: 2 },
+        recent: [{ eventType: "attempt_started", repoFullName: "acme/widgets", createdAt: "2026-07-10T06:00:00.000Z" }],
+      },
+    };
+    render(<LedgersView result={{ ok: true, summary }} />);
+    expect(screen.getByRole("heading", { name: "Events by type (5)" })).toBeTruthy();
+    expect(screen.getByText("attempt_failed")).toBeTruthy();
+  });
+
+  it("shows the empty breakdown message when no events are recorded but other ledgers have activity", () => {
+    const summary: LedgersSummary = {
+      ...fixtureSummary,
+      events: { total: 0, byType: {}, recent: [] },
+    };
+    render(<LedgersView result={{ ok: true, summary }} />);
+    expect(screen.getByText("No events recorded.")).toBeTruthy();
   });
 
   it("renders the fresh-install empty state when every ledger is empty", () => {
