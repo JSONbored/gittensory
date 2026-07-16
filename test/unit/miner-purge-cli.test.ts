@@ -6,6 +6,8 @@ import { openClaimLedger, closeDefaultClaimLedger } from "../../packages/loopove
 import { initEventLedger, closeDefaultEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
 import { initGovernorLedger, closeDefaultGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
 import { initPredictionLedger, closeDefaultPredictionLedger } from "../../packages/loopover-miner/lib/prediction-ledger.js";
+import { initPortfolioQueueStore } from "../../packages/loopover-miner/lib/portfolio-queue.js";
+import { initRunStateStore } from "../../packages/loopover-miner/lib/run-state.js";
 import { initAttemptLog, closeDefaultAttemptLog } from "../../packages/loopover-miner/lib/attempt-log.js";
 import {
   ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
@@ -69,12 +71,14 @@ describe("parsePurgeArgs (#5564)", () => {
 });
 
 describe("runPurge --dry-run (#5564)", () => {
-  it("counts matching rows across the four real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
+  it("counts matching rows across the six real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
     const root = tempDir();
     const claimDbPath = join(root, "claim-ledger.sqlite3");
     const eventDbPath = join(root, "event-ledger.sqlite3");
     const governorDbPath = join(root, "governor-ledger.sqlite3");
     const predictionDbPath = join(root, "prediction-ledger.sqlite3");
+    const portfolioDbPath = join(root, "portfolio-queue.sqlite3");
+    const runStateDbPath = join(root, "run-state.sqlite3");
     const attemptLogDbPath = join(root, "attempt-log.sqlite3"); // never created — dry run must not touch it
 
     const claimLedger = openClaimLedger(claimDbPath);
@@ -108,11 +112,26 @@ describe("runPurge --dry-run (#5564)", () => {
     });
     predictionLedger.close();
 
+    // #6599: both of these persist repo_full_name and were silently left out of the purge entirely. Each gets
+    // 2 rows for the target repo and 1 for another repo, so the count proves the sweep is repo-scoped.
+    const portfolioQueue = initPortfolioQueueStore(portfolioDbPath);
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:1" });
+    portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "issue:2" });
+    portfolioQueue.enqueue({ repoFullName: "acme/other", identifier: "issue:3" });
+    portfolioQueue.close();
+
+    const runState = initRunStateStore(runStateDbPath);
+    runState.setRunState("acme/widgets", "planning");
+    runState.setRunState("acme/other", "idle");
+    runState.close();
+
     const resolveDbPaths = {
       "claim-ledger": () => claimDbPath,
       "event-ledger": () => eventDbPath,
       "governor-ledger": () => governorDbPath,
       "prediction-ledger": () => predictionDbPath,
+      "portfolio-queue": () => portfolioDbPath,
+      "run-state": () => runStateDbPath,
       "attempt-log": () => attemptLogDbPath,
     };
 
@@ -127,6 +146,8 @@ describe("runPurge --dry-run (#5564)", () => {
         { store: "event-ledger", wouldPurge: 1 },
         { store: "governor-ledger", wouldPurge: 1 },
         { store: "prediction-ledger", wouldPurge: 0 },
+        { store: "portfolio-queue", wouldPurge: 2 },
+        { store: "run-state", wouldPurge: 1 },
       ],
       attemptLogNote: ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
       attemptLogTotalRows: 0,
@@ -283,11 +304,15 @@ describe("runPurge (real, #5564)", () => {
     const event = fakeStore(1);
     const governor = fakeStore(0);
     const prediction = fakeStore(3);
+    const portfolioQueue = fakeStore(4); // #6599
+    const runState = fakeStore(1); // #6599
     const options = {
       openClaimLedger: () => claim,
       initEventLedger: () => event,
       initGovernorLedger: () => governor,
       initPredictionLedger: () => prediction,
+      initPortfolioQueueStore: () => portfolioQueue,
+      initRunStateStore: () => runState,
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -296,28 +321,30 @@ describe("runPurge (real, #5564)", () => {
     expect(summary).toMatchObject({
       outcome: "purged",
       repoFullName: "acme/widgets",
-      totalPurged: 6,
+      totalPurged: 11, // 6 from the four original stores + 5 newly covered by #6599
       stores: [
         { store: "claim-ledger", purged: 2 },
         { store: "event-ledger", purged: 1 },
         { store: "governor-ledger", purged: 0 },
         { store: "prediction-ledger", purged: 3 },
+        { store: "portfolio-queue", purged: 4 },
+        { store: "run-state", purged: 1 },
         { store: "attempt-log", purged: null, note: ATTEMPT_LOG_NOT_PURGEABLE_NOTE },
       ],
     });
     expect(typeof summary.purgedAt).toBe("string");
-    for (const store of [claim, event, governor, prediction]) {
+    for (const store of [claim, event, governor, prediction, portfolioQueue, runState]) {
       expect(store.purgeByRepo).toHaveBeenCalledWith("acme/widgets");
     }
     // Injected stores are caller-owned: runPurge must not close them.
-    for (const store of [claim, event, governor, prediction]) {
+    for (const store of [claim, event, governor, prediction, portfolioQueue, runState]) {
       expect(store.close).not.toHaveBeenCalled();
     }
 
     log.mockClear();
     expect(runPurge(["--repo", "acme/widgets"], options as never)).toBe(0);
     const text = String(log.mock.calls[0]?.[0]);
-    expect(text).toContain("Purged 6 row(s) for acme/widgets");
+    expect(text).toContain("Purged 11 row(s) for acme/widgets");
     expect(text).toContain("claim-ledger=2");
     expect(text).toContain(ATTEMPT_LOG_NOT_PURGEABLE_NOTE);
   });

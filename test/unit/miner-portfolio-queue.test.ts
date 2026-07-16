@@ -644,4 +644,32 @@ describe("loopover-miner portfolio/queue store (#2292)", () => {
       }).not.toThrow();
     });
   });
+
+  describe("purgeByRepo (#6599)", () => {
+    it("deletes every queued item for one repo and leaves other repos untouched", () => {
+      const store = tempStore();
+      store.enqueue({ repoFullName: "owner/repo-a", identifier: "issue:1" });
+      store.enqueue({ repoFullName: "owner/repo-a", identifier: "issue:2" });
+      store.enqueue({ repoFullName: "owner/repo-b", identifier: "issue:3" });
+
+      expect(store.purgeByRepo("owner/repo-a")).toBe(2);
+      expect(store.listQueue("owner/repo-a")).toEqual([]);
+      expect(store.listQueue("owner/repo-b")).toHaveLength(1);
+    });
+
+    it("returns 0 when nothing matches the repo", () => {
+      const store = tempStore();
+      store.enqueue({ repoFullName: "owner/repo-b", identifier: "issue:1" });
+      expect(store.purgeByRepo("owner/repo-a")).toBe(0);
+      expect(store.listQueue("owner/repo-b")).toHaveLength(1);
+    });
+
+    it("rejects a missing/malformed repoFullName rather than silently no-opping", () => {
+      // A typo'd repo must not report a successful purge of nothing — the operator would believe the
+      // right-to-be-forgotten request was honored.
+      const store = tempStore();
+      expect(() => store.purgeByRepo(undefined as never)).toThrow("invalid_repo_full_name");
+      expect(() => store.purgeByRepo("no-slash")).toThrow("invalid_repo_full_name");
+    });
+  });
 });

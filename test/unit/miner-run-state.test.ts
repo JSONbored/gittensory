@@ -359,4 +359,44 @@ describe("loopover-miner run-state store (#2289)", () => {
       }).not.toThrow();
     });
   });
+
+  describe("purgeByRepo (#6599)", () => {
+    // Closed via this block's own afterEach rather than per-test, so a failing assertion still releases the
+    // SQLite handle — an open handle makes the outer afterEach's rmSync fail on Windows.
+    const openStores: Array<{ close: () => void }> = [];
+    afterEach(() => {
+      for (const store of openStores.splice(0)) store.close();
+    });
+
+    function tempStore() {
+      const store = initRunStateStore(join(tempRoot(), "nested", "run-state.sqlite3"));
+      openStores.push(store);
+      return store;
+    }
+
+    it("deletes the tracked state for one repo and leaves other repos untouched", () => {
+      const store = tempStore();
+      store.setRunState("owner/repo-a", "planning");
+      store.setRunState("owner/repo-b", "preparing");
+
+      expect(store.purgeByRepo("owner/repo-a")).toBe(1);
+      expect(store.getRunState("owner/repo-a")).toBeNull();
+      expect(store.listRunStates()).toHaveLength(1);
+    });
+
+    it("returns 0 when nothing matches the repo", () => {
+      const store = tempStore();
+      store.setRunState("owner/repo-b", "planning");
+      expect(store.purgeByRepo("owner/repo-a")).toBe(0);
+      expect(store.listRunStates()).toHaveLength(1);
+    });
+
+    it("rejects a missing/malformed repoFullName rather than silently no-opping", () => {
+      // A typo'd repo must not report a successful purge of nothing — the operator would believe the
+      // right-to-be-forgotten request was honored.
+      const store = tempStore();
+      expect(() => store.purgeByRepo(undefined as never)).toThrow("invalid_repo_full_name");
+      expect(() => store.purgeByRepo("no-slash")).toThrow("invalid_repo_full_name");
+    });
+  });
 });
