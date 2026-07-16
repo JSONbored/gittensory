@@ -198,6 +198,17 @@ describe("DeadLetterQueuePanel", () => {
     await screen.findByText("github-webhook");
     expect(screen.getByRole("link", { name: /next/i }).getAttribute("aria-disabled")).toBe("true");
   });
+
+  it("shows a content-shaped skeleton (not the generic spinner) while the queue is loading (#793)", () => {
+    // Keep the request in flight so the boundary stays in its loading branch.
+    apiFetch.mockReturnValue(new Promise<never>(() => {}));
+    const { container } = render(<DeadLetterQueuePanel />);
+    // The custom skeleton replaces the generic LoadingState, so neither its status role nor its title show.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Loading dead-letter queue…")).toBeNull();
+    // The placeholder renders animate-pulse skeleton blocks approximating the table's rows.
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(1);
+  });
 });
 
 describe("DeadLetterQueuePanel row actions and purge", () => {

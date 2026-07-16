@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
 import { useApiResource } from "@/lib/api/use-api-resource";
@@ -85,6 +86,32 @@ type MinerDashboard = {
   >;
   mcp?: { snapshot?: string | null; drift?: string | null; lastRun?: string | null };
 };
+
+/** Content-shaped loading placeholder mirroring the miner dashboard's layout (refresh line, metric
+ *  grid, the next-actions/scoreability two-column row, and the blockers/repo-fit row) so the panel
+ *  doesn't jump once the decision pack arrives (#793). */
+function MinerDashboardSkeleton() {
+  return (
+    <div className="space-y-6" aria-hidden>
+      <div className="flex items-center justify-end">
+        <Skeleton className="h-6 w-40 rounded-token" />
+      </div>
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} className="h-24 w-full rounded-token" />
+        ))}
+      </section>
+      <section className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+        <Skeleton className="h-80 w-full rounded-token" />
+        <Skeleton className="h-80 w-full rounded-token" />
+      </section>
+      <section className="grid gap-6 lg:grid-cols-2">
+        <Skeleton className="h-64 w-full rounded-token" />
+        <Skeleton className="h-64 w-full rounded-token" />
+      </section>
+    </div>
+  );
+}
 
 export function MinerPanel() {
   const { session } = useSession();
@@ -166,6 +193,7 @@ export function MinerPanel() {
         onRetry={dashboard.reload}
         onRefresh={dashboard.reload}
         loadingTitle="Loading miner signals…"
+        loadingSkeleton={<MinerDashboardSkeleton />}
         emptyTitle="No miner actions yet"
         emptyDescription="Once a decision pack or branch analysis exists, ranked next actions and blockers will appear here."
       >

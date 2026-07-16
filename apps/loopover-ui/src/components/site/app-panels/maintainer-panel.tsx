@@ -38,6 +38,7 @@ import { TableScroll } from "@/components/site/data-table";
 import { StatCard } from "@/components/site/primitives";
 import { RefreshMeta } from "@/components/site/refresh-meta";
 import { EmptyState, LoadingState, StateBoundary } from "@/components/site/state-views";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
 import { useApiResource } from "@/lib/api/use-api-resource";
@@ -210,6 +211,30 @@ export function MaintainerPanel({
   return <MaintainerDashboardView initialRepoFullName={initialRepoFullName} />;
 }
 
+/** Content-shaped loading placeholder mirroring the maintainer dashboard's top-level layout (refresh
+ *  line, onboarding preview, metric grid, the two-column install/settings row, and the reviewability
+ *  table) so the console doesn't jump once the dashboard payload arrives (#793). */
+function MaintainerDashboardSkeleton() {
+  return (
+    <div className="space-y-6" aria-hidden>
+      <div className="flex items-center justify-end">
+        <Skeleton className="h-6 w-40 rounded-token" />
+      </div>
+      <Skeleton className="h-24 w-full rounded-token" />
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} className="h-24 w-full rounded-token" />
+        ))}
+      </section>
+      <section className="grid gap-6 lg:grid-cols-2">
+        <Skeleton className="h-64 w-full rounded-token" />
+        <Skeleton className="h-64 w-full rounded-token" />
+      </section>
+      <Skeleton className="h-72 w-full rounded-token" />
+    </div>
+  );
+}
+
 function MaintainerDashboardView({
   initialRepoFullName,
 }: {
@@ -229,6 +254,7 @@ function MaintainerDashboardView({
       onRetry={dashboard.reload}
       onRefresh={dashboard.reload}
       loadingTitle="Loading maintainer context…"
+      loadingSkeleton={<MaintainerDashboardSkeleton />}
       emptyTitle="No maintainer data yet"
       emptyDescription="Install health, reviewability, and surface previews appear after repository data is available."
     >

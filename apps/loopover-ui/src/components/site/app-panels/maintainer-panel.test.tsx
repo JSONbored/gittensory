@@ -37,6 +37,19 @@ describe("MaintainerPanel role gate", () => {
     render(<MaintainerPanel />);
     expect(screen.queryByText(/Maintainer access required/i)).toBeNull();
   });
+
+  it("shows a content-shaped skeleton (not the generic spinner) while the dashboard loads (#793)", () => {
+    // Default mock: an admitted maintainer whose dashboard resource is still loading.
+    useSession.mockReturnValue({
+      session: { login: "maint", roles: ["maintainer"] },
+      hydrated: true,
+    });
+    const { container } = render(<MaintainerPanel />);
+    // The custom skeleton replaces the generic LoadingState spinner while the payload is in flight.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Loading maintainer context…")).toBeNull();
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(1);
+  });
 });
 
 const emptyGateOutcomeBreakdown = {

@@ -30,6 +30,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { Skeleton } from "@/components/ui/skeleton";
 import { getApiOrigin } from "@/lib/api/origin";
 import { apiFetch } from "@/lib/api/request";
 import { useApiResource } from "@/lib/api/use-api-resource";
@@ -123,6 +124,7 @@ export function DeadLetterQueuePanel() {
           onRefresh={resource.reload}
           loadingTitle="Loading dead-letter queue…"
           loadingDescription="Fetching failed jobs from the self-host queue backend."
+          loadingSkeleton={<DeadLetterQueueSkeleton />}
           emptyTitle="No dead-letter jobs"
           emptyDescription="Jobs that exhaust their retry budget will appear here."
           errorTitle="Couldn't load the dead-letter queue"
@@ -138,6 +140,31 @@ export function DeadLetterQueuePanel() {
         </StateBoundary>
       </div>
     </section>
+  );
+}
+
+/** Content-shaped loading placeholder for the dead-letter table (bordered table container + a row of
+ *  pagination controls) so the panel doesn't jump once the first page of failed jobs arrives (#793). */
+function DeadLetterQueueSkeleton() {
+  return (
+    <div className="space-y-3" aria-hidden>
+      <div className="overflow-x-auto rounded-token border border-border bg-transparent">
+        <div className="border-b border-border px-4 py-3">
+          <Skeleton className="h-4 w-40" />
+        </div>
+        <div className="divide-y divide-border/60">
+          {Array.from({ length: 5 }, (_, index) => (
+            <div key={index} className="px-4 py-3">
+              <Skeleton className="h-5 w-full" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-8 w-40 rounded-token" />
+      </div>
+    </div>
   );
 }
 
