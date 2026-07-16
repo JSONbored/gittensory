@@ -51,7 +51,7 @@ describe("CycleTimeCard", () => {
     expect(screen.getByText("2 paired PR(s)")).toBeTruthy();
   });
 
-  it("shows inline empty copy when there are no samples", () => {
+  it("shows the shared EmptyState (not the percentile tiles) when there are no samples", () => {
     const cycleTime: CycleTimeAggregate = {
       p50Ms: null,
       p90Ms: null,
@@ -61,6 +61,12 @@ describe("CycleTimeCard", () => {
     };
     render(<CycleTimeCard cycleTime={cycleTime} />);
     expect(screen.getByText("no samples yet")).toBeTruthy();
+    // Empty case now renders the shared EmptyState rather than a bare paragraph or the p50/p90/p99 tiles.
+    expect(screen.getByText("No paired samples yet")).toBeTruthy();
+    expect(
+      screen.getByText(/Paired gate decisions and PR outcomes will appear here/i),
+    ).toBeTruthy();
+    expect(screen.queryByText("p50")).toBeNull();
     expect(screen.queryByText("Cycle-time distribution")).toBeNull();
   });
 

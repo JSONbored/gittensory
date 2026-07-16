@@ -1,3 +1,4 @@
+import { AnalyticsCardShell } from "@/components/site/app-panels/analytics-card-shell";
 import { BoundaryBadge, Stat } from "@/components/site/control-primitives";
 import { EmptyState } from "@/components/site/state-views";
 import {
@@ -8,25 +9,20 @@ import {
 } from "@/components/site/app-panels/gate-outcome-card-model";
 
 /** Gate-outcome breakdown card (#2203, part of #539): auto-merged / auto-closed / held counts and rates
- *  from repo-scoped gate-outcome audit events. Read-only; public-safe aggregate counts only. */
+ *  from repo-scoped gate-outcome audit events. Renders through the shared AnalyticsCardShell (#2200); the count
+ *  stats always show, and the outcome-mix bar falls back to an EmptyState when there are no events. */
 export function GateOutcomeCard({ breakdown }: { breakdown: GateOutcomeCardData }) {
   const segments = gateOutcomeSegments(breakdown);
   const hasSamples = gateOutcomeHasSamples(breakdown);
 
   return (
-    <section className="rounded-token border-hairline bg-card p-5">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="font-display text-token-lg font-semibold">Gate outcomes</h2>
-          <p className="mt-1 text-token-xs text-muted-foreground">
-            Terminal gate dispositions from audit events over the last {breakdown.windowDays}{" "}
-            day(s).
-          </p>
-        </div>
-        <BoundaryBadge boundary="public" />
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+    <AnalyticsCardShell
+      title="Gate outcomes"
+      description={`Terminal gate dispositions from audit events over the last ${breakdown.windowDays} day(s).`}
+      state="ready"
+      action={<BoundaryBadge boundary="public" />}
+    >
+      <div className="grid gap-3 sm:grid-cols-3">
         <Stat
           label="Auto-merged"
           value={String(breakdown.counts.autoMerged)}
@@ -94,6 +90,6 @@ export function GateOutcomeCard({ breakdown }: { breakdown: GateOutcomeCardData 
           description="Auto-merge, auto-close, and hold audit rows appear here once the agent processes PRs in your scoped repos."
         />
       )}
-    </section>
+    </AnalyticsCardShell>
   );
 }

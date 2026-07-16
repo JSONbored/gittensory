@@ -13,6 +13,7 @@ export function AnalyticsCardShell({
   title,
   description,
   state,
+  action,
   emptyTitle = "No data yet",
   emptyHint,
   children,
@@ -20,6 +21,8 @@ export function AnalyticsCardShell({
   title: string;
   description?: ReactNode;
   state: AnalyticsCardState;
+  /** Optional header-right chrome (a status pill, boundary badge, freshness stamp) rendered across every state. */
+  action?: ReactNode;
   emptyTitle?: string;
   emptyHint?: ReactNode;
   children?: ReactNode;
@@ -33,6 +36,7 @@ export function AnalyticsCardShell({
             <p className="mt-1 text-token-xs text-muted-foreground">{description}</p>
           ) : null}
         </div>
+        {action ? <div className="flex flex-wrap items-center gap-2">{action}</div> : null}
       </div>
 
       {state === "loading" ? (

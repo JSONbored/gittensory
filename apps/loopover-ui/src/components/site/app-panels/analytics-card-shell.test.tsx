@@ -50,4 +50,20 @@ describe("AnalyticsCardShell", () => {
     expect(screen.getByRole("heading", { name: "Queue health" })).toBeTruthy();
     expect(container.querySelectorAll("p").length).toBe(0);
   });
+
+  it("renders the header action across every state, including empty", () => {
+    render(
+      <AnalyticsCardShell
+        title="Queue health"
+        state="empty"
+        action={<span>12 paired</span>}
+        emptyTitle="No snapshot yet"
+      >
+        <div>ready content</div>
+      </AnalyticsCardShell>,
+    );
+    expect(screen.getByText("12 paired")).toBeTruthy();
+    expect(screen.getByText("No snapshot yet")).toBeTruthy();
+    expect(screen.queryByText("ready content")).toBeNull();
+  });
 });
