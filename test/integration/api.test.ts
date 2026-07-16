@@ -2624,7 +2624,7 @@ describe("api routes", () => {
         // have. slopGateMode: "block" is a DIFFERENT, legitimately-blockable dimension and is left untouched.
         // #4618/#5373: gateCheckMode is an unknown key with no effect here (removed from RepositorySettings
         // entirely) -- included to confirm it is silently ignored, not to drive reviewCheckMode.
-        body: JSON.stringify({ gateCheckMode: "enabled", reviewCheckMode: "required", slopGateMode: "block", slopGateMinScore: 55, qualityGateMode: "block", mergeTrainMode: "enforce", autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
+        body: JSON.stringify({ gateCheckMode: "enabled", reviewCheckMode: "required", slopGateMode: "block", slopGateMinScore: 55, qualityGateMode: "block", autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
       },
       ownerEnv,
     );
@@ -2634,7 +2634,8 @@ describe("api routes", () => {
       slopGateMode: "block",
       slopGateMinScore: 55,
       qualityGateMode: "advisory", // #2267: downgraded, not persisted as "block"
-      mergeTrainMode: "enforce",
+      // mergeTrainMode moved off the dashboard entirely (Batch B, loopover#6443) -- configure via .loopover.yml.
+      mergeTrainMode: "off",
       autonomy: { merge: "auto_with_approval" }, // unknown action class dropped by the DB normalizer
       autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" },
       agentPaused: true, // #776 kill-switch
@@ -6060,15 +6061,13 @@ describe("api routes", () => {
       repoFullName: "entrius/allways-ui",
       requireLinkedIssue: true,
       autoLabelEnabled: false,
-      createMissingLabel: false,
-      gittensorLabel: "gittensor-miner",
     });
-    // publicSurface moved off the DB entirely (Batch A, loopover#6442) -- set via manifest injection instead.
-    // createMissingLabel/gittensorLabel stay DB-injected here: buildRegistrationReadinessResponse's
-    // applyConfigAsCodeOnlyFields only overlays the effective value for Batch A's 9 fields (#6442) -- every
-    // other field, including these two, is intentionally the RAW DB value (the #2912 raw-vs-manifest
-    // comparison design), so a manifest override here would NOT show up in this response.
-    await upsertRepoFocusManifest(env, "entrius/allways-ui", { settings: { publicSurface: "off" } });
+    // publicSurface (Batch A #6442) + createMissingLabel/gittensorLabel (Batch B #6443) are config-as-code
+    // only -- inject via the manifest so applyConfigAsCodeOnlyFields overlays the effective values onto the
+    // registration-readiness raw-vs-yml advisory response.
+    await upsertRepoFocusManifest(env, "entrius/allways-ui", {
+      settings: { publicSurface: "off", createMissingLabel: false, gittensorLabel: "gittensor-miner" },
+    });
     const directReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(directReadiness.status).toBe(200);
     await expect(directReadiness.json()).resolves.toMatchObject({

@@ -32,7 +32,7 @@ describe("maintainer AI-review config route", () => {
   it("sets mode/byok/provider/model and preserves unrelated settings", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", gittensorLabel: "custom-label", blacklistLabel: "abuse" });
+    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", autoLabelEnabled: false });
     const res = await app.request(
       `/v1/repos/${REPO}/ai-review`,
       { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: true, provider: "anthropic", model: "claude-3-5-sonnet-latest", allAuthors: true, closeOwnerAuthors: true }) },
@@ -45,8 +45,7 @@ describe("maintainer AI-review config route", () => {
     expect(settings.aiReviewAllAuthors).toBe(true); // persisted + read back (DB column round-trip)
     expect(settings.closeOwnerAuthors).toBe(true); // persisted + read back (DB column round-trip)
     expect(settings.reviewCheckMode).toBe("required"); // preserved
-    expect(settings.gittensorLabel).toBe("custom-label"); // preserved
-    expect(settings.blacklistLabel).toBe("abuse"); // #1425 round-trips through the DB
+    expect(settings.autoLabelEnabled).toBe(false); // preserved
   });
 
   it("defaults closeOwnerAuthors off when the AI-review config omits it", async () => {
@@ -96,7 +95,7 @@ describe("maintainer AI-review config route", () => {
   it("sets aiReviewLowConfidenceDisposition (#4603) and preserves unrelated settings", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", gittensorLabel: "custom-label" });
+    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", autoLabelEnabled: false });
     const res = await app.request(
       `/v1/repos/${REPO}/ai-review`,
       { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: false, lowConfidenceDisposition: "advisory_only" }) },
@@ -107,7 +106,7 @@ describe("maintainer AI-review config route", () => {
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.aiReviewLowConfidenceDisposition).toBe("advisory_only"); // persisted + read back (DB column round-trip)
     expect(settings.reviewCheckMode).toBe("required"); // preserved
-    expect(settings.gittensorLabel).toBe("custom-label"); // preserved
+    expect(settings.autoLabelEnabled).toBe(false); // preserved
   });
 
   it("defaults aiReviewLowConfidenceDisposition to hold_for_review when the AI-review config omits it (fresh repo, no row)", async () => {
@@ -149,10 +148,10 @@ describe("maintainer AI-review config route", () => {
   it("lets maintainer settings set closeOwnerAuthors without resetting unrelated fields", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", gittensorLabel: "custom-label" });
+    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", autoLabelEnabled: false });
     const res = await app.request(`/v1/repos/${REPO}/settings`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ closeOwnerAuthors: true }) }, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ closeOwnerAuthors: true, reviewCheckMode: "required", gittensorLabel: "custom-label" });
+    expect(await res.json()).toMatchObject({ closeOwnerAuthors: true, reviewCheckMode: "required", autoLabelEnabled: false });
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.closeOwnerAuthors).toBe(true);
     expect(settings.reviewCheckMode).toBe("required");

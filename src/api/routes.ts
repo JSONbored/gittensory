@@ -680,9 +680,6 @@ const repositorySettingsSchema = z.object({
   aiReviewLowConfidenceDisposition: z.enum(["one_shot", "hold_for_review", "advisory_only"]).default("hold_for_review"),
   closeOwnerAuthors: z.boolean().default(false),
   autoLabelEnabled: z.boolean().default(true),
-  gittensorLabel: z.string().trim().min(1).max(50).default("gittensor"),
-  blacklistLabel: z.string().trim().min(1).max(50).default("slop"),
-  createMissingLabel: z.boolean().default(true),
   requireLinkedIssue: z.boolean().default(false),
   badgeEnabled: z.boolean().default(false),
   publicQualityMetrics: z.boolean().default(false),
@@ -692,12 +689,6 @@ const repositorySettingsSchema = z.object({
       commands: z.record(z.string().trim().min(1).max(64), z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4)).optional(),
     })
     .default(DEFAULT_COMMAND_AUTHORIZATION_POLICY),
-  // Per-repo contributor blacklist (#1425). Loose by design — the DB layer normalizes/validates each entry
-  // (login pattern, public-safe metadata, de-dup, caps), so invalid entries are dropped on persist.
-  contributorBlacklist: z
-    .array(z.object({ login: z.string(), reason: z.string().optional(), evidence: z.array(z.string()).optional(), addedAt: z.string().optional() }))
-    .max(1000)
-    .default([]),
 });
 
 // #130 maintainer self-serve settings editor. A PATCH-style subset: every field optional so the maintainer
@@ -717,7 +708,6 @@ const maintainerSettingsSchema = z
     manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
     selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
-    mergeTrainMode: z.enum(["off", "audit", "enforce"]),
     firstTimeContributorGrace: z
       .boolean()
       .describe("Reserved (#2266) -- the gate evaluator never reads this field. Currently has no effect on gate decisions."),
@@ -725,9 +715,6 @@ const maintainerSettingsSchema = z
     slopGateMinScore: z.number().int().min(0).max(100).nullable(),
     slopAiAdvisory: z.boolean(),
     autoLabelEnabled: z.boolean(),
-    gittensorLabel: z.string().trim().min(1).max(50),
-    blacklistLabel: z.string().trim().min(1).max(50),
-    createMissingLabel: z.boolean(),
     closeOwnerAuthors: z.boolean(),
     requireLinkedIssue: z.boolean(),
     badgeEnabled: z.boolean(),
@@ -4228,14 +4215,10 @@ export function createApp() {
         aiReviewLowConfidenceDisposition: parsed.data.aiReviewLowConfidenceDisposition,
         closeOwnerAuthors: parsed.data.closeOwnerAuthors,
         autoLabelEnabled: parsed.data.autoLabelEnabled,
-        gittensorLabel: parsed.data.gittensorLabel,
-        blacklistLabel: parsed.data.blacklistLabel,
-        createMissingLabel: parsed.data.createMissingLabel,
         requireLinkedIssue: parsed.data.requireLinkedIssue,
         badgeEnabled: parsed.data.badgeEnabled,
         publicQualityMetrics: parsed.data.publicQualityMetrics,
         commandAuthorization: normalizeCommandAuthorizationPolicy(parsed.data.commandAuthorization).policy,
-        contributorBlacklist: normalizeContributorBlacklist(parsed.data.contributorBlacklist).entries,
       }),
     );
   });
@@ -5061,10 +5044,10 @@ async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
   return attachDataQuality(response as unknown as Record<string, unknown>, dataQuality);
 }
 
-// Batch A (loopover#6442): these 9 fields moved off the DB entirely -- rawSettings (getRepositorySettings)
+// Batch A+B (loopover#6442/#6443): these fields moved off the DB entirely -- rawSettings (getRepositorySettings)
 // always returns the same hardcoded default for them now, so a "DB vs yml" comparison built on rawSettings
 // alone would be comparing a constant against yml, never reflecting a repo's real .loopover.yml-driven
-// behavior. Overlays the true EFFECTIVE value for just these 9 fields onto an otherwise-raw-DB settings
+// behavior. Overlays the true EFFECTIVE value for just these fields onto an otherwise-raw-DB settings
 // object, preserving the #2912 DB-vs-yml comparison intent for every other (still DB-backed) field.
 const CONFIG_AS_CODE_ONLY_FIELDS = [
   "commentMode",
@@ -5076,6 +5059,21 @@ const CONFIG_AS_CODE_ONLY_FIELDS = [
   "publicSurface",
   "includeMaintainerAuthors",
   "backfillEnabled",
+  "gittensorLabel",
+  "blacklistLabel",
+  "createMissingLabel",
+  "typeLabelsEnabled",
+  "typeLabels",
+  "linkedIssueLabelPropagation",
+  "contributorBlacklist",
+  "moderationGateMode",
+  "moderationRules",
+  "moderationWarningLabel",
+  "moderationBannedLabel",
+  "reviewEvasionProtection",
+  "reviewEvasionLabel",
+  "reviewEvasionComment",
+  "mergeTrainMode",
 ] as const satisfies ReadonlyArray<keyof RepositorySettings>;
 function applyConfigAsCodeOnlyFields(rawSettings: RepositorySettings, resolvedSettings: RepositorySettings): RepositorySettings {
   const settings = { ...rawSettings };

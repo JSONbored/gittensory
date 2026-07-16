@@ -1783,10 +1783,10 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       },
       repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
     });
-    // reviewEvasionProtection is manifest-only now (Batch B, loopover#6443); pull any test override out of
-    // `overrides` before it reaches the DB write below so a per-test `{ reviewEvasionProtection: "off" }` still
-    // takes effect via the manifest overlay instead of being silently outranked by the "close" default.
-    const { reviewEvasionProtection, ...dbOverrides } = overrides;
+    // Batch B (#6443): reviewEvasionProtection / reviewEvasionComment / reviewEvasionLabel are
+    // config-as-code only — pull any test overrides out of `overrides` before the DB write so they
+    // take effect via the manifest overlay instead of being silently ignored.
+    const { reviewEvasionProtection, reviewEvasionComment, reviewEvasionLabel, ...dbOverrides } = overrides;
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autonomy: { close: "auto" },
@@ -1799,6 +1799,8 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
         commentMode: "off",
         checkRunMode: "off",
         reviewEvasionProtection: (reviewEvasionProtection as "off" | "close" | undefined) ?? "close",
+        ...(reviewEvasionComment !== undefined ? { reviewEvasionComment: reviewEvasionComment as boolean } : {}),
+        ...(reviewEvasionLabel !== undefined ? { reviewEvasionLabel: reviewEvasionLabel as string | null } : {}),
       },
     });
   }

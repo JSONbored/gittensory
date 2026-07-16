@@ -33,8 +33,6 @@ export type MaintainerSettingsEditable = {
   slopGateMinScore: number | null;
   slopAiAdvisory: boolean;
   autoLabelEnabled: boolean;
-  gittensorLabel: string;
-  createMissingLabel: boolean;
   requireLinkedIssue: boolean;
   badgeEnabled: boolean;
   publicQualityMetrics: boolean;
@@ -60,8 +58,6 @@ export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEd
   "slopGateMinScore",
   "slopAiAdvisory",
   "autoLabelEnabled",
-  "gittensorLabel",
-  "createMissingLabel",
   "requireLinkedIssue",
   "badgeEnabled",
   "publicQualityMetrics",

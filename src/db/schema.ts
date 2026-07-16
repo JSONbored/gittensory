@@ -89,25 +89,10 @@ export const repositorySettings = sqliteTable("repository_settings", {
   aiReviewLowConfidenceDisposition: text("ai_review_low_confidence_disposition").notNull().default("hold_for_review"),
   closeOwnerAuthors: integer("close_owner_authors", { mode: "boolean" }).notNull().default(false),
   autoLabelEnabled: integer("auto_label_enabled", { mode: "boolean" }).notNull().default(true),
-  gittensorLabel: text("gittensor_label").notNull().default("gittensor"),
-  // Label applied to a blacklisted contributor's PR/issue (#1425); configurable so the disposition works
-  // regardless of the label a repo uses.
-  blacklistLabel: text("blacklist_label").notNull().default("slop"),
-  createMissingLabel: integer("create_missing_label", { mode: "boolean" }).notNull().default(true),
-  // #label-decoupling: independently gates the per-PR TYPE label (gittensor:bug/feature/priority),
-  // distinct from autoLabelEnabled (the base gittensor context label) and the public-surface gate.
-  typeLabelsEnabled: integer("type_labels_enabled", { mode: "boolean" }).notNull().default(true),
-  // Per-repo override of the three TYPE label NAMES (#priority-linked-issue-gate): { bug, feature, priority }.
-  typeLabelsJson: text("type_labels_json").notNull().default("{}"),
-  // Linked-issue label propagation (#priority-linked-issue-gate): the only mechanism that can select the
-  // configured priority label -- never inferred from title/files/AI/PR-labels. Default disabled, no mappings.
-  linkedIssueLabelPropagationJson: text("linked_issue_label_propagation_json").notNull().default("{}"),
   requireLinkedIssue: integer("require_linked_issue", { mode: "boolean" }).notNull().default(false),
   badgeEnabled: integer("badge_enabled", { mode: "boolean" }).notNull().default(false),
   publicQualityMetrics: integer("public_quality_metrics", { mode: "boolean" }).notNull().default(false),
   commandAuthorizationJson: text("command_authorization_json").notNull().default("{}"),
-  // Per-repo contributor blacklist (#1425): a JSON array of { login, reason?, evidence?, addedAt? } entries.
-  contributorBlacklistJson: text("contributor_blacklist_json").notNull().default("[]"),
   autonomyJson: text("autonomy_json").notNull().default("{}"),
   autoMaintainJson: text("auto_maintain_json").notNull().default("{}"),
   agentPaused: integer("agent_paused", { mode: "boolean" }).notNull().default(false),
@@ -144,36 +129,11 @@ export const repositorySettings = sqliteTable("repository_settings", {
   commandRateLimitMaxPerWindow: integer("command_rate_limit_max_per_window").notNull().default(20),
   commandRateLimitAiMaxPerWindow: integer("command_rate_limit_ai_max_per_window").notNull().default(5),
   commandRateLimitWindowHours: integer("command_rate_limit_window_hours").notNull().default(24),
-  // Moderation-rules engine (#selfhost-mod-engine): per-repo overrides layered over global_moderation_config.
-  // 'inherit' (default) defers to the global master switch; 'off'/'enabled' force this repo regardless of it.
-  moderationGateMode: text("moderation_gate_mode").notNull().default("inherit"),
-  // Nullable: null = inherit the global rule set / label text, never "unset to empty".
-  moderationRulesJson: text("moderation_rules_json"),
-  moderationWarningLabel: text("moderation_warning_label"),
-  moderationBannedLabel: text("moderation_banned_label"),
-  // Review-evasion protection (#review-evasion-protection). reviewEvasionLabel mirrors blacklistLabel/
-  // reviewNagLabel's shape -- NOT NULL with a string default; "no label" is a `.loopover.yml`-only
-  // override, never persisted here.
-  //
-  // #4011: this raw column-level DEFAULT ('off') is intentionally left unchanged even though the actual
-  // resolved default is now 'close' (protection ON) -- upsertRepositorySettings is the ONLY writer and
-  // always resolves an explicit value through normalizeReviewEvasionProtection (its own doc comment has
-  // the full reasoning), so this raw default never fires through any live write path. Rebuilding it would
-  // need a full create-copy-drop-rename table migration for zero behavioral effect (SQLite has no ALTER
-  // COLUMN SET DEFAULT) -- see migration 0102's doc comment for the identical lesson already learned on
-  // linked_issue_gate_mode. Don't "fix" this value without re-reading that reasoning first.
-  reviewEvasionProtection: text("review_evasion_protection").notNull().default("off"),
-  reviewEvasionLabel: text("review_evasion_label").notNull().default("review-evasion"),
-  reviewEvasionComment: integer("review_evasion_comment", { mode: "boolean" }).notNull().default(true),
-  // Draft-PR close policy (#draft-pr-close-policy): off by default -- unlike reviewEvasionProtection above,
-  // this enforces on ANY draft (including the first one, before a review has run), so a maintainer opts in
-  // deliberately rather than getting it on by default.
+  // Draft-PR close policy (#draft-pr-close-policy): off by default because this enforces on ANY draft
+  // (including the first one, before a review has run), so a maintainer opts in deliberately.
   draftPrClosePolicy: text("draft_pr_close_policy").notNull().default("off"),
-  // Merge-train FIFO gate (#selfhost-merge-train): off by default, same "opt-in, no surprise behavior change"
-  // shape as reviewEvasionProtection above.
-  mergeTrainMode: text("merge_train_mode").notNull().default("off"),
   // Config-driven before/after screenshot-table gate (#2006): off by default. whenLabels/whenPaths are JSON
-  // string arrays (mirrors contributorBlacklistJson's shape); screenshotTableGateMessage is nullable ("no
+  // string arrays; screenshotTableGateMessage is nullable ("no
   // override" is a `.loopover.yml`-only concept -- null here means "use the built-in default message").
   screenshotTableGateEnabled: integer("screenshot_table_gate_enabled", { mode: "boolean" }).notNull().default(false),
   screenshotTableGateWhenLabelsJson: text("screenshot_table_gate_when_labels_json").notNull().default("[]"),
@@ -190,7 +150,7 @@ export const repositorySettings = sqliteTable("repository_settings", {
   screenshotTableGateSkillFileUrl: text("screenshot_table_gate_skill_file_url"),
   // Waste elimination for known automation authors (settings/automation-bot-skip.ts). 'inherit' (default)
   // defers to the LOOPOVER_SKIP_AUTOMATION_BOT_PRS global default; 'off'/'enabled' force this repo
-  // regardless of it -- mirrors moderationGateMode's shape above.
+  // regardless of it.
   skipAutomationBotAuthors: text("skip_automation_bot_authors").notNull().default("inherit"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),

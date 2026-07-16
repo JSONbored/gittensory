@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { findBlacklistEntry, isAuthorBlacklisted, mergeContributorBlacklists, normalizeContributorBlacklist } from "../../src/settings/contributor-blacklist";
-import { getGlobalContributorBlacklist, getRepositorySettings, upsertGlobalContributorBlacklist, upsertRepositorySettings } from "../../src/db/repositories";
+import { getGlobalContributorBlacklist, getRepositorySettings, upsertGlobalContributorBlacklist } from "../../src/db/repositories";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import { resolveRepositorySettings } from "../../src/settings/repository-settings";
 import { createTestEnv } from "../helpers/d1";
 import type { ContributorBlacklistEntry } from "../../src/types";
 
-describe("contributor blacklist DB round-trip (#1425)", () => {
-  it("persists + resolves the per-repo blacklist through the DB, dropping invalid entries", async () => {
+describe("contributor blacklist settings (#1425)", () => {
+  it("resolves the per-repo blacklist from config-as-code, dropping invalid entries", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", contributorBlacklist: [{ login: "plagiarist", reason: "plagiarism" }, { login: "-invalid" }, { login: "farmer" }] });
-    const settings = await getRepositorySettings(env, "owner/repo");
+    await upsertRepoFocusManifest(env, "owner/repo", { settings: { contributorBlacklist: [{ login: "plagiarist", reason: "plagiarism" }, { login: "-invalid" }, { login: "farmer" }] } });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
     expect(settings.contributorBlacklist?.map((e) => e.login)).toEqual(["plagiarist", "farmer"]);
     expect(settings.contributorBlacklist?.[0]).toEqual({ login: "plagiarist", reason: "plagiarism" });
   });

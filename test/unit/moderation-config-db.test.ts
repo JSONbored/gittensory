@@ -6,10 +6,11 @@ import {
   hasModerationViolationForTarget,
   recordModerationViolation,
   upsertGlobalModerationConfig,
-  upsertRepositorySettings,
 } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 import { DEFAULT_GLOBAL_MODERATION_CONFIG, MAX_MODERATION_VIOLATION_DECAY_DAYS, MODERATION_VIOLATION_EVENT_TYPE } from "../../src/settings/moderation-rules";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import { resolveRepositorySettings } from "../../src/settings/repository-settings";
 
 describe("global moderation config DB round-trip (#selfhost-mod-engine)", () => {
   it("defaults to the migrated singleton row's values (off, the original three rules) for a fresh install", async () => {
@@ -187,7 +188,7 @@ describe("moderation violation ledger (#selfhost-mod-engine)", () => {
   });
 });
 
-describe("per-repo moderation settings DB round-trip (#selfhost-mod-engine)", () => {
+describe("per-repo moderation settings config-as-code (#selfhost-mod-engine, #6443)", () => {
   it("defaults to 'inherit' gate mode and undefined overrides for an unconfigured repo", async () => {
     const settings = await getRepositorySettings(createTestEnv(), "owner/none");
     expect(settings.moderationGateMode).toBe("inherit");
@@ -196,47 +197,32 @@ describe("per-repo moderation settings DB round-trip (#selfhost-mod-engine)", ()
     expect(settings.moderationBannedLabel).toBeUndefined();
   });
 
-  it("persists an explicit gate mode + rule override + custom labels", async () => {
+  it("resolves an explicit gate mode + rule override + custom labels from the focus manifest", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, {
-      repoFullName: "owner/repo",
-      moderationGateMode: "enabled",
-      moderationRules: ["blacklist"],
-      moderationWarningLabel: "repo:warn",
-      moderationBannedLabel: "repo:ban",
-    });
-    const settings = await getRepositorySettings(env, "owner/repo");
+    await upsertRepoFocusManifest(env, "owner/repo", { settings: { moderationGateMode: "enabled", moderationRules: ["blacklist"], moderationWarningLabel: "repo:warn", moderationBannedLabel: "repo:ban" } });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
     expect(settings.moderationGateMode).toBe("enabled");
     expect(settings.moderationRules).toEqual(["blacklist"]);
     expect(settings.moderationWarningLabel).toBe("repo:warn");
     expect(settings.moderationBannedLabel).toBe("repo:ban");
   });
 
-  it("persists an explicit EMPTY moderationRules override distinctly from 'not configured' (undefined)", async () => {
+  it("resolves an explicit EMPTY moderationRules override distinctly from 'not configured' (undefined)", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", moderationRules: [] });
-    const settings = await getRepositorySettings(env, "owner/repo");
+    await upsertRepoFocusManifest(env, "owner/repo", { settings: { moderationRules: [] } });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
     expect(settings.moderationRules).toEqual([]);
-  });
-
-  it("round-trips through an UPDATE (not just the initial INSERT)", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", moderationGateMode: "off" });
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", moderationGateMode: "enabled", moderationWarningLabel: "updated:warn" });
-    const settings = await getRepositorySettings(env, "owner/repo");
-    expect(settings.moderationGateMode).toBe("enabled");
-    expect(settings.moderationWarningLabel).toBe("updated:warn");
   });
 
   it("moderationRules accepts review_evasion alongside the original three (#review-evasion-protection)", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", moderationRules: ["review_evasion", "blacklist"] });
-    const settings = await getRepositorySettings(env, "owner/repo");
+    await upsertRepoFocusManifest(env, "owner/repo", { settings: { moderationRules: ["review_evasion", "blacklist"] } });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
     expect(settings.moderationRules).toEqual(["review_evasion", "blacklist"]);
   });
 });
 
-describe("per-repo review-evasion protection settings DB round-trip (#review-evasion-protection)", () => {
+describe("per-repo review-evasion protection config-as-code (#review-evasion-protection, #6443)", () => {
   it("defaults to close/review-evasion/true for an unconfigured repo (#4011: default-ON)", async () => {
     const settings = await getRepositorySettings(createTestEnv(), "owner/none");
     expect(settings.reviewEvasionProtection).toBe("close");
@@ -244,49 +230,19 @@ describe("per-repo review-evasion protection settings DB round-trip (#review-eva
     expect(settings.reviewEvasionComment).toBe(true);
   });
 
-  it("persists an explicit protection mode + custom label + comment toggle", async () => {
+  it("resolves an explicit protection mode + custom label + comment toggle from the focus manifest", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, {
-      repoFullName: "owner/repo",
-      reviewEvasionProtection: "close",
-      reviewEvasionLabel: "repo:evasion",
-      reviewEvasionComment: false,
-    });
-    const settings = await getRepositorySettings(env, "owner/repo");
+    await upsertRepoFocusManifest(env, "owner/repo", { settings: { reviewEvasionProtection: "close", reviewEvasionLabel: "repo:evasion", reviewEvasionComment: false } });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
     expect(settings.reviewEvasionProtection).toBe("close");
     expect(settings.reviewEvasionLabel).toBe("repo:evasion");
     expect(settings.reviewEvasionComment).toBe(false);
   });
 
-  it("an explicit null label falls back to the default (#label-scoping: the DB column has no true-null state, mirroring blacklistLabel)", async () => {
+  it("an explicit null label from config-as-code remains an intentional no-label override", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", reviewEvasionLabel: null });
-    const settings = await getRepositorySettings(env, "owner/repo");
-    expect(settings.reviewEvasionLabel).toBe("review-evasion");
-  });
-
-  it("round-trips through an UPDATE (not just the initial INSERT)", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", reviewEvasionProtection: "off" });
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo", reviewEvasionProtection: "close", reviewEvasionComment: false });
-    const settings = await getRepositorySettings(env, "owner/repo");
-    expect(settings.reviewEvasionProtection).toBe("close");
-    expect(settings.reviewEvasionComment).toBe(false);
-  });
-
-  it("a malformed raw DB value for review_evasion_protection normalizes to 'close' on read (#4011: only the explicit opt-out 'off' is honored; anything else, including a bypassed-validation bogus value, fails safe to protected)", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo" });
-    await env.DB.prepare("UPDATE repository_settings SET review_evasion_protection = 'bogus' WHERE repo_full_name = ?").bind("owner/repo").run();
-    const settings = await getRepositorySettings(env, "owner/repo");
-    expect(settings.reviewEvasionProtection).toBe("close");
-  });
-
-  it("the explicit opt-out 'off' is honored on read even after a direct SQL write (#4011)", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "owner/repo" });
-    await env.DB.prepare("UPDATE repository_settings SET review_evasion_protection = 'off' WHERE repo_full_name = ?").bind("owner/repo").run();
-    const settings = await getRepositorySettings(env, "owner/repo");
-    expect(settings.reviewEvasionProtection).toBe("off");
+    await upsertRepoFocusManifest(env, "owner/repo", { settings: { reviewEvasionLabel: null } });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
+    expect(settings.reviewEvasionLabel).toBeNull();
   });
 });
