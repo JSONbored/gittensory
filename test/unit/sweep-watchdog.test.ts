@@ -3,6 +3,7 @@ import {
   clearSweepWatchdogManifestOverrideCacheForTest,
   isSweepStale,
   isSweepWatchdogEnabled,
+  resolveSweepStalenessThresholdMs,
   resolveSweepWatchdogManifestOverride,
   runSweepLivenessWatchdog,
   SWEEP_STALENESS_THRESHOLD_MS,
@@ -22,12 +23,12 @@ describe("isSweepWatchdogEnabled — default OFF, truthy convention", () => {
   });
 
   it("a present manifest override wins outright over the env flag, in both directions (#6558)", () => {
-    expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "false" }, { present: true, enabled: true })).toBe(true);
-    expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "true" }, { present: true, enabled: false })).toBe(false);
+    expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "false" }, { present: true, enabled: true, staleAfterMinutes: null })).toBe(true);
+    expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "true" }, { present: true, enabled: false, staleAfterMinutes: null })).toBe(false);
   });
 
   it("falls back to the env flag when the manifest override is not present", () => {
-    expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "true" }, { present: false, enabled: false })).toBe(true);
+    expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "true" }, { present: false, enabled: false, staleAfterMinutes: null })).toBe(true);
     expect(isSweepWatchdogEnabled({ LOOPOVER_SWEEP_WATCHDOG: "false" }, undefined)).toBe(false);
   });
 });
@@ -44,14 +45,33 @@ describe("resolveSweepWatchdogManifestOverride — config-as-code lookup (#6558)
     const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { sweepWatchdog: { enabled: true } });
 
-    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({ present: true, enabled: true });
+    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({
+      present: true,
+      enabled: true,
+      staleAfterMinutes: null,
+    });
   });
 
   it("returns present: false when the self-repo has no sweepWatchdog block configured", async () => {
     const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
 
-    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({ present: false, enabled: false });
+    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({
+      present: false,
+      enabled: false,
+      staleAfterMinutes: null,
+    });
+  });
+
+  it("carries staleAfterMinutes through from the self-repo manifest (#6594)", async () => {
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
+    await upsertRepoFocusManifest(env, SELF_REPO, { sweepWatchdog: { enabled: true, staleAfterMinutes: 90 } });
+
+    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({
+      present: true,
+      enabled: true,
+      staleAfterMinutes: 90,
+    });
   });
 
   it("degrades to present: false (never throws) when the manifest load itself fails", async () => {
@@ -66,7 +86,11 @@ describe("resolveSweepWatchdogManifestOverride — config-as-code lookup (#6558)
     });
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({ present: false, enabled: false });
+    expect(await resolveSweepWatchdogManifestOverride(env)).toEqual({
+      present: false,
+      enabled: false,
+      staleAfterMinutes: null,
+    });
     expect(warnings.mock.calls.map((c) => String(c[0])).some((line) => line.includes("sweep_watchdog_manifest_override_error"))).toBe(true);
   });
 
@@ -74,22 +98,38 @@ describe("resolveSweepWatchdogManifestOverride — config-as-code lookup (#6558)
     const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { sweepWatchdog: { enabled: true } });
     const t0 = Date.parse("2026-07-16T00:00:00Z");
-    expect(await resolveSweepWatchdogManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
+    expect(await resolveSweepWatchdogManifestOverride(env, t0)).toEqual({
+      present: true,
+      enabled: true,
+      staleAfterMinutes: null,
+    });
 
     env.DB.prepare = (() => {
       throw new Error("should not be queried on a cache hit");
     }) as typeof env.DB.prepare;
-    expect(await resolveSweepWatchdogManifestOverride(env, t0 + 30_000)).toEqual({ present: true, enabled: true });
+    expect(await resolveSweepWatchdogManifestOverride(env, t0 + 30_000)).toEqual({
+      present: true,
+      enabled: true,
+      staleAfterMinutes: null,
+    });
   });
 
   it("re-reads the manifest once the 60s TTL has elapsed", async () => {
     const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { sweepWatchdog: { enabled: true } });
     const t0 = Date.parse("2026-07-16T00:00:00Z");
-    expect(await resolveSweepWatchdogManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
+    expect(await resolveSweepWatchdogManifestOverride(env, t0)).toEqual({
+      present: true,
+      enabled: true,
+      staleAfterMinutes: null,
+    });
 
     await upsertRepoFocusManifest(env, SELF_REPO, { sweepWatchdog: { enabled: false } });
-    expect(await resolveSweepWatchdogManifestOverride(env, t0 + 60_001)).toEqual({ present: true, enabled: false });
+    expect(await resolveSweepWatchdogManifestOverride(env, t0 + 60_001)).toEqual({
+      present: true,
+      enabled: false,
+      staleAfterMinutes: null,
+    });
   });
 });
 
@@ -117,6 +157,44 @@ describe("isSweepStale (#audit-sweep-fanout-isolation follow-up)", () => {
   it("a repo NOT regated within the staleness window IS stale", () => {
     const lastRegatedAt = new Date(NOW - (SWEEP_STALENESS_THRESHOLD_MS + 1000)).toISOString();
     expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt, nowMs: NOW })).toBe(true);
+  });
+
+  it("an explicit staleAfterMs override changes the stale/not-stale boundary (#6594)", () => {
+    const overrideMs = 10 * 60_000;
+    const withinOverride = new Date(NOW - (overrideMs - 1000)).toISOString();
+    const outsideOverride = new Date(NOW - (overrideMs + 1000)).toISOString();
+    // Still inside the hardcoded 45m default, but outside a 10m override → stale under the override only.
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt: withinOverride, nowMs: NOW, staleAfterMs: overrideMs })).toBe(
+      false,
+    );
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt: outsideOverride, nowMs: NOW, staleAfterMs: overrideMs })).toBe(
+      true,
+    );
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt: outsideOverride, nowMs: NOW })).toBe(false);
+  });
+
+  it("omitted / non-positive staleAfterMs preserves today's 45-minute default exactly (#6594)", () => {
+    const lastRegatedAt = new Date(NOW - (SWEEP_STALENESS_THRESHOLD_MS + 1000)).toISOString();
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt, nowMs: NOW })).toBe(true);
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt, nowMs: NOW, staleAfterMs: 0 })).toBe(true);
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt, nowMs: NOW, staleAfterMs: -1 })).toBe(true);
+    expect(isSweepStale({ openPullRequestCount: 1, lastRegatedAt, nowMs: NOW, staleAfterMs: Number.NaN })).toBe(true);
+  });
+});
+
+describe("resolveSweepStalenessThresholdMs (#6594)", () => {
+  it("returns the hardcoded default when the override is absent or minutes are null", () => {
+    expect(resolveSweepStalenessThresholdMs(undefined)).toBe(SWEEP_STALENESS_THRESHOLD_MS);
+    expect(resolveSweepStalenessThresholdMs({ present: false, enabled: false, staleAfterMinutes: null })).toBe(
+      SWEEP_STALENESS_THRESHOLD_MS,
+    );
+    expect(resolveSweepStalenessThresholdMs({ present: true, enabled: true, staleAfterMinutes: null })).toBe(
+      SWEEP_STALENESS_THRESHOLD_MS,
+    );
+  });
+
+  it("converts a present positive staleAfterMinutes to milliseconds", () => {
+    expect(resolveSweepStalenessThresholdMs({ present: true, enabled: true, staleAfterMinutes: 90 })).toBe(90 * 60_000);
   });
 });
 
@@ -160,6 +238,44 @@ describe("runSweepLivenessWatchdog (#audit-sweep-fanout-isolation follow-up)", (
     expect(found).toEqual([expect.objectContaining({ repoFullName: "owner/aged-repo", lastRegatedAt: start.toISOString(), ageMs: SWEEP_STALENESS_THRESHOLD_MS + 60_000 })]);
     expect(Number.isFinite(found[0]?.ageMs)).toBe(true);
     expect(sent).toEqual([expect.objectContaining({ type: "agent-regate-sweep", repoFullName: "owner/aged-repo" })]);
+  }, 60_000);
+
+  it("threads a present staleAfterMinutes override into the stale decision (#6594)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const start = new Date("2026-07-06T10:00:00.000Z");
+    vi.setSystemTime(start);
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertRepositoryFromGitHub(env, { name: "override-repo", full_name: "owner/override-repo", private: false, owner: { login: "owner" } }, 9310);
+    await upsertRepositorySettings(env, { repoFullName: "owner/override-repo", autonomy: { merge: "auto" } });
+    await upsertPullRequestFromGitHub(env, "owner/override-repo", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+    await markPullRequestsRegated(env, "owner/override-repo", [1]);
+    // 15 minutes later: still inside the 45m default, but outside a 10m override.
+    vi.setSystemTime(new Date(start.getTime() + 15 * 60_000));
+
+    const notStaleUnderDefault = await runSweepLivenessWatchdog(env, {
+      present: true,
+      enabled: true,
+      staleAfterMinutes: null,
+    });
+    expect(notStaleUnderDefault).toEqual([]);
+
+    const staleUnderOverride = await runSweepLivenessWatchdog(env, {
+      present: true,
+      enabled: true,
+      staleAfterMinutes: 10,
+    });
+    expect(staleUnderOverride).toEqual([
+      expect.objectContaining({
+        repoFullName: "owner/override-repo",
+        installationId: 9310,
+        openPullRequestCount: 1,
+        lastRegatedAt: start.toISOString(),
+      }),
+    ]);
+    expect(staleUnderOverride[0]?.ageMs).toBeGreaterThan(10 * 60_000);
+    expect(staleUnderOverride[0]?.ageMs).toBeLessThan(SWEEP_STALENESS_THRESHOLD_MS);
+    expect(sent).toEqual([expect.objectContaining({ type: "agent-regate-sweep", repoFullName: "owner/override-repo" })]);
   }, 60_000);
 
   it("watches an ALLOWLISTED (LOOPOVER_REVIEW_REPOS) installed repo even with no autonomy configured, and skips a plain repo that is neither allowlisted nor agent-configured", async () => {

@@ -301,7 +301,9 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       // no-op, so disabled does zero work here too. Fails safe internally — never throws into the queue.
       {
         const sweepWatchdogManifestOverride = await resolveSweepWatchdogManifestOverride(env);
-        if (isSweepWatchdogEnabled(env, sweepWatchdogManifestOverride)) await runSweepLivenessWatchdog(env);
+        if (isSweepWatchdogEnabled(env, sweepWatchdogManifestOverride)) {
+          await runSweepLivenessWatchdog(env, sweepWatchdogManifestOverride);
+        }
       }
       return;
     case "loop-escalation-sweep":

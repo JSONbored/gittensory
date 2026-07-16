@@ -20,11 +20,16 @@ import type { JobMessage } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 import { isConvergenceRepoAllowed, listConvergenceRepos } from "./cutover-gate";
 
-/** A manifest-sourced enable override (#6558 / #6275) -- the top-level `sweepWatchdog` block of the
- *  loopover self-repo's `.loopover.yml` (see FocusManifestSweepWatchdogConfig). Distinct from the
+/** A manifest-sourced enable/threshold override (#6558 / #6275 / #6594) -- the top-level `sweepWatchdog`
+ *  block of the loopover self-repo's `.loopover.yml` (see FocusManifestSweepWatchdogConfig). Distinct from the
  *  per-repo FORCE-OFF under `review.sweepWatchdog`. `present: false` means "no override configured",
- *  not "disabled" -- the caller falls through to the env var in that case. Mirrors OpsManifestOverride. */
-export type SweepWatchdogManifestOverride = { present: boolean; enabled: boolean };
+ *  not "disabled" -- the caller falls through to the env var in that case. `staleAfterMinutes: null` means
+ *  keep the hardcoded {@link SWEEP_STALENESS_THRESHOLD_MS} default. Mirrors OpsManifestOverride. */
+export type SweepWatchdogManifestOverride = {
+  present: boolean;
+  enabled: boolean;
+  staleAfterMinutes: number | null;
+};
 
 /** True when the sweep-liveness watchdog is enabled. Config-as-code (#6558 / #6275): a present top-level
  *  `sweepWatchdog` manifest block on the loopover self-repo wins outright; otherwise falls back to the
@@ -58,12 +63,16 @@ export async function resolveSweepWatchdogManifestOverride(env: Env, nowMs: numb
   try {
     const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
     const config = manifest.sweepWatchdog;
-    const override = { present: config.present, enabled: config.enabled };
+    const override: SweepWatchdogManifestOverride = {
+      present: config.present,
+      enabled: config.enabled,
+      staleAfterMinutes: config.staleAfterMinutes,
+    };
     sweepWatchdogManifestOverrideCache = { override, at: nowMs };
     return override;
   } catch (error) {
     console.warn(JSON.stringify({ event: "sweep_watchdog_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
-    const override = { present: false, enabled: false };
+    const override: SweepWatchdogManifestOverride = { present: false, enabled: false, staleAfterMinutes: null };
     sweepWatchdogManifestOverrideCache = { override, at: nowMs };
     return override;
   }
@@ -79,11 +88,31 @@ export function clearSweepWatchdogManifestOverrideCacheForTest(): void {
  *  the sweep to do, so a `null` marker there means "nothing to regate," not "the sweep stopped working." */
 export const SWEEP_STALENESS_THRESHOLD_MS = 45 * 60 * 1000;
 
-export function isSweepStale(input: { openPullRequestCount: number; lastRegatedAt: string | null; nowMs: number }): boolean {
+/** Resolve the effective staleness threshold in ms from a manifest override (#6594). Absent / null minutes
+ *  keep {@link SWEEP_STALENESS_THRESHOLD_MS}; never returns zero/negative/NaN. */
+export function resolveSweepStalenessThresholdMs(
+  manifestOverride?: SweepWatchdogManifestOverride | undefined,
+): number {
+  const minutes = manifestOverride?.present ? manifestOverride.staleAfterMinutes : null;
+  if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) return minutes * 60_000;
+  return SWEEP_STALENESS_THRESHOLD_MS;
+}
+
+export function isSweepStale(input: {
+  openPullRequestCount: number;
+  lastRegatedAt: string | null;
+  nowMs: number;
+  /** Optional override in milliseconds (#6594); omitted ⇒ {@link SWEEP_STALENESS_THRESHOLD_MS}. */
+  staleAfterMs?: number;
+}): boolean {
   if (input.openPullRequestCount === 0) return false;
   const lastMs = input.lastRegatedAt ? Date.parse(input.lastRegatedAt) : NaN;
   if (!Number.isFinite(lastMs)) return true;
-  return input.nowMs - lastMs > SWEEP_STALENESS_THRESHOLD_MS;
+  const thresholdMs =
+    typeof input.staleAfterMs === "number" && Number.isFinite(input.staleAfterMs) && input.staleAfterMs > 0
+      ? input.staleAfterMs
+      : SWEEP_STALENESS_THRESHOLD_MS;
+  return input.nowMs - lastMs > thresholdMs;
 }
 
 /** The same acting-autonomy repo set fanOutAgentRegateSweepJobs sweeps: the convergence allowlist
@@ -149,16 +178,22 @@ export interface StaleSweepRepo {
  * Caller MUST gate this on {@link isSweepWatchdogEnabled} — it is invoked only from the flag-ON cron path, so
  * flag-OFF this function is never reached and the cron does zero new work.
  */
-export async function runSweepLivenessWatchdog(env: Env): Promise<StaleSweepRepo[]> {
+export async function runSweepLivenessWatchdog(
+  env: Env,
+  /** Optional pre-resolved override (#6594); when omitted, looks up the self-repo manifest (cached). */
+  manifestOverride?: SweepWatchdogManifestOverride,
+): Promise<StaleSweepRepo[]> {
   const found: StaleSweepRepo[] = [];
   const nowMs = Date.parse(nowIso());
+  const override = manifestOverride ?? (await resolveSweepWatchdogManifestOverride(env, nowMs));
+  const staleAfterMs = resolveSweepStalenessThresholdMs(override);
   try {
     const repos = await watchedRepos(env);
     for (const repo of repos) {
       try {
         if (typeof repo.installationId !== "number") continue;
         const [openPullRequestCount, lastRegatedAt] = await Promise.all([countOpenPullRequests(env, repo.fullName), getLatestRegatedAt(env, repo.fullName)]);
-        if (!isSweepStale({ openPullRequestCount, lastRegatedAt, nowMs })) continue;
+        if (!isSweepStale({ openPullRequestCount, lastRegatedAt, nowMs, staleAfterMs })) continue;
         const lastMs = lastRegatedAt ? Date.parse(lastRegatedAt) : NaN;
         const ageMs = Number.isFinite(lastMs) ? nowMs - lastMs : Number.POSITIVE_INFINITY;
         found.push({ repoFullName: repo.fullName, installationId: repo.installationId, openPullRequestCount, lastRegatedAt, ageMs });

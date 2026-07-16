@@ -1276,14 +1276,15 @@ settings:
 # upstreamDriftIssues:
 #   enabled: true   # Bool. Default: false (the env var decides instead).
 
-# Fleet-wide sweep-liveness watchdog cron (#6558 / #6275): config-as-code override for the
+# Fleet-wide sweep-liveness watchdog cron (#6558 / #6275 / #6594): config-as-code override for the
 # LOOPOVER_SWEEP_WATCHDOG flag that gates the hourly sweep-liveness check. Operator-level, not per-repo --
 # only meaningful on the loopover self-repo's own manifest; a present block there wins over the env var.
 # Distinct from the per-repo FORCE-OFF under `review.sweepWatchdog` (which only excludes one repo from the
 # scan set once the fleet gate is ON).
 # sweepWatchdog:
-#   enabled: true   # Bool. Default: false (the env var decides instead).
-
+#   enabled: true              # Bool. Default: false (the env var decides instead).
+#   staleAfterMinutes: 90      # Optional positive int (#6594). Minutes without a sweep-marker advance before
+#                              # a repo with open PRs is treated as stale. Omit ⇒ hardcoded 45-minute default.
 # Fleet-wide open-PR reconciliation cron (#6558 / #6275): config-as-code override for the
 # LOOPOVER_PR_RECONCILIATION flag that gates the fast open-PR reconciliation pass. Same shape and
 # precedence as `sweepWatchdog:` above. Distinct from the per-repo FORCE-OFF under `review.prReconciliation`.

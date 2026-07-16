@@ -443,6 +443,8 @@ export type FocusManifestUpstreamDriftIssuesConfig = {
 export type FocusManifestSweepWatchdogConfig = {
   present: boolean;
   enabled: boolean;
+  /** Optional staleness window in minutes (#6594). null ⇒ caller keeps the hardcoded 45-minute default. */
+  staleAfterMinutes: number | null;
 };
 
 /**
@@ -1245,6 +1247,7 @@ const EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG: FocusManifestUpstreamDriftIssuesConfig
 const EMPTY_SWEEP_WATCHDOG_CONFIG: FocusManifestSweepWatchdogConfig = {
   present: false,
   enabled: false,
+  staleAfterMinutes: null,
 };
 
 const EMPTY_PR_RECONCILIATION_CONFIG: FocusManifestPrReconciliationConfig = {
@@ -2134,8 +2137,9 @@ export function upstreamDriftIssuesConfigToJson(config: FocusManifestUpstreamDri
 }
 
 /**
- * Parse the optional top-level `sweepWatchdog:` mapping (#6558 / #6275). Mirrors {@link parseOpsConfig}
- * exactly — `enabled` is the only field. Distinct from per-repo `review.sweepWatchdog`.
+ * Parse the optional top-level `sweepWatchdog:` mapping (#6558 / #6275 / #6594). Mirrors {@link parseOpsConfig}
+ * for `enabled`, plus an optional `staleAfterMinutes` positive integer. Invalid / non-positive values warn and
+ * fall back to null (caller keeps the hardcoded 45-minute default). Distinct from per-repo `review.sweepWatchdog`.
  */
 function parseSweepWatchdogConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestSweepWatchdogConfig {
   if (value === undefined || value === null) return { ...EMPTY_SWEEP_WATCHDOG_CONFIG };
@@ -2145,14 +2149,21 @@ function parseSweepWatchdogConfig(value: JsonValue | undefined, warnings: string
   }
   const record = value as Record<string, JsonValue>;
   const enabled = normalizeOptionalBoolean(record.enabled, "sweepWatchdog.enabled", warnings) ?? false;
-  return { present: true, enabled };
+  const staleAfterMinutes = normalizeOptionalPositiveInteger(
+    record.staleAfterMinutes,
+    "sweepWatchdog.staleAfterMinutes",
+    warnings,
+  );
+  return { present: true, enabled, staleAfterMinutes };
 }
 
 /** Serialize a sweepWatchdog config back into the parse-compatible shape so a cached snapshot round-trips
  *  through {@link parseSweepWatchdogConfig} unchanged. Returns null when nothing is configured. */
 export function sweepWatchdogConfigToJson(config: FocusManifestSweepWatchdogConfig): JsonValue {
   if (!config.present) return null;
-  return { enabled: config.enabled };
+  const out: Record<string, JsonValue> = { enabled: config.enabled };
+  if (config.staleAfterMinutes !== null) out.staleAfterMinutes = config.staleAfterMinutes;
+  return out;
 }
 
 /**

@@ -503,6 +503,7 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
 
   const SWEEP_WATCHDOG_FIELD_TOKENS = {
     enabled: "enabled:",
+    staleAfterMinutes: "staleAfterMinutes:",
   } satisfies Record<Exclude<keyof FocusManifestSweepWatchdogConfig, "present">, string>;
 
   it.each(Object.entries(SWEEP_WATCHDOG_FIELD_TOKENS))("documents sweepWatchdog.%s", (_field, token) => {
@@ -945,7 +946,7 @@ describe("compileFocusManifestPolicy", () => {
       publicStats: { present: false, enabled: false },
       draftFlow: { present: false, enabled: false },
       upstreamDriftIssues: { present: false, enabled: false },
-      sweepWatchdog: { present: false, enabled: false },
+      sweepWatchdog: { present: false, enabled: false, staleAfterMinutes: null },
       prReconciliation: { present: false, enabled: false },
       federatedIntelligence: { present: false, enabled: false, collectorUrl: null, collectorMode: null },
       warnings: [],
@@ -2143,15 +2144,19 @@ describe("parseFocusManifest gate config", () => {
     });
   });
 
-  describe("sweepWatchdog: (#6558 / #6275, fleet-wide sweep-liveness watchdog config-as-code override)", () => {
+  describe("sweepWatchdog: (#6558 / #6275 / #6594, fleet-wide sweep-liveness watchdog config-as-code override)", () => {
     it("defaults to fully disabled/absent when the key is omitted, and does not make the manifest present on its own", () => {
       const m = parseFocusManifest({});
-      expect(m.sweepWatchdog).toEqual({ present: false, enabled: false });
+      expect(m.sweepWatchdog).toEqual({ present: false, enabled: false, staleAfterMinutes: null });
       expect(m.present).toBe(false);
     });
 
     it("treats an explicit null the same as an omitted key", () => {
-      expect(parseFocusManifest({ sweepWatchdog: null }).sweepWatchdog).toEqual({ present: false, enabled: false });
+      expect(parseFocusManifest({ sweepWatchdog: null }).sweepWatchdog).toEqual({
+        present: false,
+        enabled: false,
+        staleAfterMinutes: null,
+      });
     });
 
     it("warns and falls back to the default when the value is a non-mapping type (string or array)", () => {
@@ -2165,13 +2170,13 @@ describe("parseFocusManifest gate config", () => {
 
     it("parses enabled: true, making the manifest present", () => {
       const m = parseFocusManifest({ sweepWatchdog: { enabled: true } });
-      expect(m.sweepWatchdog).toEqual({ present: true, enabled: true });
+      expect(m.sweepWatchdog).toEqual({ present: true, enabled: true, staleAfterMinutes: null });
       expect(m.present).toBe(true);
     });
 
     it("parses enabled: false explicitly, still marking the manifest present (present is a real override, off)", () => {
       const m = parseFocusManifest({ sweepWatchdog: { enabled: false } });
-      expect(m.sweepWatchdog).toEqual({ present: true, enabled: false });
+      expect(m.sweepWatchdog).toEqual({ present: true, enabled: false, staleAfterMinutes: null });
       expect(m.present).toBe(true);
     });
 
@@ -2181,9 +2186,41 @@ describe("parseFocusManifest gate config", () => {
       expect(m.warnings.some((w) => /sweepWatchdog\.enabled/.test(w))).toBe(true);
     });
 
-    it("round-trips through sweepWatchdogConfigToJson → parseFocusManifest unchanged", () => {
+    it("parses a valid staleAfterMinutes positive integer (#6594)", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: true, staleAfterMinutes: 90 } });
+      expect(m.sweepWatchdog).toEqual({ present: true, enabled: true, staleAfterMinutes: 90 });
+    });
+
+    it("leaves staleAfterMinutes null when the field is absent (#6594)", () => {
       const m = parseFocusManifest({ sweepWatchdog: { enabled: true } });
-      expect(parseFocusManifest({ sweepWatchdog: sweepWatchdogConfigToJson(m.sweepWatchdog) }).sweepWatchdog).toEqual(m.sweepWatchdog);
+      expect(m.sweepWatchdog.staleAfterMinutes).toBeNull();
+    });
+
+    it.each([
+      ["string", "ninety" as unknown],
+      ["zero", 0],
+      ["negative", -5],
+      ["NaN", Number.NaN],
+      ["float", 1.5],
+    ] as const)("warns and falls back to null when staleAfterMinutes is %s (#6594)", (_label, value) => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: true, staleAfterMinutes: value as number } });
+      expect(m.sweepWatchdog.staleAfterMinutes).toBeNull();
+      expect(m.warnings.some((w) => /sweepWatchdog\.staleAfterMinutes/.test(w))).toBe(true);
+    });
+
+    it("round-trips through sweepWatchdogConfigToJson → parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: true, staleAfterMinutes: 90 } });
+      expect(parseFocusManifest({ sweepWatchdog: sweepWatchdogConfigToJson(m.sweepWatchdog) }).sweepWatchdog).toEqual(
+        m.sweepWatchdog,
+      );
+    });
+
+    it("round-trips enabled-only configs without inventing a staleAfterMinutes key", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: true } });
+      expect(sweepWatchdogConfigToJson(m.sweepWatchdog)).toEqual({ enabled: true });
+      expect(parseFocusManifest({ sweepWatchdog: sweepWatchdogConfigToJson(m.sweepWatchdog) }).sweepWatchdog).toEqual(
+        m.sweepWatchdog,
+      );
     });
 
     it("sweepWatchdogConfigToJson returns null for an absent config", () => {
