@@ -198,6 +198,13 @@ describe("importPeerBundles (#6480)", () => {
     warn.mockRestore();
   });
 
+  it("labels an unreadable instance handle as unknown rather than logging 'null'", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    importPeerBundles(manifest(), [{ schemaVersion: FEDERATED_BUNDLE_SCHEMA_VERSION } as unknown as FederatedSignalBundle]);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("instance=unknown");
+    warn.mockRestore();
+  });
+
   it("never logs a peer key or bundle contents", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     importPeerBundles(manifest(), [signedWith(UNTRUSTED_KEY)]);

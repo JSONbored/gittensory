@@ -73,6 +73,8 @@ function manifest(enabled: boolean | undefined): Pick<FocusManifest, "federatedI
     federatedIntelligence: {
       present: enabled !== undefined,
       enabled: enabled ?? false,
+      // The EXPORT never reads peerKeys — that allowlist gates the import side (#6480) only.
+      peerKeys: [],
       collectorUrl: null,
       collectorMode: null,
     },

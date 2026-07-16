@@ -53,6 +53,8 @@ function manifest(
     federatedIntelligence: {
       present: o.present ?? true,
       enabled: o.enabled ?? true,
+      // The TRANSPORT never reads peerKeys — pulled bundles are trust-gated downstream by #6480's import.
+      peerKeys: [],
       collectorUrl: o.collectorUrl === undefined ? URL_OK : o.collectorUrl,
       collectorMode: o.collectorMode ?? null,
     },
