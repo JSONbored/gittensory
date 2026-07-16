@@ -53,6 +53,21 @@ describe("predicted-gate engine collision parity (#2283)", () => {
     expect(sharedLinkedIssue.findings.map((finding) => finding.code)).toContain("possible_duplicate_work");
   });
 
+  it("classifies a single-linked-PR cluster as medium risk even when the issue's own linkedPrs field is stale (>1), matching engine.ts's canonical version", () => {
+    const directRepo = repo("owner/direct");
+    // The issue's own linkedPrs field is a pre-populated/possibly-stale count of 2,
+    // but exactly ONE open PR actually references the issue. The live gate (engine.ts)
+    // classifies this on the freshly-computed linkedPrs only -> "medium"; the miner
+    // preview must match, not inflate to "high" off the stale issue.linkedPrs count.
+    const staleIssue = issue(directRepo.fullName, 7, "Token refresh race in the auth middleware", { linkedPrs: [101, 102] });
+    const singleLinkingPr = pr(directRepo.fullName, 50, "Guard the token refresh race", { linkedIssues: [7] });
+
+    const collisions = buildCollisionReport(directRepo.fullName, [staleIssue], [singleLinkingPr]);
+    const cluster = collisions.clusters.find((c) => c.id === "issue-7");
+    expect(cluster).toBeDefined();
+    expect(cluster?.risk).toBe("medium");
+  });
+
   it("itemSharesPlannedLinkedIssue intersects linked-issue sets and tolerates missing linkedIssues", () => {
     const prItemValue: CollisionItem = { type: "pull_request", number: 42, title: "Unrelated PR", linkedIssues: [9] };
     expect(itemSharesPlannedLinkedIssue(prItemValue, [9])).toBe(true);
