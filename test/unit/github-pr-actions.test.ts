@@ -567,6 +567,51 @@ describe("GitHub PR action primitives (#778)", () => {
     expect(calls[0]?.body).toMatchObject({ message: "stale approval retracted", event: "DISMISS" });
   });
 
+  it("dismisses the bot's approve review when GitHub returns a different login casing than GITHUB_APP_SLUG (#6614)", async () => {
+    // The regression: `Gittensory[bot]` vs the default GITHUB_APP_SLUG of `gittensory` matched nothing under
+    // the old case-sensitive ===, so this returned { dismissed: false } — a SILENT no-op, no error, leaving a
+    // stale bot approval standing. The human reviewer whose login differs only in case must still be ignored.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/pulls/11/reviews") && !url.includes("/dismissals") && method === "GET") {
+        return Response.json([
+          { id: 1, state: "APPROVED", user: { login: "Human-Reviewer" } },
+          { id: 2, state: "APPROVED", user: { login: "Gittensory[bot]" } }, // an EARLIER bot approve, mixed case
+          { id: 3, state: "CHANGES_REQUESTED", user: { login: "GITTENSORY[BOT]" } },
+          { id: 4, state: "APPROVED", user: { login: "GitTensory[Bot]" } }, // the LATEST bot approve — this one
+        ]);
+      }
+      if (url.includes("/pulls/11/reviews/4/dismissals") && method === "PUT") {
+        calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : {} });
+        return Response.json({ id: 4, state: "DISMISSED" });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const result = await dismissLatestBotApproval(envWithKey(), 123, "owner/repo", 11, "stale approval retracted");
+    expect(result).toEqual({ dismissed: true });
+    expect(calls).toHaveLength(1); // the mixed-case human's approve (id 1) was never dismissed
+  });
+
+  it("still ignores a review whose author is missing a login entirely (#6614)", async () => {
+    // The optional-chain's nullish side: `review.user?.login?.toLowerCase()` must not throw on a null author
+    // (a ghosted/deleted account) and must not match the bot.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/pulls/12/reviews")) {
+        return Response.json([
+          { id: 1, state: "APPROVED", user: null },
+          { id: 2, state: "APPROVED", user: { login: null } },
+        ]);
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    await expect(dismissLatestBotApproval(envWithKey(), 123, "owner/repo", 12, "retract")).resolves.toEqual({ dismissed: false });
+  });
+
   it("is a no-op when the bot never approved this PR", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();

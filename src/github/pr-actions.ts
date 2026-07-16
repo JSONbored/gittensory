@@ -132,7 +132,12 @@ export async function dismissLatestBotApproval(env: Env, installationId: number,
     const { owner, repo } = splitRepo(repoFullName);
     return await withInstallationTokenRetry(env, installationId, async (token) => {
       const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-      const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
+      // Compared case-INSENSITIVELY, like every other bot-login check in this subsystem
+      // (isLoopOverBotComment in comments.ts:104, normalizeGitHubSlug/isBotActor in self-authored.ts). GitHub's
+      // canonical casing for the login need not match however GITHUB_APP_SLUG happens to be configured, and a
+      // case-sensitive === would degrade to a silent no-op: no match, no error, a stale bot approval simply
+      // never dismissed (#6614).
+      const botLogin = `${env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
       // Reviews are returned oldest-first; the LAST matching entry across ALL pages is the bot's most recent
       // APPROVE. Stopping at page 1 would find (or miss) the wrong review on a PR with >100 total reviews.
       let latestApprovalId: number | undefined;
@@ -140,7 +145,7 @@ export async function dismissLatestBotApproval(env: Env, installationId: number,
         const response = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number: pullNumber, per_page: REVIEW_PAGE_SIZE, page });
         const batch = response.data as Array<{ id: number; state?: string; user?: { login?: string | null } | null }>;
         for (const review of batch) {
-          if (review.user?.login === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
+          if (review.user?.login?.toLowerCase() === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
         }
         if (batch.length < REVIEW_PAGE_SIZE) break;
       }
