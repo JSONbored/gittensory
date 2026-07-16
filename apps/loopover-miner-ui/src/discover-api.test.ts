@@ -197,18 +197,28 @@ describe("handleDiscoverRequest (#6522)", () => {
     expect(args).not.toContain("--token");
   });
 
-  it("surfaces a CLI-module load failure as a 500 with a safe message", async () => {
-    const handled = await handleDiscoverRequest(
-      "POST",
-      "/api/discover",
-      JSON.stringify({ targets: ["acme/widgets"] }),
-      {
-        loadDiscoverCliModule: async () => {
-          throw new Error("module load boom");
+  it("surfaces a CLI-module load failure as a 500 with a generic token, never leaking the raw error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const handled = await handleDiscoverRequest(
+        "POST",
+        "/api/discover",
+        JSON.stringify({ targets: ["acme/widgets"] }),
+        {
+          loadDiscoverCliModule: async () => {
+            throw new Error("module load boom /abs/path/discover-cli.js");
+          },
         },
-      },
-    );
-    expect(handled).toEqual({ status: 500, body: JSON.stringify({ error: "module load boom" }) });
+      );
+      // Client sees only a generic token — the raw message (which for a real ERR_MODULE_NOT_FOUND
+      // carries an absolute filesystem path) must not appear in the response body.
+      expect(handled).toEqual({ status: 500, body: JSON.stringify({ error: "internal_error" }) });
+      expect(handled?.body).not.toContain("module load boom");
+      // The detail is logged server-side for debugging.
+      expect(errorSpy).toHaveBeenCalledWith("[miner-ui] /api/discover failed:", expect.any(Error));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 

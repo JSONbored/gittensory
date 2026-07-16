@@ -137,8 +137,11 @@ async function respondToAttemptRoute(rawBody: string, deps: AttemptApiDeps): Pro
     // error status carrying the raw exit code rather than crashing on an assumed-present result object.
     return { status: 502, body: JSON.stringify({ error: "attempt_failed", exitCode }) };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "failed to run local attempt";
-    return { status: 500, body: JSON.stringify({ error: message }) };
+    // Log the detailed error server-side only; return a generic token to the client. A failed dynamic
+    // import raises ERR_MODULE_NOT_FOUND carrying an absolute filesystem path, so echoing error.message
+    // would leak internal directory structure to API callers.
+    console.error("[miner-ui] /api/attempt failed:", error);
+    return { status: 500, body: JSON.stringify({ error: "internal_error" }) };
   }
 }
 
