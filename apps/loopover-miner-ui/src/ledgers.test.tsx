@@ -88,13 +88,22 @@ describe("emptyLedgersSummary (#4855)", () => {
 });
 
 describe("LedgersView (#4855)", () => {
-  it("renders claim status counts, the governor type table, and the recent-events feed", () => {
+  it("renders claim status counts, the governor type table, the events-by-type table, and the recent-events feed", () => {
     render(<LedgersView result={{ ok: true, summary: fixtureSummary }} />);
     expect(screen.getByText("Active", { selector: "dt" }).nextSibling?.textContent).toBe("2");
     expect(screen.getByText("Released", { selector: "dt" }).nextSibling?.textContent).toBe("1");
     expect(screen.getByText("rate_limit_deferred")).toBeTruthy();
+    expect(screen.getByText("attempt_started")).toBeTruthy();
     expect(screen.getByText("attempt_succeeded")).toBeTruthy();
     expect(screen.getAllByText("acme/widgets").length).toBeGreaterThan(0);
+  });
+
+  it("renders an events-by-type breakdown table matching the governor pattern (#6184)", () => {
+    render(<LedgersView result={{ ok: true, summary: fixtureSummary }} />);
+    expect(screen.getByRole("heading", { name: "Events (2)" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Governor events (2)" })).toBeTruthy();
+    const attemptStartedCells = screen.getAllByText("attempt_started");
+    expect(attemptStartedCells.length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders the fresh-install empty state when every ledger is empty", () => {
