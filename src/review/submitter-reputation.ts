@@ -313,6 +313,52 @@ export async function getSubmitterReputation(env: Env, project: string, submitte
   return { ...agg, closeRate: decided > 0 ? agg.closed / decided : 0, signal };
 }
 
+/** One submitter's raw, recency-windowed terminal-outcome tally for a repo (#6488) — the same `review_targets`
+ *  source {@link getSubmitterReputation} reads, but grouped by submitter instead of scoped to one. `avgAttemptCount`
+ *  reuses `attempt_count` (the gate's own re-review counter) as the review-cycle-count proxy; `avgMergeMs` is
+ *  `AVG(terminal_at - created_at)` over MERGED rows only (`null` when this submitter has no merges in the window). */
+export interface SubmitterCohortRow {
+  submitter: string;
+  submissions: number;
+  merged: number;
+  closed: number;
+  avgAttemptCount: number;
+  avgMergeMs: number | null;
+}
+
+/** Per-submitter cohort tally for a repo over the recency window (#6488, AMS-vs-human dashboard comparison).
+ *  Reuses the SAME `review_targets` terminal-row convention {@link getSubmitterReputation} does (terminal_at
+ *  within `windowDays`), just grouped by submitter instead of read for one. Fail-safe: any read error degrades
+ *  to an empty array (never throws — the caller treats that identically to "no activity in the window"). */
+export async function listSubmitterCohortRows(env: Env, project: string, windowDays: number = REPUTATION_WINDOW_DAYS): Promise<SubmitterCohortRow[]> {
+  try {
+    const result = await storage(env)
+      .prepare(
+        `SELECT submitter,
+                COUNT(*) AS submissions,
+                SUM(CASE WHEN status = 'merged' THEN 1 ELSE 0 END) AS merged,
+                SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed,
+                AVG(attempt_count) AS avgAttemptCount,
+                AVG(CASE WHEN status = 'merged' THEN (julianday(terminal_at) - julianday(created_at)) * 86400000 ELSE NULL END) AS avgMergeMs
+           FROM review_targets
+          WHERE project = ? AND submitter IS NOT NULL AND submitter != '' AND terminal_at IS NOT NULL AND terminal_at >= datetime('now', ?)
+          GROUP BY submitter`,
+      )
+      .bind(project, `-${windowDays} days`)
+      .all<{ submitter: string; submissions: number; merged: number; closed: number; avgAttemptCount: number; avgMergeMs: number | null }>();
+    return (result?.results ?? []).map((row) => ({
+      submitter: row.submitter,
+      submissions: row.submissions,
+      merged: row.merged,
+      closed: row.closed,
+      avgAttemptCount: row.avgAttemptCount,
+      avgMergeMs: row.avgMergeMs,
+    }));
+  } catch {
+    return []; // fail-safe — never throw; the caller reads this identically to "no activity in the window".
+  }
+}
+
 /** Install-wide sibling of {@link getSubmitterReputation} (#4513): the SAME quality-weighted, recency-windowed
  *  signal derivation, but aggregated across EVERY repo `review_targets` has recorded for this installation_id
  *  (migrations/0050), not just one project. Closes a real blind spot: a fleet identity spreading thin across

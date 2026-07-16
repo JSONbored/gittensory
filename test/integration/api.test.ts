@@ -953,6 +953,14 @@ describe("api routes", () => {
       noiseSources: expect.any(Array),
     });
 
+    // #6488: AMS-vs-human contributor-mix dashboard comparison, maintainer-scoped like maintainer-noise above.
+    // present: false here (never a 404/error) since the test env has no AMS reputation bridge configured.
+    const amsMinerCohortUnauthenticated = await app.request("/v1/repos/entrius/allways-ui/ams-miner-cohort", {}, env);
+    expect(amsMinerCohortUnauthenticated.status).toBe(401);
+    const amsMinerCohort = await app.request("/v1/repos/entrius/allways-ui/ams-miner-cohort", { headers: apiHeaders(env) }, env);
+    expect(amsMinerCohort.status).toBe(200);
+    await expect(amsMinerCohort.json()).resolves.toMatchObject({ present: false });
+
     const settingsPreviewUnauthenticated = await app.request("/v1/repos/entrius/allways-ui/settings-preview", { method: "POST", body: "{}" }, env);
     expect(settingsPreviewUnauthenticated.status).toBe(401);
 

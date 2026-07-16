@@ -40,6 +40,7 @@ import {
   MaintainerCutReadinessSchema,
   MaintainerLaneReportSchema,
   MaintainerNoiseReportSchema,
+  AmsMinerCohortComparisonSchema,
   McpCompatibilitySchema,
   PullRequestMaintainerPacketSchema,
   PullRequestReviewIntelligenceSchema,
@@ -157,6 +158,7 @@ export function buildOpenApiSpec() {
   registry.register("RepoRewardRisk", RepoRewardRiskSchema);
   registry.register("ContributorRewardRiskStrategy", ContributorRewardRiskStrategySchema);
   registry.register("MaintainerNoiseReport", MaintainerNoiseReportSchema);
+  registry.register("AmsMinerCohortComparison", AmsMinerCohortComparisonSchema);
   registry.register("PullRequestReviewability", PullRequestReviewabilitySchema);
 
   registry.registerPath({

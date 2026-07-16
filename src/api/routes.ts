@@ -212,6 +212,7 @@ import {
 import { generateAndSendReviewRecap } from "../services/review-recap";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadMaintainerNoiseReport } from "../services/maintainer-noise";
+import { buildAmsMinerCohortComparison } from "../review/ams-miner-cohort";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
@@ -2713,6 +2714,17 @@ export function createApp() {
     const gate = await requireRepoMaintainer(c, fullName);
     if (gate instanceof Response) return gate;
     return c.json(await loadMaintainerNoiseReport(c.env, fullName));
+  });
+
+  // #6488 (per #6210's decided design): AMS-vs-human contributor-mix dashboard comparison. Maintainer-scoped,
+  // mirrors maintainer-noise above. `present: false` (never a 404/error) when the AMS reputation bridge is off,
+  // unconfigured, or the repo has no submitter activity in the window -- the panel's own required empty state.
+  app.get("/v1/repos/:owner/:repo/ams-miner-cohort", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    return c.json(await buildAmsMinerCohortComparison(c.env, fullName));
   });
 
   // #6168 self-tune override admin: the operator-facing read side of the self-tune override store. The

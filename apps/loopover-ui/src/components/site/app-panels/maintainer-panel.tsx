@@ -18,6 +18,7 @@ import {
   type Status,
 } from "@/components/site/control-primitives";
 import { ActivationPreview } from "@/components/site/app-panels/activation-preview";
+import { AmsMinerCohortCard } from "@/components/site/app-panels/ams-miner-cohort-card";
 import { AiReviewSettings } from "@/components/site/app-panels/ai-review-settings";
 import { ContributorQualityTable } from "@/components/site/app-panels/contributor-quality-table";
 import type { MaintainerTopContributor } from "@/components/site/app-panels/contributor-quality-table-model";
@@ -452,6 +453,8 @@ function MaintainerDashboardView({
           <ContributorQualityTable topContributors={data.qualityDashboard.topContributors} />
 
           <ActivationPreview reviewability={data.reviewability} />
+
+          <AmsMinerCohortCard reviewability={data.reviewability} />
 
           <GateRampControl reviewability={data.reviewability} />
 

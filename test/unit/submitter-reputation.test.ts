@@ -8,6 +8,7 @@ import {
   getSubmitterReputation,
   getSubmitterReputationAcrossInstall,
   isMachinePacedCadence,
+  listSubmitterCohortRows,
   recordSubmissionOutcome,
   REPUTATION_WINDOW_DAYS,
   type ReputationConfig,
@@ -280,6 +281,77 @@ describe("recordSubmissionOutcome / getSubmitterReputation (D1, fail-safe)", () 
     const rep = await getSubmitterReputation(env, "p", "u");
     expect(rep.signal).toBe("neutral");
     expect(rep.closeRate).toBeCloseTo(1 / 3); // closed 1 / (merged 2 + closed 1)
+  });
+});
+
+describe("listSubmitterCohortRows (D1, fail-safe) (#6488)", () => {
+  it("passes the project + window-days binding and maps the aggregate row shape through unchanged", async () => {
+    const seen: { sql: string; bindArgs: unknown[] }[] = [];
+    const env = {
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...bindArgs: unknown[]) => {
+            seen.push({ sql, bindArgs });
+            return {
+              all: async () => ({
+                results: [
+                  { submitter: "alice", submissions: 10, merged: 7, closed: 3, avgAttemptCount: 1.5, avgMergeMs: 3_600_000 },
+                  { submitter: "bob", submissions: 2, merged: 0, closed: 2, avgAttemptCount: 3, avgMergeMs: null },
+                ],
+              }),
+            };
+          },
+        }),
+      },
+    } as unknown as Env;
+
+    const rows = await listSubmitterCohortRows(env, "acme/widgets", 30);
+
+    expect(seen[0]?.bindArgs).toEqual(["acme/widgets", "-30 days"]);
+    expect(seen[0]?.sql).toContain("GROUP BY submitter");
+    expect(rows).toEqual([
+      { submitter: "alice", submissions: 10, merged: 7, closed: 3, avgAttemptCount: 1.5, avgMergeMs: 3_600_000 },
+      { submitter: "bob", submissions: 2, merged: 0, closed: 2, avgAttemptCount: 3, avgMergeMs: null },
+    ]);
+  });
+
+  it("defaults windowDays to REPUTATION_WINDOW_DAYS when omitted", async () => {
+    const seen: unknown[][] = [];
+    const env = {
+      DB: {
+        prepare: () => ({
+          bind: (...bindArgs: unknown[]) => {
+            seen.push(bindArgs);
+            return { all: async () => ({ results: [] }) };
+          },
+        }),
+      },
+    } as unknown as Env;
+
+    await listSubmitterCohortRows(env, "acme/widgets");
+
+    expect(seen[0]).toEqual(["acme/widgets", `-${REPUTATION_WINDOW_DAYS} days`]);
+  });
+
+  it("degrades to an empty array (never throws) when the query itself throws", async () => {
+    const env = {
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => {
+              throw new Error("D1 boom");
+            },
+          }),
+        }),
+      },
+    } as unknown as Env;
+
+    await expect(listSubmitterCohortRows(env, "acme/widgets")).resolves.toEqual([]);
+  });
+
+  it("degrades to an empty array when the query resolves malformed (no results key, ?? [] fallback)", async () => {
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => undefined }) }) } } as unknown as Env;
+    await expect(listSubmitterCohortRows(env, "acme/widgets")).resolves.toEqual([]);
   });
 });
 

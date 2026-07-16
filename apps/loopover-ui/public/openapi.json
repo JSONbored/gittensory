@@ -13971,6 +13971,91 @@
           "scope_cap_files",
           "scope_cap_lines"
         ]
+      },
+      "AmsMinerCohortComparison": {
+        "type": "object",
+        "properties": {
+          "present": {
+            "type": "boolean"
+          },
+          "windowDays": {
+            "type": "number"
+          },
+          "totalSubmitterCount": {
+            "type": "number"
+          },
+          "checkedSubmitterCount": {
+            "type": "number"
+          },
+          "amsCohort": {
+            "type": "object",
+            "properties": {
+              "submitterCount": {
+                "type": "number"
+              },
+              "prVolume": {
+                "type": "number"
+              },
+              "acceptanceRate": {
+                "type": "number",
+                "nullable": true
+              },
+              "avgReviewCycleCount": {
+                "type": "number",
+                "nullable": true
+              },
+              "avgTimeToMergeMs": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "submitterCount",
+              "prVolume",
+              "acceptanceRate",
+              "avgReviewCycleCount",
+              "avgTimeToMergeMs"
+            ]
+          },
+          "humanCohort": {
+            "type": "object",
+            "properties": {
+              "submitterCount": {
+                "type": "number"
+              },
+              "prVolume": {
+                "type": "number"
+              },
+              "acceptanceRate": {
+                "type": "number",
+                "nullable": true
+              },
+              "avgReviewCycleCount": {
+                "type": "number",
+                "nullable": true
+              },
+              "avgTimeToMergeMs": {
+                "type": "number",
+                "nullable": true
+              }
+            },
+            "required": [
+              "submitterCount",
+              "prVolume",
+              "acceptanceRate",
+              "avgReviewCycleCount",
+              "avgTimeToMergeMs"
+            ]
+          }
+        },
+        "required": [
+          "present",
+          "windowDays",
+          "totalSubmitterCount",
+          "checkedSubmitterCount",
+          "amsCohort",
+          "humanCohort"
+        ]
       }
     },
     "parameters": {},

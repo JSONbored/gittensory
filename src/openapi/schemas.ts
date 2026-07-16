@@ -2603,6 +2603,25 @@ export const MaintainerNoiseReportSchema = z
   })
   .openapi("MaintainerNoiseReport");
 
+export const AmsMinerCohortMetricsSchema = z.object({
+  submitterCount: z.number(),
+  prVolume: z.number(),
+  acceptanceRate: z.number().nullable(),
+  avgReviewCycleCount: z.number().nullable(),
+  avgTimeToMergeMs: z.number().nullable(),
+});
+
+export const AmsMinerCohortComparisonSchema = z
+  .object({
+    present: z.boolean(),
+    windowDays: z.number(),
+    totalSubmitterCount: z.number(),
+    checkedSubmitterCount: z.number(),
+    amsCohort: AmsMinerCohortMetricsSchema,
+    humanCohort: AmsMinerCohortMetricsSchema,
+  })
+  .openapi("AmsMinerCohortComparison");
+
 export const PullRequestReviewabilitySchema = z
   .object({
     repoFullName: z.string(),
