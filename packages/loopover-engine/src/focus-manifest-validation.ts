@@ -7,6 +7,7 @@ import {
   reviewConfigToJson,
   reviewRecapConfigToJson,
   maintainerRecapConfigToJson,
+  federatedIntelligenceConfigToJson,
   opsConfigToJson,
   publicStatsConfigToJson,
   draftFlowConfigToJson,
@@ -84,6 +85,8 @@ function focusManifestToNormalizedJson(manifest: FocusManifest): Record<string, 
   if (ops !== null) normalized.ops = ops;
   const publicStats = publicStatsConfigToJson(manifest.publicStats);
   if (publicStats !== null) normalized.publicStats = publicStats;
+  const federatedIntelligence = federatedIntelligenceConfigToJson(manifest.federatedIntelligence);
+  if (federatedIntelligence !== null) normalized.federatedIntelligence = federatedIntelligence;
   const draftFlow = draftFlowConfigToJson(manifest.draftFlow);
   if (draftFlow !== null) normalized.draftFlow = draftFlow;
   const upstreamDriftIssues = upstreamDriftIssuesConfigToJson(manifest.upstreamDriftIssues);

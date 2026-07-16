@@ -41,6 +41,7 @@ import {
   parseReviewConfigMapping,
   reviewRecapConfigToJson,
   maintainerRecapConfigToJson,
+  federatedIntelligenceConfigToJson,
   opsConfigToJson,
   publicStatsConfigToJson,
   draftFlowConfigToJson,
@@ -921,6 +922,7 @@ describe("compileFocusManifestPolicy", () => {
       maintainerRecap: { present: false, enabled: false, cadence: "weekly", channel: "discord" },
       ops: { present: false, enabled: false },
       publicStats: { present: false, enabled: false },
+      federatedIntelligence: { present: false, enabled: false },
       draftFlow: { present: false, enabled: false },
       upstreamDriftIssues: { present: false, enabled: false },
       warnings: [],
@@ -2019,6 +2021,55 @@ describe("parseFocusManifest gate config", () => {
 
     it("publicStatsConfigToJson returns null for an absent config", () => {
       expect(publicStatsConfigToJson(parseFocusManifest(null).publicStats)).toBeNull();
+    });
+  });
+
+  describe("federatedIntelligence: (#6478, opt-in signed signature-bundle export)", () => {
+    it("defaults to disabled when the block is absent -- the export must never be on by default", () => {
+      expect(parseFocusManifest(null).federatedIntelligence).toEqual({ present: false, enabled: false });
+      expect(parseFocusManifest({}).federatedIntelligence).toEqual({ present: false, enabled: false });
+      expect(parseFocusManifest({ federatedIntelligence: null }).federatedIntelligence).toEqual({
+        present: false,
+        enabled: false,
+      });
+    });
+
+    it("parses an explicit opt-in and an explicit opt-out", () => {
+      expect(parseFocusManifest({ federatedIntelligence: { enabled: true } }).federatedIntelligence).toEqual({
+        present: true,
+        enabled: true,
+      });
+      expect(parseFocusManifest({ federatedIntelligence: { enabled: false } }).federatedIntelligence).toEqual({
+        present: true,
+        enabled: false,
+      });
+    });
+
+    it("warns and lands on disabled when the block is not a mapping", () => {
+      const asString = parseFocusManifest({ federatedIntelligence: "yes" as never });
+      expect(asString.federatedIntelligence).toEqual({ present: false, enabled: false });
+      expect(asString.warnings.some((w) => /federatedIntelligence/.test(w))).toBe(true);
+      const asArray = parseFocusManifest({ federatedIntelligence: ["yes"] as never });
+      expect(asArray.federatedIntelligence).toEqual({ present: false, enabled: false });
+      expect(asArray.warnings.some((w) => /federatedIntelligence/.test(w))).toBe(true);
+    });
+
+    it("warns and defaults to false when enabled is a non-boolean value", () => {
+      const m = parseFocusManifest({ federatedIntelligence: { enabled: "yes" as unknown as boolean } });
+      expect(m.federatedIntelligence.enabled).toBe(false);
+      expect(m.warnings.some((w) => /federatedIntelligence\.enabled/.test(w))).toBe(true);
+    });
+
+    it("round-trips through federatedIntelligenceConfigToJson → parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ federatedIntelligence: { enabled: true } });
+      expect(
+        parseFocusManifest({ federatedIntelligence: federatedIntelligenceConfigToJson(m.federatedIntelligence) })
+          .federatedIntelligence,
+      ).toEqual(m.federatedIntelligence);
+    });
+
+    it("federatedIntelligenceConfigToJson returns null for an absent config", () => {
+      expect(federatedIntelligenceConfigToJson(parseFocusManifest(null).federatedIntelligence)).toBeNull();
     });
   });
 

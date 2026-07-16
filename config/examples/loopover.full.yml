@@ -1265,6 +1265,18 @@ settings:
 # publicStats:
 #   enabled: true   # Bool. Default: false (the env var decides instead).
 
+# Federated fleet intelligence export (#6478): opt in to sharing a signed, anonymized calibration bundle with
+# the federated network, so this instance can be benchmarked against a peer median. OFF unless you set this --
+# and unlike `ops:`/`publicStats:` above there is NO env-var fallback, deliberately: this is the toggle that
+# decides whether locally-derived data leaves the instance at all, so anything other than an explicit
+# `enabled: true` means nothing is built and nothing is sent.
+#
+# What the bundle carries, and all it can carry: the gate's verdict, the PR's real outcome, a reversal flag, a
+# bucketed reason category, and a coarse time-to-close. Never source, diffs, comments, logins, repo names, PR
+# numbers -- and no per-PR identifiers at all, not even hashed ones.
+# federatedIntelligence:
+#   enabled: true   # Bool. Default: false (nothing is exported).
+
 # Fleet-wide AI-drafted-PR creation capability (#6275): config-as-code override for the LOOPOVER_REVIEW_DRAFT
 # env flag that gates the public OAuth draft-submission flow (POST /v1/drafts and friends). Operator-level,
 # not per-repo -- there is no repo context at any of its activation checks -- so only meaningful on the
