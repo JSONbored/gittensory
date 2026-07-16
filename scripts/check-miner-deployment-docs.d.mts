@@ -1,5 +1,6 @@
 export type MinerDeploymentReality = {
   hasEnvRead: (name: string) => boolean;
+  envReads: Iterable<string>;
   pathExists: (relativePath: string) => boolean;
   isRegisteredCommand: (name: string) => boolean;
 };
