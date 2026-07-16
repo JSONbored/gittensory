@@ -81,3 +81,13 @@ test("reconstructOldContent: a wholly new file reconstructs to an empty string, 
   assert.equal(old, "");
   assert.ok(!old); // falsy, exactly like null — this is the contract every caller relies on
 });
+
+test("reconstructOldContent: a well-formed patch ending in a trailing newline reconstructs faithfully, not null (#6254)", () => {
+  // `patch.split("\n")` on a trailing-newline patch yields a phantom empty final element. Before #6254 the loop
+  // treated it as a context line requiring a match against a non-existent `newLines[cursor]`, so this fully-
+  // faithful hunk wrongly returned null — silently degrading complexity-/duplication-/doc-comment-/exhaustiveness-
+  // drift to "no signal" on the very common trailing-newline patch. The phantom is now dropped before the loop.
+  assert.equal(reconstructOldContent("a\nb", "@@ -1,2 +1,2 @@\n a\n b\n"), "a\nb");
+  // A real change (a removal) that also ends in a trailing newline still rebuilds the old side correctly.
+  assert.equal(reconstructOldContent("a\nb", "@@ -1,2 +1,2 @@\n-x\n+a\n b\n"), "x\nb");
+});

@@ -34,6 +34,12 @@
 export function reconstructOldContent(newContent: string, patch: string): string | null {
   const newLines = newContent.split("\n");
   const patchLines = patch.split("\n");
+  // A unified-diff patch conventionally ends in a newline, so `split("\n")` yields a phantom empty final element
+  // that is NOT a real diff line — dropping it keeps the reconstruction loop from treating it as a context line
+  // to match against `newContent[cursor]`, which wrongly discarded otherwise-faithful trailing-newline patches
+  // (#6254). This is safe and scoped: a genuine blank context/added/removed line always carries its " "/"+"/"-"
+  // prefix, so a truly-empty ("") element only ever arises from that trailing split, never from real hunk content.
+  if (patchLines.length > 0 && patchLines[patchLines.length - 1] === "") patchLines.pop();
   const out: string[] = [];
   let cursor = 0; // next unconsumed index into newLines
   let i = 0;
