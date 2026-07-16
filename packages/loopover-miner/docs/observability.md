@@ -1,5 +1,9 @@
 # Observing your miner
 
+> Also published on the docs website: [Observing your miner](https://loopover.ai/docs/ams-observability)
+> (same content, rendered with search and the rest of the maintainer docs nav). This file remains
+> the canonical source and ships inside the published `@loopover/miner` package.
+
 How to point Grafana at redacted miner reporting exports to see attempt and prediction history without exposing the
 miner's live local ledgers. This covers the **miner-specific** observability wiring only; for general self-host
 operations, see your ops runbook.

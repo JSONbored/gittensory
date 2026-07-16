@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, children }: { to: string; children: ReactNode }) => <a href={to}>{children}</a>,
+}));
 
 import {
   AMS_OBSERVABILITY_DOC_URL,
@@ -24,11 +29,9 @@ describe("AMS observability cross-reference callout", () => {
     expect(link.getAttribute("href")).toBe(AMS_OBSERVABILITY_DOC_URL);
   });
 
-  it("targets a well-formed, non-empty absolute https URL (guards against a blank/copy-paste link)", () => {
+  it("targets a well-formed, non-empty in-app docs path (guards against a blank/copy-paste link)", () => {
     expect(AMS_OBSERVABILITY_DOC_URL).toBeTruthy();
-    const url = new URL(AMS_OBSERVABILITY_DOC_URL);
-    expect(url.protocol).toBe("https:");
-    expect(url.hostname).toBe("github.com");
+    expect(AMS_OBSERVABILITY_DOC_URL.startsWith("/docs/")).toBe(true);
   });
 
   it.each(ROUTES_WITH_CALLOUT)("wires the callout into %s", (_path, docPath) => {

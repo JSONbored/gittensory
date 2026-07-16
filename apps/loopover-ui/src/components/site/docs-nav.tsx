@@ -77,6 +77,7 @@ export const docsNav: DocsGroup[] = [
         items: [
           { to: "/docs/ams-deployment", label: "Deployment guide" },
           { to: "/docs/ams-operations-runbook", label: "Operations runbook" },
+          { to: "/docs/ams-observability", label: "Observing your miner" },
         ],
       },
     ],
