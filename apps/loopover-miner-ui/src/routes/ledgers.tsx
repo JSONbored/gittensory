@@ -4,9 +4,17 @@ import { useEffect, useState } from "react";
 import { Button } from "@loopover/ui-kit/components/button";
 import { Card, CardContent, CardHeader } from "@loopover/ui-kit/components/card";
 import { Input } from "@loopover/ui-kit/components/input";
+import { Skeleton } from "@loopover/ui-kit/components/skeleton";
+import { StateBoundary } from "@loopover/ui-kit/components/state-views";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@loopover/ui-kit/components/table";
 
-import { CLAIM_STATUSES, fetchLedgers, type ClaimStatus, type LedgersResult } from "../lib/ledgers";
+import {
+  CLAIM_STATUSES,
+  fetchLedgers,
+  type ClaimStatus,
+  type LedgersResult,
+  type LedgersSummary,
+} from "../lib/ledgers";
 import { fetchGovernorPauseState, pauseGovernor, resumeGovernor, type GovernorPauseStateResult } from "../lib/governor";
 
 export const Route = createFileRoute("/ledgers")({
@@ -16,12 +24,15 @@ export const Route = createFileRoute("/ledgers")({
 // Read-only views over the miner's local claim / event / governor ledgers (#4855). All three are aggregated
 // server-side (see vite-ledgers-api.ts) to status/type counts plus a small feed of SAFE columns — raw payloads
 // and the free-text claim note never reach this component. Same 4-state pattern as the portfolio/run-history
-// views (loading / error / fresh-install empty / populated).
+// views (loading / error / fresh-install empty / populated), now rendered through ui-kit's shared StateBoundary
+// / LoadingState / ErrorState primitives with content-shaped Skeletons instead of hand-rolled plain text (#6512).
 //
 // The governor control section below is a SEPARATE fetch/action loop from the read-only ledger summary above
 // (#4857, the governor half): it reads/writes the governor's pause state via vite-governor-api.ts, the
 // miner-ui's first write-capable endpoint, safe only because vite-auth.ts (#4858) now authenticates every
-// /api/* request. It does not touch, and is unrelated to, the governor EVENT ledger already shown below.
+// /api/* request. It does not touch, and is unrelated to, the governor EVENT ledger already shown below. Its
+// read has its OWN StateBoundary so a governor-state fetch failure never blocks the ledger summary, and the
+// pause/resume write path (lib/governor.ts + the Button click handlers) is deliberately left untouched (#6512).
 
 const CLAIM_STATUS_LABELS: Record<ClaimStatus, string> = {
   active: "Active",
@@ -57,6 +68,50 @@ function CountTable({ counts, keyLabel }: { counts: Record<string, number>; keyL
   );
 }
 
+// Content-shaped placeholder for the governor-control panel: a status line plus the input/button row, so the
+// layout doesn't jump once the pause state arrives.
+function GovernorControlSkeleton() {
+  return (
+    <div className="grid gap-3 rounded-token border border-border bg-transparent p-4" aria-hidden>
+      <Skeleton className="h-4 w-40" />
+      <div className="flex flex-wrap items-center gap-3">
+        <Skeleton className="h-9 min-w-[12rem] flex-1 rounded-token" />
+        <Skeleton className="h-8 w-32 rounded-token" />
+      </div>
+    </div>
+  );
+}
+
+// Content-shaped placeholder for the ledger summary: the three claim count-cards plus a couple of table blocks,
+// approximating the eventual card-grid + table layout rather than a single generic bar.
+function LedgerSummarySkeleton() {
+  return (
+    <div className="grid gap-6" aria-hidden>
+      <section className="grid gap-3">
+        <Skeleton className="h-5 w-32" />
+        <div className="grid gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }, (_, index) => (
+            <div key={index} className="grid gap-2 rounded-token border border-border p-4">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-8 w-12" />
+            </div>
+          ))}
+        </div>
+      </section>
+      {Array.from({ length: 2 }, (_, section) => (
+        <section key={section} className="grid gap-3">
+          <Skeleton className="h-5 w-40" />
+          <div className="grid gap-2">
+            {Array.from({ length: 3 }, (_, row) => (
+              <Skeleton key={row} className="h-6 w-full" />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function GovernorControlSection({
   result,
   pending,
@@ -71,67 +126,62 @@ export function GovernorControlSection({
   // Optional pause reason, mirroring the CLI's `governor pause [--reason <text>]`; an empty field
   // is passed through as `undefined` so it matches the CLI's own optional-flag behavior.
   const [reason, setReason] = useState("");
+  const pauseState = result?.ok ? result.pauseState : null;
+  const governorError = result !== null && !result.ok ? result.error : null;
   return (
     <section className="grid gap-3">
       <h3 className="font-display text-token-base font-semibold">Governor control</h3>
-      {result === null ? (
-        <p className="text-token-sm text-muted-foreground">Loading governor state…</p>
-      ) : !result.ok ? (
-        <p role="alert" className="text-token-sm text-[var(--danger)]">
-          Could not read the local governor state: {result.error}
-        </p>
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-token-sm text-muted-foreground">
-            {result.pauseState.paused
-              ? `Paused since ${result.pauseState.pausedAt}${result.pauseState.reason ? ` (${result.pauseState.reason})` : ""}`
-              : "Not paused"}
-          </p>
-          {result.pauseState.paused ? (
-            <Button size="sm" variant="outline" disabled={pending} onClick={onResume}>
-              Resume governor
-            </Button>
-          ) : (
-            <>
-              <Input
-                type="text"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                disabled={pending}
-                placeholder="Reason (optional)"
-                aria-label="Pause reason"
-                className="w-auto flex-1 min-w-[12rem]"
+      <StateBoundary
+        isLoading={result === null}
+        isError={governorError !== null}
+        loadingSkeleton={<GovernorControlSkeleton />}
+        errorTitle="Couldn't read the governor state"
+        errorDescription={governorError ? `Could not read the local governor state: ${governorError}` : undefined}
+      >
+        {pauseState && (
+          <div className="grid gap-3 rounded-token border border-border bg-transparent p-4">
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className={`size-2 shrink-0 rounded-full ${pauseState.paused ? "bg-[var(--warning)]" : "bg-[var(--success)]"}`}
               />
-              <Button size="sm" variant="destructive" disabled={pending} onClick={() => onPause(reason || undefined)}>
-                Pause governor
-              </Button>
-            </>
-          )}
-        </div>
-      )}
+              <p className="text-token-sm text-muted-foreground">
+                {pauseState.paused
+                  ? `Paused since ${pauseState.pausedAt}${pauseState.reason ? ` (${pauseState.reason})` : ""}`
+                  : "Not paused"}
+              </p>
+            </div>
+            {pauseState.paused ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button size="sm" variant="outline" disabled={pending} onClick={onResume}>
+                  Resume governor
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Input
+                  type="text"
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  disabled={pending}
+                  placeholder="Reason (optional)"
+                  aria-label="Pause reason"
+                  className="w-auto flex-1 min-w-[12rem]"
+                />
+                <Button size="sm" variant="destructive" disabled={pending} onClick={() => onPause(reason || undefined)}>
+                  Pause governor
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </StateBoundary>
     </section>
   );
 }
 
-export function LedgersView({ result }: { result: LedgersResult | null }) {
-  if (result === null) {
-    return <p className="text-token-sm text-muted-foreground">Loading local ledgers…</p>;
-  }
-  if (!result.ok) {
-    return (
-      <p role="alert" className="text-token-sm text-[var(--danger)]">
-        Could not read the local ledgers: {result.error}
-      </p>
-    );
-  }
-  const { claims, events, governor } = result.summary;
-  if (claims.total === 0 && events.total === 0 && governor.total === 0) {
-    return (
-      <p className="text-token-sm text-muted-foreground">
-        No ledger activity yet — claims, events, and governor entries appear here once the miner starts working.
-      </p>
-    );
-  }
+function LedgerSummary({ summary }: { summary: LedgersSummary }) {
+  const { claims, events, governor } = summary;
   return (
     <div className="grid gap-6">
       <section className="grid gap-3">
@@ -196,6 +246,27 @@ export function LedgersView({ result }: { result: LedgersResult | null }) {
         )}
       </section>
     </div>
+  );
+}
+
+export function LedgersView({ result }: { result: LedgersResult | null }) {
+  const summary = result?.ok ? result.summary : null;
+  const ledgersError = result !== null && !result.ok ? result.error : null;
+  const isEmpty =
+    summary !== null && summary.claims.total === 0 && summary.events.total === 0 && summary.governor.total === 0;
+  return (
+    <StateBoundary
+      isLoading={result === null}
+      isError={ledgersError !== null}
+      isEmpty={isEmpty}
+      loadingSkeleton={<LedgerSummarySkeleton />}
+      errorTitle="Couldn't read the local ledgers"
+      errorDescription={ledgersError ? `Could not read the local ledgers: ${ledgersError}` : undefined}
+      emptyTitle="No ledger activity yet"
+      emptyDescription="Claims, events, and governor entries appear here once the miner starts working."
+    >
+      {summary && <LedgerSummary summary={summary} />}
+    </StateBoundary>
   );
 }
 

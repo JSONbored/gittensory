@@ -101,20 +101,23 @@ describe("LedgersView (#4855)", () => {
     expect(screen.getAllByText("acme/widgets").length).toBeGreaterThan(0);
   });
 
-  it("renders the fresh-install empty state when every ledger is empty", () => {
+  it("renders the fresh-install empty state when every ledger is empty (#6512 StateBoundary EmptyState)", () => {
     render(<LedgersView result={{ ok: true, summary: emptyLedgersSummary() }} />);
     expect(screen.getByText(/No ledger activity yet/i)).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("renders an error message when the local API is unreachable", () => {
+  it("renders the ui-kit ErrorState, surfacing the raw error, when the local API is unreachable (#6512)", () => {
     render(<LedgersView result={{ ok: false, error: "connection refused" }} />);
     expect(screen.getByRole("alert").textContent).toContain("connection refused");
   });
 
-  it("renders the loading state before the first result arrives", () => {
-    render(<LedgersView result={null} />);
-    expect(screen.getByText(/Loading local ledgers/i)).toBeTruthy();
+  it("renders content-shaped Skeleton placeholders (not plain text) before the first result arrives (#6512)", () => {
+    const { container } = render(<LedgersView result={null} />);
+    // The plain-text "Loading local ledgers…" branch is gone; the StateBoundary now renders animate-pulse
+    // Skeleton blocks shaped to the eventual card/table layout.
+    expect(screen.queryByText(/Loading local ledgers/i)).toBeNull();
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
   });
 });
 

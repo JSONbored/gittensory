@@ -35,11 +35,14 @@ describe("defaultGovernorPauseState (#4857)", () => {
 });
 
 describe("GovernorControlSection (#4857)", () => {
-  it("renders the loading state before the first result arrives", () => {
-    render(
+  it("renders content-shaped Skeleton placeholders (not plain text) before the first result arrives (#6512)", () => {
+    const { container } = render(
       <GovernorControlSection result={null} pending={false} onPause={() => undefined} onResume={() => undefined} />,
     );
-    expect(screen.getByText(/Loading governor state/i)).toBeTruthy();
+    // The plain-text "Loading governor state…" branch is gone; the StateBoundary now renders animate-pulse
+    // Skeleton blocks shaped to the eventual status-line + input/button layout.
+    expect(screen.queryByText(/Loading governor state/i)).toBeNull();
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
   });
 
   it("renders an error message when the local API is unreachable", () => {
