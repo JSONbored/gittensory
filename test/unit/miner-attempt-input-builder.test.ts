@@ -145,6 +145,7 @@ describe("buildAttemptLoopInput (#5132)", () => {
       branchRef: undefined,
       reviewContext: reviewContext(),
       rejectionSignaled: false,
+      autonomyLevel: DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy,
     });
   });
 
@@ -177,6 +178,38 @@ describe("buildAttemptLoopInput (#5132)", () => {
     });
     expect(loopInput.rejectionSignaled).toBe(true);
     expect(loopInput.mode).toBe("live");
+  });
+
+  it("#6560: threads amsPolicySpec.selfLoopAutonomy through as IterateLoopInput.autonomyLevel", () => {
+    for (const selfLoopAutonomy of ["auto", "auto_with_approval", "observe"] as const) {
+      const loopInput = buildAttemptLoopInput({
+        codingTaskSpec: codingTaskSpec(),
+        reviewContext: reviewContext(),
+        worktreePath: "/fake",
+        attemptId: "a1",
+        mode: "live",
+        repoFullName: "acme/widgets",
+        minerLogin: "alice",
+        rejectionSignaled: false,
+        amsPolicySpec: { ...DEFAULT_AMS_POLICY_SPEC, selfLoopAutonomy },
+      });
+      expect(loopInput.autonomyLevel).toBe(selfLoopAutonomy);
+    }
+  });
+
+  it("#6560: the default policy spec's autonomy level flows through unchanged (no fabricated default)", () => {
+    const loopInput = buildAttemptLoopInput({
+      codingTaskSpec: codingTaskSpec(),
+      reviewContext: reviewContext(),
+      worktreePath: "/fake",
+      attemptId: "a1",
+      mode: "live",
+      repoFullName: "acme/widgets",
+      minerLogin: "alice",
+      rejectionSignaled: false,
+      amsPolicySpec: DEFAULT_AMS_POLICY_SPEC,
+    });
+    expect(loopInput.autonomyLevel).toBe(DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy);
   });
 
   it("uses AmsPolicySpec's real maxIterations/maxTurnsPerIteration, not hardcoded literals", () => {

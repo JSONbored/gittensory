@@ -207,3 +207,45 @@ test("deriveSelfReviewOutcome: a failing verdict maps to fail with the real bloc
   } as unknown as SelfReviewVerdict;
   assert.deepEqual(deriveSelfReviewOutcome(verdict), { kind: "fail", blockerCodes: ["duplicate_pr_risk", "missing_linked_issue"] });
 });
+
+// #6560: autonomy narrows the pass->handoff transition ONLY. Mirrored as a vitest suite at
+// test/unit/engine-iterate-policy-autonomy.test.ts, which is what codecov/patch actually measures for
+// packages/loopover-engine/src/**.
+function passingState(overrides: Partial<IterationState> = {}): IterationState {
+  return baseState({ selfReview: { kind: "pass" }, ...overrides });
+}
+
+test("autonomy #6560: \"auto\" hands off with no requiresApproval", () => {
+  const decision = decideNextActionWithReason(passingState({ autonomyLevel: "auto" }));
+  assert.equal(decision.action, "handoff");
+  assert.equal(decision.requiresApproval, undefined);
+});
+
+test("autonomy #6560: \"auto_with_approval\" hands off AND flags requiresApproval", () => {
+  const decision = decideNextActionWithReason(passingState({ autonomyLevel: "auto_with_approval" }));
+  assert.equal(decision.action, "handoff");
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("autonomy #6560: \"observe\" abandons with autonomy_observe_only despite the clean pass", () => {
+  const decision = decideNextActionWithReason(passingState({ autonomyLevel: "observe" }));
+  assert.equal(decision.action, "abandon");
+  assert.equal(decision.abandonReason, "autonomy_observe_only");
+  assert.ok(decision.reason.includes("clean predicted-gate pass"));
+  assert.ok(decision.reason.includes("observe-only"));
+});
+
+test("autonomy #6560: an unset autonomyLevel is byte-identical to an explicit \"auto\" (true no-op)", () => {
+  const omitted = passingState();
+  assert.equal(omitted.autonomyLevel, undefined);
+  assert.deepEqual(decideNextActionWithReason(omitted), decideNextActionWithReason(passingState({ autonomyLevel: "auto" })));
+});
+
+test("autonomy #6560: rejectionSignaled and an ambiguous self-review still win over \"observe\"", () => {
+  const rejected = decideNextActionWithReason(passingState({ autonomyLevel: "observe", rejectionSignaled: true }));
+  assert.equal(rejected.abandonReason, "rejection_signaled");
+  const ambiguous = decideNextActionWithReason(
+    baseState({ autonomyLevel: "observe", selfReview: { kind: "ambiguous", reason: "unclear" } }),
+  );
+  assert.equal(ambiguous.abandonReason, "self_review_ambiguous");
+});

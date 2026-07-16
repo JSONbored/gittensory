@@ -99,5 +99,8 @@ export function buildAttemptLoopInput(input) {
     branchRef: input.branchRef,
     reviewContext: input.reviewContext,
     rejectionSignaled: input.rejectionSignaled,
+    // #6560: the operator's configured self-loop autonomy level reaches the policy the same way every other
+    // AmsPolicySpec knob above does. It gates only the pass->handoff transition inside iterate-policy.js.
+    autonomyLevel: input.amsPolicySpec.selfLoopAutonomy,
   };
 }
