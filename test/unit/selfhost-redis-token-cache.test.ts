@@ -4,7 +4,7 @@ import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createRedisTokenCache } from "../../src/selfhost/redis-token-cache";
 
 /** Minimal ioredis stand-in that records the TTL passed to set(). */
-function fakeRedis(): {
+function fakeRedis(options: { getThrows?: boolean } = {}): {
   redis: Redis;
   store: Map<string, string>;
   ttl: () => number;
@@ -13,6 +13,7 @@ function fakeRedis(): {
   let lastTtl = -1;
   const redis = {
     async get(k: string) {
+      if (options.getThrows) throw new Error("connection refused");
       return store.get(k) ?? null;
     },
     async set(k: string, v: string, _ex: "EX", ttl: number) {
@@ -94,6 +95,19 @@ describe("createRedisTokenCache (#perf installation-token persistence)", () => {
 
     expect(await renderMetrics()).toContain(
       'loopover_redis_token_cache_total{result="miss"} 1',
+    );
+  });
+
+  it("regression: fails open (returns null) and records an error metric on a Redis connection failure (#6288)", async () => {
+    // Unlike a cache miss/malformed value, a connection failure must never throw uncaught here: the caller
+    // (github/app.ts's readCachedToken -> createInstallationToken) has no try/catch of its own, so an uncaught
+    // rejection would hard-fail GitHub App token minting on every Redis hiccup instead of costing one extra
+    // real mint. This must still be observable, unlike redis-cache.ts's silent fail-open.
+    const { redis } = fakeRedis({ getThrows: true });
+    await expect(createRedisTokenCache(redis).get(9)).resolves.toBeNull();
+
+    expect(await renderMetrics()).toContain(
+      'loopover_redis_token_cache_total{result="error"} 1',
     );
   });
 });

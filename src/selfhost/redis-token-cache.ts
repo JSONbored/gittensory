@@ -13,14 +13,24 @@ const REDIS_TOKEN_CACHE_METRIC = "loopover_redis_token_cache_total";
 const keyFor = (installationId: number): string =>
   `gh:insttoken:${installationId}`;
 
-function recordTokenCacheMetric(result: "hit" | "miss"): void {
+function recordTokenCacheMetric(result: "hit" | "miss" | "error"): void {
   incr(REDIS_TOKEN_CACHE_METRIC, { result });
 }
 
 export function createRedisTokenCache(redis: Redis): InstallationTokenStore {
   return {
     async get(installationId: number) {
-      const raw = await redis.get(keyFor(installationId));
+      // Fail open on a connection error, same contract as redis-cache.ts's webhook-dedup cache: the caller
+      // (github/app.ts's readCachedToken -> createInstallationToken) has no try/catch of its own, so an
+      // uncaught error here would hard-fail GitHub App token minting on every Redis hiccup instead of just
+      // costing one extra real mint. Unlike redis-cache.ts, still record a metric so the failure isn't invisible.
+      let raw: string | null;
+      try {
+        raw = await redis.get(keyFor(installationId));
+      } catch {
+        recordTokenCacheMetric("error");
+        return null;
+      }
       if (!raw) {
         recordTokenCacheMetric("miss");
         return null;
