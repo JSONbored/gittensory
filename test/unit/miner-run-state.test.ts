@@ -359,4 +359,32 @@ describe("loopover-miner run-state store (#2289)", () => {
       }).not.toThrow();
     });
   });
+
+  describe("purgeByRepo (#6599)", () => {
+    it("deletes every row for one repo and leaves other repos untouched", () => {
+      const store = initRunStateStore(join(tempRoot(), "run-state.sqlite3"));
+      store.setRunState("owner/repo-a", "discovering");
+      store.setRunState("owner/repo-b", "planning");
+
+      expect(store.purgeByRepo("owner/repo-a")).toBe(1);
+      expect(store.getRunState("owner/repo-a")).toBeNull();
+      expect(store.listRunStates()).toHaveLength(1);
+      store.close();
+    });
+
+    it("returns 0 when nothing matches the repo", () => {
+      const store = initRunStateStore(join(tempRoot(), "run-state.sqlite3"));
+      store.setRunState("owner/repo-b", "discovering");
+      expect(store.purgeByRepo("owner/repo-a")).toBe(0);
+      expect(store.listRunStates()).toHaveLength(1);
+      store.close();
+    });
+
+    it("rejects a missing/malformed repoFullName rather than silently no-opping", () => {
+      const store = initRunStateStore(join(tempRoot(), "run-state.sqlite3"));
+      expect(() => store.purgeByRepo(undefined as never)).toThrow("invalid_repo_full_name");
+      expect(() => store.purgeByRepo("no-slash")).toThrow("invalid_repo_full_name");
+      store.close();
+    });
+  });
 });

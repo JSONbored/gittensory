@@ -32,6 +32,8 @@ export const CLAIM_LEDGER_PURGE_SPEC = { table: "miner_claims", repoColumn: "rep
 export const EVENT_LEDGER_PURGE_SPEC = { table: "miner_event_ledger", repoColumn: "repo_full_name" };
 export const GOVERNOR_LEDGER_PURGE_SPEC = { table: "governor_events", repoColumn: "repo_full_name" };
 export const PREDICTION_LEDGER_PURGE_SPEC = { table: "predictions", repoColumn: "repo_full_name" };
+export const PORTFOLIO_QUEUE_PURGE_SPEC = { table: "miner_portfolio_queue", repoColumn: "repo_full_name" };
+export const RUN_STATE_PURGE_SPEC = { table: "miner_run_state", repoColumn: "repo_full_name" };
 
 const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

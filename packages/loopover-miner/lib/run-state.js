@@ -1,6 +1,7 @@
 import { DEFAULT_FORGE_CONFIG } from "./forge-config.js";
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 import { applySchemaMigrations } from "./schema-version.js";
+import { RUN_STATE_PURGE_SPEC, purgeStoreByRepo } from "./store-maintenance.js";
 
 export const RUN_STATES = Object.freeze(["idle", "discovering", "planning", "preparing"]);
 
@@ -132,6 +133,11 @@ export function initRunStateStore(dbPath = resolveRunStateDbPath()) {
           state: row.state,
           updatedAt: row.updated_at,
         }));
+    },
+    /** Right-to-be-forgotten (#5564/#6599): delete every row for one repo, mirroring the ledgers' purgeByRepo.
+     *  Throws on a missing/malformed repoFullName rather than silently no-opping. */
+    purgeByRepo(repoFullName) {
+      return purgeStoreByRepo(db, RUN_STATE_PURGE_SPEC, normalizeRepoFullName(repoFullName));
     },
     close() {
       db.close();

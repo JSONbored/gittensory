@@ -1,7 +1,8 @@
 // `loopover-miner purge` (#5564): an explicit, operator-invoked right-to-be-forgotten path across the local
-// ledgers. Deletes every row for one repo from the four stores that have a real `repoColumn` (claim-ledger,
-// event-ledger, governor-ledger, prediction-ledger), via each store's own `purgeByRepo` method (which reuses
-// `store-maintenance.js`'s shared, identifier-guarded `purgeStoreByRepo`). `attempt-log.js` is deliberately
+// ledgers. Deletes every row for one repo from the six stores that have a real `repoColumn` (claim-ledger,
+// event-ledger, governor-ledger, prediction-ledger, portfolio-queue, run-state — the last two added in #6599),
+// via each store's own `purgeByRepo` method (which reuses `store-maintenance.js`'s shared, identifier-guarded
+// `purgeStoreByRepo`). `attempt-log.js` is deliberately
 // reported as not-purgeable rather than silently skipped or approximated: its payload is a free-form
 // `Record<string, unknown>` with no dedicated repo column, so a precise per-repo match isn't possible there
 // without risking false matches -- see store-maintenance.js's own purge-spec doc comment.
@@ -15,12 +16,16 @@ import { openClaimLedger, resolveClaimLedgerDbPath } from "./claim-ledger.js";
 import { initEventLedger, resolveEventLedgerDbPath } from "./event-ledger.js";
 import { initGovernorLedger, resolveGovernorLedgerDbPath } from "./governor-ledger.js";
 import { initPredictionLedger, resolvePredictionLedgerDbPath } from "./prediction-ledger.js";
+import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "./portfolio-queue.js";
+import { initRunStateStore, resolveRunStateDbPath } from "./run-state.js";
 import { resolveAttemptLogDbPath } from "./attempt-log.js";
 import {
   CLAIM_LEDGER_PURGE_SPEC,
   EVENT_LEDGER_PURGE_SPEC,
   GOVERNOR_LEDGER_PURGE_SPEC,
   PREDICTION_LEDGER_PURGE_SPEC,
+  PORTFOLIO_QUEUE_PURGE_SPEC,
+  RUN_STATE_PURGE_SPEC,
   countStoreByRepo,
   describeError,
 } from "./store-maintenance.js";
@@ -36,6 +41,8 @@ const REAL_PURGE_TARGETS = [
   { name: "event-ledger", optionKey: "initEventLedger", opener: initEventLedger, resolveDbPath: resolveEventLedgerDbPath, spec: EVENT_LEDGER_PURGE_SPEC },
   { name: "governor-ledger", optionKey: "initGovernorLedger", opener: initGovernorLedger, resolveDbPath: resolveGovernorLedgerDbPath, spec: GOVERNOR_LEDGER_PURGE_SPEC },
   { name: "prediction-ledger", optionKey: "initPredictionLedger", opener: initPredictionLedger, resolveDbPath: resolvePredictionLedgerDbPath, spec: PREDICTION_LEDGER_PURGE_SPEC },
+  { name: "portfolio-queue", optionKey: "initPortfolioQueueStore", opener: initPortfolioQueueStore, resolveDbPath: resolvePortfolioQueueDbPath, spec: PORTFOLIO_QUEUE_PURGE_SPEC },
+  { name: "run-state", optionKey: "initRunStateStore", opener: initRunStateStore, resolveDbPath: resolveRunStateDbPath, spec: RUN_STATE_PURGE_SPEC },
 ];
 
 function parseRepoArg(value, usage) {
