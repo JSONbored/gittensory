@@ -1276,6 +1276,24 @@ settings:
 # upstreamDriftIssues:
 #   enabled: true   # Bool. Default: false (the env var decides instead).
 
+# Sweep liveness watchdog cron (#6558): config-as-code override for the LOOPOVER_SWEEP_WATCHDOG env flag
+# that gates the scheduled scan re-enqueuing a targeted sweep for installed repos with open PRs whose regate
+# marker has gone stale. Distinct from the per-repo `review.sweepWatchdog: false` force-off field further up
+# this file -- that one excludes a single repo from an otherwise-running scan; this one gates whether the
+# scan itself runs at all. Operator-level, not per-repo -- only meaningful on the loopover self-repo's own
+# manifest; a present block there wins over the env var, which stays the fallback when absent.
+# sweepWatchdog:
+#   enabled: true   # Bool. Default: false (the env var decides instead).
+
+# Open-PR reconciliation cron (#6558): config-as-code override for the LOOPOVER_PR_RECONCILIATION env flag
+# that gates the scheduled scan catching up any PR loopover's own records are missing relative to GitHub.
+# Distinct from the per-repo `review.prReconciliation: false` force-off field further up this file -- that
+# one excludes a single repo from an otherwise-running scan; this one gates whether the scan itself runs at
+# all. Operator-level, not per-repo -- only meaningful on the loopover self-repo's own manifest; a present
+# block there wins over the env var, which stays the fallback when absent.
+# prReconciliation:
+#   enabled: true   # Bool. Default: false (the env var decides instead).
+
 # Opt-in federated fleet intelligence export (#1970): packages this instance's OWN calibration signals into a
 # signed, anonymized bundle an operator can choose to hand to a peer (or to a collector they run). Exports
 # AGGREGATE figures only -- gate precision, reversal/slop/copycat rates over a window -- never source code,

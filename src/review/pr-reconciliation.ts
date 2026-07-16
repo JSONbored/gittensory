@@ -13,6 +13,7 @@ import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import { createInstallationToken } from "../github/app";
 import { fetchLivePullRequest, reconcileOpenPullRequests } from "../github/backfill";
 import { getRepository, listRepositories, upsertPullRequestFromGitHub } from "../db/repositories";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
@@ -21,10 +22,65 @@ import type { JobMessage } from "../types";
 import { errorMessage } from "../utils/json";
 import { isConvergenceRepoAllowed, listConvergenceRepos } from "./cutover-gate";
 
-/** True when fast open-PR reconciliation is enabled. Flag-OFF (default) → the caller never invokes it, so the
- *  cron enqueues no reconciliation job and the queue processor no-ops on a stale in-flight one. */
-export function isPrReconciliationEnabled(env: { LOOPOVER_PR_RECONCILIATION?: string | undefined }): boolean {
+/** A manifest-sourced enable override (#6275/#6558) -- the `prReconciliation` block of the loopover self-repo's
+ *  `.loopover.yml` (see FocusManifestPrReconciliationConfig). `present: false` means "no override configured",
+ *  not "disabled" -- the caller falls through to the env var in that case, exactly as if this parameter were
+ *  omitted. Mirrors SweepWatchdogManifestOverride (sweep-watchdog.ts). This is an UNRELATED sibling namespace
+ *  to the existing per-repo `review.prReconciliation: false` force-off field below -- that one lets an
+ *  already-watched repo exclude itself from the scan; this is the fleet-wide, top-level switch for whether the
+ *  scan runs at all. */
+export type PrReconciliationManifestOverride = { present: boolean; enabled: boolean };
+
+/** True when fast open-PR reconciliation is enabled. Config-as-code (#6275/#6558): a present `prReconciliation`
+ *  manifest block on the loopover self-repo wins outright; otherwise falls back to the LOOPOVER_PR_RECONCILIATION
+ *  env flag (default OFF). Flag-OFF (default) → the caller never invokes it, so the cron enqueues no
+ *  reconciliation job and the queue processor no-ops on a stale in-flight one. */
+export function isPrReconciliationEnabled(
+  env: { LOOPOVER_PR_RECONCILIATION?: string | undefined },
+  manifestOverride?: PrReconciliationManifestOverride | undefined,
+): boolean {
+  if (manifestOverride?.present) return manifestOverride.enabled;
   return /^(1|true|yes|on)$/i.test(env.LOOPOVER_PR_RECONCILIATION ?? "");
+}
+
+// Short in-isolate TTL cache, mirroring resolveSweepWatchdogManifestOverride's identical cache
+// (sweep-watchdog.ts): the override always resolves to the SAME repo (resolveLoopOverSelfRepoFullName is
+// fleet-wide, not per-caller), so a single slot suffices. The operator's `.loopover.yml prReconciliation:`
+// block changes rarely, so the same 60s window the sibling override caches use is a reasonable staleness
+// bound here too.
+const PR_RECONCILIATION_MANIFEST_OVERRIDE_CACHE_TTL_MS = 60_000;
+let prReconciliationManifestOverrideCache: { override: PrReconciliationManifestOverride; at: number } | null = null;
+
+/**
+ * Config-as-code override lookup (#6275/#6558): read the `prReconciliation` block off the loopover self-repo's
+ * `.loopover.yml` (resolveLoopOverSelfRepoFullName) -- mirrors resolveSweepWatchdogManifestOverride exactly. A
+ * manifest load failure (network blip, malformed YAML) degrades to `{ present: false }` -- the caller then
+ * falls through to the env var, exactly as if no override existed, so a manifest hiccup can never accidentally
+ * enable or disable reconciliation. `nowMs` defaults to `Date.now()` so callers need no change, while tests can
+ * pass a deterministic value to exercise the TTL precisely.
+ */
+export async function resolvePrReconciliationManifestOverride(env: Env, nowMs: number = Date.now()): Promise<PrReconciliationManifestOverride> {
+  const hit = prReconciliationManifestOverrideCache;
+  if (hit && nowMs - hit.at < PR_RECONCILIATION_MANIFEST_OVERRIDE_CACHE_TTL_MS) return hit.override;
+  try {
+    const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
+    const config = manifest.prReconciliation;
+    const override = { present: config.present, enabled: config.enabled };
+    prReconciliationManifestOverrideCache = { override, at: nowMs };
+    return override;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "pr_reconciliation_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
+    const override = { present: false, enabled: false };
+    prReconciliationManifestOverrideCache = { override, at: nowMs };
+    return override;
+  }
+}
+
+/** Test-only: clears the cached override, mirroring clearSweepWatchdogManifestOverrideCacheForTest. Without
+ *  this, a test suite running many cases would leak one test's cached override into the next under fake/fixed
+ *  timers. */
+export function clearPrReconciliationManifestOverrideCacheForTest(): void {
+  prReconciliationManifestOverrideCache = null;
 }
 
 /** The same acting-autonomy repo set fanOutAgentRegateSweepJobs sweeps (mirrors sweep-watchdog.ts's own copy of
