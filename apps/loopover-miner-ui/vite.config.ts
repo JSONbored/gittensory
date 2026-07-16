@@ -7,6 +7,7 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import { attemptApiPlugin } from "./vite-attempt-api";
 import { authPlugin } from "./vite-auth";
 import { chatApiPlugin } from "./vite-chat-api";
+import { chatGovernorActionsPlugin } from "./vite-chat-governor-actions";
 import { discoverApiPlugin } from "./vite-discover-api";
 import { governorApiPlugin } from "./vite-governor-api";
 import { ledgersApiPlugin } from "./vite-ledgers-api";
@@ -25,6 +26,7 @@ export default defineConfig({
     // middlewares are reached (#4858).
     authPlugin(),
     chatApiPlugin(),
+    chatGovernorActionsPlugin(),
     runStateApiPlugin(),
     portfolioQueueApiPlugin(),
     portfolioQueueActionsApiPlugin(),
