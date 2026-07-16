@@ -1,7 +1,7 @@
 import { listSignalSnapshots, persistSignalSnapshot } from "../db/repositories";
 import type { JsonValue } from "../types";
 import { nowIso } from "../utils/json";
-import { contentLaneConfigToJson, experimentalConfigToJson, featuresConfigToJson, gateConfigToJson, MAX_FOCUS_MANIFEST_BYTES, parseFocusManifest, parseFocusManifestContent, repoDocGenerationConfigToJson, reviewConfigToJson, reviewRecapConfigToJson, maintainerRecapConfigToJson, opsConfigToJson, publicStatsConfigToJson, draftFlowConfigToJson, upstreamDriftIssuesConfigToJson, settingsOverrideToJson, type FocusManifest, type FocusManifestSource, type RepoReviewContext } from "./focus-manifest";
+import { contentLaneConfigToJson, experimentalConfigToJson, featuresConfigToJson, gateConfigToJson, MAX_FOCUS_MANIFEST_BYTES, parseFocusManifest, parseFocusManifestContent, repoDocGenerationConfigToJson, reviewConfigToJson, reviewRecapConfigToJson, maintainerRecapConfigToJson, opsConfigToJson, publicStatsConfigToJson, draftFlowConfigToJson, upstreamDriftIssuesConfigToJson, federatedIntelligenceConfigToJson, settingsOverrideToJson, type FocusManifest, type FocusManifestSource, type RepoReviewContext } from "./focus-manifest";
 import { LOOPOVER_REPO_FOCUS_MANIFEST_YAML, resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import type { LocalManifestLoadResult } from "../selfhost/private-config";
 
@@ -331,6 +331,7 @@ function manifestToJson(manifest: FocusManifest): Record<string, JsonValue> {
     publicStats: publicStatsConfigToJson(manifest.publicStats),
     draftFlow: draftFlowConfigToJson(manifest.draftFlow),
     upstreamDriftIssues: upstreamDriftIssuesConfigToJson(manifest.upstreamDriftIssues),
+    federatedIntelligence: federatedIntelligenceConfigToJson(manifest.federatedIntelligence),
   };
 }
 

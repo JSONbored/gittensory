@@ -45,6 +45,7 @@ import {
   publicStatsConfigToJson,
   draftFlowConfigToJson,
   upstreamDriftIssuesConfigToJson,
+  federatedIntelligenceConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
   type FocusManifestContentLaneConfig,
@@ -923,6 +924,7 @@ describe("compileFocusManifestPolicy", () => {
       publicStats: { present: false, enabled: false },
       draftFlow: { present: false, enabled: false },
       upstreamDriftIssues: { present: false, enabled: false },
+      federatedIntelligence: { present: false, enabled: false },
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -2115,6 +2117,54 @@ describe("parseFocusManifest gate config", () => {
 
     it("upstreamDriftIssuesConfigToJson returns null for an absent config", () => {
       expect(upstreamDriftIssuesConfigToJson(parseFocusManifest(null).upstreamDriftIssues)).toBeNull();
+    });
+  });
+
+  describe("federatedIntelligence: (#1970, opt-in federated fleet intelligence export config-as-code toggle)", () => {
+    it("defaults to fully disabled/absent when the key is omitted, and does not make the manifest present on its own", () => {
+      const m = parseFocusManifest({});
+      expect(m.federatedIntelligence).toEqual({ present: false, enabled: false });
+      expect(m.present).toBe(false);
+    });
+
+    it("treats an explicit null the same as an omitted key", () => {
+      expect(parseFocusManifest({ federatedIntelligence: null }).federatedIntelligence).toEqual({ present: false, enabled: false });
+    });
+
+    it("warns and falls back to the default when the value is a non-mapping type (string or array)", () => {
+      const asString = parseFocusManifest({ federatedIntelligence: "nope" as never });
+      expect(asString.federatedIntelligence.present).toBe(false);
+      expect(asString.warnings.some((w) => /"federatedIntelligence" must be a mapping/.test(w))).toBe(true);
+      const asArray = parseFocusManifest({ federatedIntelligence: ["nope"] as never });
+      expect(asArray.federatedIntelligence.present).toBe(false);
+      expect(asArray.warnings.some((w) => /"federatedIntelligence" must be a mapping/.test(w))).toBe(true);
+    });
+
+    it("parses enabled: true, making the manifest present", () => {
+      const m = parseFocusManifest({ federatedIntelligence: { enabled: true } });
+      expect(m.federatedIntelligence).toEqual({ present: true, enabled: true });
+      expect(m.present).toBe(true);
+    });
+
+    it("parses enabled: false explicitly, still making the manifest present", () => {
+      const m = parseFocusManifest({ federatedIntelligence: { enabled: false } });
+      expect(m.federatedIntelligence).toEqual({ present: true, enabled: false });
+      expect(m.present).toBe(true);
+    });
+
+    it("warns and defaults to false when enabled is a non-boolean value", () => {
+      const m = parseFocusManifest({ federatedIntelligence: { enabled: "yes" as unknown as boolean } });
+      expect(m.federatedIntelligence.enabled).toBe(false);
+      expect(m.warnings.some((w) => /federatedIntelligence\.enabled/.test(w))).toBe(true);
+    });
+
+    it("round-trips through federatedIntelligenceConfigToJson -> parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ federatedIntelligence: { enabled: true } });
+      expect(parseFocusManifest({ federatedIntelligence: federatedIntelligenceConfigToJson(m.federatedIntelligence) }).federatedIntelligence).toEqual(m.federatedIntelligence);
+    });
+
+    it("federatedIntelligenceConfigToJson returns null for an absent config", () => {
+      expect(federatedIntelligenceConfigToJson(parseFocusManifest(null).federatedIntelligence)).toBeNull();
     });
   });
 

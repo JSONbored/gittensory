@@ -26,14 +26,17 @@
 // different (how often THIS instance's own PRs lose a local collision) than "identities farming wins," so no
 // proxy for it is implemented — a misleading proxy would be worse than none.
 
-const MIN_DECIDED = 5; // an instance needs at least this many decided PRs to count toward the fleet median
+// Exported so the federated bundle export (#1970, src/orb/federated-bundle.ts) gates its own published
+// precision on the SAME volume bar the fleet median uses — a bundle must not advertise a precision the fleet
+// would refuse to count.
+export const MIN_DECIDED = 5; // an instance needs at least this many decided PRs to count toward the fleet median
 const OUTLIER_BAND = 0.25; // |instance precision − fleet median| beyond this flags the instance
 const GAMING_VOLUME_MULTIPLIER = 2; // an instance's decided count more than this many times the fleet median
 const GAMING_PRECISION_BAND = OUTLIER_BAND; // mergePrecision this far ABOVE the fleet median (one-sided)
 const GAMING_REVERSAL_RATIO = 0.5; // reversalRate below this fraction of the fleet median
 
 /** Per-instance confusion-matrix cell as stored. */
-interface Cell {
+export interface Cell {
   instance_id: string;
   verdict: string | null;
   outcome: string;
@@ -93,7 +96,7 @@ function median(xs: number[]): number | null {
   return s.length % 2 === 0 ? (s[mid - 1]! + s[mid]!) / 2 : s[mid]!;
 }
 
-function percentile(sorted: number[], p: number): number | null {
+export function percentile(sorted: number[], p: number): number | null {
   if (sorted.length === 0) return null;
   // Nearest-rank: the p-th percentile is the value at 1-based rank ceil(p/100 * N), i.e. index
   // ceil(p/100 * N) - 1. `Math.floor(p/100 * N)` overshot by one rank whenever p/100 * N was an
@@ -104,8 +107,13 @@ function percentile(sorted: number[], p: number): number | null {
 }
 
 /** Fold the confusion-matrix cells for one instance into accuracy metrics (reversals count as the gate
- *  being wrong: a reverted merge is a false positive; a reopened close is a false negative). */
-function foldInstance(instanceId: string, cells: Cell[]): InstanceMetrics {
+ *  being wrong: a reverted merge is a false positive; a reopened close is a false negative).
+ *
+ *  Exported for the federated bundle export (#1970, src/orb/federated-bundle.ts): a bundle publishes this
+ *  instance's own precision for #6481 to compare against the peer median computed here, so both sides MUST use
+ *  this one definition — reimplementing it there would silently make the comparison apples-to-oranges. Callers
+ *  must pass a non-empty `cells` (reversalRate divides by the decided total). */
+export function foldInstance(instanceId: string, cells: Cell[]): InstanceMetrics {
   let wouldMerge = 0, mergeConfirmed = 0, mergeFalse = 0;
   let wouldClose = 0, closeConfirmed = 0, closeFalse = 0;
   let reversals = 0, decided = 0;

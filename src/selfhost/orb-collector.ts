@@ -55,8 +55,11 @@ interface OrbExportPayload {
 
 /** Stable instance identifier (hash of the Orb/App ID — no PII). A brokered instance holds no App id, so its
  *  dedicated anonymization secret becomes the stable identity so ORB_ENROLLMENT_SECRET is never reused as
- *  a correlatable telemetry identifier. */
-function instanceId(anonSecret: string): string {
+ *  a correlatable telemetry identifier.
+ *
+ *  Exported so the federated bundle export (#1970, src/orb/federated-bundle.ts) reuses this exact opaque handle
+ *  rather than minting a second instance identity with different de-anonymization properties. */
+export function instanceId(anonSecret: string): string {
   const seed = process.env.ORB_APP_ID ?? process.env.GITHUB_APP_ID ?? `anon:${anonSecret}`;
   return createHash("sha256").update(seed).digest("hex").slice(0, 16);
 }
@@ -141,8 +144,11 @@ const FLEET_QUERY = `
   ORDER BY event_at ASC, target_id ASC
   LIMIT ?`;
 
-/** ms between the gate decision and the resolution; null if implausible (NaN or negative). */
-function cycleTimeMs(decidedAt: string, outcomeAt: string): number | null {
+/** ms between the gate decision and the resolution; null if implausible (NaN or negative).
+ *
+ *  Exported for the federated bundle export (#1970, src/orb/federated-bundle.ts) so its cycle-time percentiles
+ *  measure the same interval, with the same implausible-value rejection, as the orb pipeline's. */
+export function cycleTimeMs(decidedAt: string, outcomeAt: string): number | null {
   const ms = new Date(outcomeAt).getTime() - new Date(decidedAt).getTime();
   return Number.isFinite(ms) && ms >= 0 ? ms : null;
 }

@@ -425,6 +425,23 @@ export type FocusManifestUpstreamDriftIssuesConfig = {
 };
 
 /**
+ * Config-as-code opt-in for the federated fleet intelligence export (#1970), declared under
+ * `federatedIntelligence:`. Gates buildFederatedBundle (src/orb/federated-bundle.ts), which packages this
+ * instance's own anonymized calibration signals into a signed bundle an operator can hand to a peer -- like
+ * `draftFlow:`/`upstreamDriftIssues:` above, this is read from the loopover self-repo's own manifest, since
+ * exporting a deployment's calibration data is operator-level (fleet-wide), not per-contributor-repo.
+ * Mirrors `upstreamDriftIssues:` exactly: no DB-backed counterpart, so the parsed value (or the default
+ * below when unset) IS the effective value. Unlike those two it overrides no env flag -- there is no
+ * federated env var; not present ⇒ disabled ⇒ nothing is bundled and no network call is made, byte-identical
+ * to before this override existed. (ORB_AIR_GAP gates the separate, always-on #1255 orb telemetry path in
+ * src/selfhost/orb-collector.ts and is unrelated to this opt-in.)
+ */
+export type FocusManifestFederatedIntelligenceConfig = {
+  present: boolean;
+  enabled: boolean;
+};
+
+/**
  * Generic repository-settings override declared in `.loopover.yml` under `settings:`. A partial of
  * {@link RepositorySettings} — every behaviour a maintainer can toggle in the dashboard can be set here
  * as code. Unset fields are omitted so the resolver layers it OVER the DB-backed settings
@@ -1009,6 +1026,7 @@ export type FocusManifest = {
   publicStats: FocusManifestPublicStatsConfig;
   draftFlow: FocusManifestDraftFlowConfig;
   upstreamDriftIssues: FocusManifestUpstreamDriftIssuesConfig;
+  federatedIntelligence: FocusManifestFederatedIntelligenceConfig;
   warnings: string[];
 };
 
@@ -1170,6 +1188,11 @@ const EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG: FocusManifestUpstreamDriftIssuesConfig
   enabled: false,
 };
 
+const EMPTY_FEDERATED_INTELLIGENCE_CONFIG: FocusManifestFederatedIntelligenceConfig = {
+  present: false,
+  enabled: false,
+};
+
 const EMPTY_MANIFEST: FocusManifest = {
   present: false,
   source: "none",
@@ -1193,6 +1216,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
   draftFlow: { ...EMPTY_DRAFT_FLOW_CONFIG },
   upstreamDriftIssues: { ...EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG },
+  federatedIntelligence: { ...EMPTY_FEDERATED_INTELLIGENCE_CONFIG },
   warnings: [],
 };
 
@@ -1229,6 +1253,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
     draftFlow: { ...EMPTY_DRAFT_FLOW_CONFIG },
     upstreamDriftIssues: { ...EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG },
+    federatedIntelligence: { ...EMPTY_FEDERATED_INTELLIGENCE_CONFIG },
   };
 }
 
@@ -2034,6 +2059,30 @@ function parseUpstreamDriftIssuesConfig(value: JsonValue | undefined, warnings: 
  *  round-trips through {@link parseUpstreamDriftIssuesConfig} unchanged. Returns null when nothing is
  *  configured. */
 export function upstreamDriftIssuesConfigToJson(config: FocusManifestUpstreamDriftIssuesConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled };
+}
+
+/**
+ * Parse the optional `federatedIntelligence:` mapping (#1970). Mirrors {@link parseUpstreamDriftIssuesConfig}
+ * exactly -- `enabled` is the only field, defaulting to false, so the parsed value IS the effective value and
+ * an absent block leaves the federated export off.
+ */
+function parseFederatedIntelligenceConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestFederatedIntelligenceConfig {
+  if (value === undefined || value === null) return { ...EMPTY_FEDERATED_INTELLIGENCE_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "federatedIntelligence" must be a mapping; ignoring it.');
+    return { ...EMPTY_FEDERATED_INTELLIGENCE_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "federatedIntelligence.enabled", warnings) ?? false;
+  return { present: true, enabled };
+}
+
+/** Serialize a federatedIntelligence config back into the parse-compatible shape so a cached snapshot
+ *  round-trips through {@link parseFederatedIntelligenceConfig} unchanged. Returns null when nothing is
+ *  configured. */
+export function federatedIntelligenceConfigToJson(config: FocusManifestFederatedIntelligenceConfig): JsonValue {
   if (!config.present) return null;
   return { enabled: config.enabled };
 }
@@ -3385,6 +3434,7 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     publicStats: parsePublicStatsConfig(record.publicStats, warnings),
     draftFlow: parseDraftFlowConfig(record.draftFlow, warnings),
     upstreamDriftIssues: parseUpstreamDriftIssuesConfig(record.upstreamDriftIssues, warnings),
+    federatedIntelligence: parseFederatedIntelligenceConfig(record.federatedIntelligence, warnings),
     warnings,
   };
   if (
@@ -3407,7 +3457,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     !manifest.ops.present &&
     !manifest.publicStats.present &&
     !manifest.draftFlow.present &&
-    !manifest.upstreamDriftIssues.present
+    !manifest.upstreamDriftIssues.present &&
+    !manifest.federatedIntelligence.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;

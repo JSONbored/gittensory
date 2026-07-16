@@ -1280,3 +1280,14 @@ settings:
 # env var, which stays the fallback when absent.
 # upstreamDriftIssues:
 #   enabled: true   # Bool. Default: false (the env var decides instead).
+
+# Opt-in federated fleet intelligence export (#1970): packages this instance's OWN calibration signals into a
+# signed, anonymized bundle an operator can choose to hand to a peer (or to a collector they run). Exports
+# AGGREGATE figures only -- gate precision, reversal/slop/copycat rates over a window -- never source code,
+# diffs, GitHub logins, repo names, PR ids, or raw gate reason text. Operator-level, not per-repo, so only
+# meaningful on the loopover self-repo's own manifest. OFF unless you explicitly enable it here: with the block
+# absent nothing is bundled and nothing leaves the instance. Distinct from the always-on Orb telemetry (#1255,
+# suppressed by ORB_AIR_GAP), which streams per-PR events UP to loopover's central collector -- this one is
+# peer-to-peer and assumes no central service at all.
+# federatedIntelligence:
+#   enabled: true   # Bool. Default: false (nothing is exported).
