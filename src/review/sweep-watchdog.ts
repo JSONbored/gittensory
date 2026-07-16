@@ -15,15 +15,63 @@ import { countOpenPullRequests, getLatestRegatedAt, listRepositories } from "../
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import type { JobMessage } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 import { isConvergenceRepoAllowed, listConvergenceRepos } from "./cutover-gate";
 
-/** True when the sweep-liveness watchdog is enabled. Flag-OFF (default) → the caller never invokes it, so the
+/** A manifest-sourced enable override (#6558 / #6275) -- the top-level `sweepWatchdog` block of the
+ *  loopover self-repo's `.loopover.yml` (see FocusManifestSweepWatchdogConfig). Distinct from the
+ *  per-repo FORCE-OFF under `review.sweepWatchdog`. `present: false` means "no override configured",
+ *  not "disabled" -- the caller falls through to the env var in that case. Mirrors OpsManifestOverride. */
+export type SweepWatchdogManifestOverride = { present: boolean; enabled: boolean };
+
+/** True when the sweep-liveness watchdog is enabled. Config-as-code (#6558 / #6275): a present top-level
+ *  `sweepWatchdog` manifest block on the loopover self-repo wins outright; otherwise falls back to the
+ *  LOOPOVER_SWEEP_WATCHDOG env flag (default OFF). Flag-OFF (default) → the caller never invokes it, so the
  *  cron enqueues no watchdog job and the queue processor no-ops on a stale in-flight one (defense-in-depth,
  *  mirrors isOpsEnabled). */
-export function isSweepWatchdogEnabled(env: { LOOPOVER_SWEEP_WATCHDOG?: string | undefined }): boolean {
+export function isSweepWatchdogEnabled(
+  env: { LOOPOVER_SWEEP_WATCHDOG?: string | undefined },
+  manifestOverride?: SweepWatchdogManifestOverride | undefined,
+): boolean {
+  if (manifestOverride?.present) return manifestOverride.enabled;
   return /^(1|true|yes|on)$/i.test(env.LOOPOVER_SWEEP_WATCHDOG ?? "");
+}
+
+// Short in-isolate TTL cache for resolveSweepWatchdogManifestOverride, mirroring ops-wire.ts /
+// public-stats.ts: the override always resolves to the SAME repo (resolveLoopOverSelfRepoFullName is
+// fleet-wide), so a single slot suffices. Called from the scheduled cron tick AND the queue's
+// sweep-liveness-watchdog job -- without this, every trigger re-reads the persisted snapshot.
+const SWEEP_WATCHDOG_MANIFEST_OVERRIDE_CACHE_TTL_MS = 60_000;
+let sweepWatchdogManifestOverrideCache: { override: SweepWatchdogManifestOverride; at: number } | null = null;
+
+/**
+ * Config-as-code override lookup (#6558 / #6275): read the top-level `sweepWatchdog` block off the
+ * loopover self-repo's `.loopover.yml`. A manifest load failure degrades to `{ present: false }` so a
+ * hiccup can never accidentally enable or disable the watchdog. `nowMs` defaults to `Date.now()` so
+ * callers need no change, while tests can pass a deterministic value to exercise the TTL precisely.
+ */
+export async function resolveSweepWatchdogManifestOverride(env: Env, nowMs: number = Date.now()): Promise<SweepWatchdogManifestOverride> {
+  const hit = sweepWatchdogManifestOverrideCache;
+  if (hit && nowMs - hit.at < SWEEP_WATCHDOG_MANIFEST_OVERRIDE_CACHE_TTL_MS) return hit.override;
+  try {
+    const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
+    const config = manifest.sweepWatchdog;
+    const override = { present: config.present, enabled: config.enabled };
+    sweepWatchdogManifestOverrideCache = { override, at: nowMs };
+    return override;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "sweep_watchdog_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
+    const override = { present: false, enabled: false };
+    sweepWatchdogManifestOverrideCache = { override, at: nowMs };
+    return override;
+  }
+}
+
+/** Test-only: clears the cached override, mirroring clearOpsManifestOverrideCacheForTest. */
+export function clearSweepWatchdogManifestOverrideCacheForTest(): void {
+  sweepWatchdogManifestOverrideCache = null;
 }
 
 /** A repo's sweep is stale when it has open PRs to regate but its last-regated marker either never advanced or

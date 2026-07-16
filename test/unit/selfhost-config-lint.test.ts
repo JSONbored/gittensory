@@ -134,6 +134,22 @@ reviewRecap:
     expect(result.recognizedFields).toEqual(["upstreamDriftIssues"]);
   });
 
+  it("recognizes a standalone top-level sweepWatchdog: block instead of flagging it as unknown (#6558)", () => {
+    const result = lintManifestText("sweepWatchdog:\n  enabled: true\n");
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(result.recognizedFields).toEqual(["sweepWatchdog"]);
+  });
+
+  it("recognizes a standalone top-level prReconciliation: block instead of flagging it as unknown (#6558)", () => {
+    const result = lintManifestText("prReconciliation:\n  enabled: true\n");
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(result.recognizedFields).toEqual(["prReconciliation"]);
+  });
+
   it("flags legacy blockedPaths with a migration-specific warning, not the generic unknown-field message", () => {
     const result = lintManifestText("wantedPaths: [src/]\nblockedPaths: [dist/]\n");
 

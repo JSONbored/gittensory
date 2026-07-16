@@ -8,8 +8,8 @@ import { isOrbBrokerMode } from "./orb/broker-client";
 import { gittensorEnabledRepoFullNames } from "./review/gittensor-wire";
 import { isOpsEnabled, resolveOpsManifestOverride } from "./review/ops-wire";
 import { isRecapEnabled, resolveMaintainerRecapManifestOverride, shouldFireMaintainerRecap } from "./review/maintainer-recap-wire";
-import { isSweepWatchdogEnabled } from "./review/sweep-watchdog";
-import { isPrReconciliationEnabled } from "./review/pr-reconciliation";
+import { isSweepWatchdogEnabled, resolveSweepWatchdogManifestOverride } from "./review/sweep-watchdog";
+import { isPrReconciliationEnabled, resolvePrReconciliationManifestOverride } from "./review/pr-reconciliation";
 import { isRagEnabled } from "./review/rag-wire";
 import { isSelfTuneEnabled } from "./review/selftune-wire";
 import {
@@ -199,9 +199,14 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
     }
   }
   // Self-heal (flag LOOPOVER_PR_RECONCILIATION). Every 10 minutes — see isReconciliationWindow above.
-  // Enqueued ONLY when the flag is ON — flag-OFF (default) this job is never created, so the cron tick does
-  // ZERO new work and the enqueued set is byte-identical to today.
-  if (selfHostedReviews && isReconciliationWindow && isPrReconciliationEnabled(env)) jobs.push({ type: "reconcile-open-prs", requestedBy: "schedule" });
+  // Enable can ALSO be set as code via the loopover self-repo's `.loopover.yml prReconciliation:` block
+  // (config-as-code parity, #6558 / #6275) -- a present manifest block wins over the env var; absent, the
+  // env var decides exactly as before. Enqueued ONLY when enabled — flag-OFF (default) this job is never
+  // created, so the cron tick does ZERO new work and the enqueued set is byte-identical to today.
+  if (selfHostedReviews && isReconciliationWindow) {
+    const prReconciliationManifestOverride = await resolvePrReconciliationManifestOverride(env);
+    if (isPrReconciliationEnabled(env, prReconciliationManifestOverride)) jobs.push({ type: "reconcile-open-prs", requestedBy: "schedule" });
+  }
   if (isHourly) {
     // Isolation (#experimental-gittensor-plugin): on self-host, refresh-registry both FETCHES from and
     // PERSISTS the whole upstream gittensor-subnet registry (entrius/gittensor has no server-side filtering,
@@ -235,9 +240,15 @@ async function enqueueScheduledJobs(env: Env, controller: ScheduledController): 
     }
     // Self-heal (flag LOOPOVER_SWEEP_WATCHDOG). Hourly liveness check over the same repo set the scheduled
     // regate sweep covers — re-enqueues a targeted sweep for any repo whose sweep marker has gone stale despite
-    // having open PRs to regate. Enqueued ONLY when the flag is ON — flag-OFF (default) this job is never
-    // created, so the cron tick does ZERO new work and the enqueued set is byte-identical to today.
-    if (selfHostedReviews && isSweepWatchdogEnabled(env)) jobs.push({ type: "sweep-liveness-watchdog", requestedBy: "schedule" });
+    // having open PRs to regate. Enable can ALSO be set as code via the loopover self-repo's
+    // `.loopover.yml sweepWatchdog:` block (config-as-code parity, #6558 / #6275) -- a present manifest
+    // block wins over the env var; absent, the env var decides exactly as before. Enqueued ONLY when
+    // enabled — flag-OFF (default) this job is never created, so the cron tick does ZERO new work and the
+    // enqueued set is byte-identical to today.
+    if (selfHostedReviews) {
+      const sweepWatchdogManifestOverride = await resolveSweepWatchdogManifestOverride(env);
+      if (isSweepWatchdogEnabled(env, sweepWatchdogManifestOverride)) jobs.push({ type: "sweep-liveness-watchdog", requestedBy: "schedule" });
+    }
     // Convergence (self-improve / auto-tune, flag LOOPOVER_REVIEW_SELFTUNE). Hourly self-improvement tick over
     // loopover's own review-outcome data: compute tuning recommendations, shadow-soak any strictly-tightening
     // one, and auto-promote it to live only after the soak window passes the gate (TIGHTENING-ONLY, audited).

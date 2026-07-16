@@ -45,6 +45,8 @@ import {
   publicStatsConfigToJson,
   draftFlowConfigToJson,
   upstreamDriftIssuesConfigToJson,
+  sweepWatchdogConfigToJson,
+  prReconciliationConfigToJson,
   federatedIntelligenceConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
@@ -57,6 +59,8 @@ import {
   type FocusManifestMaintainerRecapConfig,
   type FocusManifestOpsConfig,
   type FocusManifestPublicStatsConfig,
+  type FocusManifestSweepWatchdogConfig,
+  type FocusManifestPrReconciliationConfig,
   type FocusManifestSettings,
   type SelfHostAiModelConfig,
 } from "../../src/signals/focus-manifest";
@@ -495,6 +499,22 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
   it.each(Object.entries(PUBLIC_STATS_FIELD_TOKENS))("documents publicStats.%s", (_field, token) => {
     expect(exampleContent).toContain(token);
   });
+
+  const SWEEP_WATCHDOG_FIELD_TOKENS = {
+    enabled: "enabled:",
+  } satisfies Record<Exclude<keyof FocusManifestSweepWatchdogConfig, "present">, string>;
+
+  it.each(Object.entries(SWEEP_WATCHDOG_FIELD_TOKENS))("documents sweepWatchdog.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const PR_RECONCILIATION_FIELD_TOKENS = {
+    enabled: "enabled:",
+  } satisfies Record<Exclude<keyof FocusManifestPrReconciliationConfig, "present">, string>;
+
+  it.each(Object.entries(PR_RECONCILIATION_FIELD_TOKENS))("documents prReconciliation.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
 });
 
 describe("matchesManifestPath", () => {
@@ -924,6 +944,8 @@ describe("compileFocusManifestPolicy", () => {
       publicStats: { present: false, enabled: false },
       draftFlow: { present: false, enabled: false },
       upstreamDriftIssues: { present: false, enabled: false },
+      sweepWatchdog: { present: false, enabled: false },
+      prReconciliation: { present: false, enabled: false },
       federatedIntelligence: { present: false, enabled: false, collectorUrl: null, collectorMode: null },
       warnings: [],
     });
@@ -2117,6 +2139,102 @@ describe("parseFocusManifest gate config", () => {
 
     it("upstreamDriftIssuesConfigToJson returns null for an absent config", () => {
       expect(upstreamDriftIssuesConfigToJson(parseFocusManifest(null).upstreamDriftIssues)).toBeNull();
+    });
+  });
+
+  describe("sweepWatchdog: (#6558 / #6275, fleet-wide sweep-liveness watchdog config-as-code override)", () => {
+    it("defaults to fully disabled/absent when the key is omitted, and does not make the manifest present on its own", () => {
+      const m = parseFocusManifest({});
+      expect(m.sweepWatchdog).toEqual({ present: false, enabled: false });
+      expect(m.present).toBe(false);
+    });
+
+    it("treats an explicit null the same as an omitted key", () => {
+      expect(parseFocusManifest({ sweepWatchdog: null }).sweepWatchdog).toEqual({ present: false, enabled: false });
+    });
+
+    it("warns and falls back to the default when the value is a non-mapping type (string or array)", () => {
+      const asString = parseFocusManifest({ sweepWatchdog: "nope" as never });
+      expect(asString.sweepWatchdog.present).toBe(false);
+      expect(asString.warnings.some((w) => /"sweepWatchdog" must be a mapping/.test(w))).toBe(true);
+      const asArray = parseFocusManifest({ sweepWatchdog: ["nope"] as never });
+      expect(asArray.sweepWatchdog.present).toBe(false);
+      expect(asArray.warnings.some((w) => /"sweepWatchdog" must be a mapping/.test(w))).toBe(true);
+    });
+
+    it("parses enabled: true, making the manifest present", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: true } });
+      expect(m.sweepWatchdog).toEqual({ present: true, enabled: true });
+      expect(m.present).toBe(true);
+    });
+
+    it("parses enabled: false explicitly, still marking the manifest present (present is a real override, off)", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: false } });
+      expect(m.sweepWatchdog).toEqual({ present: true, enabled: false });
+      expect(m.present).toBe(true);
+    });
+
+    it("warns and defaults to false when enabled is a non-boolean value", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: "yes" as unknown as boolean } });
+      expect(m.sweepWatchdog.enabled).toBe(false);
+      expect(m.warnings.some((w) => /sweepWatchdog\.enabled/.test(w))).toBe(true);
+    });
+
+    it("round-trips through sweepWatchdogConfigToJson → parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ sweepWatchdog: { enabled: true } });
+      expect(parseFocusManifest({ sweepWatchdog: sweepWatchdogConfigToJson(m.sweepWatchdog) }).sweepWatchdog).toEqual(m.sweepWatchdog);
+    });
+
+    it("sweepWatchdogConfigToJson returns null for an absent config", () => {
+      expect(sweepWatchdogConfigToJson(parseFocusManifest(null).sweepWatchdog)).toBeNull();
+    });
+  });
+
+  describe("prReconciliation: (#6558 / #6275, fleet-wide open-PR reconciliation config-as-code override)", () => {
+    it("defaults to fully disabled/absent when the key is omitted, and does not make the manifest present on its own", () => {
+      const m = parseFocusManifest({});
+      expect(m.prReconciliation).toEqual({ present: false, enabled: false });
+      expect(m.present).toBe(false);
+    });
+
+    it("treats an explicit null the same as an omitted key", () => {
+      expect(parseFocusManifest({ prReconciliation: null }).prReconciliation).toEqual({ present: false, enabled: false });
+    });
+
+    it("warns and falls back to the default when the value is a non-mapping type (string or array)", () => {
+      const asString = parseFocusManifest({ prReconciliation: "nope" as never });
+      expect(asString.prReconciliation.present).toBe(false);
+      expect(asString.warnings.some((w) => /"prReconciliation" must be a mapping/.test(w))).toBe(true);
+      const asArray = parseFocusManifest({ prReconciliation: ["nope"] as never });
+      expect(asArray.prReconciliation.present).toBe(false);
+      expect(asArray.warnings.some((w) => /"prReconciliation" must be a mapping/.test(w))).toBe(true);
+    });
+
+    it("parses enabled: true, making the manifest present", () => {
+      const m = parseFocusManifest({ prReconciliation: { enabled: true } });
+      expect(m.prReconciliation).toEqual({ present: true, enabled: true });
+      expect(m.present).toBe(true);
+    });
+
+    it("parses enabled: false explicitly, still marking the manifest present (present is a real override, off)", () => {
+      const m = parseFocusManifest({ prReconciliation: { enabled: false } });
+      expect(m.prReconciliation).toEqual({ present: true, enabled: false });
+      expect(m.present).toBe(true);
+    });
+
+    it("warns and defaults to false when enabled is a non-boolean value", () => {
+      const m = parseFocusManifest({ prReconciliation: { enabled: "yes" as unknown as boolean } });
+      expect(m.prReconciliation.enabled).toBe(false);
+      expect(m.warnings.some((w) => /prReconciliation\.enabled/.test(w))).toBe(true);
+    });
+
+    it("round-trips through prReconciliationConfigToJson → parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ prReconciliation: { enabled: true } });
+      expect(parseFocusManifest({ prReconciliation: prReconciliationConfigToJson(m.prReconciliation) }).prReconciliation).toEqual(m.prReconciliation);
+    });
+
+    it("prReconciliationConfigToJson returns null for an absent config", () => {
+      expect(prReconciliationConfigToJson(parseFocusManifest(null).prReconciliation)).toBeNull();
     });
   });
 

@@ -16,15 +16,60 @@ import { getRepository, listRepositories, upsertPullRequestFromGitHub } from "..
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { incr } from "../selfhost/metrics";
 import type { JobMessage } from "../types";
 import { errorMessage } from "../utils/json";
 import { isConvergenceRepoAllowed, listConvergenceRepos } from "./cutover-gate";
 
-/** True when fast open-PR reconciliation is enabled. Flag-OFF (default) → the caller never invokes it, so the
- *  cron enqueues no reconciliation job and the queue processor no-ops on a stale in-flight one. */
-export function isPrReconciliationEnabled(env: { LOOPOVER_PR_RECONCILIATION?: string | undefined }): boolean {
+/** A manifest-sourced enable override (#6558 / #6275) -- the top-level `prReconciliation` block of the
+ *  loopover self-repo's `.loopover.yml` (see FocusManifestPrReconciliationConfig). Distinct from the
+ *  per-repo FORCE-OFF under `review.prReconciliation`. `present: false` means "no override configured",
+ *  not "disabled" -- the caller falls through to the env var. Mirrors OpsManifestOverride. */
+export type PrReconciliationManifestOverride = { present: boolean; enabled: boolean };
+
+/** True when fast open-PR reconciliation is enabled. Config-as-code (#6558 / #6275): a present top-level
+ *  `prReconciliation` manifest block on the loopover self-repo wins outright; otherwise falls back to the
+ *  LOOPOVER_PR_RECONCILIATION env flag (default OFF). Flag-OFF (default) → the caller never invokes it, so
+ *  the cron enqueues no reconciliation job and the queue processor no-ops on a stale in-flight one. */
+export function isPrReconciliationEnabled(
+  env: { LOOPOVER_PR_RECONCILIATION?: string | undefined },
+  manifestOverride?: PrReconciliationManifestOverride | undefined,
+): boolean {
+  if (manifestOverride?.present) return manifestOverride.enabled;
   return /^(1|true|yes|on)$/i.test(env.LOOPOVER_PR_RECONCILIATION ?? "");
+}
+
+// Short in-isolate TTL cache for resolvePrReconciliationManifestOverride, mirroring ops-wire.ts /
+// sweep-watchdog.ts: fleet-wide self-repo override, single slot, 60s TTL.
+const PR_RECONCILIATION_MANIFEST_OVERRIDE_CACHE_TTL_MS = 60_000;
+let prReconciliationManifestOverrideCache: { override: PrReconciliationManifestOverride; at: number } | null = null;
+
+/**
+ * Config-as-code override lookup (#6558 / #6275): read the top-level `prReconciliation` block off the
+ * loopover self-repo's `.loopover.yml`. A manifest load failure degrades to `{ present: false }` so a
+ * hiccup can never accidentally enable or disable reconciliation.
+ */
+export async function resolvePrReconciliationManifestOverride(env: Env, nowMs: number = Date.now()): Promise<PrReconciliationManifestOverride> {
+  const hit = prReconciliationManifestOverrideCache;
+  if (hit && nowMs - hit.at < PR_RECONCILIATION_MANIFEST_OVERRIDE_CACHE_TTL_MS) return hit.override;
+  try {
+    const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
+    const config = manifest.prReconciliation;
+    const override = { present: config.present, enabled: config.enabled };
+    prReconciliationManifestOverrideCache = { override, at: nowMs };
+    return override;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "pr_reconciliation_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
+    const override = { present: false, enabled: false };
+    prReconciliationManifestOverrideCache = { override, at: nowMs };
+    return override;
+  }
+}
+
+/** Test-only: clears the cached override, mirroring clearOpsManifestOverrideCacheForTest. */
+export function clearPrReconciliationManifestOverrideCacheForTest(): void {
+  prReconciliationManifestOverrideCache = null;
 }
 
 /** The same acting-autonomy repo set fanOutAgentRegateSweepJobs sweeps (mirrors sweep-watchdog.ts's own copy of

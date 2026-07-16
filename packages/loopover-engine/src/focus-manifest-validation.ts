@@ -11,6 +11,8 @@ import {
   publicStatsConfigToJson,
   draftFlowConfigToJson,
   upstreamDriftIssuesConfigToJson,
+  sweepWatchdogConfigToJson,
+  prReconciliationConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
   type FocusManifestSource,
@@ -88,6 +90,10 @@ function focusManifestToNormalizedJson(manifest: FocusManifest): Record<string, 
   if (draftFlow !== null) normalized.draftFlow = draftFlow;
   const upstreamDriftIssues = upstreamDriftIssuesConfigToJson(manifest.upstreamDriftIssues);
   if (upstreamDriftIssues !== null) normalized.upstreamDriftIssues = upstreamDriftIssues;
+  const sweepWatchdog = sweepWatchdogConfigToJson(manifest.sweepWatchdog);
+  if (sweepWatchdog !== null) normalized.sweepWatchdog = sweepWatchdog;
+  const prReconciliation = prReconciliationConfigToJson(manifest.prReconciliation);
+  if (prReconciliation !== null) normalized.prReconciliation = prReconciliation;
 
   return normalized;
 }

@@ -23,6 +23,8 @@ const TOP_LEVEL_FIELDS = [
   "publicStats",
   "draftFlow",
   "upstreamDriftIssues",
+  "sweepWatchdog",
+  "prReconciliation",
 ] as const;
 
 const TOP_LEVEL_FIELD_SET = new Set<string>(TOP_LEVEL_FIELDS);

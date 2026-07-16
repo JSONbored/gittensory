@@ -425,6 +425,29 @@ export type FocusManifestUpstreamDriftIssuesConfig = {
 };
 
 /**
+ * Config-as-code override for the fleet-wide sweep-liveness watchdog cron (LOOPOVER_SWEEP_WATCHDOG),
+ * declared under top-level `sweepWatchdog:` (#6558 / #6275). Same shape and precedence as `ops:` /
+ * `publicStats:` — fleet-wide, self-repo-manifest-sourced, no DB-backed counterpart. Distinct from the
+ * per-repo FORCE-OFF under `review.sweepWatchdog` (which only excludes one repo from the scan set).
+ * Not present ⇒ the caller falls back to the LOOPOVER_SWEEP_WATCHDOG env var.
+ */
+export type FocusManifestSweepWatchdogConfig = {
+  present: boolean;
+  enabled: boolean;
+};
+
+/**
+ * Config-as-code override for the fleet-wide open-PR reconciliation cron (LOOPOVER_PR_RECONCILIATION),
+ * declared under top-level `prReconciliation:` (#6558 / #6275). Same shape and precedence as
+ * `sweepWatchdog:` above. Distinct from the per-repo FORCE-OFF under `review.prReconciliation`.
+ * Not present ⇒ the caller falls back to the LOOPOVER_PR_RECONCILIATION env var.
+ */
+export type FocusManifestPrReconciliationConfig = {
+  present: boolean;
+  enabled: boolean;
+};
+
+/**
  * Config-as-code opt-in for the federated fleet intelligence export (#1970), declared under
  * `federatedIntelligence:`. Gates buildFederatedBundle (src/orb/federated-bundle.ts), which packages this
  * instance's own anonymized calibration signals into a signed bundle an operator can hand to a peer -- like
@@ -1045,6 +1068,8 @@ export type FocusManifest = {
   publicStats: FocusManifestPublicStatsConfig;
   draftFlow: FocusManifestDraftFlowConfig;
   upstreamDriftIssues: FocusManifestUpstreamDriftIssuesConfig;
+  sweepWatchdog: FocusManifestSweepWatchdogConfig;
+  prReconciliation: FocusManifestPrReconciliationConfig;
   federatedIntelligence: FocusManifestFederatedIntelligenceConfig;
   warnings: string[];
 };
@@ -1207,6 +1232,16 @@ const EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG: FocusManifestUpstreamDriftIssuesConfig
   enabled: false,
 };
 
+const EMPTY_SWEEP_WATCHDOG_CONFIG: FocusManifestSweepWatchdogConfig = {
+  present: false,
+  enabled: false,
+};
+
+const EMPTY_PR_RECONCILIATION_CONFIG: FocusManifestPrReconciliationConfig = {
+  present: false,
+  enabled: false,
+};
+
 const EMPTY_FEDERATED_INTELLIGENCE_CONFIG: FocusManifestFederatedIntelligenceConfig = {
   present: false,
   enabled: false,
@@ -1237,6 +1272,8 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
   draftFlow: { ...EMPTY_DRAFT_FLOW_CONFIG },
   upstreamDriftIssues: { ...EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG },
+  sweepWatchdog: { ...EMPTY_SWEEP_WATCHDOG_CONFIG },
+  prReconciliation: { ...EMPTY_PR_RECONCILIATION_CONFIG },
   federatedIntelligence: { ...EMPTY_FEDERATED_INTELLIGENCE_CONFIG },
   warnings: [],
 };
@@ -1274,6 +1311,8 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
     draftFlow: { ...EMPTY_DRAFT_FLOW_CONFIG },
     upstreamDriftIssues: { ...EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG },
+    sweepWatchdog: { ...EMPTY_SWEEP_WATCHDOG_CONFIG },
+    prReconciliation: { ...EMPTY_PR_RECONCILIATION_CONFIG },
     federatedIntelligence: { ...EMPTY_FEDERATED_INTELLIGENCE_CONFIG },
   };
 }
@@ -2080,6 +2119,52 @@ function parseUpstreamDriftIssuesConfig(value: JsonValue | undefined, warnings: 
  *  round-trips through {@link parseUpstreamDriftIssuesConfig} unchanged. Returns null when nothing is
  *  configured. */
 export function upstreamDriftIssuesConfigToJson(config: FocusManifestUpstreamDriftIssuesConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled };
+}
+
+/**
+ * Parse the optional top-level `sweepWatchdog:` mapping (#6558 / #6275). Mirrors {@link parseOpsConfig}
+ * exactly — `enabled` is the only field. Distinct from per-repo `review.sweepWatchdog`.
+ */
+function parseSweepWatchdogConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestSweepWatchdogConfig {
+  if (value === undefined || value === null) return { ...EMPTY_SWEEP_WATCHDOG_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "sweepWatchdog" must be a mapping; ignoring it.');
+    return { ...EMPTY_SWEEP_WATCHDOG_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "sweepWatchdog.enabled", warnings) ?? false;
+  return { present: true, enabled };
+}
+
+/** Serialize a sweepWatchdog config back into the parse-compatible shape so a cached snapshot round-trips
+ *  through {@link parseSweepWatchdogConfig} unchanged. Returns null when nothing is configured. */
+export function sweepWatchdogConfigToJson(config: FocusManifestSweepWatchdogConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled };
+}
+
+/**
+ * Parse the optional top-level `prReconciliation:` mapping (#6558 / #6275). Mirrors
+ * {@link parseSweepWatchdogConfig} exactly — `enabled` is the only field. Distinct from per-repo
+ * `review.prReconciliation`.
+ */
+function parsePrReconciliationConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestPrReconciliationConfig {
+  if (value === undefined || value === null) return { ...EMPTY_PR_RECONCILIATION_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "prReconciliation" must be a mapping; ignoring it.');
+    return { ...EMPTY_PR_RECONCILIATION_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "prReconciliation.enabled", warnings) ?? false;
+  return { present: true, enabled };
+}
+
+/** Serialize a prReconciliation config back into the parse-compatible shape so a cached snapshot
+ *  round-trips through {@link parsePrReconciliationConfig} unchanged. Returns null when nothing is
+ *  configured. */
+export function prReconciliationConfigToJson(config: FocusManifestPrReconciliationConfig): JsonValue {
   if (!config.present) return null;
   return { enabled: config.enabled };
 }
@@ -3471,6 +3556,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     publicStats: parsePublicStatsConfig(record.publicStats, warnings),
     draftFlow: parseDraftFlowConfig(record.draftFlow, warnings),
     upstreamDriftIssues: parseUpstreamDriftIssuesConfig(record.upstreamDriftIssues, warnings),
+    sweepWatchdog: parseSweepWatchdogConfig(record.sweepWatchdog, warnings),
+    prReconciliation: parsePrReconciliationConfig(record.prReconciliation, warnings),
     federatedIntelligence: parseFederatedIntelligenceConfig(record.federatedIntelligence, warnings),
     warnings,
   };
@@ -3495,6 +3582,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     !manifest.publicStats.present &&
     !manifest.draftFlow.present &&
     !manifest.upstreamDriftIssues.present &&
+    !manifest.sweepWatchdog.present &&
+    !manifest.prReconciliation.present &&
     !manifest.federatedIntelligence.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");

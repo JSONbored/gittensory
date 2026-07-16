@@ -25,8 +25,8 @@ import { performRepoDocRefresh } from "../github/repo-doc-refresh-runner";
 import { executeAgentRun } from "../services/agent-orchestrator";
 import { deliverNotification, evaluateNotificationEvent } from "../notifications/service";
 import { isOpsEnabled, resolveOpsManifestOverride, runOpsAlerts } from "../review/ops-wire";
-import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
-import { isPrReconciliationEnabled, runOpenPrReconciliation } from "../review/pr-reconciliation";
+import { isSweepWatchdogEnabled, resolveSweepWatchdogManifestOverride, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
+import { isPrReconciliationEnabled, resolvePrReconciliationManifestOverride, runOpenPrReconciliation } from "../review/pr-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import { runSelfTuneBreaker } from "../review/outcomes-wire";
 import { isRagEnabled } from "../review/rag-wire";
@@ -295,16 +295,22 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     }
     case "sweep-liveness-watchdog":
-      // Self-heal (flag LOOPOVER_SWEEP_WATCHDOG). Defense-in-depth: the cron only ENQUEUES this when the flag
-      // is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does zero
-      // work here too. Fails safe internally — never throws into the queue.
-      if (isSweepWatchdogEnabled(env)) await runSweepLivenessWatchdog(env);
+      // Self-heal (flag LOOPOVER_SWEEP_WATCHDOG). Defense-in-depth: the cron only ENQUEUES this when
+      // enabled, but a stale in-flight job that lands after a flag-flip (env OR manifest) must still
+      // no-op, so disabled does zero work here too. Fails safe internally — never throws into the queue.
+      {
+        const sweepWatchdogManifestOverride = await resolveSweepWatchdogManifestOverride(env);
+        if (isSweepWatchdogEnabled(env, sweepWatchdogManifestOverride)) await runSweepLivenessWatchdog(env);
+      }
       return;
     case "reconcile-open-prs":
-      // Self-heal (flag LOOPOVER_PR_RECONCILIATION). Defense-in-depth: the cron only ENQUEUES this when the
-      // flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does
-      // zero work here too. Fails safe internally — never throws into the queue.
-      if (isPrReconciliationEnabled(env)) await runOpenPrReconciliation(env);
+      // Self-heal (flag LOOPOVER_PR_RECONCILIATION). Defense-in-depth: the cron only ENQUEUES this when
+      // enabled, but a stale in-flight job that lands after a flag-flip (env OR manifest) must still
+      // no-op, so disabled does zero work here too. Fails safe internally — never throws into the queue.
+      {
+        const prReconciliationManifestOverride = await resolvePrReconciliationManifestOverride(env);
+        if (isPrReconciliationEnabled(env, prReconciliationManifestOverride)) await runOpenPrReconciliation(env);
+      }
       return;
     case "selftune":
       // Convergence (self-improve / auto-tune, flag LOOPOVER_REVIEW_SELFTUNE). Defense-in-depth: the cron only
