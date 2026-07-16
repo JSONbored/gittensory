@@ -25,6 +25,10 @@ import { GateOutcomeCard } from "@/components/site/app-panels/gate-outcome-card"
 import type { GateOutcomeCardData } from "@/components/site/app-panels/gate-outcome-card-model";
 import { GateRampControl } from "@/components/site/app-panels/gate-ramp-control";
 import {
+  McpToolUsageCard,
+  type McpToolUsageSummary,
+} from "@/components/site/app-panels/mcp-tool-usage-card";
+import {
   QueueHealthCard,
   type MaintainerQueueHealth,
 } from "@/components/site/app-panels/queue-health-card";
@@ -96,6 +100,7 @@ type MaintainerDashboard = {
   qualityDashboard: {
     topContributors: MaintainerTopContributor[];
     gateOutcomeBreakdown: GateOutcomeCardData;
+    mcpToolUsage?: McpToolUsageSummary;
     queueHealth?: MaintainerQueueHealth;
     slopDuplicateTrend?: MaintainerSlopDuplicateTrend;
   };
@@ -435,6 +440,8 @@ function MaintainerDashboardView({
           </section>
 
           <GateOutcomeCard breakdown={data.qualityDashboard.gateOutcomeBreakdown} />
+
+          <McpToolUsageCard usage={data.qualityDashboard.mcpToolUsage} />
 
           <QueueHealthCard queueHealth={data.qualityDashboard.queueHealth} />
 

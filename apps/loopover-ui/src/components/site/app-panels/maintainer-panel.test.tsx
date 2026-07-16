@@ -113,3 +113,90 @@ describe("MaintainerPanel install health — Orb broker mode (#selfhost-runtime-
     expect(screen.queryAllByText(/n\/a \(broker\)/)).toHaveLength(2); // scoped to the brokered install only
   });
 });
+
+describe("MaintainerPanel MCP tool usage panel (#6241)", () => {
+  // MaintainerPanel's own isEmpty check requires a non-empty health OR reviewability array to reach
+  // the real dashboard content branch at all -- an all-empty payload short-circuits to its own
+  // top-level EmptyState before any qualityDashboard card (including this one) ever renders.
+  const nonEmptyHealth = [
+    {
+      installationId: 1,
+      accountLogin: "an-owner",
+      installedReposCount: 1,
+      status: "healthy" as const,
+      missingPermissions: [],
+      missingEvents: [],
+      checkedAt: "2026-07-03T00:00:00.000Z",
+      authMode: "local" as const,
+    },
+  ];
+
+  it("shows the not-yet-available empty state when mcpToolUsage is absent from the payload", () => {
+    useSession.mockReturnValue({
+      session: { login: "maint", roles: ["maintainer"] },
+      hydrated: true,
+    });
+    useApiResource.mockReturnValue({
+      status: "ready",
+      data: {
+        metrics: [],
+        health: nonEmptyHealth,
+        reviewability: [],
+        settingsPreview: { removed: [], added: [] },
+        qualityDashboard: { topContributors: [], gateOutcomeBreakdown: emptyGateOutcomeBreakdown },
+      },
+      reload: () => {},
+      error: null,
+    });
+
+    render(<MaintainerPanel />);
+
+    // Scoped to this card's own copy, not the generic "Not yet available" title QueueHealthCard's
+    // own (also-absent) empty state shares.
+    expect(
+      screen.getByText(
+        "Per-tool MCP usage appears here once tool-call telemetry is aggregated into the dashboard payload.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("renders real per-tool rows once mcpToolUsage is present in the payload", () => {
+    useSession.mockReturnValue({
+      session: { login: "maint", roles: ["maintainer"] },
+      hydrated: true,
+    });
+    useApiResource.mockReturnValue({
+      status: "ready",
+      data: {
+        metrics: [],
+        health: nonEmptyHealth,
+        reviewability: [],
+        settingsPreview: { removed: [], added: [] },
+        qualityDashboard: {
+          topContributors: [],
+          gateOutcomeBreakdown: emptyGateOutcomeBreakdown,
+          mcpToolUsage: {
+            windowDays: 14,
+            tools: [
+              {
+                tool: "loopover_check_slop_risk",
+                callCount: 5,
+                successCount: 5,
+                failureCount: 0,
+                localCallCount: 5,
+                remoteCallCount: 0,
+              },
+            ],
+          },
+        },
+      },
+      reload: () => {},
+      error: null,
+    });
+
+    render(<MaintainerPanel />);
+
+    expect(screen.getByText("loopover_check_slop_risk")).toBeTruthy();
+    expect(screen.getByText("14d window")).toBeTruthy();
+  });
+});
