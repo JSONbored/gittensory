@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatCfTypegenOutput } from "../../scripts/gen-cf-typegen.mjs";
+import { formatCfTypegenOutput, resolveLocalWranglerBin } from "../../scripts/gen-cf-typegen.mjs";
 
 // #1667-followup: wrangler's own `wrangler types` output packs every declared env var into ONE long
 // single-line `Pick<Cloudflare.Env, "A" | "B" | ...>>` union. Two independent PRs that each add a DIFFERENT
@@ -53,6 +53,16 @@ describe("gen-cf-typegen: formatCfTypegenOutput", () => {
 
   it("throws when the ProcessEnv Pick<Cloudflare.Env, ...> union is not found", () => {
     expect(() => formatCfTypegenOutput("interface Env {}\n")).toThrow(/Could not find the ProcessEnv/);
+  });
+
+  // A stale global `wrangler` install can silently generate types from the WRONG (mismatched) workerd
+  // version with zero warning if resolution falls through to PATH. resolveLocalWranglerBin uses Node's
+  // own require.resolve instead of a bare "wrangler" execFileSync call, so it can only ever find this
+  // workspace's own pinned dependency -- never a same-named binary elsewhere on the machine.
+  it("resolveLocalWranglerBin resolves this workspace's own pinned wrangler binary, not PATH", () => {
+    const resolved = resolveLocalWranglerBin();
+    expect(resolved).toContain(join("node_modules", "wrangler", "bin", "wrangler.js"));
+    expect(existsSync(resolved)).toBe(true);
   });
 
   it("REGRESSION: two independent single-var additions no longer conflict under a real git 3-way merge", () => {

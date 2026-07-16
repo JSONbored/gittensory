@@ -1,7 +1,27 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+
+/** Resolves this workspace's own pinned `wrangler` binary via Node's module resolution (walking up
+ *  from this file's node_modules tree), never PATH. `execFileSync("wrangler", ...)` would silently
+ *  fall through to PATH -- and pick up a globally-installed wrangler with a DIFFERENT bundled workerd
+ *  version, with zero warning -- whenever node_modules/.bin/wrangler doesn't exist yet (a fresh clone
+ *  or worktree before `npm ci` has run). require.resolve has no such fallback: it throws immediately
+ *  and loudly if the local package isn't installed, instead of silently generating wrong output.
+ *  wrangler's own package.json restricts its `exports` map, so the bin subpath itself isn't directly
+ *  requireable -- resolve the package root via its (always-exported) package.json instead, then read
+ *  the real bin path from there rather than hand-hardcoding "./bin/wrangler.js". */
+export function resolveLocalWranglerBin() {
+  const pkgJsonPath = require.resolve("wrangler/package.json");
+  const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+  const binRelativePath = typeof pkg.bin === "string" ? pkg.bin : pkg.bin.wrangler;
+  return join(dirname(pkgJsonPath), binRelativePath);
+}
 
 // Cloudflare's own `wrangler types` output packs every declared env var into ONE long single-line
 // `Pick<Cloudflare.Env, "A" | "B" | ...>>` union (the generated ProcessEnv interface). Two independent PRs
@@ -40,7 +60,7 @@ export function formatCfTypegenOutput(source) {
 export function genCfTypegen({ check = false } = {}) {
   const target = check ? TEMP_PATH : OUTPUT_PATH;
   try {
-    execFileSync("wrangler", ["types", target], { stdio: "inherit" });
+    execFileSync(process.execPath, [resolveLocalWranglerBin(), "types", target], { stdio: "inherit" });
     const generated = formatCfTypegenOutput(readFileSync(target, "utf8"));
     if (!check) {
       writeFileSync(OUTPUT_PATH, generated);
