@@ -42,7 +42,9 @@ const doneItem: PortfolioQueueActionItem = {
 };
 
 describe("PortfolioQueueActionsSection (#4857)", () => {
-  it("renders the loading state before the first result arrives", () => {
+  it("renders a content-shaped skeleton before the first result arrives", () => {
+    // #6511: StateBoundary renders the skeleton INSTEAD of a loading title, so the old
+    // "Loading actionable queue items…" text is intentionally gone; assert the placeholder instead.
     render(
       <PortfolioQueueActionsSection
         result={null}
@@ -52,7 +54,27 @@ describe("PortfolioQueueActionsSection (#4857)", () => {
         onRequeue={() => undefined}
       />,
     );
-    expect(screen.getByText(/Loading actionable queue items/i)).toBeTruthy();
+    expect(screen.getByTestId("queue-actions-skeleton")).toBeTruthy();
+    // Shaped like the real content, not one generic bar: the real table is not rendered yet.
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("renders the empty-state sentence verbatim, with no extra copy from the shared boundary", () => {
+    // #6511: the whole original sentence is the EmptyState title and the description is suppressed, so the
+    // rendered copy is byte-identical to the <p> it replaced -- not a reworded title/description split, and
+    // none of StateBoundary's own default "This view has no records to show." boilerplate.
+    render(
+      <PortfolioQueueActionsSection
+        result={{ ok: true, items: [] }}
+        actionResult={null}
+        pending={false}
+        onRelease={() => undefined}
+        onRequeue={() => undefined}
+      />,
+    );
+    expect(screen.getByText("No in-progress or completed items to release or requeue right now.")).toBeTruthy();
+    expect(screen.queryByText(/This view has no records to show/i)).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("renders an error message when the local API is unreachable", () => {

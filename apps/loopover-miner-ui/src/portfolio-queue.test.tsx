@@ -90,7 +90,13 @@ describe("PortfolioQueueView (#4306, per-repo detail added by #4846)", () => {
 
   it("renders the fresh-install empty state without erroring", () => {
     render(<PortfolioQueueView result={{ ok: true, summary: emptyPortfolioQueueSummary() }} />);
-    expect(screen.getByText(/No queued work yet/i)).toBeTruthy();
+    // #6511: asserted as the exact sentence, not a loose regex -- the whole original string is the EmptyState
+    // title with the description suppressed, so the rendered copy is byte-identical to the <p> it replaced.
+    expect(
+      screen.getByText("No queued work yet — the cards fill in once the miner enqueues its first portfolio item."),
+    ).toBeTruthy();
+    // And none of StateBoundary's own default empty boilerplate leaks in alongside it.
+    expect(screen.queryByText(/This view has no records to show/i)).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
@@ -99,9 +105,23 @@ describe("PortfolioQueueView (#4306, per-repo detail added by #4846)", () => {
     expect(screen.getByRole("alert").textContent).toContain("connection refused");
   });
 
-  it("renders the loading state before the first result arrives", () => {
+  it("renders a content-shaped skeleton before the first result arrives", () => {
+    // #6511: StateBoundary renders the skeleton INSTEAD of a loading title, so the old
+    // "Loading local portfolio queue…" text is intentionally gone; assert the placeholder instead.
     render(<PortfolioQueueView result={null} />);
-    expect(screen.getByText(/Loading local portfolio queue/i)).toBeTruthy();
+    expect(screen.getByTestId("portfolio-queue-skeleton")).toBeTruthy();
+    // Shaped like the real content, not one generic bar: the real table is not rendered yet.
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("renders the error sentence verbatim, with no extra copy from the shared boundary", () => {
+    // #6511: same whole-sentence treatment on the error path -- one string, description suppressed, so none of
+    // ErrorState's own "Something went wrong fetching this data." default appears next to it.
+    render(<PortfolioQueueView result={{ ok: false, error: "connection refused" }} />);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Could not read the local portfolio queue: connection refused",
+    );
+    expect(screen.queryByText(/Something went wrong fetching this data/i)).toBeNull();
   });
 });
 
