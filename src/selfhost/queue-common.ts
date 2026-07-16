@@ -689,10 +689,6 @@ export function githubRateLimitRetryDelayMs(
   return null;
 }
 
-export function nonConsumingRetryDelayMs(error: unknown): number | null {
-  return githubRateLimitRetryDelayMs(error);
-}
-
 export function consumingRetryDelayMs(
   error: unknown,
   defaultDelayMs: number,
