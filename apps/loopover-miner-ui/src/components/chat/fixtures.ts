@@ -62,6 +62,36 @@ export const multiTurnConversation: ChatMessage[] = [
   },
 ];
 
+/** Portfolio release/requeue action-result entries as rendered into the message list (#6520). */
+export const portfolioQueueActionConversation: ChatMessage[] = [
+  {
+    id: "pq1",
+    role: "user",
+    content: "release acme/widgets #12",
+    timestamp: "2026-07-16T09:00:00.000Z",
+    authorName: "operator",
+  },
+  {
+    id: "pq2",
+    role: "system",
+    content: "Queue release succeeded for acme/widgets (issue:12) — status is now queued.",
+    timestamp: "2026-07-16T09:00:01.000Z",
+  },
+  {
+    id: "pq3",
+    role: "user",
+    content: "requeue acme/widgets #7",
+    timestamp: "2026-07-16T09:00:10.000Z",
+    authorName: "operator",
+  },
+  {
+    id: "pq4",
+    role: "system",
+    content: "Queue requeue succeeded for acme/widgets (issue:7) — status is now queued.",
+    timestamp: "2026-07-16T09:00:11.000Z",
+  },
+];
+
 /** A long-content edge case — exercises wrapping/overflow in MessageBubble and MessageList's viewport. */
 export const longContentConversation: ChatMessage[] = [
   {
