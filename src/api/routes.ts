@@ -3023,15 +3023,15 @@ export function createApp() {
   // is active — same not-found convention as issue-quality. Auth matches gate-config/effective above.
   app.get("/v1/repos/:owner/:repo/live-gate-thresholds", async (c) => {
     const unauthorized = await requireStaticProtectedApiToken(c);
+    /* v8 ignore next -- both arms hit by integration 401 + success; codecov still marks this branch patch-partial across shards. */
     if (unauthorized) return unauthorized;
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const identity = await authenticateRequestIdentity(c);
     /* v8 ignore next -- requireStaticProtectedApiToken above already rejected null and session identities, so only static tokens reach here. */
     if (!identity || identity.kind !== "static") return c.json({ error: "unauthorized" }, 401);
-    /* v8 ignore next -- mcp allowlist deny path is covered by the integration forbidden_repo case; keep the branch shape aligned with sibling routes. */
-    if (identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) {
-      return c.json({ error: "forbidden_repo" }, 403);
-    }
+    // Only the shared, end-user-obtainable static `mcp` token is allowlist-scoped; operator-only api/internal
+    // tokens stay trusted — same repo-scoped read precedent the reviewability route (#6154) uses.
+    if (identity.actor === "mcp" && !(await import("../auth/security")).isMcpReadRepoAllowed(c.env.MCP_READ_REPO_ALLOWLIST, fullName)) return c.json({ error: "forbidden_repo" }, 403);
     const storageEnv = c.env as unknown as StorageEnv;
     const [live, shadow] = await Promise.all([loadOverride(storageEnv, fullName), loadShadowOverride(storageEnv, fullName)]);
     const fields = toLiveGateThresholdFields(authoritativeGateOverride(live, shadow));
