@@ -5,6 +5,7 @@ import { Check, Copy, Download, History, Loader2, RefreshCw } from "lucide-react
 import { KeyValueGrid, StatusPill, type Status } from "@/components/site/control-primitives";
 import { McpVersionBadge } from "@/components/site/mcp-version-badge";
 import { StatCard } from "@/components/site/primitives";
+import { RefreshMeta } from "@/components/site/refresh-meta";
 import { StateBoundary } from "@/components/site/state-views";
 import {
   Dialog,
@@ -174,6 +175,11 @@ export function MinerPanel() {
           </div>
         ) : data ? (
           <div className="space-y-6">
+            {/* Dashboard-level refresh metadata (#6181) — reloads the GET pack; distinct from the
+                rebuild-via-POST "Refresh" in MinerPanelActions above. */}
+            <div className="flex items-center justify-end">
+              <RefreshMeta loadedAt={dashboard.loadedAt} onRefresh={dashboard.reload} />
+            </div>
             <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="Next actions" value={data.nextActions.length} hint={data.status} />
               <StatCard label="Open blockers" value={blockerCount} hint="decision pack" />

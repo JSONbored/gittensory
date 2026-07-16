@@ -6,6 +6,7 @@ import {
   StatusPill,
   type Status,
 } from "@/components/site/control-primitives";
+import { RefreshMeta } from "@/components/site/refresh-meta";
 import { StateBoundary } from "@/components/site/state-views";
 import { Input } from "@/components/ui/input";
 import { useApiResource } from "@/lib/api/use-api-resource";
@@ -111,10 +112,17 @@ export function OwnerPanel() {
         emptyDescription="Registration readiness appears after repository intelligence has been generated for this repo."
       >
         {workspace ? (
-          <RegistrationWorkspace
-            workspace={workspace}
-            generatedLabel={formatGeneratedAt(workspace.generatedAt)}
-          />
+          <div className="space-y-6">
+            {/* Dashboard-level refresh metadata (#6181) — readiness is the primary resource;
+                refresh() also reloads the config recommendation sibling. */}
+            <div className="flex items-center justify-end">
+              <RefreshMeta loadedAt={readiness.loadedAt} onRefresh={refresh} />
+            </div>
+            <RegistrationWorkspace
+              workspace={workspace}
+              generatedLabel={formatGeneratedAt(workspace.generatedAt)}
+            />
+          </div>
         ) : null}
         {repoPath && readiness.status === "error" ? (
           <p className="text-token-2xs text-muted-foreground">

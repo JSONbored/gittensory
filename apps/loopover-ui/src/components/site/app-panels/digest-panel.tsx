@@ -10,6 +10,7 @@ import {
 import { toast } from "sonner";
 
 import { StatusPill } from "@/components/site/control-primitives";
+import { RefreshMeta } from "@/components/site/refresh-meta";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StateBoundary } from "@/components/site/state-views";
@@ -58,53 +59,59 @@ export function DigestPanel() {
       errorDescription={digest.status === "error" ? digest.error : undefined}
     >
       {data ? (
-        <div className="grid gap-8 lg:grid-cols-[340px_1fr] lg:items-start">
-          <div className="mx-auto w-full max-w-[320px]">
-            <PhoneFrame>
-              <DigestStream items={data.items.slice(0, 4)} compact date={data.date} />
-            </PhoneFrame>
-            <p className="mt-3 text-center text-token-2xs text-muted-foreground">
-              Live in-app digest preview. Email delivery is not enabled.
-            </p>
+        <div className="space-y-6">
+          {/* Dashboard-level refresh metadata (#6181) — same cue as maintainer-panel (#2219). */}
+          <div className="flex items-center justify-end">
+            <RefreshMeta loadedAt={digest.loadedAt} onRefresh={digest.reload} />
           </div>
-
-          <div className="rounded-token border-hairline bg-card p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-                  Today · {data.date}
-                </div>
-                <h2 className="mt-1 font-display text-token-xl font-semibold">
-                  {data.items.length} updates worth looking at
-                </h2>
-              </div>
-              <StatusPill status={data.signal === "ready" ? "ready" : "warn"}>
-                Signal · {data.signal}
-              </StatusPill>
+          <div className="grid gap-8 lg:grid-cols-[340px_1fr] lg:items-start">
+            <div className="mx-auto w-full max-w-[320px]">
+              <PhoneFrame>
+                <DigestStream items={data.items.slice(0, 4)} compact date={data.date} />
+              </PhoneFrame>
+              <p className="mt-3 text-center text-token-2xs text-muted-foreground">
+                Live in-app digest preview. Email delivery is not enabled.
+              </p>
             </div>
-            <ul className="mt-5 divide-hairline">
-              {data.items.map((item, index) => (
-                <li
-                  key={`${item.kind}-${index}`}
-                  className="flex gap-3 rounded-token px-2 py-3.5 transition-colors hover:bg-muted/30 -mx-2"
-                >
-                  <span className="mt-0.5 shrink-0">{ICONS[item.kind]}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <h3 className="text-token-sm font-medium text-foreground">{item.title}</h3>
-                      {item.meta && (
-                        <span className="font-mono text-token-2xs text-muted-foreground">
-                          {item.meta}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-0.5 text-token-sm text-muted-foreground">{item.detail}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
 
-            <SubscribeForm subscribed={data.subscriptions.length > 0} onStored={digest.reload} />
+            <div className="rounded-token border-hairline bg-card p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+                    Today · {data.date}
+                  </div>
+                  <h2 className="mt-1 font-display text-token-xl font-semibold">
+                    {data.items.length} updates worth looking at
+                  </h2>
+                </div>
+                <StatusPill status={data.signal === "ready" ? "ready" : "warn"}>
+                  Signal · {data.signal}
+                </StatusPill>
+              </div>
+              <ul className="mt-5 divide-hairline">
+                {data.items.map((item, index) => (
+                  <li
+                    key={`${item.kind}-${index}`}
+                    className="flex gap-3 rounded-token px-2 py-3.5 transition-colors hover:bg-muted/30 -mx-2"
+                  >
+                    <span className="mt-0.5 shrink-0">{ICONS[item.kind]}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <h3 className="text-token-sm font-medium text-foreground">{item.title}</h3>
+                        {item.meta && (
+                          <span className="font-mono text-token-2xs text-muted-foreground">
+                            {item.meta}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-token-sm text-muted-foreground">{item.detail}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <SubscribeForm subscribed={data.subscriptions.length > 0} onStored={digest.reload} />
+            </div>
           </div>
         </div>
       ) : null}
