@@ -7314,4 +7314,108 @@ describe("queue processors", () => {
   // Shared cache-input-fingerprint builder for the #4603 pair below -- mirrors "#1"'s own inline fingerprint,
   // parameterized only by PR title/number/sha so both tests get a genuine cache HIT (aiCalls stays 0) instead of
   // silently falling through to a real (unmocked-defect) AI call on a fingerprint mismatch.
+
+  it("#4793: two different tenants' concurrent processJob calls never cross-contaminate a shared Worker isolate", async () => {
+    // Rent-a-Loop's execution-sandboxing acceptance criterion (#4793): "a deliberately adversarial test run
+    // attempting to access another tenant's data ... fails to escape the sandbox." This drives TWO different
+    // installations' real pull_request:opened webhooks through the ACTUAL processJob entry point CONCURRENTLY
+    // (not just the narrower token-cache layer #4794 already proved) -- the residual risk this exercises is
+    // module-level state shared across requests within the SAME Worker isolate, not GitHub's own per-installation
+    // API scoping. Every write GitHub receives is checked against BOTH tenants' identifying data.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    const TENANT_A = { installationId: 9001, repo: "tenant-a/secret-repo", prNumber: 1, prTitle: "Tenant A's confidential rollout plan", sha: "shaA1" };
+    const TENANT_B = { installationId: 9002, repo: "tenant-b/other-repo", prNumber: 2, prTitle: "Tenant B's unrelated bugfix", sha: "shaB1" };
+
+    for (const t of [TENANT_A, TENANT_B]) {
+      await upsertRepositorySettings(env, {
+        repoFullName: t.repo,
+        commentMode: "all_prs",
+        publicSurface: "comment_only",
+        autoLabelEnabled: false,
+        checkRunMode: "off",
+        reviewCheckMode: "disabled",
+        aiReviewMode: "off",
+      });
+    }
+
+    const postedComments: Record<string, { body: string; authorization: string }[]> = {
+      [TENANT_A.repo]: [],
+      [TENANT_B.repo]: [],
+    };
+    const mintedTokensByInstallation: Record<number, string> = {};
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+
+      const installationMatch = /\/app\/installations\/(\d+)\/access_tokens/.exec(url);
+      if (installationMatch) {
+        const installationId = Number(installationMatch[1]);
+        const token = `installation-${installationId}-token`;
+        mintedTokensByInstallation[installationId] = token;
+        return Response.json({ token, expires_at: new Date(Date.now() + 60 * 60_000).toISOString() });
+      }
+
+      for (const t of [TENANT_A, TENANT_B]) {
+        const [owner, repo] = t.repo.split("/");
+        if (url.includes(`/repos/${owner}/${repo}/pulls/${t.prNumber}/files`)) {
+          return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+export const ok = true;" }]);
+        }
+        if (url.endsWith(`/repos/${owner}/${repo}/pulls/${t.prNumber}`)) {
+          return Response.json({ number: t.prNumber, title: t.prTitle, state: "open", user: { login: "contributor" }, head: { sha: t.sha }, labels: [], body: null, mergeable_state: "clean" });
+        }
+        if (url.includes(`/repos/${owner}/${repo}/commits/${t.sha}/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes(`/repos/${owner}/${repo}/commits/${t.sha}/status`)) return Response.json({ state: "success", statuses: [] });
+        if (url.includes(`/repos/${owner}/${repo}/issues/${t.prNumber}/comments`) && method === "GET") return Response.json([]);
+        if (url.includes(`/repos/${owner}/${repo}/issues/${t.prNumber}/comments`) && method === "POST") {
+          const body = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          postedComments[t.repo]!.push({ body, authorization });
+          return Response.json({ id: 1 }, { status: 201 });
+        }
+      }
+      if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
+      return Response.json({});
+    });
+
+    const jobFor = (t: typeof TENANT_A) => {
+      const [owner, name] = t.repo.split("/") as [string, string];
+      return {
+        type: "github-webhook" as const,
+        deliveryId: `sandbox-test-${t.installationId}`,
+        eventName: "pull_request" as const,
+        payload: {
+          action: "opened",
+          installation: { id: t.installationId, account: { login: owner, id: t.installationId, type: "Organization" as const } },
+          repository: { name, full_name: t.repo, private: false, owner: { login: owner } },
+          pull_request: { number: t.prNumber, title: t.prTitle, state: "open", user: { login: "contributor" }, head: { sha: t.sha }, labels: [], body: null },
+        },
+      };
+    };
+
+    // Truly concurrent: both installations' jobs race through processJob at once, sharing this one Worker
+    // isolate's module-level caches (installation-token cache, response cache, single-flight maps, etc.).
+    await Promise.all([processJob(env, jobFor(TENANT_A)), processJob(env, jobFor(TENANT_B))]);
+
+    // Each installation minted its OWN token -- no cross-tenant credential reuse.
+    expect(mintedTokensByInstallation[TENANT_A.installationId]).toBe(`installation-${TENANT_A.installationId}-token`);
+    expect(mintedTokensByInstallation[TENANT_B.installationId]).toBe(`installation-${TENANT_B.installationId}-token`);
+
+    // Each repo received its own reviewing-placeholder POST followed by the final comment (the stub's empty
+    // GET-comments response means the code can't find the placeholder to PATCH, so it POSTs the final one
+    // fresh too -- both are legitimate writes to check, not test noise). Every write is authenticated with
+    // its OWN installation's token, and the final comment's content never leaks the other tenant's PR title.
+    expect(postedComments[TENANT_A.repo]!.length).toBeGreaterThanOrEqual(1);
+    expect(postedComments[TENANT_B.repo]!.length).toBeGreaterThanOrEqual(1);
+    for (const write of postedComments[TENANT_A.repo]!) expect(write.authorization).toBe(`token installation-${TENANT_A.installationId}-token`);
+    for (const write of postedComments[TENANT_B.repo]!) expect(write.authorization).toBe(`token installation-${TENANT_B.installationId}-token`);
+    const finalA = postedComments[TENANT_A.repo]!.find((c) => !c.body.includes("is reviewing"))!;
+    const finalB = postedComments[TENANT_B.repo]!.find((c) => !c.body.includes("is reviewing"))!;
+    expect(finalA).toBeDefined();
+    expect(finalB).toBeDefined();
+    expect(finalA.body).not.toContain(TENANT_B.prTitle);
+    expect(finalB.body).not.toContain(TENANT_A.prTitle);
+    expect(finalA.body).not.toContain(TENANT_B.repo);
+    expect(finalB.body).not.toContain(TENANT_A.repo);
+  });
 });
