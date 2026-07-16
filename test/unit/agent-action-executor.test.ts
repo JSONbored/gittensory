@@ -48,6 +48,11 @@ vi.mock("../../src/github/backfill", async (importOriginal) => ({
   fetchLivePullRequestState: vi.fn(async () => "open" as const),
   refreshInstallationHealthForInstallation: vi.fn(async () => null),
 }));
+vi.mock("../../src/services/notify-discord", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/notify-discord")>()),
+  notifyActionToDiscord: vi.fn(async () => undefined),
+  notifyActionToSlack: vi.fn(async () => undefined),
+}));
 
 import { closeIssue, closePullRequest, createIssueComment, createPullRequestReview, dismissLatestBotApproval, mergePullRequest, updatePullRequestBranch } from "../../src/github/pr-actions";
 import { ensurePullRequestLabel, removePullRequestLabel } from "../../src/github/labels";
@@ -55,6 +60,7 @@ import { ensurePullRequestAssignee } from "../../src/github/assignees";
 import { fetchPullRequestFreshness } from "../../src/github/pr-freshness";
 import { createInstallationToken } from "../../src/github/app";
 import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestState, fetchLiveReviewThreadBlockers, refreshInstallationHealthForInstallation } from "../../src/github/backfill";
+import { notifyActionToDiscord, notifyActionToSlack } from "../../src/services/notify-discord";
 import {
   actionParams,
   applyModerationEscalationForRule,
@@ -415,6 +421,31 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
     expect(outcomes[0]?.outcome).toBe("completed");
     expect(mergePullRequest).toHaveBeenCalled();
+  });
+
+  it("#6636: a terminal disposition notification uses the recorded gate verdict as its reason when one is on record", async () => {
+    const env = createTestEnv({});
+    // The latest gate_decision row for this PR carries the AI's reasoning — the enriched reason resolveDispositionReason surfaces.
+    await env.DB.prepare(
+      "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    )
+      .bind("gate:owner/repo#7", "owner/repo", "owner/repo#7", "gate_decision", "close", "gittensory-native", "sha7", "An AI reviewer flagged a likely blocking defect", "2026-06-21T00:00:00.000Z")
+      .run();
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalled();
+    // The rendered notification shows the gate verdict, NOT the plain disposition reason ("clean").
+    expect(notifyActionToDiscord).toHaveBeenCalledWith(env, expect.objectContaining({ outcome: "merged", summary: "An AI reviewer flagged a likely blocking defect" }));
+    expect(notifyActionToSlack).toHaveBeenCalledWith(env, expect.objectContaining({ outcome: "merged", summary: "An AI reviewer flagged a likely blocking defect" }));
+  });
+
+  it("#6636: the disposition notification falls back to the plain disposition reason when no gate verdict is on record", async () => {
+    const env = createTestEnv({});
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(notifyActionToDiscord).toHaveBeenCalledWith(env, expect.objectContaining({ outcome: "merged", summary: merge.reason }));
+    expect(notifyActionToSlack).toHaveBeenCalledWith(env, expect.objectContaining({ outcome: "merged", summary: merge.reason }));
   });
 
   it("honors a CUSTOM configured manualReviewLabel name (case-insensitive) instead of only the literal default", async () => {

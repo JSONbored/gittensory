@@ -38,6 +38,7 @@ import {
 } from "../settings/moderation-rules";
 import { incr } from "../selfhost/metrics";
 import { shouldWaitForOlderSiblings } from "../review/merge-train";
+import { resolveDispositionReason } from "../review/outcomes-wire";
 import { captureError } from "../selfhost/sentry";
 
 // The agent actor name on every audit record — the App acts on the maintainer's behalf per their configured
@@ -555,7 +556,12 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
       const notifyOutcome: NotifyOutcome | null =
         action.actionClass === "merge" ? "merged" : action.actionClass === "close" ? "closed" : action.actionClass === "request_changes" ? "manual" : null;
       if (notifyOutcome) {
-        const notifyParams = { repoFullName: ctx.repoFullName, pullNumber: ctx.pullNumber, outcome: notifyOutcome, summary: action.reason, submitter: ctx.authorLogin };
+        // #6636: surface the AI's actual gate reasoning — the reasonCode summary on the most recent gate_decision
+        // row for this PR — as the notification reason, falling back to the plain disposition reason when no
+        // verdict is on record or the read fails. This is the live consumer resolveDispositionReason was built for
+        // (its own doc comment promises the "enriched, verdict-aware reason the user actually sees").
+        const dispositionReason = await resolveDispositionReason(env, targetKey, action.reason);
+        const notifyParams = { repoFullName: ctx.repoFullName, pullNumber: ctx.pullNumber, outcome: notifyOutcome, summary: dispositionReason, submitter: ctx.authorLogin };
         await notifyActionToDiscord(env, notifyParams).catch(() => undefined);
         await notifyActionToSlack(env, notifyParams).catch(() => undefined);
       }
