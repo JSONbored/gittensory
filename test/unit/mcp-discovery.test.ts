@@ -115,6 +115,9 @@ describe("MCP resource discovery", () => {
     const uris = resources.map((r) => r.uri);
     expect(uris).toContain("loopover://changelog");
     expect(uris).toContain("loopover://compatibility");
+    // #6620: the two static-document mirrors, using the same URIs the remote server registers.
+    expect(uris).toContain("loopover://finding-taxonomy");
+    expect(uris).toContain("gittensory://enrichment-analyzers");
   });
 
   it("resource descriptions do not expose forbidden public terms", async () => {
@@ -150,6 +153,20 @@ describe("MCP resource discovery", () => {
     // Must be parseable JSON (either real API response or unavailable fallback).
     expect(() => JSON.parse(content.text ?? "")).not.toThrow();
   });
+
+  it.each(["loopover://finding-taxonomy", "gittensory://enrichment-analyzers"])(
+    "can read the %s resource and get structured JSON (#6620)",
+    async (uri) => {
+      const result = await client.readResource({ uri });
+      expect(result.contents).toHaveLength(1);
+      const content = result.contents[0];
+      expect(content?.mimeType).toBe("application/json");
+      if (!content || !("text" in content)) throw new Error("expected text content");
+      // Parseable JSON either way: the real document over the proxied route, or the
+      // { status: "unavailable" } fallback when the fixture server doesn't serve the path.
+      expect(() => JSON.parse(content.text ?? "")).not.toThrow();
+    },
+  );
 
   it("decision-pack resource template is discoverable", async () => {
     const { resourceTemplates } = await client.listResourceTemplates();

@@ -50,6 +50,8 @@ const npmRegistryUrl = (process.env.LOOPOVER_NPM_REGISTRY_URL ?? "https://regist
 const upgradeCommand = `npm install -g ${packageName}@latest`;
 const npxFallbackCommand = `npx ${packageName}@latest <command>`;
 const compatibilityPath = "/v1/mcp/compatibility";
+const findingTaxonomyPath = "/v1/mcp/finding-taxonomy";
+const enrichmentAnalyzersPath = "/v1/mcp/enrichment-analyzers";
 const currentApiVersion = "0.1.0";
 const decisionPackCacheSchemaVersion = 1;
 const decisionPackCacheMaxEntries = 25;
@@ -2202,6 +2204,47 @@ server.registerResource(
       data = { status: "unavailable", currentApiVersion, packageVersion };
     }
     return { contents: [{ uri: "loopover://compatibility", mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+  },
+);
+
+// #6620: mirror the two remote static-document MCP resources over the local stdio server, proxying the new
+// unauthenticated REST routes the same way loopover_compatibility proxies /v1/mcp/compatibility. Reuse the exact
+// URIs the remote server registers (enrichment-analyzers keeps its legacy gittensory:// URI on purpose).
+server.registerResource(
+  "loopover_finding_taxonomy",
+  "loopover://finding-taxonomy",
+  {
+    title: "LoopOver Finding Taxonomy",
+    description: "Static taxonomy of AI-review finding categories and the severity ladder.",
+    mimeType: "application/json",
+  },
+  async () => {
+    let data;
+    try {
+      data = await apiGet(findingTaxonomyPath);
+    } catch {
+      data = { status: "unavailable" };
+    }
+    return { contents: [{ uri: "loopover://finding-taxonomy", mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+  },
+);
+
+server.registerResource(
+  "loopover_enrichment_analyzers",
+  "gittensory://enrichment-analyzers",
+  {
+    title: "LoopOver Enrichment Analyzers",
+    description: "Static taxonomy of REES enrichment analyzers: names, categories, and cost classes.",
+    mimeType: "application/json",
+  },
+  async () => {
+    let data;
+    try {
+      data = await apiGet(enrichmentAnalyzersPath);
+    } catch {
+      data = { status: "unavailable" };
+    }
+    return { contents: [{ uri: "gittensory://enrichment-analyzers", mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
   },
 );
 

@@ -136,6 +136,23 @@ describe("api routes", () => {
     const unauthenticatedSpec = await app.request("/openapi.json", {}, env);
     expect(unauthenticatedSpec.status).toBe(200);
     await expect(unauthenticatedSpec.json()).resolves.toMatchObject({ info: { title: "LoopOver API" } });
+
+    // #6620: the two static-document MCP routes are served UNAUTHENTICATED (empty init = no api token), the
+    // same public treatment as /v1/mcp/compatibility, and return exactly what their builders produce.
+    const findingTaxonomy = await app.request("/v1/mcp/finding-taxonomy", {}, env);
+    expect(findingTaxonomy.status).toBe(200);
+    const findingTaxonomyPayload = (await findingTaxonomy.json()) as { categories: unknown[]; severities: unknown[] };
+    expect(Array.isArray(findingTaxonomyPayload.categories)).toBe(true);
+    expect(Array.isArray(findingTaxonomyPayload.severities)).toBe(true);
+    expect(findingTaxonomyPayload.categories.length).toBeGreaterThan(0);
+    expect(findingTaxonomyPayload.severities.length).toBeGreaterThan(0);
+
+    const enrichmentAnalyzers = await app.request("/v1/mcp/enrichment-analyzers", {}, env);
+    expect(enrichmentAnalyzers.status).toBe(200);
+    const enrichmentAnalyzersPayload = (await enrichmentAnalyzers.json()) as { analyzers: Array<{ name: string; costClass: string }> };
+    expect(Array.isArray(enrichmentAnalyzersPayload.analyzers)).toBe(true);
+    expect(enrichmentAnalyzersPayload.analyzers.length).toBeGreaterThan(0);
+    expect(enrichmentAnalyzersPayload.analyzers[0]).toMatchObject({ name: expect.any(String), costClass: expect.any(String) });
   });
 
   it("serves public GitHub repo stats without relying on browser GitHub quota", async () => {

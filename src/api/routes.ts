@@ -7,6 +7,8 @@ import { completeGitHubWebOAuth, createSessionFromGitHubToken, getLiveSessionGit
 import { enforceRateLimit, routeClassForPath } from "../auth/rate-limit";
 import { handleShot } from "../review/visual/shot";
 import { isScreenshotsEnabled } from "../review/visual-wire";
+import { buildFindingTaxonomyDocument } from "../review/finding-taxonomy";
+import { buildEnrichmentAnalyzersTaxonomyDocument } from "../review/enrichment-analyzers-taxonomy";
 import {
   BROWSER_SESSION_COOKIE,
   GITHUB_OAUTH_STATE_COOKIE,
@@ -989,6 +991,11 @@ export function createApp() {
     }),
   );
   app.get("/v1/mcp/compatibility", (c) => c.json(buildMcpCompatibilityMetadata(nowIso())));
+  // #6620: unauthenticated static-document routes mirroring the two remote MCP resources, so the local CLI
+  // can proxy them the same way it proxies /v1/mcp/compatibility. Both documents carry only committed public
+  // enums/analyzer metadata (no DB/env/private data); excluded from requiresApiToken below.
+  app.get("/v1/mcp/finding-taxonomy", (c) => c.json(buildFindingTaxonomyDocument()));
+  app.get("/v1/mcp/enrichment-analyzers", (c) => c.json(buildEnrichmentAnalyzersTaxonomyDocument()));
   app.get("/openapi.json", (c) => c.json(buildOpenApiSpec()));
   app.all("/mcp", handleMcpRequest);
 
@@ -6031,6 +6038,8 @@ async function isAuthorizedAmsIngest(env: Env, token: string | undefined): Promi
 function requiresApiToken(path: string): boolean {
   if (path === "/health") return false;
   if (path === "/v1/mcp/compatibility") return false;
+  if (path === "/v1/mcp/finding-taxonomy") return false;
+  if (path === "/v1/mcp/enrichment-analyzers") return false;
   if (/^\/v1\/public\/github\/repos\/[^/]+\/[^/]+\/stats$/.test(path)) return false;
   if (/^\/v1\/public\/repos\/[^/]+\/[^/]+\/badge\.(svg|json)$/.test(path)) return false;
   if (/^\/v1\/public\/repos\/[^/]+\/[^/]+\/quality$/.test(path)) return false;
