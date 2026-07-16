@@ -16,27 +16,17 @@ const apiHeaders = (env: Env) => ({ authorization: `Bearer ${env.LOOPOVER_API_TO
 
 const ADVISORY_ON = { slop: false, e2eTestGen: false, planner: false, summaries: false, chatQa: true, chatQaFrontierFallback: false, intentRouting: false };
 
-async function generatePrivateKeyPem(): Promise<string> {
-  const key = (await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
-  const exported = await crypto.subtle.exportKey("pkcs8", key.privateKey);
-  const base64 = Buffer.from(exported as ArrayBuffer).toString("base64").replace(/(.{64})/g, "$1\n");
-  return `-----BEGIN PRIVATE KEY-----\n${base64}\n-----END PRIVATE KEY-----`;
-}
-
 // advisoryAiRouting is config-as-code only (never DB-writable via upsertRepositorySettings, #6489) --
-// enable chatQa the real way, through the repo's published `.loopover.yml` raw-fetch, same as production
-// (mirrors test/unit/queue-5.test.ts's #4595 chat-dispatch test).
+// enable chatQa the real way, through the repo's published `.loopover.yml` raw-fetch, same as production.
+// This is a plain, unauthenticated raw.githubusercontent.com read (no installation-token exchange), so no
+// GitHub App private key is needed to stub it -- unlike test/unit/queue-5.test.ts's #4595 chat-dispatch
+// test, which also drives a real GitHub API call downstream and does need one.
 function stubChatQaManifestFetch() {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = input.toString();
     if (url.includes("raw.githubusercontent.com") && url.includes(".loopover.yml")) {
       return new Response("settings:\n  advisoryAiRouting:\n    chatQa: true\n", { status: 200 });
     }
-    if (url.includes("/access_tokens")) return Response.json({ token: "fake-installation-token" });
     return new Response("not found", { status: 404 });
   });
 }
@@ -104,10 +94,16 @@ describe("POST /v1/repos/:owner/:repo/pulls/:number/chat-qa (#6489)", () => {
     vi.resetModules();
     const generateChatQaAnswer = vi.fn().mockResolvedValue({ status: "ok", model: "test-model", estimatedNeurons: 12, text: "This PR is blocked on a failing check." });
     vi.doMock("../../src/services/ai-chat-qa", () => ({ generateChatQaAnswer }));
+    const fixtureBundle = { run: { status: "completed" }, actions: [], contextSnapshots: [], summary: "" };
+    const planNextWork = vi.fn().mockResolvedValue(fixtureBundle);
+    vi.doMock("../../src/services/agent-orchestrator", async () => {
+      const actual = await vi.importActual<typeof import("../../src/services/agent-orchestrator")>("../../src/services/agent-orchestrator");
+      return { ...actual, planNextWork };
+    });
     const { createApp: createMockedApp } = await import("../../src/api/routes");
     const mockedApp = createMockedApp();
 
-    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    const env = createTestEnv();
     await seedRepoWithPull(env, { authorLogin: "a-contributor" });
     stubChatQaManifestFetch();
 
@@ -115,9 +111,11 @@ describe("POST /v1/repos/:owner/:repo/pulls/:number/chat-qa (#6489)", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ status: "ok", model: "test-model", estimatedNeurons: 12, text: "This PR is blocked on a failing check." });
 
+    expect(planNextWork).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ login: "a-contributor", repoFullName: "owner/repo" }));
     expect(generateChatQaAnswer).toHaveBeenCalledTimes(1);
     const [, request] = generateChatQaAnswer.mock.calls[0]!;
     expect(request).toMatchObject({
+      bundle: fixtureBundle,
       question: "why is this blocked?",
       advisoryAiRouting: ADVISORY_ON,
       repoFullName: "owner/repo",
@@ -125,7 +123,6 @@ describe("POST /v1/repos/:owner/:repo/pulls/:number/chat-qa (#6489)", () => {
       actor: "api",
       route: "app.maintainer_dashboard.chat_qa",
     });
-    expect(request.bundle).toBeTruthy();
   });
 
   it("falls back to the caller's own actor as the grounding login when the pull request has no cached author", async () => {
