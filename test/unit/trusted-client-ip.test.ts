@@ -99,8 +99,15 @@ describe("trusted-client-ip (self-host rate-limit identity)", () => {
     expect(resolveTrustedClientIp("2001:db8::1::2", new Headers())).toBe("unknown-ip");
     expect(resolveTrustedClientIp("1:2:3:4:5:6:7:8:9", new Headers())).toBe("unknown-ip");
     expect(resolveTrustedClientIp("2001:db8::zzzz", new Headers())).toBe("unknown-ip");
+    // Segment longer than 4 hex digits passes the outer charset but fails per-segment validation.
+    expect(resolveTrustedClientIp("2001:db8::12345", new Headers())).toBe("unknown-ip");
+    // Dot-containing IPv6 form: outer charset allows `.`, per-segment hex check rejects.
+    expect(resolveTrustedClientIp("2001:db8::1.2", new Headers())).toBe("unknown-ip");
     expect(resolveTrustedClientIp("notaip", new Headers())).toBe("unknown-ip");
     expect(resolveTrustedClientIp("[2001:db8::1", new Headers())).toBe("unknown-ip");
+    // Whitespace-only / trim edge cases.
+    expect(resolveTrustedClientIp("  ", new Headers())).toBe("unknown-ip");
+    expect(resolveTrustedClientIp("  203.0.113.50  ", new Headers())).toBe("203.0.113.50");
   });
 
   it("classifies expanded loopback and unique-local IPv6 peers", () => {
