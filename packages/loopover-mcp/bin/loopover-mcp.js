@@ -11,6 +11,7 @@ import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "../lib/cli-error.js";
+import { redactKnownLocalPaths, redactLocalPath } from "../lib/redact-local-path.js";
 
 // Read name/version from this package's own package.json (always present in any install --
 // global, npx, or local -- npm ships it regardless of the "files" allowlist) instead of hand-synced
@@ -3707,15 +3708,8 @@ function parseDurationMs(value) {
 function sanitizeValidationText(value, maxLength = 240) {
   const text = String(value ?? "").replace(/[\r\n\t]+/g, " ").trim();
   if (!text) return undefined;
-  const redacted = redactPrivateValidationMetrics(redactLocalValidationPaths(text));
+  const redacted = redactPrivateValidationMetrics(redactLocalPath(text));
   return redacted.length <= maxLength ? redacted : `${redacted.slice(0, maxLength - 3)}...`;
-}
-
-function redactLocalValidationPaths(text) {
-  const pathSegment = "[^\\\\/\\s\"'`,;)]+(?:\\s+[^\\\\/\\s\"'`,;)]+)*(?=[\\\\/])";
-  const pathTail = "[^\\\\/\\s\"'`,;)]+";
-  const localPathPattern = new RegExp(`(^|[\\s"'\\\`=])((?:~[\\\\/]|[A-Za-z]:[\\\\/]|/)(?:${pathSegment}[\\\\/])*${pathTail})`, "g");
-  return text.replace(localPathPattern, (_, prefix) => `${prefix}<local-path>`);
 }
 
 function redactPrivateValidationMetrics(text) {
@@ -3943,7 +3937,7 @@ function isForbiddenCacheKey(key) {
 }
 
 function sanitizeCacheString(value) {
-  return redactPrivateValidationMetrics(redactLocalValidationPaths(sanitizeDiagnosticText(value)));
+  return redactPrivateValidationMetrics(redactLocalPath(sanitizeDiagnosticText(value)));
 }
 
 function decisionPackCacheFiles() {
@@ -4032,30 +4026,16 @@ function findExecutable(name) {
 }
 
 function sanitizeDiagnosticText(value, extraPaths = []) {
-  if (value === undefined || value === null) return value;
-  let text = String(value);
-  const sensitiveValues = [
-    process.env.LOOPOVER_API_TOKEN,
-    process.env.LOOPOVER_MCP_TOKEN,
-    process.env.LOOPOVER_TOKEN,
-    config.session?.token,
-    ...profileSessions(config).map((entry) => entry.session.token),
-  ].filter((candidate) => typeof candidate === "string" && candidate.length > 0);
-  for (const token of sensitiveValues) {
-    text = text.split(token).join("[redacted]");
-  }
-  const localPaths = [
-    configPath,
-    process.env.LOOPOVER_CONFIG_PATH,
-    process.env.LOOPOVER_CONFIG_DIR,
-    process.cwd(),
-    homedir(),
-    ...extraPaths,
-  ].filter((candidate) => typeof candidate === "string" && candidate.length > 1);
-  for (const localPath of localPaths.sort((left, right) => right.length - left.length)) {
-    text = text.split(localPath).join("[local-path]");
-  }
-  return text;
+  return redactKnownLocalPaths(value, {
+    tokens: [
+      process.env.LOOPOVER_API_TOKEN,
+      process.env.LOOPOVER_MCP_TOKEN,
+      process.env.LOOPOVER_TOKEN,
+      config.session?.token,
+      ...profileSessions(config).map((entry) => entry.session.token),
+    ],
+    paths: [configPath, process.env.LOOPOVER_CONFIG_PATH, process.env.LOOPOVER_CONFIG_DIR, process.cwd(), homedir(), ...extraPaths],
+  });
 }
 
 function loadConfig() {

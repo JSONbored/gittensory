@@ -3,8 +3,10 @@ import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isCodeFile, isTestPath as isTestFile } from "@loopover/engine/signals/test-evidence";
+import { redactLocalPath } from "./redact-local-path.js";
 
 export { isCodeFile, isTestFile };
+export { redactLocalPath };
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -209,14 +211,6 @@ export function referenceScorePreviewExample(kind = "metadata") {
   const script = kind === "gittensor" ? "gittensor-score-preview.py" : "gittensor-score-preview.mjs";
   const interpreter = kind === "gittensor" ? "python3" : "node";
   return `${interpreter} ./node_modules/@loopover/mcp/scripts/${script}`;
-}
-
-export function redactLocalPath(value) {
-  const text = String(value ?? "");
-  if (!text) return text;
-  return text
-    .replace(/(?:~\/|[A-Za-z]:\\)[^\s"'`,;)]+/g, "<local-path>")
-    .replace(/(^|[\s"'`=])\/(?:[^\s"'`,;)]+(?:\/[^\s"'`,;)]+)*)/g, (_, prefix) => `${prefix}<local-path>`);
 }
 
 export function redactScorerCommand(command) {
