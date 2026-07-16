@@ -21,8 +21,6 @@ function isGovernorPauseState(value: unknown): value is GovernorPauseState {
   );
 }
 
-export const defaultGovernorPauseState = (): GovernorPauseState => ({ paused: false, reason: null, pausedAt: null });
-
 async function parseGovernorPauseStateResponse(
   response: Response,
   apiLabel: string,

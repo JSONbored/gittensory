@@ -1,16 +1,18 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  emptyLedgersSummary,
-  fetchLedgers,
-  LEDGERS_API_PATH,
-  type LedgersResult,
-  type LedgersSummary,
-} from "./lib/ledgers";
-import { defaultGovernorPauseState, type GovernorPauseState, type GovernorPauseStateResult } from "./lib/governor";
+import { fetchLedgers, LEDGERS_API_PATH, type LedgersResult, type LedgersSummary } from "./lib/ledgers";
+import { type GovernorPauseState, type GovernorPauseStateResult } from "./lib/governor";
 import { LedgersPage, LedgersView } from "./routes/ledgers";
 import { handleLedgersRequest, type LedgersApiDeps } from "../vite-ledgers-api";
+
+// Test-local fixture factories (were lib exports reachable only from tests; moved here per #6187).
+const emptyLedgersSummary = (): LedgersSummary => ({
+  claims: { total: 0, byStatus: { active: 0, released: 0, expired: 0 } },
+  events: { total: 0, byType: {}, recent: [] },
+  governor: { total: 0, byEventType: {} },
+});
+const defaultGovernorPauseState = (): GovernorPauseState => ({ paused: false, reason: null, pausedAt: null });
 
 const fixtureSummary: LedgersSummary = {
   claims: { total: 3, byStatus: { active: 2, released: 1, expired: 0 } },

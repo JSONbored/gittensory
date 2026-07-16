@@ -18,12 +18,6 @@ export type LedgersSummary = { claims: ClaimsSummary; events: EventsSummary; gov
 
 export type LedgersResult = { ok: true; summary: LedgersSummary } | { ok: false; error: string };
 
-export const emptyLedgersSummary = (): LedgersSummary => ({
-  claims: { total: 0, byStatus: { active: 0, released: 0, expired: 0 } },
-  events: { total: 0, byType: {}, recent: [] },
-  governor: { total: 0, byEventType: {} },
-});
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

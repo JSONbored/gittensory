@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  defaultGovernorPauseState,
   fetchGovernorPauseState,
   GOVERNOR_PAUSE_API_PATH,
   GOVERNOR_PAUSE_STATE_API_PATH,
@@ -19,6 +18,9 @@ import {
   matchGovernorRoute,
   type GovernorApiDeps,
 } from "../vite-governor-api";
+
+// Test-local fixture factory (was a lib export reachable only from tests; moved here per #6187).
+const defaultGovernorPauseState = (): GovernorPauseState => ({ paused: false, reason: null, pausedAt: null });
 
 const pausedState: GovernorPauseState = {
   paused: true,

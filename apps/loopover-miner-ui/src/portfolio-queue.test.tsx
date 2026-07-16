@@ -2,7 +2,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  emptyPortfolioQueueSummary,
   fetchPortfolioQueue,
   PORTFOLIO_QUEUE_API_PATH,
   type PortfolioQueueResult,
@@ -10,6 +9,14 @@ import {
 } from "./lib/portfolio-queue";
 import { PortfolioPage, PortfolioQueueView } from "./routes/portfolio";
 import { handlePortfolioQueueRequest, type PortfolioQueueApiDeps } from "../vite-portfolio-queue-api";
+
+// Test-local fixture factory (was a lib export reachable only from tests; moved here per #6187).
+const emptyPortfolioQueueSummary = (): PortfolioQueueSummary => ({
+  total: 0,
+  byStatus: { queued: 0, in_progress: 0, done: 0 },
+  repos: [],
+  oldestQueuedAgeMs: null,
+});
 
 const fixtureSummary: PortfolioQueueSummary = {
   total: 4,

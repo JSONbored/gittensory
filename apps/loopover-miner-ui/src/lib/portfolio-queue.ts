@@ -51,13 +51,6 @@ function isPortfolioQueueSummary(value: unknown): value is PortfolioQueueSummary
   );
 }
 
-export const emptyPortfolioQueueSummary = (): PortfolioQueueSummary => ({
-  total: 0,
-  byStatus: { queued: 0, in_progress: 0, done: 0 },
-  repos: [],
-  oldestQueuedAgeMs: null,
-});
-
 /** Fetch the local queue summary; failures surface as a typed error result the view renders, never a crash. */
 export async function fetchPortfolioQueue(fetchImpl: typeof fetch = fetch): Promise<PortfolioQueueResult> {
   try {
