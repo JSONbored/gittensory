@@ -20,6 +20,9 @@ import {
   // #6269: the same manifest-validation builder the remote server uses, so `loopover_validate_config`
   // can validate a `.loopover.yml` in-process instead of round-tripping to the API.
   buildFocusManifestValidation,
+  // #6150: the same deterministic token-score computation the remote server's loopover_run_local_scorer
+  // wraps, so it works fully offline here too.
+  computeLocalScorerTokens,
 } from "@loopover/engine";
 import { buildSlopAssessment, SLOP_RUBRIC_MARKDOWN } from "@loopover/engine/signals/slop";
 import { z } from "zod";
@@ -103,6 +106,109 @@ const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage
 // purpose. Do not "sync" it to the engine list.
 const MAINTAIN_ACTION_CLASSES = ["review", "request_changes", "approve", "merge", "close", "label"];
 const MAINTAIN_AUTONOMY_LEVELS = ["observe", "auto_with_approval", "auto"];
+
+// #6150 — plan-DAG step tracking for loopover_build_plan/loopover_plan_status/loopover_record_step_result.
+// Hand-duplicated from src/services/plan-dag.ts (packages/loopover-engine/src/services/plan-dag.ts is NOT
+// where it lives -- this module was never extracted to @loopover/engine, so there is nothing to import from
+// the published package's export map), same rationale as MAINTAIN_ACTION_CLASSES/AUTONOMY_LEVELS above: this
+// file resolves @loopover/engine through the published package, whose export map does not surface it.
+// PURE + stateless (no DB, no repo/network access) -- the harness performs each step's real work and calls
+// loopover_record_step_result to report it back; this only advances the in-memory state machine the caller
+// passes in and gets back on every call.
+const DEFAULT_PLAN_MAX_ATTEMPTS = 1;
+
+function buildPlanDag(steps) {
+  return {
+    steps: steps.map((step) => ({
+      id: step.id,
+      title: step.title,
+      ...(step.actionClass !== undefined ? { actionClass: step.actionClass } : {}),
+      dependsOn: [...new Set((step.dependsOn ?? []).filter((dep) => dep !== step.id))],
+      status: "pending",
+      attempts: 0,
+      maxAttempts: Math.min(10, Math.max(1, Math.trunc(step.maxAttempts ?? DEFAULT_PLAN_MAX_ATTEMPTS))),
+    })),
+  };
+}
+
+function validatePlanDag(plan) {
+  const errors = [];
+  const ids = plan.steps.map((step) => step.id);
+  const idSet = new Set(ids);
+  if (idSet.size !== ids.length) errors.push("duplicate step ids");
+  for (const step of plan.steps) {
+    for (const dep of step.dependsOn) {
+      if (!idSet.has(dep)) errors.push(`step ${step.id} depends on unknown step ${dep}`);
+    }
+  }
+  const color = new Map();
+  const byId = new Map(plan.steps.map((step) => [step.id, step]));
+  const hasCycle = (id) => {
+    color.set(id, 1);
+    for (const dep of byId.get(id)?.dependsOn ?? []) {
+      const depColor = color.get(dep) ?? 0;
+      if (depColor === 1) return true;
+      if (depColor === 0 && byId.has(dep) && hasCycle(dep)) return true;
+    }
+    color.set(id, 2);
+    return false;
+  };
+  for (const step of plan.steps) {
+    if ((color.get(step.id) ?? 0) === 0 && hasCycle(step.id)) {
+      errors.push("plan has a dependency cycle");
+      break;
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+const isPlanStepDone = (status) => status === "completed" || status === "skipped";
+
+function nextReadySteps(plan) {
+  const statusById = new Map(plan.steps.map((step) => [step.id, step.status]));
+  return plan.steps.filter((step) => step.status === "pending" && step.dependsOn.every((dep) => isPlanStepDone(statusById.get(dep) ?? "pending")));
+}
+
+function mapPlanStep(plan, stepId, update) {
+  return { steps: plan.steps.map((step) => (step.id === stepId ? update(step) : step)) };
+}
+
+function applyStepResult(plan, stepId, result) {
+  return mapPlanStep(plan, stepId, (step) => {
+    if (isPlanStepDone(step.status) || step.status === "failed") return step;
+    if (result.outcome === "completed") return { ...step, status: "completed", lastError: null };
+    if (result.outcome === "skipped") return { ...step, status: "skipped", lastError: null };
+    const attempts = step.attempts + 1;
+    const exhausted = attempts >= step.maxAttempts;
+    return { ...step, attempts, status: exhausted ? "failed" : "pending", lastError: result.error ?? "step failed" };
+  });
+}
+
+function planProgress(plan) {
+  const count = (status) => plan.steps.filter((step) => step.status === status).length;
+  const completed = count("completed");
+  const skipped = count("skipped");
+  const failed = count("failed");
+  const running = count("running");
+  const pending = count("pending");
+  const total = plan.steps.length;
+  let status;
+  if (total > 0 && completed + skipped === total) status = "completed";
+  else if (failed > 0) status = "failed";
+  else if (running > 0) status = "running";
+  else if (pending > 0 && nextReadySteps(plan).length === 0) status = "blocked";
+  else status = "pending";
+  return { total, completed, failed, running, pending, skipped, status };
+}
+
+function planView(plan) {
+  return {
+    plan,
+    progress: planProgress(plan),
+    readySteps: nextReadySteps(plan).map((step) => ({ id: step.id, title: step.title })),
+    validation: validatePlanDag(plan),
+  };
+}
 const AGENT_PROFILES = {
   "miner-planner": {
     id: "miner-planner",
@@ -425,6 +531,78 @@ const checkIssueSlopShape = {
   body: z.string().max(40000).optional(),
 };
 
+// #6150 — loopover_run_local_scorer's input, mirroring the remote server's changedFileSchema/validationEntrySchema.
+const localScorerChangedFileShape = z
+  .object({
+    path: z.string().min(1).max(400),
+    previousPath: z.string().min(1).max(400).optional(),
+    additions: z.number().int().min(0).optional(),
+    deletions: z.number().int().min(0).optional(),
+    status: z.enum(["added", "modified", "deleted", "renamed", "copied", "unknown"]).optional(),
+    binary: z.boolean().optional(),
+  })
+  .strict();
+const localScorerValidationShape = z
+  .object({
+    command: z.string().min(1).max(400),
+    status: z.enum(["passed", "failed", "not_run", "skipped", "focused", "unknown"]),
+    summary: z.string().max(2000).optional(),
+    durationMs: z.number().int().min(0).optional(),
+    exitCode: z.number().int().min(0).optional(),
+  })
+  .strict();
+const runLocalScorerShape = {
+  changedFiles: z.array(localScorerChangedFileShape).min(1).max(500),
+  validation: z.array(localScorerValidationShape).max(50).optional(),
+};
+
+// #6150 — loopover_build_plan/loopover_plan_status/loopover_record_step_result's input, mirroring the remote
+// server's rawPlanStepSchema/planStepSchema/planDagSchema (src/mcp/server.ts).
+const rawPlanStepShape = z
+  .object({
+    id: z.string().min(1).max(100),
+    title: z.string().min(1).max(300),
+    actionClass: z.string().min(1).max(60).optional(),
+    dependsOn: z.array(z.string().min(1).max(100)).max(50).optional(),
+    maxAttempts: z.number().int().min(1).max(10).optional(),
+  })
+  .strict();
+const planStepShape = z
+  .object({
+    id: z.string().min(1).max(100),
+    title: z.string().min(1).max(300),
+    actionClass: z.string().min(1).max(60).optional(),
+    dependsOn: z.array(z.string().min(1).max(100)).max(50),
+    status: z.enum(["pending", "running", "completed", "failed", "skipped"]),
+    attempts: z.number().int().min(0),
+    maxAttempts: z.number().int().min(1).max(10),
+    lastError: z.string().max(2000).nullable().optional(),
+  })
+  .strict();
+const planDagShape = z.object({ steps: z.array(planStepShape).max(100) }).strict();
+const buildPlanShape = { steps: z.array(rawPlanStepShape).min(1).max(100) };
+const planStatusShape = { plan: planDagShape };
+const recordStepResultShape = {
+  plan: planDagShape,
+  stepId: z.string().min(1).max(100),
+  outcome: z.enum(["completed", "failed", "skipped"]),
+  error: z.string().max(2000).optional(),
+};
+
+// #6150 — loopover_predict_gate's input, mirroring the remote server's predictGateShape. Metadata-only (no
+// git/workspace context needed): predicts the gate outcome for a PLANNED PR before any local code exists, the
+// same use case loopover_preflight_pr already serves for lane/duplicate/linked-issue checks.
+const predictGateShape = {
+  login: z.string().min(1),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  title: z.string().min(1),
+  body: z.string().max(40000).optional(),
+  labels: z.array(z.string()).max(50).optional(),
+  linkedIssues: z.array(z.number().int().positive()).max(50).optional(),
+  changedPaths: z.array(z.string().min(1).max(400)).max(500).optional(),
+};
+
 const preflightShape = {
   repoFullName: z.string().min(3),
   contributorLogin: z.string().min(1).optional(),
@@ -645,6 +823,33 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_check_issue_slop",
     category: "review",
     description: "Assess the deterministic slop risk of an issue from its title + body alone (no repo data) — flags clearly low-effort issues (empty body, an unfilled template) for triage. Returns slopRisk (0-100), band, findings, and the rubric. Advisory-only.",
+  },
+  // #6150 — the miner-auto-dev profile's plan-DAG + local-scorer + gate-prediction tools, previously listed in
+  // recommendedTools below but never actually registered.
+  {
+    name: "loopover_run_local_scorer",
+    category: "branch",
+    description: "Compute deterministic source/test/non-code token scores from local changed-file metadata + validation results — no repo/contributor access, reveals nothing beyond a computation on the caller's own diff stats. Pass the result as the localScorer field of loopover_preview_local_pr_score or the analyze tools to score this branch in external_command mode. Computed in-process; no API round-trip.",
+  },
+  {
+    name: "loopover_build_plan",
+    category: "agent",
+    description: "Build a normalized step DAG (dependencies, retry limits) from a raw list of steps and validate it for cycles/unknown dependencies. Returns the plan, its progress, the currently-ready steps, and validation. Computed in-process; no API round-trip.",
+  },
+  {
+    name: "loopover_plan_status",
+    category: "agent",
+    description: "Return a plan's current progress, the next ready steps, and validation status. Takes the plan object returned by loopover_build_plan or a prior loopover_record_step_result call. Computed in-process; no API round-trip.",
+  },
+  {
+    name: "loopover_record_step_result",
+    category: "agent",
+    description: "Record the outcome (completed/failed/skipped) of a plan step the harness just ran and return the updated plan. A failed step retries (back to pending) until its maxAttempts is exhausted. Computed in-process; no API round-trip.",
+  },
+  {
+    name: "loopover_predict_gate",
+    category: "review",
+    description: "Predict the LoopOver gate outcome for a planned PR before any local code exists — the same advisory + gate evaluation the maintainer pipeline runs, using only the repo's public .loopover.yml policy. Takes login, owner, repo, title, and optional body/labels/linkedIssues/changedPaths. Metadata-only, no source upload.",
   },
   {
     name: "loopover_preflight_local_diff",
@@ -1144,6 +1349,75 @@ registerStdioTool(
     inputSchema: checkIssueSlopShape,
   },
   async (input) => toolResult("LoopOver issue-slop self-check.", await apiPost("/v1/lint/issue-slop", input)),
+);
+
+registerStdioTool(
+  "loopover_run_local_scorer",
+  {
+    description: stdioToolDescription("loopover_run_local_scorer"),
+    inputSchema: runLocalScorerShape,
+  },
+  // Computed in-process from @loopover/engine (#6150) — matches the remote server's own
+  // computeLocalScorerTokens call (src/mcp/server.ts) with no API round-trip, so token scoring works fully
+  // offline.
+  (input) => toolResult("LoopOver local token scores.", computeLocalScorerTokens(input)),
+);
+
+registerStdioTool(
+  "loopover_build_plan",
+  {
+    description: stdioToolDescription("loopover_build_plan"),
+    inputSchema: buildPlanShape,
+  },
+  // Computed in-process (#6150) — matches the remote server's own buildPlanDag call (src/mcp/server.ts)
+  // with no API round-trip; the plan-DAG logic itself is hand-duplicated above (see its own comment).
+  (input) => toolResult("LoopOver plan built.", planView(buildPlanDag(input.steps))),
+);
+
+registerStdioTool(
+  "loopover_plan_status",
+  {
+    description: stdioToolDescription("loopover_plan_status"),
+    inputSchema: planStatusShape,
+  },
+  (input) => toolResult("LoopOver plan status.", planView(input.plan)),
+);
+
+registerStdioTool(
+  "loopover_record_step_result",
+  {
+    description: stdioToolDescription("loopover_record_step_result"),
+    inputSchema: recordStepResultShape,
+  },
+  (input) =>
+    toolResult(
+      "LoopOver plan step result recorded.",
+      planView(applyStepResult(input.plan, input.stepId, { outcome: input.outcome, ...(input.error !== undefined ? { error: input.error } : {}) })),
+    ),
+);
+
+registerStdioTool(
+  "loopover_predict_gate",
+  {
+    description: stdioToolDescription("loopover_predict_gate"),
+    inputSchema: predictGateShape,
+  },
+  // Metadata-only proxy to the same route the branch-analysis tools already use (#6150) — that route computes
+  // predictedGate via buildPredictedGateVerdict (the identical logic the remote loopover_predict_gate tool
+  // uses) and returns it as a top-level field; no local git/workspace context is needed for this shape.
+  async (input) => {
+    const body = {
+      login: input.login,
+      repoFullName: `${input.owner}/${input.repo}`,
+      title: input.title,
+      ...(input.body !== undefined ? { body: input.body } : {}),
+      ...(input.labels !== undefined ? { labels: input.labels } : {}),
+      ...(input.linkedIssues !== undefined ? { linkedIssues: input.linkedIssues } : {}),
+      ...(input.changedPaths !== undefined ? { changedFiles: input.changedPaths.map((path) => ({ path })) } : {}),
+    };
+    const result = await apiPost("/v1/local/branch-analysis", body);
+    return toolResult(`LoopOver predicted gate for ${input.owner}/${input.repo}.`, result.predictedGate);
+  },
 );
 
 registerStdioTool(
