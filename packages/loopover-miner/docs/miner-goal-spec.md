@@ -1,5 +1,9 @@
 # MinerGoalSpec (`.loopover-miner.yml`)
 
+> Also published on the docs website: [MinerGoalSpec](https://loopover.ai/docs/ams-goal-spec)
+> (same content, rendered with search and the rest of the maintainer docs nav). This file remains
+> the canonical source and ships inside the published `@loopover/miner` package.
+
 Per-repo configuration telling an autonomous LoopOver miner what to look for and how to behave when targeting a repo. Parsed by `@loopover/engine` (`parseMinerGoalSpec` / `parseMinerGoalSpecContent`); this document is the field reference. Machine-readable shape: [`../schema/miner-goal-spec.schema.json`](../schema/miner-goal-spec.schema.json). Copy [`.loopover-miner.yml.example`](../../../.loopover-miner.yml.example) to `.loopover-miner.yml` and edit.
 
 Discovery order (first match wins):

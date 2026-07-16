@@ -1,0 +1,128 @@
+---
+title: "MinerGoalSpec (.loopover-miner.yml)"
+description: Per-repo configuration telling an autonomous LoopOver miner what to look for and how to behave when targeting a repo -- the full field reference.
+---
+
+Per-repo configuration telling an autonomous LoopOver miner what to look for and how to behave
+when targeting a repo. Parsed by `@loopover/engine` (`parseMinerGoalSpec` /
+`parseMinerGoalSpecContent`); this page is the field reference. Machine-readable shape:
+`packages/loopover-miner/schema/miner-goal-spec.schema.json`. Copy
+`.loopover-miner.yml.example` (repo root) to `.loopover-miner.yml` and edit.
+
+Discovery order (first match wins):
+
+- `.loopover-miner.yml`
+- `.github/loopover-miner.yml`
+- `.loopover-miner.json`
+- `.github/loopover-miner.json`
+
+<Callout variant="note">
+  Every field is optional. Unknown keys are ignored; a malformed field falls back to its
+  documented default with a warning — a broken file never hard-fails the miner.
+</Callout>
+
+## Relationship to `.loopover.yml`
+
+<FeatureRow
+  items={[
+    {
+      title: ".loopover.yml (review stack)",
+      description:
+        "How a maintainer's repo reviews incoming PRs (focus manifest, gate, scoring knobs).",
+    },
+    {
+      title: ".loopover-miner.yml (miner runtime)",
+      description:
+        "How a miner searches for and prioritizes work in a target repo. Unrelated naming concern -- not affected by the review-config naming above.",
+    },
+  ]}
+/>
+
+They are read by different components and do not conflict. A miner should still treat a target
+repo's public `.loopover.yml` `wantedPaths` / `blockedPaths` as a hard floor when both files
+exist.
+
+## Fields
+
+### `minerEnabled` (boolean, default: `true`)
+
+Explicit opt-out: a public repo with no file remains minable. Set `false` to halt all miner
+targeting.
+
+### `wantedPaths` (string list, default: `[]`)
+
+Work areas the maintainer wants a miner to focus on. Glob list. Empty means no preference.
+
+### `blockedPaths` (string list, default: `[]`)
+
+Paths off-limits to a miner; candidates touching one should be skipped. Glob list. Mirrors
+`.loopover.yml` `blockedPaths` semantics.
+
+### `preferredLabels` (string list, default: `[]`)
+
+Issue labels a miner should favor. Empty means no preference.
+
+### `blockedLabels` (string list, default: `[]`)
+
+Issue labels a miner must skip.
+
+### `maxConcurrentClaims` (integer `>= 1`, default: `1`)
+
+Maximum issues one miner may hold claimed on this repo at once.
+
+### `issueDiscoveryPolicy` (`encouraged` | `neutral` | `discouraged`, default: `neutral`)
+
+How strongly this repo encourages a miner to open discovery issues.
+
+### `feasibilityGate` (object, default: `{ enabled: true, suppressedReasons: [] }`)
+
+Per-repo tuning for the feasibility gate (`buildFeasibilityVerdict`) a miner consults before
+starting work. This is config-parsing surface only — a caller wiring the gate into a decision
+flow is responsible for reading and applying this policy.
+
+- `enabled` (boolean, default: `true`) — whether the feasibility gate is consulted at all before a
+  miner starts work.
+- `suppressedReasons` (string list, default: `[]`) — specific avoid/raise reason codes (e.g.
+  `duplicate_cluster_high`) this repo wants ignored.
+
+### `selfPlagiarism` (object, default: `{ similarityThreshold: 0.85 }`)
+
+Per-repo tuning for the Governor self-plagiarism throttle consulted before `open_pr`. Compares a
+prospective PR's diff fingerprint against the miner's own recent submission history.
+
+- `similarityThreshold` (number in `[0, 1]`, default: `0.85`) — Jaccard similarity at/above which
+  two fingerprints read as near-duplicates across repos.
+
+### `killSwitch` (object, default: `{ paused: false }`)
+
+Per-repo kill-switch consulted by the Governor chokepoint before every write action.
+
+<Callout variant="note">
+  Distinct from `minerEnabled`: `minerEnabled` is a discovery-time opt-out (a miner never even
+  considers the repo), while `killSwitch.paused` is a runtime halt of an already-in-flight queue —
+  un-pausing resumes exactly where the queue left off. A separate, operator-controlled GLOBAL
+  kill-switch (env var `LOOPOVER_MINER_KILL_SWITCH`) halts every repo at once and always wins over
+  this per-repo flag.
+</Callout>
+
+- `paused` (boolean, default: `false`) — halts all miner WRITE actions for this repo without
+  deregistering it from targeting/discovery.
+
+### `execution` (object, default: `{ liveModeOptIn: null }`)
+
+Per-repo dry-run/live execution opt-in consulted by the Governor chokepoint.
+
+<Callout variant="warn">
+  A freshly-configured miner always defaults to dry-run (observe/log only, never execute a
+  write) — this field is the only per-repo path to live mode, and it alone is not sufficient: the
+  miner's own operator must also separately opt in globally (env var
+  `LOOPOVER_MINER_LIVE_MODE=live`) before writes actually execute. A repo that wants to guarantee
+  it never receives live automated writes, regardless of any operator's global setting, should use
+  `killSwitch.paused: true` instead — the kill-switch always takes precedence over any live-mode
+  opt-in.
+</Callout>
+
+- `liveModeOptIn` (string or `null`, default: `null`) — must equal EXACTLY the literal `"live"` to
+  opt in. Any other value (a typo, `"yes"`, `"on"`, or a boolean `true` from a malformed file) is
+  treated as not opted in — deliberately not a boolean flag, so a fat-fingered config can never
+  accidentally enable live writes.
