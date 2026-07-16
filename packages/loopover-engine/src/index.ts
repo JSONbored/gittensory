@@ -420,6 +420,14 @@ export type { CollisionItem } from "./types/predicted-gate-types.js";
 // `./signals/engine.js` — that file is excluded from this package's tsc emit (host-bound imports) and
 // pulling it into the public barrel breaks `npm run build` (closed #6139).
 export { buildIssueQualityReport } from "./signals/issue-quality-report.js";
+// Deterministic PR-text-lint rubric (#549), extracted from the host-bound `signals/engine.ts` (#6268) so the
+// published loopover-mcp CLI can compute `loopover_lint_pr_text` in-process instead of proxying over HTTP.
+export {
+  buildPrTextLint,
+  type PrTextLintComponent,
+  type PrTextLintInput,
+  type PrTextLintReport,
+} from "./signals/pr-text-lint.js";
 // Unlinked-issue candidate pre-filter (#4883), extracted out of src/signals/unlinked-issue-candidates.ts so the
 // miner's self-review can run the SAME deterministic recall pass the maintainer gate uses to flag a PR's
 // likely-but-unlinked issue, instead of a driftable copy. PURE — no IO, no AI call.

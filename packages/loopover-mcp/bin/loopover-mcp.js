@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { buildFeasibilityVerdict } from "@loopover/engine";
+import { buildFeasibilityVerdict, buildPrTextLint } from "@loopover/engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -476,7 +476,7 @@ const STDIO_TOOL_DESCRIPTORS = [
   },
   {
     name: "loopover_lint_pr_text",
-    description: "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. No source upload.",
+    description: "Lint a commit message + PR body against the gittensor traceability/no-issue-rationale and Conventional Commit rubric before submitting. Returns a deterministic verdict (strong/adequate/weak) plus specific public-safe fixes. Computed in-process; no source upload and no API round-trip.",
   },
   {
     name: "loopover_validate_config",
@@ -810,7 +810,9 @@ registerStdioTool(
     description: stdioToolDescription("loopover_lint_pr_text"),
     inputSchema: lintPrTextShape,
   },
-  async (input) => toolResult("LoopOver PR-text lint.", await apiPost("/v1/lint/pr-text", input)),
+  // Computed in-process from @loopover/engine (#6268) — matches the remote server's own buildPrTextLint
+  // call (src/mcp/server.ts) with no API round-trip, so PR-text lint works fully offline.
+  (input) => toolResult("LoopOver PR-text lint.", buildPrTextLint(input)),
 );
 
 registerStdioTool(
