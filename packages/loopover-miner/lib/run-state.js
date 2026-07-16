@@ -63,6 +63,19 @@ function addApiBaseUrlScope(db) {
   db.exec("ALTER TABLE miner_run_state_v2 RENAME TO miner_run_state");
 }
 
+// v2 -> v3 (#4939): additive tenant-scoping column, a prerequisite for any hosted, multi-tenant use of this
+// same store's logic. NULL for every row today -- self-host behavior is byte-identical, since nothing reads or
+// writes it yet (no consumer exists until a future hosted deployment populates it). Same defensive
+// column-presence guard as every other additive migration in this file's siblings (e.g.
+// portfolio-queue.js's v3->v4 attempts_count addition).
+function addTenantIdColumn(db) {
+  const hasTenantIdColumn = db
+    .prepare("PRAGMA table_info(miner_run_state)")
+    .all()
+    .some((column) => column.name === "tenant_id");
+  if (!hasTenantIdColumn) db.exec("ALTER TABLE miner_run_state ADD COLUMN tenant_id TEXT");
+}
+
 /**
  * Opens the 100% local/client-side miner run-state store. The database only lives on this machine;
  * this module never uploads, syncs, or phones home with its contents. (#2289, #5563)
@@ -78,7 +91,7 @@ export function initRunStateStore(dbPath = resolveRunStateDbPath()) {
     )
   `);
   // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations.
-  applySchemaMigrations(db, [addApiBaseUrlScope]);
+  applySchemaMigrations(db, [addApiBaseUrlScope, addTenantIdColumn]);
 
   const getStatement = db.prepare(
     "SELECT state FROM miner_run_state WHERE api_base_url = ? AND repo_full_name = ?",

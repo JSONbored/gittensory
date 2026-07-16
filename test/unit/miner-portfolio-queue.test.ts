@@ -565,5 +565,83 @@ describe("loopover-miner portfolio/queue store (#2292)", () => {
         reachedDone: false,
       });
     });
+
+    it("v4 -> v5 (#4939): adds an additive tenant_id column, NULL for every pre-existing row -- self-host behavior byte-identical", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-legacy-v4-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-v4.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_portfolio_queue (
+          api_base_url TEXT NOT NULL,
+          repo_full_name TEXT NOT NULL,
+          identifier TEXT NOT NULL,
+          priority REAL NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'in_progress', 'done')),
+          enqueued_at TEXT NOT NULL,
+          leased_at TEXT,
+          attempts_count INTEGER NOT NULL DEFAULT 0,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          reenqueue_count INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (api_base_url, repo_full_name, identifier)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 4");
+      legacy.exec(
+        "INSERT INTO miner_portfolio_queue (api_base_url, repo_full_name, identifier, priority, status, enqueued_at, leased_at, attempts_count, consecutive_failures, reenqueue_count) VALUES ('https://api.github.com', 'acme/widgets', 'issue:5', 3, 'queued', '2026-01-01T00:00:00.000Z', NULL, 0, 0, 0)",
+      );
+      legacy.close();
+
+      const store = initPortfolioQueueStore(dbPath);
+      stores.push(store);
+      // The pre-existing row is untouched by the additive migration -- no consumer reads tenant_id yet, so
+      // it isn't part of the public row shape; verified directly against the schema instead.
+      expect(store.listQueue("acme/widgets")).toEqual([
+        {
+          apiBaseUrl: "https://api.github.com",
+          repoFullName: "acme/widgets",
+          identifier: "issue:5",
+          priority: 3,
+          status: "queued",
+          enqueuedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]);
+      const readonly = new DatabaseSync(dbPath, { readOnly: true });
+      const columns = readonly.prepare("PRAGMA table_info(miner_portfolio_queue)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      const row = readonly.prepare("SELECT tenant_id FROM miner_portfolio_queue WHERE identifier = ?").get("issue:5") as { tenant_id: string | null };
+      expect(row.tenant_id).toBeNull();
+      readonly.close();
+    });
+
+    it("REGRESSION: a v4 file that (unusually) already carries tenant_id is not re-altered into a duplicate-column error", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-portfolio-legacy-partial-v5-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-partial-v5.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_portfolio_queue (
+          api_base_url TEXT NOT NULL,
+          repo_full_name TEXT NOT NULL,
+          identifier TEXT NOT NULL,
+          priority REAL NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'in_progress', 'done')),
+          enqueued_at TEXT NOT NULL,
+          leased_at TEXT,
+          attempts_count INTEGER NOT NULL DEFAULT 0,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          reenqueue_count INTEGER NOT NULL DEFAULT 0,
+          tenant_id TEXT,
+          PRIMARY KEY (api_base_url, repo_full_name, identifier)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 4");
+      legacy.close();
+
+      expect(() => {
+        const store = initPortfolioQueueStore(dbPath);
+        stores.push(store);
+      }).not.toThrow();
+    });
   });
 });

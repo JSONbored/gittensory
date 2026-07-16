@@ -295,5 +295,68 @@ describe("loopover-miner run-state store (#2289)", () => {
         store.close();
       }
     });
+
+    it("v2 -> v3 (#4939): adds an additive tenant_id column, NULL for every pre-existing row -- self-host behavior byte-identical", () => {
+      const dbPath = join(tempRoot(), "legacy-v2.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_run_state (
+          api_base_url TEXT NOT NULL,
+          repo_full_name TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('idle', 'discovering', 'planning', 'preparing')),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (api_base_url, repo_full_name)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 2");
+      legacy.exec(
+        "INSERT INTO miner_run_state (api_base_url, repo_full_name, state, updated_at) VALUES ('https://api.github.com', 'acme/widgets', 'planning', '2026-01-01T00:00:00.000Z')",
+      );
+      legacy.close();
+
+      const store = initRunStateStore(dbPath);
+      try {
+        // The pre-existing row is untouched -- no consumer reads tenant_id yet, so it isn't part of the
+        // public row shape; verified directly against the schema instead.
+        expect(store.listRunStates()).toEqual([
+          {
+            apiBaseUrl: "https://api.github.com",
+            repoFullName: "acme/widgets",
+            state: "planning",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]);
+      } finally {
+        store.close();
+      }
+      const readonly = new DatabaseSync(dbPath, { readOnly: true });
+      const columns = readonly.prepare("PRAGMA table_info(miner_run_state)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      const row = readonly.prepare("SELECT tenant_id FROM miner_run_state WHERE repo_full_name = ?").get("acme/widgets") as { tenant_id: string | null };
+      expect(row.tenant_id).toBeNull();
+      readonly.close();
+    });
+
+    it("REGRESSION: a v2 file that (unusually) already carries tenant_id is not re-altered into a duplicate-column error", () => {
+      const dbPath = join(tempRoot(), "legacy-partial-v3.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_run_state (
+          api_base_url TEXT NOT NULL,
+          repo_full_name TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('idle', 'discovering', 'planning', 'preparing')),
+          updated_at TEXT NOT NULL,
+          tenant_id TEXT,
+          PRIMARY KEY (api_base_url, repo_full_name)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 2");
+      legacy.close();
+
+      expect(() => {
+        const store = initRunStateStore(dbPath);
+        store.close();
+      }).not.toThrow();
+    });
   });
 });

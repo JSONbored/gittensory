@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   closeDefaultEventLedger,
@@ -182,6 +183,67 @@ describe("loopover-miner event ledger (#2290)", () => {
       const ledger = tempLedger();
       expect(() => ledger.purgeByRepo(undefined as never)).toThrow("invalid_repo_full_name");
       expect(() => ledger.purgeByRepo("no-slash")).toThrow("invalid_repo_full_name");
+    });
+  });
+
+  describe("schema migrations", () => {
+    it("v1 -> v2 (#4939): adds an additive tenant_id column, NULL for every pre-existing row -- self-host behavior byte-identical", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-event-legacy-v1-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-v1.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_event_ledger (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          seq INTEGER NOT NULL UNIQUE,
+          event_type TEXT NOT NULL,
+          repo_full_name TEXT,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 1");
+      legacy.exec(
+        "INSERT INTO miner_event_ledger (seq, event_type, repo_full_name, payload_json, created_at) VALUES (1, 'discovered_issue', 'acme/widgets', '{}', '2026-01-01T00:00:00.000Z')",
+      );
+      legacy.close();
+
+      const ledger = initEventLedger(dbPath);
+      ledgers.push(ledger);
+      // The pre-existing row is untouched -- no consumer reads tenant_id yet, so it isn't part of the
+      // public event shape; verified directly against the schema instead.
+      expect(ledger.readEvents().map((event) => event.type)).toEqual(["discovered_issue"]);
+      const readonly = new DatabaseSync(dbPath, { readOnly: true });
+      const columns = readonly.prepare("PRAGMA table_info(miner_event_ledger)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      const row = readonly.prepare("SELECT tenant_id FROM miner_event_ledger WHERE seq = 1").get() as { tenant_id: string | null };
+      expect(row.tenant_id).toBeNull();
+      readonly.close();
+    });
+
+    it("REGRESSION: a v1 file that (unusually) already carries tenant_id is not re-altered into a duplicate-column error", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-event-legacy-partial-v2-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-partial-v2.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_event_ledger (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          seq INTEGER NOT NULL UNIQUE,
+          event_type TEXT NOT NULL,
+          repo_full_name TEXT,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          tenant_id TEXT
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 1");
+      legacy.close();
+
+      expect(() => {
+        const ledger = initEventLedger(dbPath);
+        ledgers.push(ledger);
+      }).not.toThrow();
     });
   });
 });

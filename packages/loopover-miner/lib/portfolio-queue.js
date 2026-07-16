@@ -165,6 +165,17 @@ export function initPortfolioQueueStore(dbPath = resolvePortfolioQueueDbPath()) 
         migrationDb.exec("ALTER TABLE miner_portfolio_queue ADD COLUMN reenqueue_count INTEGER NOT NULL DEFAULT 0");
       }
     },
+    // v4 -> v5 (#4939): additive tenant-scoping column, a prerequisite for any hosted, multi-tenant use of this
+    // same store's logic. NULL for every row today -- self-host behavior is byte-identical, since nothing reads
+    // or writes it yet (no consumer exists until a future hosted deployment populates it). Same defensive
+    // column-presence guard as the v3->v4 migration immediately above.
+    (migrationDb) => {
+      const hasTenantIdColumn = migrationDb
+        .prepare("PRAGMA table_info(miner_portfolio_queue)")
+        .all()
+        .some((column) => column.name === "tenant_id");
+      if (!hasTenantIdColumn) migrationDb.exec("ALTER TABLE miner_portfolio_queue ADD COLUMN tenant_id TEXT");
+    },
   ]);
 
   // `rowid` is a stable, unique key assigned once at first insert (re-enqueue updates in place, never re-inserts),

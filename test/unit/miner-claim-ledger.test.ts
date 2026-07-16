@@ -219,6 +219,7 @@ describe("loopover-miner claim ledger (#2314)", () => {
       "claimed_at",
       "status",
       "note",
+      "tenant_id",
     ]);
     for (const name of ["api_base_url", "repo_full_name", "issue_number", "claimed_at", "status"]) {
       expect(columns.find((column) => column.name === name)?.notnull).toBe(1);
@@ -361,6 +362,69 @@ describe("loopover-miner claim ledger (#2314)", () => {
       ledgers.push(ledger);
       // The corrupt row was dropped, not migrated -- only the valid row survived the rebuild.
       expect(ledger.listClaims().map((claim) => claim.repoFullName)).toEqual(["acme/widgets"]);
+    });
+
+    it("v2 -> v3 (#4939): adds an additive tenant_id column, NULL for every pre-existing row -- self-host behavior byte-identical", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-claim-legacy-v2-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-v2.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_claims (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          api_base_url TEXT NOT NULL,
+          repo_full_name TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          claimed_at TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'released', 'expired')),
+          note TEXT,
+          UNIQUE (api_base_url, repo_full_name, issue_number)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 2");
+      legacy.exec(
+        "INSERT INTO miner_claims (api_base_url, repo_full_name, issue_number, claimed_at, status, note) VALUES ('https://api.github.com', 'acme/widgets', 5, '2026-01-01T00:00:00.000Z', 'active', 'pre-migration')",
+      );
+      legacy.close();
+
+      const ledger = openClaimLedger(dbPath);
+      ledgers.push(ledger);
+      // The pre-existing row is untouched -- no consumer reads tenant_id yet, so it isn't part of the
+      // public claim shape; verified directly against the schema instead.
+      expect(ledger.listClaims().map((claim) => claim.note)).toEqual(["pre-migration"]);
+      const readonly = new DatabaseSync(dbPath, { readOnly: true });
+      const columns = readonly.prepare("PRAGMA table_info(miner_claims)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("tenant_id");
+      const row = readonly.prepare("SELECT tenant_id FROM miner_claims WHERE repo_full_name = ?").get("acme/widgets") as { tenant_id: string | null };
+      expect(row.tenant_id).toBeNull();
+      readonly.close();
+    });
+
+    it("REGRESSION: a v2 file that (unusually) already carries tenant_id is not re-altered into a duplicate-column error", () => {
+      const root = mkdtempSync(join(tmpdir(), "loopover-miner-claim-legacy-partial-v3-"));
+      roots.push(root);
+      const dbPath = join(root, "legacy-partial-v3.sqlite3");
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE miner_claims (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          api_base_url TEXT NOT NULL,
+          repo_full_name TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          claimed_at TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'released', 'expired')),
+          note TEXT,
+          tenant_id TEXT,
+          UNIQUE (api_base_url, repo_full_name, issue_number)
+        )
+      `);
+      legacy.exec("PRAGMA user_version = 2");
+      legacy.close();
+
+      expect(() => {
+        const ledger = openClaimLedger(dbPath);
+        ledgers.push(ledger);
+      }).not.toThrow();
     });
   });
 

@@ -93,6 +93,19 @@ function rowToEntry(row) {
   };
 }
 
+// v1 -> v2 (#4939): additive tenant-scoping column, a prerequisite for any hosted, multi-tenant use of this
+// same store's logic. NULL for every row today -- self-host behavior is byte-identical, since nothing reads or
+// writes it yet (no consumer exists until a future hosted deployment populates it). Same defensive
+// column-presence guard as this file's sibling stores' own additive migrations (e.g. portfolio-queue.js's
+// leased_at addition).
+function addTenantIdColumn(db) {
+  const hasTenantIdColumn = db
+    .prepare("PRAGMA table_info(miner_event_ledger)")
+    .all()
+    .some((column) => column.name === "tenant_id");
+  if (!hasTenantIdColumn) db.exec("ALTER TABLE miner_event_ledger ADD COLUMN tenant_id TEXT");
+}
+
 /**
  * Opens the local append-only event ledger, creating the table on first use. `seq` is a monotonically increasing
  * counter maintained by this module (next = current MAX(seq) + 1) rather than relying on `AUTOINCREMENT`'s
@@ -114,8 +127,8 @@ export function initEventLedger(dbPath = resolveEventLedgerDbPath()) {
       created_at TEXT NOT NULL
     )
   `);
-  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations (none yet).
-  applySchemaMigrations(db, []);
+  // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations.
+  applySchemaMigrations(db, [addTenantIdColumn]);
   // Opt-in retention (#4834): prune aged/excess rows when an operator has enabled it; a no-op by default.
   pruneLedgerByRetention(db, EVENT_LEDGER_RETENTION_SPEC, resolveLedgerRetentionPolicy(), Date.now());
 

@@ -95,6 +95,18 @@ function addApiBaseUrlScope(db) {
   db.exec("ALTER TABLE miner_claims_v2 RENAME TO miner_claims");
 }
 
+// v2 -> v3 (#4939): additive tenant-scoping column, a prerequisite for any hosted, multi-tenant use of this
+// same store's logic. NULL for every row today -- self-host behavior is byte-identical, since nothing reads or
+// writes it yet (no consumer exists until a future hosted deployment populates it). Same defensive
+// column-presence guard as this file's own v1->v2 migration's sibling in portfolio-queue.js.
+function addTenantIdColumn(db) {
+  const hasTenantIdColumn = db
+    .prepare("PRAGMA table_info(miner_claims)")
+    .all()
+    .some((column) => column.name === "tenant_id");
+  if (!hasTenantIdColumn) db.exec("ALTER TABLE miner_claims ADD COLUMN tenant_id TEXT");
+}
+
 /**
  * Opens the local claim ledger, creating the table on first use. `UNIQUE(api_base_url, repo_full_name,
  * issue_number)` keeps ONE row per claimed issue per forge host, and `recordClaim` is a single atomic
@@ -118,7 +130,7 @@ export function openClaimLedger(dbPath = resolveClaimLedgerDbPath()) {
     )
   `);
   // Schema-version convention (#4832): stamp the baseline and run any post-baseline migrations.
-  applySchemaMigrations(db, [addApiBaseUrlScope]);
+  applySchemaMigrations(db, [addApiBaseUrlScope, addTenantIdColumn]);
 
   // Idempotent claim in ONE atomic statement: insert a new active claim, or — only if the existing row is NOT
   // already active — re-activate it (a released/expired claim can be re-claimed). The `WHERE status <> 'active'`

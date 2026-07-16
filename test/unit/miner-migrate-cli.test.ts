@@ -85,9 +85,9 @@ describe("loopover-miner migrate (#4871)", () => {
     const results = runMigrateChecks(env);
     const portfolioQueue = results.find((result) => result.name === "portfolio-queue");
 
-    // Runs ALL THREE post-baseline migrations in sequence: v1->v2 adds leased_at, v2->v3 adds api_base_url
-    // (#5563), v3->v4 adds the attempt-history counters (#5654).
-    expect(portfolioQueue).toMatchObject({ ok: true, status: "migrated", versionBefore: 1, versionAfter: 4 });
+    // Runs ALL FOUR post-baseline migrations in sequence: v1->v2 adds leased_at, v2->v3 adds api_base_url
+    // (#5563), v3->v4 adds the attempt-history counters (#5654), v4->v5 adds tenant_id (#4939).
+    expect(portfolioQueue).toMatchObject({ ok: true, status: "migrated", versionBefore: 1, versionAfter: 5 });
 
     const verifyDb = new DatabaseSync(dbPath, { readOnly: true });
     try {
@@ -97,7 +97,8 @@ describe("loopover-miner migrate (#4871)", () => {
       expect(columns).toContain("attempts_count");
       expect(columns).toContain("consecutive_failures");
       expect(columns).toContain("reenqueue_count");
-      expect(verifyDb.prepare("PRAGMA user_version").get()?.user_version).toBe(4);
+      expect(columns).toContain("tenant_id");
+      expect(verifyDb.prepare("PRAGMA user_version").get()?.user_version).toBe(5);
     } finally {
       verifyDb.close();
     }
