@@ -58,6 +58,7 @@ import { Route as DocsFumadocsSpikeApiReferenceRouteImport } from './routes/docs
 import { Route as DocsBranchAnalysisRouteImport } from './routes/docs.branch-analysis'
 import { Route as DocsBetaOnboardingRouteImport } from './routes/docs.beta-onboarding'
 import { Route as DocsAmsUnattendedSchedulingRouteImport } from './routes/docs.ams-unattended-scheduling'
+import { Route as DocsAmsSizingRouteImport } from './routes/docs.ams-sizing'
 import { Route as DocsAmsOperationsRunbookRouteImport } from './routes/docs.ams-operations-runbook'
 import { Route as DocsAmsObservabilityRouteImport } from './routes/docs.ams-observability'
 import { Route as DocsAmsDeploymentRouteImport } from './routes/docs.ams-deployment'
@@ -338,6 +339,11 @@ const DocsAmsUnattendedSchedulingRoute =
     path: '/ams-unattended-scheduling',
     getParentRoute: () => DocsRoute,
   } as any)
+const DocsAmsSizingRoute = DocsAmsSizingRouteImport.update({
+  id: '/ams-sizing',
+  path: '/ams-sizing',
+  getParentRoute: () => DocsRoute,
+} as any)
 const DocsAmsOperationsRunbookRoute =
   DocsAmsOperationsRunbookRouteImport.update({
     id: '/ams-operations-runbook',
@@ -464,6 +470,7 @@ export interface FileRoutesByFullPath {
   '/docs/ams-deployment': typeof DocsAmsDeploymentRoute
   '/docs/ams-observability': typeof DocsAmsObservabilityRoute
   '/docs/ams-operations-runbook': typeof DocsAmsOperationsRunbookRoute
+  '/docs/ams-sizing': typeof DocsAmsSizingRoute
   '/docs/ams-unattended-scheduling': typeof DocsAmsUnattendedSchedulingRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
@@ -531,6 +538,7 @@ export interface FileRoutesByTo {
   '/docs/ams-deployment': typeof DocsAmsDeploymentRoute
   '/docs/ams-observability': typeof DocsAmsObservabilityRoute
   '/docs/ams-operations-runbook': typeof DocsAmsOperationsRunbookRoute
+  '/docs/ams-sizing': typeof DocsAmsSizingRoute
   '/docs/ams-unattended-scheduling': typeof DocsAmsUnattendedSchedulingRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
@@ -602,6 +610,7 @@ export interface FileRoutesById {
   '/docs/ams-deployment': typeof DocsAmsDeploymentRoute
   '/docs/ams-observability': typeof DocsAmsObservabilityRoute
   '/docs/ams-operations-runbook': typeof DocsAmsOperationsRunbookRoute
+  '/docs/ams-sizing': typeof DocsAmsSizingRoute
   '/docs/ams-unattended-scheduling': typeof DocsAmsUnattendedSchedulingRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
@@ -674,6 +683,7 @@ export interface FileRouteTypes {
     | '/docs/ams-deployment'
     | '/docs/ams-observability'
     | '/docs/ams-operations-runbook'
+    | '/docs/ams-sizing'
     | '/docs/ams-unattended-scheduling'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
@@ -741,6 +751,7 @@ export interface FileRouteTypes {
     | '/docs/ams-deployment'
     | '/docs/ams-observability'
     | '/docs/ams-operations-runbook'
+    | '/docs/ams-sizing'
     | '/docs/ams-unattended-scheduling'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
@@ -811,6 +822,7 @@ export interface FileRouteTypes {
     | '/docs/ams-deployment'
     | '/docs/ams-observability'
     | '/docs/ams-operations-runbook'
+    | '/docs/ams-sizing'
     | '/docs/ams-unattended-scheduling'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
@@ -1212,6 +1224,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsAmsUnattendedSchedulingRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/ams-sizing': {
+      id: '/docs/ams-sizing'
+      path: '/ams-sizing'
+      fullPath: '/docs/ams-sizing'
+      preLoaderRoute: typeof DocsAmsSizingRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/docs/ams-operations-runbook': {
       id: '/docs/ams-operations-runbook'
       path: '/ams-operations-runbook'
@@ -1401,6 +1420,7 @@ interface DocsRouteChildren {
   DocsAmsDeploymentRoute: typeof DocsAmsDeploymentRoute
   DocsAmsObservabilityRoute: typeof DocsAmsObservabilityRoute
   DocsAmsOperationsRunbookRoute: typeof DocsAmsOperationsRunbookRoute
+  DocsAmsSizingRoute: typeof DocsAmsSizingRoute
   DocsAmsUnattendedSchedulingRoute: typeof DocsAmsUnattendedSchedulingRoute
   DocsBetaOnboardingRoute: typeof DocsBetaOnboardingRoute
   DocsBranchAnalysisRoute: typeof DocsBranchAnalysisRoute
@@ -1445,6 +1465,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsAmsDeploymentRoute: DocsAmsDeploymentRoute,
   DocsAmsObservabilityRoute: DocsAmsObservabilityRoute,
   DocsAmsOperationsRunbookRoute: DocsAmsOperationsRunbookRoute,
+  DocsAmsSizingRoute: DocsAmsSizingRoute,
   DocsAmsUnattendedSchedulingRoute: DocsAmsUnattendedSchedulingRoute,
   DocsBetaOnboardingRoute: DocsBetaOnboardingRoute,
   DocsBranchAnalysisRoute: DocsBranchAnalysisRoute,

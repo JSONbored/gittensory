@@ -1,5 +1,9 @@
 # loopover-miner resource sizing
 
+> Also published on the docs website: [Resource sizing](https://loopover.ai/docs/ams-sizing) (same
+> content, rendered with search and the rest of the maintainer docs nav). This file remains the
+> canonical source and ships inside the published `@loopover/miner` package.
+
 Real, measured CPU/RAM/disk numbers for laptop mode and fleet mode, so an operator can size a host or
 cluster from data instead of guessing. Neither the operational-runbook issue nor the local-stores
 documentation commits to this — this doc is scoped strictly to the numbers and how they were captured.
