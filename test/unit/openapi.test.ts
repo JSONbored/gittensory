@@ -27,6 +27,7 @@ describe("OpenAPI contract", () => {
     expect(spec.paths["/v1/contributors/{login}/pr-outcomes"]).toBeDefined();
     expect(spec.paths["/v1/contributors/{login}/repos/{owner}/{repo}/decision"]).toBeDefined();
     expect(spec.paths["/v1/preflight/pr"]).toBeDefined();
+    expect(spec.paths["/v1/preflight/review-risk"]).toBeDefined();
     expect(spec.paths["/v1/preflight/local-diff"]).toBeDefined();
     expect(spec.paths["/v1/local/branch-analysis"]).toBeDefined();
     expect(spec.paths["/v1/agent/runs"]).toBeDefined();

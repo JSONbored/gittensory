@@ -77,6 +77,7 @@ import {
   RepositorySettingsSchema,
   RepoDocRefreshResultSchema,
   RoleContextSchema,
+  ReviewRiskExplanationSchema,
   RewardRiskActionSchema,
   ScorePreviewSchema,
   ScoringModelSnapshotSchema,
@@ -123,6 +124,7 @@ export function buildOpenApiSpec() {
   registry.register("RepoFitRecommendation", RepoFitRecommendationSchema);
   registry.register("PreflightResult", PreflightResultSchema);
   registry.register("LocalDiffPreflightResult", LocalDiffPreflightResultSchema);
+  registry.register("ReviewRiskExplanation", ReviewRiskExplanationSchema);
   registry.register("LocalBranchAnalysis", LocalBranchAnalysisSchema);
   registry.register("MaintainerPacket", MaintainerPacketSchema);
   registry.register("MaintainerLaneReport", MaintainerLaneReportSchema);
@@ -845,6 +847,16 @@ export function buildOpenApiSpec() {
     responses: {
       200: { description: "Submission preflight result", content: { "application/json": { schema: PreflightResultSchema } } },
       400: { description: "Invalid preflight input" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/preflight/review-risk",
+    summary: "Explain review risk for a planned pull request",
+    responses: {
+      200: { description: "Review-risk explanation with preflight, role context, and recommendation", content: { "application/json": { schema: ReviewRiskExplanationSchema } } },
+      400: { description: "Invalid preflight input" },
+      403: { description: "Forbidden when contributorLogin does not match the authenticated session" },
     },
   });
   registry.registerPath({

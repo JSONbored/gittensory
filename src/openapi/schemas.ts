@@ -1908,6 +1908,15 @@ export const RoleContextSchema = z
   })
   .openapi("RoleContext");
 
+export const ReviewRiskExplanationSchema = z
+  .object({
+    preflight: PreflightResultSchema,
+    roleContext: RoleContextSchema.nullable(),
+    recommendation: z.enum(["likely_duplicate", "maintainer_lane", "needs_author", "review", "watch"]),
+    summary: z.string(),
+  })
+  .openapi("ReviewRiskExplanation");
+
 const ContributorOutcomeCountsSchema = z.object({
   pullRequests: z.number(),
   mergedPullRequests: z.number(),

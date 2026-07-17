@@ -90,6 +90,7 @@ const CLI_COMMAND_SPEC = {
   "contributor-profile": [],
   "monitor-open-prs": [],
   "pr-outcomes": [],
+  "explain-review-risk": [],
   notifications: [],
   "notifications-read": [],
   "analyze-branch": [],
@@ -937,6 +938,11 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Preflight planned PR metadata against lane, duplicate, linked issue, test, and queue signals.",
   },
   {
+    name: "loopover_explain_review_risk",
+    category: "review",
+    description: "Explain review risk for a planned PR using preflight, lane, duplicate, and role context.",
+  },
+  {
     name: "loopover_validate_linked_issue",
     category: "discovery",
     description: "Report whether linking an issue will actually earn the standard linked-issue scoring multiplier for a planned PR — open, valid, single-owner, solvable by this PR — with the blocking reason if not. The raw multiplier value stays private.",
@@ -1514,6 +1520,19 @@ registerStdioTool(
     inputSchema: preflightShape,
   },
   async (input) => toolResult("LoopOver PR preflight.", await apiPost("/v1/preflight/pr", input)),
+);
+
+// #6980: CLI stdio mirror of loopover_explain_review_risk — proxies POST /v1/preflight/review-risk.
+registerStdioTool(
+  "loopover_explain_review_risk",
+  {
+    description: stdioToolDescription("loopover_explain_review_risk"),
+    inputSchema: preflightShape,
+  },
+  async (input) => {
+    const payload = await apiPost("/v1/preflight/review-risk", input);
+    return toolResult(payload.summary ?? `LoopOver review-risk explanation for ${input.repoFullName}.`, payload);
+  },
 );
 
 registerStdioTool(
@@ -3401,6 +3420,7 @@ async function runCli(args) {
   if (command === "contributor-profile") return contributorProfileCli(options);
   if (command === "monitor-open-prs") return monitorOpenPrsCli(options);
   if (command === "pr-outcomes") return prOutcomesCli(options);
+  if (command === "explain-review-risk") return explainReviewRiskCli(options);
   if (command === "notifications") return notificationsCli(options);
   if (command === "notifications-read") return notificationsReadCli(options);
   if (command === "review-pr") return reviewPrCli(options);
@@ -3902,6 +3922,57 @@ async function prOutcomesCli(options) {
     process.stdout.write(`${sanitizePlainTextTerminalOutput(heading)}\n`);
     if (outcome.attribution) process.stdout.write(`  ${sanitizePlainTextTerminalOutput(outcome.attribution)}\n`);
   }
+}
+
+function printExplainReviewRiskHelp() {
+  process.stdout.write(
+    [
+      "Usage: loopover-mcp explain-review-risk --repo owner/repo --title <text> [--login <github-login>] [--body <text>] [--json]",
+      "",
+      "Explain review risk for a planned PR (preflight + optional role context + recommendation).",
+      "Mirrors the loopover_explain_review_risk MCP tool and POST /v1/preflight/review-risk. No source upload.",
+      "",
+      "Pass --repo or --repoFullName, --title, and optionally --login as contributorLogin.",
+      "Pass --json for machine-readable output.",
+    ].join("\n") + "\n",
+  );
+}
+
+async function explainReviewRiskCli(options) {
+  if (options.help === true) return printExplainReviewRiskHelp();
+  const repoFullName = options.repoFullName ?? options.repo;
+  if (!repoFullName || !String(repoFullName).includes("/")) throw new Error("Pass --repo owner/repo or --repoFullName owner/repo.");
+  if (!options.title) throw new Error("Pass --title <text>.");
+  const contributorLogin = options.login ?? options.contributorLogin;
+  const labels = Array.isArray(options.label) ? options.label : options.label ? [options.label] : undefined;
+  const changedFiles = Array.isArray(options.changedFile) ? options.changedFile : options.changedFile ? [options.changedFile] : undefined;
+  const linkedIssues = Array.isArray(options.issue)
+    ? options.issue.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
+    : options.issue
+      ? [Number(options.issue)].filter((value) => Number.isInteger(value) && value > 0)
+      : undefined;
+  const tests = Array.isArray(options.test) ? options.test : options.test ? [options.test] : undefined;
+  const payload = await apiPost(
+    "/v1/preflight/review-risk",
+    stripUndefined({
+      repoFullName,
+      title: options.title,
+      contributorLogin,
+      body: options.body,
+      labels,
+      changedFiles,
+      linkedIssues: linkedIssues && linkedIssues.length > 0 ? linkedIssues : undefined,
+      tests,
+      authorAssociation: options.authorAssociation,
+    }),
+  );
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${sanitizePlainTextTerminalOutput(payload.summary ?? `LoopOver review-risk explanation for ${repoFullName}.`)}\n`);
+  if (payload.recommendation) process.stdout.write(`Recommendation: ${sanitizePlainTextTerminalOutput(payload.recommendation)}\n`);
+  if (payload.preflight?.status) process.stdout.write(`Preflight status: ${sanitizePlainTextTerminalOutput(payload.preflight.status)}\n`);
 }
 
 function printNotificationsHelp() {
@@ -4444,6 +4515,7 @@ function printHelp() {
   loopover-mcp repo-decision --login <github-login> --repo owner/repo [--json]
   loopover-mcp monitor-open-prs --login <github-login> [--json]
   loopover-mcp pr-outcomes --login <github-login> [--limit N] [--json]
+  loopover-mcp explain-review-risk --repo owner/repo --title <text> [--login <github-login>] [--body <text>] [--json]
   loopover-mcp notifications --login <github-login> [--json]
   loopover-mcp notifications-read --login <github-login> [--id <delivery-id>]... [--json]
   loopover-mcp analyze-branch --login <github-login> [--repo owner/repo] [--base origin/main] [--branch-eligibility eligible|ineligible|unknown] [--pending-merged-prs 3] [--expected-open-prs 0] [--projected-credibility 0.8] [--scenario-note "..."] [--validation "passed|npm test|summary"] [--format table] [--json]

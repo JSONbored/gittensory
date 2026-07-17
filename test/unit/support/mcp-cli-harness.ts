@@ -177,6 +177,9 @@ export async function startFixtureServer(
     validateConfigWarnings?: string[];
     openPrMonitor?: Record<string, unknown>;
     prOutcomes?: Record<string, unknown>;
+    /** #6980: overrides POST /v1/preflight/review-risk and captures the request body. */
+    reviewRisk?: Record<string, unknown>;
+    onReviewRiskRequest?: (body: unknown) => void;
     /** #6745: overrides the notification feed / mark-read responses, and captures the mark-read POST body. */
     notifications?: Record<string, unknown>;
     notificationsRead?: Record<string, unknown>;
@@ -412,6 +415,16 @@ export async function startFixtureServer(
         testFiles?: string[];
       };
       response.end(JSON.stringify(withTerminalInjection(slopRiskFixture(body), options.terminalInjection)));
+      return;
+    }
+    if (request.url === "/v1/preflight/review-risk" && request.method === "POST") {
+      const body = (await readJsonRequest(request)) as {
+        repoFullName?: string;
+        title?: string;
+        contributorLogin?: string;
+      };
+      options.onReviewRiskRequest?.(body);
+      response.end(JSON.stringify({ ...reviewRiskFixture(body), ...(options.reviewRisk ?? {}) }));
       return;
     }
     if (request.url === "/v1/lint/improvement-potential" && request.method === "POST") {
@@ -911,6 +924,38 @@ export function prOutcomesFixture(login = "JSONbored") {
         recordedAt: "2026-06-01T00:00:00.000Z",
       },
     ],
+  };
+}
+
+/** #6980: mirrors POST /v1/preflight/review-risk / buildReviewRiskExplanation. */
+export function reviewRiskFixture(input: { repoFullName?: string; title?: string; contributorLogin?: string } = {}) {
+  const repoFullName = input.repoFullName ?? "JSONbored/loopover";
+  return {
+    preflight: {
+      repoFullName,
+      generatedAt: "2026-06-01T00:00:00.000Z",
+      status: "ready" as const,
+      lane: { lane: "direct_pr", reasons: ["Fixture lane."] },
+      reviewBurden: "low" as const,
+      linkedIssues: [] as number[],
+      findings: [] as unknown[],
+      collisions: [] as unknown[],
+    },
+    roleContext: input.contributorLogin
+      ? {
+          login: input.contributorLogin.toLowerCase(),
+          repoFullName,
+          generatedAt: "2026-06-01T00:00:00.000Z",
+          role: "outside_contributor" as const,
+          maintainerLane: false,
+          normalContributorEvidenceAllowed: true,
+          source: "unknown" as const,
+          reasons: ["Fixture role context."],
+          guidance: "Outside-contributor work is scoreable when the lane fits.",
+        }
+      : null,
+    recommendation: "review" as const,
+    summary: `LoopOver review-risk explanation for ${repoFullName}.`,
   };
 }
 

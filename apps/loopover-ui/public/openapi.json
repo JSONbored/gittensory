@@ -14490,6 +14490,43 @@
           "login",
           "marked"
         ]
+      },
+      "ReviewRiskExplanation": {
+        "type": "object",
+        "properties": {
+          "preflight": {
+            "$ref": "#/components/schemas/PreflightResult"
+          },
+          "roleContext": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RoleContext"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "recommendation": {
+            "type": "string",
+            "enum": [
+              "likely_duplicate",
+              "maintainer_lane",
+              "needs_author",
+              "review",
+              "watch"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "preflight",
+          "roleContext",
+          "recommendation",
+          "summary"
+        ]
       }
     },
     "parameters": {},
@@ -18858,6 +18895,37 @@
           },
           "400": {
             "description": "Invalid mark-read body"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/preflight/review-risk": {
+      "post": {
+        "summary": "Explain review risk for a planned pull request",
+        "responses": {
+          "200": {
+            "description": "Review-risk explanation with preflight, role context, and recommendation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRiskExplanation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid preflight input"
+          },
+          "403": {
+            "description": "Forbidden when contributorLogin does not match the authenticated session"
           }
         },
         "security": [

@@ -275,6 +275,7 @@ import {
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildContributorPrOutcomes } from "../signals/contributor-pr-outcomes";
+import { buildReviewRiskExplanation } from "../signals/review-risk";
 import { buildNotificationFeed } from "../notifications/service";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
@@ -3596,6 +3597,25 @@ export function createApp() {
       loadOrComputeIssueQualityResponse(c.env, parsed.data.repoFullName),
     ]);
     return c.json(buildPreflightResult(parsed.data, repo, issues, pullRequests, bounties, issueQuality?.report));
+  });
+
+  // #6980: REST mirror of loopover_explain_review_risk — same preflightSchema as /v1/preflight/pr, richer
+  // payload (preflight + optional roleContext + recommendation + summary). Does NOT pass issueQuality.
+  app.post("/v1/preflight/review-risk", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = preflightSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_preflight_request", issues: parsed.error.issues }, 400);
+    if (parsed.data.contributorLogin) {
+      const unauthorized = await requireContributorAccess(c, parsed.data.contributorLogin);
+      if (unauthorized) return unauthorized;
+    }
+    const [repo, issues, pullRequests, bounties] = await Promise.all([
+      getRepository(c.env, parsed.data.repoFullName),
+      listIssues(c.env, parsed.data.repoFullName),
+      listPullRequests(c.env, parsed.data.repoFullName),
+      listBountiesByRepo(c.env, parsed.data.repoFullName),
+    ]);
+    return c.json(buildReviewRiskExplanation({ input: parsed.data, repo, issues, pullRequests, bounties }));
   });
 
   app.post("/v1/preflight/local-diff", async (c) => {

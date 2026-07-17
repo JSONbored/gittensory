@@ -138,11 +138,11 @@ import {
   buildPrTextLint,
   buildQueueHealth,
   buildRegistryChangeReport,
-  buildRoleContext,
 } from "../signals/engine";
 import { PUBLIC_SURFACE_SKIP_REASONS, skippedPrAuditRemediation, type PublicSurfaceSkipReason } from "../signals/settings-preview";
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
 import { buildContributorPrOutcomes } from "../signals/contributor-pr-outcomes";
+import { buildReviewRiskExplanation } from "../signals/review-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { computeLocalScorerTokens } from "../signals/local-scorer";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
@@ -4209,24 +4209,13 @@ export class LoopoverMcp {
       listPullRequests(this.env, input.repoFullName),
       listBountiesByRepo(this.env, input.repoFullName),
     ]);
-    const preflight = buildPreflightResult(input, repo, issues, pullRequests, bounties);
-    const roleContext = input.contributorLogin
-      ? buildRoleContext({ login: input.contributorLogin, repo, repoFullName: input.repoFullName, pullRequests, issues })
-      : null;
+    const explanation = buildReviewRiskExplanation({ input, repo, issues, pullRequests, bounties });
     return {
-      summary: `LoopOver review-risk explanation for ${input.repoFullName}.`,
+      summary: explanation.summary,
       data: {
-        preflight,
-        roleContext,
-        recommendation: preflight.collisions.some((cluster) => cluster.risk === "high")
-          ? "likely_duplicate"
-          : roleContext?.maintainerLane
-            ? "maintainer_lane"
-            : preflight.status === "needs_work"
-              ? "needs_author"
-              : preflight.status === "ready"
-                ? "review"
-                : "watch",
+        preflight: explanation.preflight,
+        roleContext: explanation.roleContext,
+        recommendation: explanation.recommendation,
       },
     };
   }
