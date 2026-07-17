@@ -423,10 +423,7 @@ export function shouldIncludeTrackRecordSummary(
  */
 export function renderTrackRecordSummaryMarkdown(summary: TrackRecordSummary): string {
   if (!summary.enabled) return "";
-  const lines = [
-    "### Public contributor record",
-    "",
-    `- GitHub login: ${markdownSafe(summary.login)}`,
+  const bodyLines = [
     `- Resolved public PRs: ${summary.outcomes.resolved} (${summary.outcomes.merged} merged, ${summary.outcomes.closedWithoutMerge} closed without merge)`,
     `- Public merge rate: ${summary.mergeRate.label}`,
     `- Public tenure: ${summary.tenure.label}`,
@@ -434,15 +431,25 @@ export function renderTrackRecordSummaryMarkdown(summary: TrackRecordSummary): s
   ];
 
   if (summary.outcomes.openIgnored > 0) {
-    lines.push(`- Open PRs ignored for rate: ${summary.outcomes.openIgnored}`);
+    bodyLines.push(`- Open PRs ignored for rate: ${summary.outcomes.openIgnored}`);
   }
   if (summary.incidents.hasPublicIncident && summary.incidents.evidenceUrls.length > 0) {
-    lines.push(
+    bodyLines.push(
       `- Public evidence: ${summary.incidents.evidenceUrls.map((url) => markdownSafe(url)).join(", ")}`,
     );
   }
 
-  const rendered = `${lines.join("\n")}\n`;
-  assertPublicSummaryText(rendered);
-  return rendered;
+  // #6772: fail-closed on the COMPUTED fields only -- a blocklisted term there would be a genuine leak. The
+  // GitHub login is caller-provided identity (already markdown-escaped below), not computed private data, so a
+  // legitimate username that merely contains a blocklisted word bounded by hyphens (e.g. "team-wallet") must
+  // NOT crash rendering. Scanning the whole block including the identity line was the bug.
+  assertPublicSummaryText(bodyLines.join("\n"));
+
+  const lines = [
+    "### Public contributor record",
+    "",
+    `- GitHub login: ${markdownSafe(summary.login)}`,
+    ...bodyLines,
+  ];
+  return `${lines.join("\n")}\n`;
 }
