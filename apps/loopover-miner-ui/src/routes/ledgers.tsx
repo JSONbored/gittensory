@@ -45,9 +45,9 @@ const CLAIM_STATUS_LABELS: Record<ClaimStatus, string> = {
 };
 
 const CLAIM_STATUS_TONE: Record<ClaimStatus, string> = {
-  active: "text-[var(--success)]",
+  active: "text-success",
   released: "text-muted-foreground",
-  expired: "text-[var(--warning)]",
+  expired: "text-warning",
 };
 
 function CountTable({ counts, keyLabel }: { counts: Record<string, number>; keyLabel: string }) {

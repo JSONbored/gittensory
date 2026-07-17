@@ -77,7 +77,7 @@ export function OverviewRunsCard({ runs }: { runs: RunHistoryResult | null }) {
             <Stat
               label="Currently working"
               value={runs.rows.filter((row) => row.state !== "idle").length}
-              tone="text-[var(--success)]"
+              tone="text-success"
             />
           </>
         )}
@@ -100,8 +100,8 @@ export function OverviewPortfolioCard({ portfolio }: { portfolio: PortfolioQueue
           <>
             <Stat label="Total items" value={portfolio.summary.total} />
             <Stat label="Queued" value={portfolio.summary.byStatus.queued} />
-            <Stat label="In progress" value={portfolio.summary.byStatus.in_progress} tone="text-[var(--warning)]" />
-            <Stat label="Done" value={portfolio.summary.byStatus.done} tone="text-[var(--success)]" />
+            <Stat label="In progress" value={portfolio.summary.byStatus.in_progress} tone="text-warning" />
+            <Stat label="Done" value={portfolio.summary.byStatus.done} tone="text-success" />
             {/* Deliver the CLI/web-UI parity the portfolio-queue data path promises (#6185): the CLI's `queue
                 dashboard` renders "oldest-queued: Xm" (portfolio-dashboard.js), and the same minutes-rounded age
                 is shown here. Omitted (like the CLI) when the queue is empty and the age is null. */}
@@ -127,7 +127,7 @@ export function OverviewClaimsCard({ claims }: { claims: LedgersResult | null })
       >
         {claims?.ok && (
           <>
-            <Stat label="Active" value={claims.summary.claims.byStatus.active} tone="text-[var(--success)]" />
+            <Stat label="Active" value={claims.summary.claims.byStatus.active} tone="text-success" />
             <Stat label="Total recorded" value={claims.summary.claims.total} />
           </>
         )}

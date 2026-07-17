@@ -26,7 +26,7 @@ export function GovernorChatActionResult({
   if (result === null) return null;
   if (!result.ok) {
     return (
-      <p role="alert" className="text-token-sm text-[var(--danger)]">
+      <p role="alert" className="text-token-sm text-danger">
         {formatGovernorPauseChatMessage(result)}
       </p>
     );

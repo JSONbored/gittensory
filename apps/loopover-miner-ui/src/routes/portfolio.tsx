@@ -33,8 +33,8 @@ const STATUS_LABELS: Record<QueueStatus, string> = {
 
 const STATUS_TONE: Record<QueueStatus, string> = {
   queued: "text-muted-foreground",
-  in_progress: "text-[var(--warning)]",
-  done: "text-[var(--success)]",
+  in_progress: "text-warning",
+  done: "text-success",
 };
 
 /** Placeholder shaped like the real summary -- three status cards over the repo table -- so the layout doesn't
@@ -152,7 +152,7 @@ export function PortfolioQueueActionsSection({
     <section className="grid gap-3">
       <h3 className="font-display text-token-base font-semibold">Queue actions</h3>
       {actionResult !== null && !actionResult.ok ? (
-        <p role="alert" className="text-token-sm text-[var(--danger)]">
+        <p role="alert" className="text-token-sm text-danger">
           Queue action failed: {actionResult.error}
         </p>
       ) : null}
