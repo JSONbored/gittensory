@@ -96,7 +96,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "onboarding-pack"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "onboarding-pack", "audit-feed"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -2934,6 +2934,9 @@ function printMaintainHelp() {
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
       "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
       "  onboarding-pack [--refresh]  Preview the repo's contributor onboarding pack.",
+      "  audit-feed [--since ISO]     Show the agent audit feed (who did what, when).",
+      "             [--limit N]       Cap the events returned (1-200).",
+      "             [--pull N]        Scope the feed to one pull request.",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -3056,8 +3059,35 @@ async function maintainCli(args) {
     );
     return;
   }
+  if (subcommand === "audit-feed") {
+    // #6733: read-only mirror of GET {repoBase}/agent/audit-feed (the same surface the remote
+    // loopover_get_agent_audit_feed tool exposes). The API enforces maintainer authorization and validates
+    // every query param -- `since` must be ISO-8601, `limit` 1..200, `pull` a positive integer -- so the CLI
+    // forwards them verbatim rather than re-deciding locally, and a bad value surfaces as the API's own 400
+    // detail. Omitted flags are omitted from the query entirely, so the route applies its own defaults.
+    const query = new URLSearchParams();
+    if (options.since !== undefined) query.set("since", String(options.since));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.pull !== undefined) query.set("pull", String(options.pull));
+    const payload = await apiGet(`${repoBase}/agent/audit-feed${query.size > 0 ? `?${query}` : ""}`);
+    const events = payload.events ?? [];
+    // `pullNumber` is echoed by the route only on the ?pull= branch, so the scope line reports what was asked for.
+    const scope = payload.pullNumber ? `${repoFullName}#${payload.pullNumber}` : repoFullName;
+    emit(
+      payload,
+      [
+        `Agent audit feed for ${scope}: ${events.length} event${events.length === 1 ? "" : "s"}.`,
+        // `detail` is the one free-form field here; sanitized on the plain-text path like onboarding-pack's
+        // dump above (--json re-serializes `payload` untouched, so the JSON contract is unaffected).
+        ...events.map((event) =>
+          sanitizePlainTextTerminalOutput([event.createdAt, event.eventType, event.actor, event.outcome, event.detail].filter(Boolean).join("  ")),
+        ),
+      ].join("\n"),
+    );
+    return;
+  }
   throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack.`,
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack | audit-feed.`,
   );
 }
 
