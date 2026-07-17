@@ -29,6 +29,7 @@ path filter matched; on push to `main`, everything runs.
 | lint → cf-typegen | worker types drift | `npm run cf-typegen:check` | committed `worker-configuration.d.ts` is stale (run `npm run cf-typegen`) |
 | lint → schema-drift | `src/db/schema.ts` vs `migrations/` | `npm run db:schema-drift:check` | a Drizzle table's schema doesn't match the migration history |
 | lint → selfhost-env-reference | self-host env-var doc drift | `npm run selfhost:env-reference:check` | committed `apps/loopover-ui/src/lib/selfhost-env-reference.ts` is stale (run `npm run selfhost:env-reference`) — triggers when `src/selfhost/**` (+ a few other scanned files) adds/removes an env var read; a pure line shift of an existing read does NOT trigger it, since the doc cites the file only, not `file:line` (#env-reference-churn) |
+| lint → miner-env-reference | miner/AMS env-var doc drift | `npm run miner:env-reference:check` | committed `packages/loopover-miner/docs/env-reference.md` / `apps/loopover-ui/src/lib/ams-env-reference.ts` is stale (run `npm run miner:env-reference`) — miner/AMS twin of the selfhost check above |
 | lint → observability | Grafana/Prometheus/alert config validation | `npm run selfhost:validate-observability` | a self-host observability config (dashboard/rule/datasource) is malformed |
 | lint → typecheck | `tsc --noEmit` | `npm run typecheck` | any backend type error |
 | test (1/2) | sharded vitest + coverage | `npm run test:coverage` (unsharded) | any failing `test/**/*.test.ts` (excl. `test/workers/**`) |
@@ -43,6 +44,10 @@ path filter matched; on push to `main`, everything runs.
 | ui → version audit | MCP version copy | `npm run ui:version-audit` | stale MCP version strings / non-`@latest` install copy (hits npm registry) |
 | docs → drift | doc/code claim checker | `npm run docs:drift-check` | a doc makes a claim the mechanical lint can verify is now false |
 | docs → command-reference | generated CLI reference drift | `npm run command-reference:check` | committed command-reference doc is stale (run `npm run command-reference`) |
+| manifest drift | `.loopover.yml` vs bundled fallback YAML | `npm run manifest:drift-check` | `src/config/loopover-repo-focus-manifest.ts`'s bundled YAML diverges from the real root `.loopover.yml` |
+| engine-parity drift | `src/{review,settings,signals}` vs `loopover-engine` twins | `npm run engine-parity:drift-check` | a hand-duplicated twin file pair diverges, or the installed `@loopover/engine` semver skews from the monorepo package |
+| branding drift | "gittensory" leaking into runtime source | `npm run branding-drift:check` | a file's gittensory-string hit count rises above the recorded baseline (`scripts/branding-drift-baseline.json`) |
+| release-please manifest sync | `.release-please-manifest.json` vs each package's real `package.json` version | `npm run release-manifest:sync:check` | the manifest and a package's `package.json` version disagree — normally only possible after a manual out-of-band release (release-please's own PR-merge flow keeps them in sync automatically); fix with `npm run release-manifest:sync` (never hand-edit the manifest) |
 | ui → lint | `eslint .` (UI) | `npm run ui:lint` | ESLint **incl. Prettier formatting** + design-token rules |
 | ui → typecheck | `tsc --noEmit` (UI) | `npm run ui:typecheck` | UI type error |
 | ui → tests | vitest jsdom (UI) | `npm run ui:test` | failing UI component test |
@@ -68,7 +73,6 @@ these for a normal PR:**
 |---|---|
 | `npm run test:engine-parity`, `npm run test:live-gate-parity`, `npm run test:driver-parity` | Plain `test/contract/*.test.ts` files — no dedicated CI job, but they DO run in CI as part of whichever `test (1/2)` shard happens to contain them (sharded `vitest run`). |
 | `npm run test --workspace @loopover/engine` | The engine package's own `node --test` suite. **Not run by `ci.yml` on a PR at all** — only by `.github/workflows/publish-engine.yml` at release time. A regression here is invisible to Codecov and to every PR-gating CI check; `test:ci` locally is the only pre-merge signal. |
-| `npm run manifest:drift-check`, `npm run engine-parity:drift-check` | Appear in `test:ci` only — not in `ci.yml` under any job. |
 
 This is a real, previously-hit gap, not a hypothetical: a past PR shipped a genuine, undetected
 `codecov/patch`-adjacent regression in the engine package specifically because `test --workspace
