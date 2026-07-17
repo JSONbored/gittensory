@@ -98,7 +98,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "onboarding-pack", "audit-feed"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "onboarding-pack", "audit-feed", "outcome-calibration"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -2996,6 +2996,8 @@ function printMaintainHelp() {
       "  audit-feed [--since ISO]     Show the agent audit feed (who did what, when).",
       "             [--limit N]       Cap the events returned (1-200).",
       "             [--pull N]        Scope the feed to one pull request.",
+      "  outcome-calibration [--window-days N]",
+      "                               Show recommendation/slop outcome calibration for the repo.",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -3145,8 +3147,28 @@ async function maintainCli(args) {
     );
     return;
   }
+  if (subcommand === "outcome-calibration") {
+    // #6735: read-only mirror of GET {repoBase}/outcome-calibration (the remote loopover_get_outcome_calibration
+    // tool). Identical --window-days handling to `precision` above: a positive value opts into a bounded window
+    // via ?windowDays, anything else is omitted so the route falls through to full history (it clamps/floors
+    // server-side). The CLI never decides locally; the API enforces maintainer authorization.
+    const windowDays = Number(options.windowDays);
+    const query = windowDays > 0 ? `?windowDays=${encodeURIComponent(windowDays)}` : "";
+    const payload = await apiGet(`${repoBase}/outcome-calibration${query}`);
+    const window = payload.windowDays ? `last ${payload.windowDays}d` : "all history";
+    emit(
+      payload,
+      [
+        // The calibration payload is a structured slop/recommendations bundle rather than a flat telemetry row,
+        // so the plain-text path dumps it like onboarding-pack does; --json re-serializes `payload` untouched.
+        `Outcome calibration for ${repoFullName} (${window}):`,
+        sanitizePlainTextTerminalOutput(JSON.stringify({ slop: payload.slop, recommendations: payload.recommendations, signals: payload.signals }, null, 2)),
+      ].join("\n"),
+    );
+    return;
+  }
   throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack | audit-feed.`,
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack | audit-feed | outcome-calibration.`,
   );
 }
 

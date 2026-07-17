@@ -488,6 +488,22 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #6735 outcome calibration (read-only). Echoes ?windowDays so the CLI window pass-through is testable, and
+    // returns the route's structured slop/recommendations/signals bundle so the plain-text dump is exercised.
+    if (request.url?.startsWith("/v1/repos/owner/repo/outcome-calibration") && request.method === "GET") {
+      const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          windowDays: windowDays ? Number(windowDays) : null,
+          slop: { bandAccuracy: 0.82, sampled: 40 },
+          recommendations: { merged: 12, closed: 4, reverted: 1 },
+          signals: ["Recommendation acceptance is tracking above the slop band; keep the current threshold."],
+        }),
+      );
+      return;
+    }
     // #554 gate precision telemetry (read-only). Echoes ?windowDays so the CLI window pass-through is testable.
     if (request.url?.startsWith("/v1/repos/owner/repo/gate-precision") && request.method === "GET") {
       const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");

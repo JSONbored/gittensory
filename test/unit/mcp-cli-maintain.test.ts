@@ -152,6 +152,40 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(payload.echoedQuery).toEqual({ since: null, limit: null, pull: null });
   });
 
+  it("outcome-calibration shows the calibration bundle (plain + json), with output parity (#6735)", async () => {
+    const e = await env();
+    const out = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo"], e);
+    expect(out).toMatch(/Outcome calibration for owner\/repo \(all history\):/);
+    // The structured slop/recommendations bundle is dumped on the plain-text path.
+    expect(out).toMatch(/"bandAccuracy": 0\.82/);
+    expect(out).toMatch(/"merged": 12/);
+    // Parity: --json re-serializes the API payload untouched, so the same fields reach both surfaces.
+    const json = JSON.parse(await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--json"], e)) as {
+      repoFullName: string;
+      slop: { bandAccuracy: number };
+      recommendations: { merged: number };
+    };
+    expect(json.repoFullName).toBe("owner/repo");
+    expect(json.slop.bandAccuracy).toBe(0.82);
+    expect(json.recommendations.merged).toBe(12);
+  });
+
+  it("outcome-calibration forwards --window-days as ?windowDays and reflects it in the header (#6735)", async () => {
+    const e = await env();
+    // Identical --window-days handling to `precision`: a positive value bounds the window, absent = full history.
+    const scoped = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--window-days", "30"], e);
+    expect(scoped).toMatch(/Outcome calibration for owner\/repo \(last 30d\):/);
+    const scopedJson = JSON.parse(await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--window-days", "30", "--json"], e)) as {
+      windowDays: number;
+    };
+    expect(scopedJson.windowDays).toBe(30);
+    // A non-positive window is omitted from the query, so the route falls through to full history.
+    const zero = JSON.parse(await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--window-days", "0", "--json"], e)) as {
+      windowDays: number | null;
+    };
+    expect(zero.windowDays).toBeNull();
+  });
+
   it("validates inputs: --repo required, id required for approve, known subcommand + action/level", async () => {
     const e = await env();
     await expect(runAsync(["maintain", "status"], e)).rejects.toThrow(/Pass --repo/);
