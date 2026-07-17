@@ -27,6 +27,10 @@ const REQUIRED = [
   "schema/miner-goal-spec.schema.json",
 ];
 const FORBIDDEN_PATH = /(^|\/)(\.dev\.vars|\.env|\.npmrc|.*\.pem|.*private.*key.*|.*secret.*)$/i;
+// Stale public-package wording the published README must never ship with (#7013). The sibling
+// check-mcp-package.mjs has always guarded its README against this; the miner-package check did not, so a
+// pre-release "private beta"/"preview URL" phrasing could ship in the public `@loopover/miner` README unnoticed.
+const STALE_PACKAGE_TEXT = /(private beta|zeronode\.workers\.dev|preview URL)/i;
 
 export function validateMinerPackFileList(files, readContent) {
   const paths = files.map((file) => (typeof file === "string" ? file : file.path)).sort();
@@ -35,6 +39,8 @@ export function validateMinerPackFileList(files, readContent) {
     if (!ALLOWED.some((pattern) => pattern.test(file))) throw new Error(`Unexpected file in miner package: ${file}`);
     const content = readContent(file);
     if (FORBIDDEN_CONTENT.test(content)) throw new Error(`Secret-like content found in miner package file: ${file}`);
+    if (file === "README.md" && STALE_PACKAGE_TEXT.test(content))
+      throw new Error(`Stale public-package wording found in miner package file: ${file}`);
   }
   for (const required of REQUIRED) {
     if (!paths.includes(required)) throw new Error(`Miner package is missing required file: ${required}`);

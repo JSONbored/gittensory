@@ -29,6 +29,24 @@ describe("check-miner-package script", () => {
     expect(result.out).toContain("Forbidden file in miner package: .env");
   });
 
+  it("rejects a README carrying stale public-package wording (#7013)", () => {
+    const result = runChecker({
+      CHECK_MINER_PACK_TEST_FILES: JSON.stringify([
+        "package.json",
+        "bin/loopover-miner.js",
+        "README.md",
+        "DEPLOYMENT.md",
+        "Dockerfile",
+        "lib/cli.js",
+        "docs/quickstart.md",
+        "schema/miner-goal-spec.schema.json",
+      ]),
+      CHECK_MINER_PACK_TEST_CONTENT: "Join the private beta today!",
+    });
+    expect(result.status).toBe(1);
+    expect(result.out).toContain("Stale public-package wording found in miner package file: README.md");
+  });
+
   it("rejects an unexpected file", () => {
     const result = runChecker({ CHECK_MINER_PACK_TEST_FILES: JSON.stringify(["scripts/extra.mjs"]) });
     expect(result.status).toBe(1);
