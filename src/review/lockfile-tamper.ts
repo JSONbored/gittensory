@@ -1,5 +1,6 @@
-// Lockfile-tamper-risk gate check (#2563). Deterministic scan of a changed `package-lock.json` (or another
-// `*.lock` file) diff for the classic supply-chain tell: a `resolved`/`integrity` value changed WITHOUT that
+// Lockfile-tamper-risk gate check (#2563). Deterministic scan of a changed `package-lock.json` diff (npm
+// only — see isNpmLockfilePath below; yarn.lock/pnpm-lock.yaml are not parsed) for the classic supply-chain
+// tell: a `resolved`/`integrity` value changed WITHOUT that
 // SAME package-lock entry's own `"version"` field genuinely changing, or a `resolved` URL that points outside
 // the public npm registry. Distinct from the OSV.dev CVE analyzer (review-enrichment/src/analyzers/lockfile-drift.ts)
 // — that flags KNOWN-CVE versions; this flags tamper/integrity-substitution regardless of whether the substituted
