@@ -29,26 +29,10 @@ async function seedRepo(env: Env, owner: string, name: string, installationId: n
 }
 
 describe("maintainer AI-review config route", () => {
-  it("sets mode/byok/provider/model and preserves unrelated settings", async () => {
-    const app = createApp();
-    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", autoLabelEnabled: false });
-    const res = await app.request(
-      `/v1/repos/${REPO}/ai-review`,
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: true, provider: "anthropic", model: "claude-3-5-sonnet-latest", allAuthors: true, closeOwnerAuthors: true }) },
-      env,
-    );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewByok: true, aiReviewProvider: "anthropic", aiReviewModel: "claude-3-5-sonnet-latest", aiReviewAllAuthors: true, closeOwnerAuthors: true });
-    const settings = await getRepositorySettings(env, REPO);
-    expect(settings.aiReviewMode).toBe("block");
-    expect(settings.aiReviewAllAuthors).toBe(true); // persisted + read back (DB column round-trip)
-    expect(settings.closeOwnerAuthors).toBe(true); // persisted + read back (DB column round-trip)
-    expect(settings.reviewCheckMode).toBe("required"); // preserved
-    expect(settings.autoLabelEnabled).toBe(false); // preserved
-  });
-
-  it("defaults closeOwnerAuthors off when the AI-review config omits it", async () => {
+  // mode/byok/provider/model/allAuthors are config-as-code only now (Batch C, loopover#6444) --
+  // repositoryAiReviewSchema is .strict(), so a caller still sending the pre-Batch-C shape gets a 400
+  // naming the unrecognized keys instead of a silently-partial success.
+  it("rejects the pre-Batch-C shape (mode/byok/provider/model/allAuthors) as unrecognized keys", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
     const res = await app.request(
@@ -56,6 +40,38 @@ describe("maintainer AI-review config route", () => {
       { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: true, provider: "anthropic", model: "claude-3-5-sonnet-latest", allAuthors: true }) },
       env,
     );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_ai_review_config" });
+  });
+
+  it("sets closeOwnerAuthors, sourcing aiReviewMode/byok/provider/model from the (unconfigured) manifest default", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    await upsertRepositorySettings(env, { repoFullName: REPO, autoLabelEnabled: false });
+    const res = await app.request(
+      `/v1/repos/${REPO}/ai-review`,
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ closeOwnerAuthors: true }) },
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      aiReviewMode: "off",
+      aiReviewByok: false,
+      aiReviewProvider: null,
+      aiReviewModel: null,
+      aiReviewAllAuthors: false,
+      closeOwnerAuthors: true,
+      aiReviewConfigAsCode: true,
+    });
+    const settings = await getRepositorySettings(env, REPO);
+    expect(settings.closeOwnerAuthors).toBe(true); // persisted + read back (DB column round-trip)
+    expect(settings.autoLabelEnabled).toBe(false); // preserved
+  });
+
+  it("defaults closeOwnerAuthors off when the AI-review config omits it", async () => {
+    const app = createApp();
+    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
+    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ closeOwnerAuthors: false });
     expect((await getRepositorySettings(env, REPO)).closeOwnerAuthors).toBe(false);
@@ -66,23 +82,11 @@ describe("maintainer AI-review config route", () => {
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
     await upsertRepositorySettings(env, { repoFullName: REPO, closeOwnerAuthors: true });
 
-    const res = await app.request(
-      `/v1/repos/${REPO}/ai-review`,
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "advisory", byok: false }) },
-      env,
-    );
+    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "advisory", closeOwnerAuthors: true });
+    expect(await res.json()).toMatchObject({ closeOwnerAuthors: true });
     expect((await getRepositorySettings(env, REPO)).closeOwnerAuthors).toBe(true);
-  });
-
-  it("accepts a config without provider/model (stored as null)", async () => {
-    const app = createApp();
-    const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "advisory", byok: false }) }, env);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "advisory", aiReviewByok: false, aiReviewProvider: null, aiReviewModel: null });
   });
 
   it("rejects an invalid AI-review config", async () => {
@@ -95,28 +99,23 @@ describe("maintainer AI-review config route", () => {
   it("sets aiReviewLowConfidenceDisposition (#4603) and preserves unrelated settings", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", autoLabelEnabled: false });
+    await upsertRepositorySettings(env, { repoFullName: REPO, autoLabelEnabled: false });
     const res = await app.request(
       `/v1/repos/${REPO}/ai-review`,
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", byok: false, lowConfidenceDisposition: "advisory_only" }) },
+      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ lowConfidenceDisposition: "advisory_only" }) },
       env,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "block", aiReviewLowConfidenceDisposition: "advisory_only" });
+    expect(await res.json()).toMatchObject({ aiReviewLowConfidenceDisposition: "advisory_only" });
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.aiReviewLowConfidenceDisposition).toBe("advisory_only"); // persisted + read back (DB column round-trip)
-    expect(settings.reviewCheckMode).toBe("required"); // preserved
     expect(settings.autoLabelEnabled).toBe(false); // preserved
   });
 
   it("defaults aiReviewLowConfidenceDisposition to hold_for_review when the AI-review config omits it (fresh repo, no row)", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    const res = await app.request(
-      `/v1/repos/${REPO}/ai-review`,
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "advisory", byok: false }) },
-      env,
-    );
+    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ aiReviewLowConfidenceDisposition: "hold_for_review" });
     expect((await getRepositorySettings(env, REPO)).aiReviewLowConfidenceDisposition).toBe("hold_for_review");
@@ -127,34 +126,30 @@ describe("maintainer AI-review config route", () => {
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
     await upsertRepositorySettings(env, { repoFullName: REPO, aiReviewLowConfidenceDisposition: "one_shot" });
 
-    const res = await app.request(
-      `/v1/repos/${REPO}/ai-review`,
-      { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "advisory", byok: false }) },
-      env,
-    );
+    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({}) }, env);
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "advisory", aiReviewLowConfidenceDisposition: "one_shot" });
+    expect(await res.json()).toMatchObject({ aiReviewLowConfidenceDisposition: "one_shot" });
     expect((await getRepositorySettings(env, REPO)).aiReviewLowConfidenceDisposition).toBe("one_shot");
   });
 
   it("rejects an invalid aiReviewLowConfidenceDisposition value", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ mode: "block", lowConfidenceDisposition: "sometimes" }) }, env);
+    const res = await app.request(`/v1/repos/${REPO}/ai-review`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ lowConfidenceDisposition: "sometimes" }) }, env);
     expect(res.status).toBe(400);
   });
 
   it("lets maintainer settings set closeOwnerAuthors without resetting unrelated fields", async () => {
     const app = createApp();
     const env = createTestEnv({ TOKEN_ENCRYPTION_SECRET: SECRET });
-    await upsertRepositorySettings(env, { repoFullName: REPO, reviewCheckMode: "required", autoLabelEnabled: false });
+    await upsertRepositorySettings(env, { repoFullName: REPO, autoLabelEnabled: false });
     const res = await app.request(`/v1/repos/${REPO}/settings`, { method: "PUT", headers: apiHeaders(env), body: JSON.stringify({ closeOwnerAuthors: true }) }, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ closeOwnerAuthors: true, reviewCheckMode: "required", autoLabelEnabled: false });
+    expect(await res.json()).toMatchObject({ closeOwnerAuthors: true, autoLabelEnabled: false });
     const settings = await getRepositorySettings(env, REPO);
     expect(settings.closeOwnerAuthors).toBe(true);
-    expect(settings.reviewCheckMode).toBe("required");
+    expect(settings.autoLabelEnabled).toBe(false);
   });
 
   it("round-trips requireFreshRebaseWindowMinutes through the maintainer settings PUT route (#2552 gate finding)", async () => {
@@ -254,9 +249,9 @@ describe("maintainer route authz (session-scoped)", () => {
     stubMinerFetch();
     mockedPermission.mockResolvedValue("admin"); // real GitHub write access
     const { token } = await createSessionForGitHubUser(env, { login: "repo-owner", id: 201 });
-    const res = await app.request(`${OWNED}/ai-review`, { method: "PUT", headers: { cookie: `loopover_session=${token}`, "content-type": "application/json" }, body: JSON.stringify({ mode: "advisory", byok: true, provider: "anthropic" }) }, env);
+    const res = await app.request(`${OWNED}/ai-review`, { method: "PUT", headers: { cookie: `loopover_session=${token}`, "content-type": "application/json" }, body: JSON.stringify({ closeOwnerAuthors: true }) }, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ aiReviewMode: "advisory", aiReviewProvider: "anthropic" });
+    expect(await res.json()).toMatchObject({ closeOwnerAuthors: true, aiReviewConfigAsCode: true });
   });
 
   it("allows the repo owner (admin permission) via session to set a BYOK key", async () => {

@@ -430,9 +430,10 @@ describe("api routes", () => {
     await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/badged", badgeEnabled: false });
   });
 
-  it("downgrades qualityGateMode: block to advisory through the internal settings write endpoint too (#2267)", async () => {
-    // Readiness/quality can never hard-block a PR — the internal full-settings write path (used by tooling,
-    // not just the maintainer dashboard) gets the identical downgrade so it can't persist "block" either.
+  it("ignores a qualityGateMode opt-in posted to the internal settings write endpoint (config-as-code only now, #6444)", async () => {
+    // qualityGateMode was removed from repositorySettingsSchema entirely in Batch C (loopover#6444) --
+    // it's config-as-code only via .loopover.yml's gate.readiness.mode now, so upsertRepositorySettings
+    // always returns its hardcoded "advisory" default regardless of what a caller posts here.
     const app = createApp();
     const env = createTestEnv();
     const response = await app.request(
@@ -444,10 +445,11 @@ describe("api routes", () => {
     await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/readiness-block", qualityGateMode: "advisory" });
   });
 
-  it("ignores an unknown gateCheckMode key in the request body through the internal settings write endpoint (#4618/#5373)", async () => {
-    // gateCheckMode was removed entirely from RepositorySettings (#5373); the internal full-replace route's
-    // schema never accepted it as input even before removal (#4618). A caller sending it gets the schema's
-    // plain reviewCheckMode default ("disabled") -- the unknown key is silently ignored, not rejected.
+  it("ignores reviewCheckMode/gateCheckMode keys in the request body through the internal settings write endpoint (#4618/#5373/#6444)", async () => {
+    // gateCheckMode was removed entirely from RepositorySettings (#5373); reviewCheckMode itself was
+    // subsequently removed from repositorySettingsSchema too (Batch C, loopover#6444) -- it's
+    // config-as-code only via .loopover.yml's gate.checkMode now, so both keys are silently ignored and
+    // the response always reflects the hardcoded "disabled" default.
     const app = createApp();
     const env = createTestEnv();
     const enabled = await app.request(
@@ -458,14 +460,13 @@ describe("api routes", () => {
     expect(enabled.status).toBe(200);
     await expect(enabled.json()).resolves.toMatchObject({ reviewCheckMode: "disabled" });
 
-    // reviewCheckMode set directly is the real, honored write path.
     const explicit = await app.request(
       "/v1/internal/repos/acme/legacy-gate-explicit/settings",
       { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ gateCheckMode: "off", reviewCheckMode: "visible" }) },
       env,
     );
     expect(explicit.status).toBe(200);
-    await expect(explicit.json()).resolves.toMatchObject({ reviewCheckMode: "visible" });
+    await expect(explicit.json()).resolves.toMatchObject({ reviewCheckMode: "disabled" });
   });
 
   it("rejects invalid public GitHub repo stats paths before calling GitHub", async () => {
@@ -2677,11 +2678,11 @@ describe("api routes", () => {
         method: "PUT",
         headers: ownerHeaders,
         // #773/#774/#776: the agent-layer config is settable here; the DB layer drops an unknown action class.
-        // #2267: qualityGateMode: "block" is downgraded to "advisory" on write — readiness/quality can never
-        // hard-block a PR, so the dashboard/API save path can't persist a value implying enforcement it doesn't
-        // have. slopGateMode: "block" is a DIFFERENT, legitimately-blockable dimension and is left untouched.
-        // #4618/#5373: gateCheckMode is an unknown key with no effect here (removed from RepositorySettings
-        // entirely) -- included to confirm it is silently ignored, not to drive reviewCheckMode.
+        // slopGateMode: "block" is a legitimately-blockable dimension, unaffected by Batch C.
+        // #4618/#5373/#6444: gateCheckMode/reviewCheckMode/qualityGateMode are unknown keys here now --
+        // reviewCheckMode/qualityGateMode were removed from maintainerSettingsSchema entirely in Batch C
+        // (loopover#6444), config-as-code only via .loopover.yml now -- included to confirm they are
+        // silently ignored (ignored keys on a non-strict `.partial()` schema), not rejected.
         // mergeTrainMode moved off the DB entirely (Batch B, loopover#6443) -- no longer a writable key on this
         // route, config-as-code only via .loopover.yml now. Same for autoMaintain (loopover#6445).
         body: JSON.stringify({ gateCheckMode: "enabled", reviewCheckMode: "required", slopGateMode: "block", slopGateMinScore: 55, qualityGateMode: "block", autonomy: { merge: "auto_with_approval", deploy: "auto" }, agentPaused: true, agentDryRun: true }),
@@ -2690,28 +2691,22 @@ describe("api routes", () => {
     );
     expect(settingsUpdate.status).toBe(200);
     await expect(settingsUpdate.json()).resolves.toMatchObject({
-      reviewCheckMode: "required",
+      reviewCheckMode: "disabled", // config-as-code only (#6444) -- always the hardcoded default now
       slopGateMode: "block",
       slopGateMinScore: 55,
-      qualityGateMode: "advisory", // #2267: downgraded, not persisted as "block"
+      qualityGateMode: "advisory", // config-as-code only (#6444) -- always the hardcoded default now
       autonomy: { merge: "auto_with_approval" }, // unknown action class dropped by the DB normalizer
       agentPaused: true, // #776 kill-switch
       agentDryRun: true,
     });
-    // #4618/#5373: gateCheckMode alone has NO effect -- it is an unknown key, so reviewCheckMode stays
-    // whatever it already was (still "required" from the write immediately above), not derived "disabled".
-    const settingsUpdateOff = await app.request(
-      "/v1/repos/repo-owner/owned-repo/settings",
-      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ gateCheckMode: "off" }) },
-      ownerEnv,
-    );
-    expect(settingsUpdateOff.status).toBe(200);
-    await expect(settingsUpdateOff.json()).resolves.toMatchObject({ reviewCheckMode: "required" });
-    // autoMaintain moved off the DB entirely (config-as-code, loopover#6445) -- no longer a writable key on
-    // this route, so it's no longer validated at this API boundary either.
+    // gateCheckMode/reviewCheckMode/autoMaintain are all unknown/removed keys now (Batch C loopover#6444 +
+    // Batch D loopover#6445 both moved fields off this route to config-as-code-only) -- reviewCheckMode is
+    // covered by the dedicated "ignores reviewCheckMode/gateCheckMode keys..." test above, and autoMaintain
+    // has no writable shape left to bounds-check, so both of those follow-up probes are gone. Probe a
+    // still-real gate field instead for the invalid-value 400 case.
     const settingsInvalid = await app.request(
       "/v1/repos/repo-owner/owned-repo/settings",
-      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ reviewCheckMode: "nonsense" }) },
+      { method: "PUT", headers: ownerHeaders, body: JSON.stringify({ slopGateMode: "nonsense" }) },
       ownerEnv,
     );
     expect(settingsInvalid.status).toBe(400);
@@ -4667,7 +4662,8 @@ describe("api routes", () => {
     expect(queuedBurden.status).toBe(202);
     const queuedSignals = await app.request("/v1/internal/jobs/generate-signal-snapshots", { method: "POST", headers: internalHeaders, body: JSON.stringify({ repoFullName: "owner/repo" }) }, env);
     expect(queuedSignals.status).toBe(202);
-    expect((await app.request("/v1/internal/repos/owner/repo/settings", { method: "POST", headers: internalHeaders, body: JSON.stringify({ reviewCheckMode: "bad" }) }, env)).status).toBe(400);
+    // reviewCheckMode is gone from repositorySettingsSchema entirely (#6444) -- probe a still-real field instead.
+    expect((await app.request("/v1/internal/repos/owner/repo/settings", { method: "POST", headers: internalHeaders, body: JSON.stringify({ gatePack: "bad" }) }, env)).status).toBe(400);
   });
 
   it("settings-preview never mutates GitHub state", async () => {
@@ -6506,9 +6502,10 @@ describe("api routes", () => {
       env,
     );
     expect(signalsOne.status).toBe(202);
+    // reviewCheckMode is gone from repositorySettingsSchema entirely (#6444) -- probe a still-real field instead.
     const invalidSettings = await app.request(
       "/v1/internal/repos/owner/repo/settings",
-      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` }, body: JSON.stringify({ reviewCheckMode: "loud" }) },
+      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` }, body: JSON.stringify({ gatePack: "loud" }) },
       env,
     );
     expect(invalidSettings.status).toBe(400);

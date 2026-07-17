@@ -108,23 +108,8 @@ function buildSummary(evaluated: number, withFindings: number, currentlyActive: 
   return currentlyActive ? `${base} The LoopOver gate is already enabled.` : `${base} Enable advisory mode to start surfacing this guidance automatically.`;
 }
 
-/**
- * The one-click "enable advisory mode" patch. Advisory-first by design (#525 cross-cutting AC): turns on the
- * gate check + the deterministic rules in ADVISORY mode (never blocking, never auto-merge). AI review stays
- * off — it's opt-in via the ai-review route. Merged onto current settings so unrelated fields are preserved.
- */
-export function recommendedAdvisoryActivationSettings(): Pick<
-  RepositorySettings,
-  "reviewCheckMode" | "linkedIssueGateMode" | "duplicatePrGateMode" | "qualityGateMode"
-> {
-  // checkRunMode moved off the DB entirely (Batch A, loopover#6442) -- writing it via upsertRepositorySettings
-  // is now a silent no-op, so it's dropped from this one-click patch rather than pretending to activate it.
-  // Turning check-run mode on now requires a repo's own .loopover.yml settings.checkRunMode -- there is no
-  // config-as-code write mechanism this one-click action can use to set that on the maintainer's behalf.
-  return {
-    reviewCheckMode: "required",
-    linkedIssueGateMode: "advisory",
-    duplicatePrGateMode: "advisory",
-    qualityGateMode: "advisory",
-  };
-}
+// The one-click "enable advisory mode" patch (recommendedAdvisoryActivationSettings) was removed here:
+// reviewCheckMode, linkedIssueGateMode, duplicatePrGateMode, and qualityGateMode are ALL config-as-code
+// only now (Batch C, loopover#6444) -- writing any of them via upsertRepositorySettings is a silent
+// no-op, so there was nothing left for a one-click DB-write action to meaningfully do. Enabling the gate
+// now requires a repo's own .loopover.yml gate.checkMode (or the legacy settings.reviewCheckMode alias).

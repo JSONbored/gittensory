@@ -264,7 +264,7 @@ import { buildSlopAssessment, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { computeContributorCalibration } from "../review/predicted-gate-calibration-ledger";
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
-import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
+import { buildMaintainerActivationPreview } from "../services/maintainer-activation";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { computeOpsStats, isOpsEnabled, resolveOpsManifestOverride } from "../review/ops-wire";
@@ -281,7 +281,7 @@ import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from ".
 import { buildMaintainerSlopDuplicateTrend, SLOP_DUPLICATE_TREND_SNAPSHOT_LIMIT } from "../services/maintainer-slop-duplicate-trend";
 import { buildGateOutcomeBreakdown, GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS } from "../services/gate-outcome-breakdown";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
-import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode, resolveEffectiveSettings } from "../signals/focus-manifest";
+import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, resolveEffectiveSettings } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
@@ -666,21 +666,12 @@ const agentPlanSchema = z
 
 const agentExplainBlockersSchema = z.union([localBranchAnalysisSchema, agentPlanSchema]);
 
+// reviewCheckMode/linkedIssueGateMode/duplicatePrGateMode/qualityGateMode/qualityGateMinScore/
+// aiReviewMode/aiReviewByok/aiReviewProvider/aiReviewModel/aiReviewAllAuthors removed from this write
+// schema (Batch C, loopover#6444) -- config-as-code only via .loopover.yml's gate.* block now;
+// upsertRepositorySettings no longer has a DB column to write any of them into.
 const repositorySettingsSchema = z.object({
-  // #4618/#5373: this write schema never accepted a gateCheckMode field -- it was a deprecated computed
-  // read-back of reviewCheckMode, removed from RepositorySettings entirely in #5373. Set reviewCheckMode
-  // directly.
-  reviewCheckMode: z.enum(["required", "visible", "disabled"]).default("disabled"),
   gatePack: z.enum(["gittensor", "oss-anti-slop"]).default("gittensor"),
-  linkedIssueGateMode: z.enum(["off", "advisory", "block"]).default("advisory"),
-  duplicatePrGateMode: z.enum(["off", "advisory", "block"]).default("block"),
-  qualityGateMode: z.enum(["off", "advisory", "block"]).default("advisory"),
-  qualityGateMinScore: z.number().int().min(0).max(100).nullable().optional(),
-  aiReviewMode: z.enum(["off", "advisory", "block"]).default("off"),
-  aiReviewByok: z.boolean().default(false),
-  aiReviewProvider: z.enum(["anthropic", "openai"]).nullable().optional(),
-  aiReviewModel: z.string().trim().min(1).max(120).nullable().optional(),
-  aiReviewAllAuthors: z.boolean().default(false),
   aiReviewLowConfidenceDisposition: z.enum(["one_shot", "hold_for_review", "advisory_only"]).default("hold_for_review"),
   closeOwnerAuthors: z.boolean().default(false),
   autoLabelEnabled: z.boolean().default(true),
@@ -700,17 +691,14 @@ const repositorySettingsSchema = z.object({
 // dedicated /ai-review + /ai-key routes) and the operator-only scoring internal (backfillEnabled). The
 // handler loads current settings and merges, since upsertRepositorySettings defaults any absent field
 // rather than preserving it.
+// reviewCheckMode/linkedIssueGateMode/duplicatePrGateMode/qualityGateMode/qualityGateMinScore/
+// selfAuthoredLinkedIssueGateMode removed from this write schema (Batch C, loopover#6444) --
+// config-as-code only via .loopover.yml's gate.* block now.
 const maintainerSettingsSchema = z
   .object({
-    reviewCheckMode: z.enum(["required", "visible", "disabled"]),
     gatePack: z.enum(["gittensor", "oss-anti-slop"]),
-    linkedIssueGateMode: z.enum(["off", "advisory", "block"]),
-    duplicatePrGateMode: z.enum(["off", "advisory", "block"]),
-    qualityGateMode: z.enum(["off", "advisory", "block"]),
-    qualityGateMinScore: z.number().int().min(0).max(100).nullable(),
     mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
     manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
-    selfAuthoredLinkedIssueGateMode: z.enum(["off", "advisory", "block"]),
     linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
     // #6443: mergeTrainMode/gittensorLabel/blacklistLabel/createMissingLabel removed -- no longer DB-backed,
     // config-as-code only via .loopover.yml's settings: block now.
@@ -738,20 +726,10 @@ const maintainerSettingsSchema = z
   })
   .partial();
 
-/** Readiness/quality can never hard-block a PR (buildQualityGateWarning is always advisory-severity;
- *  isConfiguredGateBlocker has no branch for it) — downgrade a settings-write's `qualityGateMode: "block"` to
- *  `"advisory"` here too, mirroring the same downgrade `.loopover.yml`'s `gate.readiness.mode` /
- *  `settings.qualityGateMode` already get in normalizeReadinessGateMode, so the dashboard/API save path can
- *  never persist a value that implies enforcement it doesn't have (#2267). Callers check for `undefined`
- *  (a PATCH-style save that didn't touch this field) before calling — this only handles the defined case, so
- *  the return type never needs `undefined` under `exactOptionalPropertyTypes`. The warnings array is scratch;
- *  these routes have no warnings-response protocol. */
-function downgradeQualityGateMode(mode: "off" | "advisory" | "block"): "off" | "advisory" {
-  /* v8 ignore next -- never null for a Zod-validated "off"|"advisory"|"block" input (normalizeReadinessGateMode's
-     "must be one of" branch only fires for a value outside that set); the fallback only satisfies the shared
-     parser's broader return type. */
-  return (normalizeReadinessGateMode(mode, "qualityGateMode", []) as "off" | "advisory" | null) ?? "advisory";
-}
+// downgradeQualityGateMode (the settings-write-path "block" -> "advisory" downgrade for
+// qualityGateMode/#2267) was removed here: qualityGateMode is config-as-code only now (Batch C,
+// loopover#6444), so no write path sets it anymore. resolveEffectiveSettings's own downgrade logic
+// (src/signals/focus-manifest.ts) still applies the same rule on the read/resolver path.
 
 // Maintainer BYOK provider key. Write-only: the key is encrypted at rest and never returned. A loose
 // prefix check catches the common provider/key mismatch (e.g. pasting an OpenAI key under Anthropic)
@@ -774,20 +752,22 @@ const repositoryLinearKeySchema = z.object({
   key: z.string().trim().min(20).max(400),
 });
 
-// Maintainer-settable AI-review config (the non-secret subset of settings). The secret key is set
+// Maintainer-settable AI-review config. mode/byok/provider/model/allAuthors are config-as-code only now
+// (Batch C, loopover#6444) -- set via a repo's own .loopover.yml gate.aiReview.* block, not this route --
+// so they are intentionally NOT accepted here anymore (a caller submitting the old shape gets a clean
+// validation error naming the current route, not a silently-ignored write). The secret key is set
 // separately via the ai-key route; never here.
-const repositoryAiReviewSchema = z.object({
-  mode: z.enum(["off", "advisory", "block"]),
-  byok: z.boolean().default(false),
-  provider: z.enum(["anthropic", "openai"]).nullable().optional(),
-  model: z.string().trim().min(1).max(120).nullable().optional(),
-  allAuthors: z.boolean().default(false),
-  closeOwnerAuthors: z.boolean().optional(),
-  // Disposition for a sub-aiReviewCloseConfidence-floor ai_consensus_defect/ai_review_split finding (#4603).
-  // Optional so a caller that only ever cared about mode/byok/provider/model keeps its historical effect --
-  // upsertRepositorySettings applies its own "hold_for_review" default when omitted.
-  lowConfidenceDisposition: z.enum(["one_shot", "hold_for_review", "advisory_only"]).optional(),
-});
+const repositoryAiReviewSchema = z
+  .object({
+    closeOwnerAuthors: z.boolean().optional(),
+    // Disposition for a sub-aiReviewCloseConfidence-floor ai_consensus_defect/ai_review_split finding (#4603).
+    // Optional -- upsertRepositorySettings applies its own "hold_for_review" default when omitted.
+    lowConfidenceDisposition: z.enum(["one_shot", "hold_for_review", "advisory_only"]).optional(),
+  })
+  // .strict() so a caller still sending the pre-Batch-C shape (mode/byok/provider/model/allAuthors) gets
+  // an immediate "unrecognized key" validation error naming exactly which fields moved, instead of those
+  // keys being silently dropped and the request appearing to partially succeed.
+  .strict();
 
 const contributorIssueDraftGenerateSchema = z.object({
   dryRun: z.boolean().optional().default(true),
@@ -2563,7 +2543,6 @@ export function createApp() {
     if (!parsed.success) return c.json({ error: "invalid_repository_settings", issues: parsed.error.issues }, 400);
     const current = await getRepositorySettings(c.env, fullName);
     const changes = Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined)) as Partial<RepositorySettings>;
-    if (changes.qualityGateMode !== undefined) changes.qualityGateMode = downgradeQualityGateMode(changes.qualityGateMode);
     const updated = await upsertRepositorySettings(c.env, { ...current, ...changes, repoFullName: fullName });
     await recordAuditEvent(c.env, {
       eventType: "repo.settings_updated",
@@ -2679,14 +2658,17 @@ export function createApp() {
   });
 
   // Maintainer activation demo (#701): a repo-specific "here's what LoopOver would have surfaced" preview
-  // over recent PRs, plus a one-click advisory ramp. Maintainer-scoped + per-repo. Deterministic (no AI run).
+  // over recent PRs. Maintainer-scoped + per-repo. Deterministic (no AI run).
   app.get("/v1/repos/:owner/:repo/activation-preview", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const gate = await requireRepoMaintainer(c, fullName);
     if (gate instanceof Response) return gate;
+    // resolveRepositorySettings (not the raw getRepositorySettings row), so reviewCheckMode/aiReviewMode --
+    // both config-as-code only now (Batch C, loopover#6444) -- reflect a repo's real .loopover.yml-driven
+    // state instead of always reporting the hardcoded DB default (#6444 follow-up to the #6557-class bug).
     const [repo, settings, pullRequests] = await Promise.all([
       getRepository(c.env, fullName),
-      getRepositorySettings(c.env, fullName),
+      resolveRepositorySettings(c.env, fullName),
       listPullRequests(c.env, fullName),
     ]);
     return c.json(
@@ -2785,28 +2767,10 @@ export function createApp() {
     return c.json({ repoFullName: fullName, cleared: true });
   });
 
-  // One-click "enable advisory mode" — turns on the gate + deterministic rules in advisory (non-blocking)
-  // mode. Merges onto current settings so unrelated fields are preserved.
-  app.post("/v1/repos/:owner/:repo/activation", async (c) => {
-    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
-    const gate = await requireRepoWriteAccess(c, fullName);
-    if (gate instanceof Response) return gate;
-    const current = await getRepositorySettings(c.env, fullName);
-    const updated = await upsertRepositorySettings(c.env, { ...current, ...recommendedAdvisoryActivationSettings() });
-    // checkRunMode dropped (Batch A, loopover#6442): recommendedAdvisoryActivationSettings() no longer sets
-    // it (writing it is now a no-op), so echoing updated.checkRunMode here would just always report the
-    // hardcoded default regardless of what this activation actually did.
-    return c.json({
-      repoFullName: fullName,
-      reviewCheckMode: updated.reviewCheckMode,
-      linkedIssueGateMode: updated.linkedIssueGateMode,
-      duplicatePrGateMode: updated.duplicatePrGateMode,
-      qualityGateMode: updated.qualityGateMode,
-    });
-  });
-
-  // Maintainer self-serve AI-review config (non-secret: mode/byok/provider/model). Session-authenticated +
-  // scoped to repos the maintainer has live GitHub write access to. The secret provider key goes through the ai-key route.
+  // Maintainer self-serve AI-review config. mode/byok/provider/model/allAuthors are config-as-code only now
+  // (Batch C, loopover#6444) -- set via a repo's own .loopover.yml gate.aiReview.* block; this route can
+  // only still persist closeOwnerAuthors/lowConfidenceDisposition. Session-authenticated + scoped to repos
+  // the maintainer has live GitHub write access to. The secret provider key goes through the ai-key route.
   // Merges onto current settings so unrelated settings are preserved.
   app.put("/v1/repos/:owner/:repo/ai-review", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
@@ -2817,26 +2781,28 @@ export function createApp() {
     const current = await getRepositorySettings(c.env, fullName);
     const updated = await upsertRepositorySettings(c.env, {
       ...current,
-      aiReviewMode: parsed.data.mode,
-      aiReviewByok: parsed.data.byok,
-      aiReviewProvider: parsed.data.provider,
-      aiReviewModel: parsed.data.model,
-      aiReviewAllAuthors: parsed.data.allAuthors,
       aiReviewLowConfidenceDisposition: parsed.data.lowConfidenceDisposition ?? current.aiReviewLowConfidenceDisposition,
       closeOwnerAuthors: parsed.data.closeOwnerAuthors ?? current.closeOwnerAuthors,
     });
-    // getRepositorySettings normalizes these to a concrete value or null (never undefined).
+    // mode/byok/provider/model/allAuthors read from the manifest-resolved settings (not `updated`, which is
+    // always the hardcoded default for these five now) so the response reflects a repo's real
+    // .loopover.yml-driven state instead of silently reporting the same constant on every save.
+    const manifest = await loadRepoFocusManifest(c.env, fullName);
+    const resolved = resolveEffectiveSettings(updated, manifest);
     return c.json({
-      aiReviewMode: updated.aiReviewMode,
-      aiReviewByok: updated.aiReviewByok,
-      aiReviewProvider: updated.aiReviewProvider ?? null,
-      aiReviewModel: updated.aiReviewModel ?? null,
-      aiReviewAllAuthors: updated.aiReviewAllAuthors,
+      aiReviewMode: resolved.aiReviewMode,
+      aiReviewByok: resolved.aiReviewByok,
+      aiReviewProvider: resolved.aiReviewProvider ?? null,
+      aiReviewModel: resolved.aiReviewModel ?? null,
+      aiReviewAllAuthors: resolved.aiReviewAllAuthors,
       // parseAiReviewLowConfidenceDisposition's return type is non-nullable and already falls back to the
       // literal "hold_for_review" itself, so this side of the `??` can never actually run.
       /* v8 ignore next */
       aiReviewLowConfidenceDisposition: updated.aiReviewLowConfidenceDisposition ?? "hold_for_review",
       closeOwnerAuthors: updated.closeOwnerAuthors,
+      // Tells the dashboard these five fields are read-only now and where to configure them instead --
+      // see apps/loopover-ui's AiReviewSettings component, which stops rendering them as editable inputs.
+      aiReviewConfigAsCode: true,
     });
   });
 
@@ -4271,17 +4237,7 @@ export function createApp() {
     return c.json(
       await upsertRepositorySettings(c.env, {
         repoFullName: fullName,
-        reviewCheckMode: parsed.data.reviewCheckMode,
         gatePack: parsed.data.gatePack,
-        linkedIssueGateMode: parsed.data.linkedIssueGateMode,
-        duplicatePrGateMode: parsed.data.duplicatePrGateMode,
-        qualityGateMode: downgradeQualityGateMode(parsed.data.qualityGateMode),
-        qualityGateMinScore: parsed.data.qualityGateMinScore,
-        aiReviewMode: parsed.data.aiReviewMode,
-        aiReviewByok: parsed.data.aiReviewByok,
-        aiReviewProvider: parsed.data.aiReviewProvider,
-        aiReviewModel: parsed.data.aiReviewModel,
-        aiReviewAllAuthors: parsed.data.aiReviewAllAuthors,
         aiReviewLowConfidenceDisposition: parsed.data.aiReviewLowConfidenceDisposition,
         closeOwnerAuthors: parsed.data.closeOwnerAuthors,
         autoLabelEnabled: parsed.data.autoLabelEnabled,
@@ -5145,6 +5101,12 @@ const CONFIG_AS_CODE_ONLY_FIELDS = [
   "reviewEvasionLabel",
   "reviewEvasionComment",
   "mergeTrainMode",
+  // Batch C (loopover#6444): only reviewCheckMode is read directly in this file (buildGithubAppBehavior) --
+  // the other 10 Batch C fields (linkedIssueGateMode, duplicatePrGateMode, qualityGateMode,
+  // qualityGateMinScore, selfAuthoredLinkedIssueGateMode, aiReviewMode, aiReviewByok, aiReviewProvider,
+  // aiReviewModel, aiReviewAllAuthors) are never read by registration-readiness.ts/this response, so they
+  // don't need adding here.
+  "reviewCheckMode",
 ] as const satisfies ReadonlyArray<keyof RepositorySettings>;
 function applyConfigAsCodeOnlyFields(rawSettings: RepositorySettings, resolvedSettings: RepositorySettings): RepositorySettings {
   const settings = { ...rawSettings };

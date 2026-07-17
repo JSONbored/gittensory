@@ -26,12 +26,6 @@ describe("timestamp column defaults", () => {
     expect(row?.createdAt).toMatch(ISO);
     expect(row?.updatedAt).toMatch(ISO);
     expect(row?.createdAt).not.toBe("CURRENT_TIMESTAMP");
-    // #gate-review-2727: the raw SQLite column-level DEFAULT for linked_issue_gate_mode is still 'block'
-    // (migration 0023 added it that way, and SQLite has no ALTER COLUMN SET DEFAULT to fix it without a full
-    // table rebuild -- see migrations/0102_fix_linked_issue_gate_mode_default.sql's header comment). This
-    // pins that the raw default never actually fires: Drizzle's schema.ts `.default("advisory")` is injected
-    // client-side into the generated INSERT whenever the field is omitted, same as createdAt/updatedAt above.
-    expect(row?.linkedIssueGateMode).toBe("advisory");
   });
 
   it("keeps orb relay pending coalesce keys wired through the drizzle schema", async () => {

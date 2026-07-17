@@ -1,4 +1,4 @@
-import { CheckCircle2, Loader2, Rocket } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { StatusPill, type Status } from "@/components/site/control-primitives";
@@ -34,16 +34,6 @@ type ActivationPreviewResponse = {
   summary: string;
 };
 
-type ActivationResponse = {
-  repoFullName: string;
-  reviewCheckMode: string;
-  linkedIssueGateMode: string;
-  duplicatePrGateMode: string;
-  qualityGateMode: string;
-};
-
-type Message = { kind: "ok" | "err"; text: string };
-
 const SEVERITY_TONE: Record<ActivationSeverity, Status> = {
   info: "info",
   warning: "warn",
@@ -57,10 +47,13 @@ function repoApiBase(repoFullName: string): string | null {
 }
 
 /**
- * One-step maintainer activation demo (#701): loads GET /activation-preview for a repo (deterministic,
- * no AI run) so a newly-installed maintainer sees concrete "here's what LoopOver would have surfaced"
- * evidence, then a single action button posts /activation to turn on advisory mode. Mirrors the
- * AiReviewSettings / MaintainerSettings repo-picker + load/save shape in this same file group.
+ * Maintainer activation demo (#701): loads GET /activation-preview for a repo (deterministic, no AI
+ * run) so a newly-installed maintainer sees concrete "here's what LoopOver would have surfaced"
+ * evidence. Purely informational — reviewCheckMode and every other gate field it reports on are
+ * config-as-code only now (Batch C, loopover#6444), so there is no longer a one-click action this
+ * panel can take on the maintainer's behalf; enabling the gate requires editing the repo's own
+ * .loopover.yml. Mirrors the AiReviewSettings / MaintainerSettings repo-picker + load shape in this
+ * same file group.
  */
 export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr: string }> }) {
   const repoOptions = useMemo(() => extractPreviewRepoOptions(reviewability), [reviewability]);
@@ -68,8 +61,6 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
   const [preview, setPreview] = useState<ActivationPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<Message | null>(null);
 
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
@@ -81,7 +72,6 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
       setLoadError(null);
       return;
     }
-    setMessage(null);
     setLoadError(null);
     setLoading(true);
     const result = await apiFetch<ActivationPreviewResponse>(`${apiBase}/activation-preview`, {
@@ -102,28 +92,6 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
     void load();
   }, [load]);
 
-  async function activate() {
-    if (!base) return;
-    setBusy(true);
-    const result = await apiFetch<ActivationResponse>(`${base}/activation`, {
-      method: "POST",
-      label: "Enable advisory mode",
-      credentials: "include",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-    });
-    setBusy(false);
-    if (result.ok) {
-      // Reload first — `load()` clears any prior message, so the success message must be set after it settles.
-      await load();
-      setMessage({
-        kind: "ok",
-        text: "Advisory mode enabled. LoopOver will now surface guidance on new PRs.",
-      });
-    } else {
-      setMessage({ kind: "err", text: result.message });
-    }
-  }
-
   return (
     <section
       className="rounded-token border-hairline bg-card p-5"
@@ -135,8 +103,8 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
             Instant activation preview
           </h2>
           <p className="mt-1 text-token-xs text-muted-foreground">
-            See what LoopOver would have surfaced on this repo's recent pull requests, then enable
-            advisory mode in one step. Deterministic — never runs AI, never blocks a merge.
+            See what LoopOver would have surfaced on this repo's recent pull requests. Deterministic
+            — never runs AI, never blocks a merge.
           </p>
         </div>
         {preview ? (
@@ -195,35 +163,15 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
                 : "Enter an installed repository to preview activation."}
             </p>
           ) : preview ? (
-            <ActivationPreviewBody
-              preview={preview}
-              busy={busy}
-              onActivate={() => void activate()}
-            />
+            <ActivationPreviewBody preview={preview} />
           ) : null}
         </StateBoundary>
       </div>
-
-      <span
-        role="status"
-        aria-live="polite"
-        className={`mt-4 block text-token-xs ${message ? (message.kind === "ok" ? "text-mint" : "text-warning") : "sr-only"}`}
-      >
-        {message?.text ?? ""}
-      </span>
     </section>
   );
 }
 
-function ActivationPreviewBody({
-  preview,
-  busy,
-  onActivate,
-}: {
-  preview: ActivationPreviewResponse;
-  busy: boolean;
-  onActivate: () => void;
-}) {
+function ActivationPreviewBody({ preview }: { preview: ActivationPreviewResponse }) {
   return (
     <div className="space-y-4">
       <p className="text-token-sm text-foreground/90">{preview.summary}</p>
@@ -297,16 +245,11 @@ function ActivationPreviewBody({
 
       <div className="flex flex-wrap items-center gap-3">
         {preview.recommendedAction === "enable_advisory" ? (
-          <button
-            type="button"
-            disabled={busy}
-            aria-busy={busy}
-            onClick={onActivate}
-            className="inline-flex items-center gap-2 rounded-token border border-mint/40 bg-mint px-3 py-2 text-token-xs font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Rocket className="size-3.5" />}
-            Enable advisory mode
-          </button>
+          <span className="inline-flex items-center gap-2 rounded-token border-hairline bg-background/40 px-3 py-2 text-token-xs text-muted-foreground">
+            Not yet enabled — set <code className="font-mono">gate.checkMode: required</code> (or{" "}
+            <code className="font-mono">gate.enabled: true</code>) in this repo's{" "}
+            <code className="font-mono">.loopover.yml</code> to turn on advisory mode.
+          </span>
         ) : (
           <span className="inline-flex items-center gap-2 rounded-token border border-success/35 bg-success/10 px-3 py-2 text-token-xs text-success">
             <CheckCircle2 className="size-3.5" /> Advisory mode is already enabled

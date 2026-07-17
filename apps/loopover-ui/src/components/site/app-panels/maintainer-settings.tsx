@@ -1,7 +1,6 @@
 import { FileCog, Loader2, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { StatusPill } from "@/components/site/control-primitives";
 import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
 import { extractPreviewRepoOptions, splitRepoFullName } from "@/lib/maintainer-settings-preview";
@@ -68,19 +67,10 @@ type NumberFieldDef = {
 };
 type FieldDef = SelectFieldDef | ToggleFieldDef | NumberFieldDef;
 
+// reviewCheckMode/linkedIssueGateMode/duplicatePrGateMode/qualityGateMode/qualityGateMinScore removed
+// (#6444) -- config-as-code only via .loopover.yml's gate.* block now; there's no DB-backed value left
+// for this editor to show or write.
 const GATE_FIELDS: FieldDef[] = [
-  {
-    key: "reviewCheckMode",
-    label: "Review agent check",
-    kind: "select",
-    // "visible" (publishes but never required in branch protection) is deliberately not offered here --
-    // this toggle keeps its historical off/enabled shape; set .loopover.yml gate.checkMode: visible directly
-    // for that finer-grained mode.
-    options: [
-      ["disabled", "off"],
-      ["required", "enabled"],
-    ],
-  },
   {
     key: "gatePack",
     label: "Policy pack",
@@ -95,20 +85,6 @@ const GATE_FIELDS: FieldDef[] = [
     label: "Merge-readiness (master)",
     kind: "select",
     options: GATE_MODE_OPTIONS,
-  },
-  { key: "linkedIssueGateMode", label: "Linked issue", kind: "select", options: GATE_MODE_OPTIONS },
-  { key: "duplicatePrGateMode", label: "Duplicate PR", kind: "select", options: GATE_MODE_OPTIONS },
-  {
-    key: "qualityGateMode",
-    label: "Quality / readiness",
-    kind: "select",
-    options: GATE_MODE_OPTIONS,
-  },
-  {
-    key: "qualityGateMinScore",
-    label: "Quality min score",
-    kind: "number",
-    placeholder: "default",
   },
   {
     key: "manifestPolicyGateMode",
@@ -236,14 +212,12 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
           </h2>
           <p className="mt-1 text-token-xs text-muted-foreground">
             Configure exactly what LoopOver enforces and surfaces on this repo — gate modes,
-            anti-slop, labels, public output, and who can run each command. Changes are audited.
+            anti-slop, labels, public output, and who can run each command. Changes are audited. The
+            review-agent check itself (on/off) is config-as-code only now — set{" "}
+            <code className="font-mono">gate.checkMode</code> in this repo&apos;s{" "}
+            <code className="font-mono">.loopover.yml</code>.
           </p>
         </div>
-        {settings ? (
-          <StatusPill status={settings.reviewCheckMode === "disabled" ? "info" : "ready"}>
-            gate {settings.reviewCheckMode === "disabled" ? "off" : "enabled"}
-          </StatusPill>
-        ) : null}
       </div>
 
       <label className="mt-4 block max-w-sm">

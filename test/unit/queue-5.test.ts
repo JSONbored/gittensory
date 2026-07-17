@@ -2885,17 +2885,13 @@ describe("queue processors", () => {
   it("overrides the Gate to neutral for THIS commit only when a real write/admin maintainer runs gate-override", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-    // NOT manifest-converted: this test asserts directly on the raw repository_settings.review_check_mode
-    // DB column below (a bypassing raw SQL read, not resolveRepositorySettings/resolveEffectiveSettings),
-    // to prove the gate-override doesn't persist a permanent state change -- a manifest override wouldn't
-    // be reflected in that raw column read, so reviewCheckMode/linkedIssueGateMode stay DB-injected here.
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: false,
-      reviewCheckMode: "required",
-      linkedIssueGateMode: "off",
     });
-    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off" } });
+    // reviewCheckMode/linkedIssueGateMode are config-as-code only now (Batch C, loopover#6444) -- set via
+    // the manifest, which resolveEffectiveSettings reads (the DB layer would silently ignore them).
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { reviewCheckMode: "required", linkedIssueGateMode: "off", commentMode: "off", publicSurface: "off", checkRunMode: "off" } });
     await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
       number: 90,
       title: "Override me",
@@ -2971,10 +2967,10 @@ describe("queue processors", () => {
     expect(audit).toMatchObject({ event_type: "github_app.gate_overridden", actor: "maintainer", target_key: "JSONbored/gittensory#90", outcome: "completed" });
     const usageEvents = await listProductUsageEvents(env, { limit: 10 });
     expect(usageEvents).toEqual(expect.arrayContaining([expect.objectContaining({ surface: "github_app", eventName: "gate_overridden", outcome: "completed" })]));
-    // No override state is persisted: the gate stays "required" and the override does NOT persist an advisory,
-    // so a follow-up synchronize re-evaluates the Gate from scratch (no permanent bypass).
-    const settingsAfter = await env.DB.prepare("select review_check_mode from repository_settings where repo_full_name = ?").bind("JSONbored/gittensory").first<{ review_check_mode: string }>();
-    expect(settingsAfter?.review_check_mode).toBe("required");
+    // No override state is persisted: the manifest-resolved gate stays "required" and the override does NOT
+    // persist an advisory, so a follow-up synchronize re-evaluates the Gate from scratch (no permanent bypass).
+    const settingsAfter = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+    expect(settingsAfter.reviewCheckMode).toBe("required");
     const overrideAdvisory = await env.DB.prepare("select id from advisories where target_key = ?").bind("JSONbored/gittensory#90").first<{ id: string }>();
     expect(overrideAdvisory ?? null).toBeNull();
   });

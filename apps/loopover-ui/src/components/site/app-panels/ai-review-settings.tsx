@@ -8,6 +8,12 @@ import { extractPreviewRepoOptions, splitRepoFullName } from "@/lib/maintainer-s
 type AiReviewMode = "off" | "advisory" | "block";
 type AiProvider = "anthropic" | "openai";
 
+const MODE_COPY: Record<AiReviewMode, string> = {
+  off: "off — no AI review",
+  advisory: "advisory — AI notes only",
+  block: "block — also blocks on a dual-model consensus defect",
+};
+
 type RepoSettingsResponse = {
   aiReviewMode?: AiReviewMode;
   aiReviewByok?: boolean;
@@ -33,8 +39,11 @@ function repoApiBase(repoFullName: string): string | null {
 const JSON_HEADERS = { Accept: "application/json", "Content-Type": "application/json" };
 
 /**
- * Maintainer self-serve AI review + BYOK key config. The provider key is write-only: it POSTs to the
- * encrypted key endpoint and only the configured/last4 status is ever read back — the key is never rendered.
+ * Maintainer AI review status + self-serve BYOK key config. mode/byok/provider/model are config-as-code
+ * only now (Batch C, loopover#6444) -- read-only here, sourced from GET /settings (manifest-resolved),
+ * with guidance to edit the repo's own .loopover.yml gate.aiReview.* block to change them. The provider
+ * key management (still fully DB-backed) is unaffected: it POSTs to the encrypted key endpoint and only
+ * the configured/last4 status is ever read back — the key is never rendered.
  */
 export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr: string }> }) {
   const repoOptions = useMemo(() => extractPreviewRepoOptions(reviewability), [reviewability]);
@@ -82,27 +91,6 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function saveConfig() {
-    if (!base) {
-      setMessage({ kind: "err", text: "Enter a repository as owner/repo." });
-      return;
-    }
-    setBusy(true);
-    const result = await apiFetch<RepoSettingsResponse>(`${base}/ai-review`, {
-      method: "PUT",
-      label: "Save AI review config",
-      credentials: "include",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ mode, byok, provider, model: model.trim() || null }),
-    });
-    setBusy(false);
-    setMessage(
-      result.ok
-        ? { kind: "ok", text: "AI review configuration saved." }
-        : { kind: "err", text: result.message },
-    );
-  }
 
   async function saveKey() {
     if (!base) return;
@@ -176,9 +164,11 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
             AI review &amp; BYOK
           </h2>
           <p className="mt-1 text-token-xs text-muted-foreground">
-            Uses the operator's default reviewer by default. Bring your own Anthropic/OpenAI key for
-            a frontier-quality advisory write-up — your key, your provider account. Consensus
-            blocking always uses the default reviewer and only applies to confirmed contributors.
+            Mode, BYOK, provider, and model are set in this repo's own{" "}
+            <code className="font-mono">.loopover.yml</code> (
+            <code className="font-mono">gate.aiReview.*</code>) now — shown below as read-only
+            status. Consensus blocking always uses the default reviewer and only applies to
+            confirmed contributors.
           </p>
         </div>
         <StatusPill status={mode === "off" ? "info" : mode === "block" ? "warn" : "ready"}>
@@ -210,66 +200,26 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
             ) : null}
           </label>
 
-          <label className="block">
-            <span className={labelClass}>Mode</span>
-            <select
-              value={mode}
-              onChange={(event) => setMode(event.target.value as AiReviewMode)}
-              className={fieldClass}
-            >
-              <option value="off">off — no AI review</option>
-              <option value="advisory">advisory — AI notes only</option>
-              <option value="block">block — also block on a dual-model consensus defect</option>
-            </select>
-          </label>
-
-          <label className="flex items-center gap-2 text-token-sm">
-            <input
-              type="checkbox"
-              checked={byok}
-              onChange={(event) => setByok(event.target.checked)}
-              className="size-4 accent-mint"
-            />
-            <span>Use my own provider key (BYOK) for the advisory write-up</span>
-          </label>
-
           <div className="grid grid-cols-2 gap-3">
-            <label className="block">
+            <div>
+              <span className={labelClass}>Mode</span>
+              <p className="mt-1 text-token-sm text-foreground/90">{MODE_COPY[mode]}</p>
+            </div>
+            <div>
+              <span className={labelClass}>BYOK</span>
+              <p className="mt-1 text-token-sm text-foreground/90">{byok ? "on" : "off"}</p>
+            </div>
+            <div>
               <span className={labelClass}>Provider</span>
-              <select
-                value={provider}
-                onChange={(event) => setProvider(event.target.value as AiProvider)}
-                className={fieldClass}
-              >
-                <option value="anthropic">Anthropic (Claude)</option>
-                <option value="openai">OpenAI (GPT)</option>
-              </select>
-            </label>
-            <label className="block">
-              <span className={labelClass}>Model (optional)</span>
-              <input
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-                placeholder="default"
-                className={fieldClass}
-              />
-            </label>
+              <p className="mt-1 text-token-sm text-foreground/90">
+                {provider === "anthropic" ? "Anthropic (Claude)" : "OpenAI (GPT)"}
+              </p>
+            </div>
+            <div>
+              <span className={labelClass}>Model</span>
+              <p className="mt-1 text-token-sm text-foreground/90">{model || "default"}</p>
+            </div>
           </div>
-
-          <button
-            type="button"
-            disabled={busy || loading || !base}
-            aria-busy={busy}
-            onClick={() => void saveConfig()}
-            className="inline-flex items-center gap-2 rounded-token border border-mint/40 bg-mint px-3 py-2 text-token-xs font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busy || loading ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Save className="size-3.5" />
-            )}
-            {loading ? "Loading…" : "Save configuration"}
-          </button>
         </div>
 
         <div className="space-y-4 rounded-token border-hairline bg-background/40 p-4">

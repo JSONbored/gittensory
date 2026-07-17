@@ -4053,11 +4053,6 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: false,
-      // Batch-C: reviewCheckMode/aiReviewMode stay DB-backed here (not moved to upsertRepoFocusManifest) --
-      // this test exercises the real .loopover.yml raw-fetch path below, and upsertRepoFocusManifest would
-      // poison the 6h manifest cache and skip that fetch entirely.
-      reviewCheckMode: "required",
-      aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4073,8 +4068,10 @@ describe("queue processors", () => {
       if (url.includes("/issues/7/comments") && method === "POST") return Response.json({ id: 1 }, { status: 201 });
       if (url.includes("/branches/")) return Response.json({ protected: false, protection: { required_status_checks: { contexts: [] } } });
       // The repo's own review.tone opt-in (#2044) -- a maintainer voice brief, distinct from review.instructions.
+      // reviewCheckMode/aiReviewMode are config-as-code only now (Batch C, loopover#6444) -- set via gate.checkMode/
+      // gate.aiReview.mode here instead of upsertRepositorySettings above.
       if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
-        return new Response("settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: \"off\"\nreview:\n  tone: Keep findings terse and skip pleasantries\n");
+        return new Response("settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: \"off\"\ngate:\n  checkMode: required\n  aiReview:\n    mode: block\nreview:\n  tone: Keep findings terse and skip pleasantries\n");
       }
       // Real GitHub raw-content 404s for every other manifest candidate -- without this, Response.json({}) below would 200 the first candidate
       // tried and mask the review.tone config crafted above.
@@ -4134,17 +4131,6 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: false,
-      // Batch-C: reviewCheckMode also stays DB-backed here (not moved to upsertRepoFocusManifest) -- this
-      // test exercises the real .loopover.yml raw-fetch path below, and upsertRepoFocusManifest would
-      // poison the 6h manifest cache and skip that fetch entirely.
-      reviewCheckMode: "required",
-      // advisory (NOT block): block mode always reviews the full diff, ignoring exclude_paths/path_filters, so
-      // only advisory mode exercises the filterReviewFilesForAi branch (src/queue/processors.ts).
-      aiReviewMode: "advisory",
-      // The PR author below is an unconfirmed contributor; aiReviewAllAuthors is the documented per-repo opt-in
-      // that widens the AI-spend gate to every author (already unit-tested in ai-review-advisory.test.ts) so this
-      // test doesn't also have to stand up the full miner-confirmation registry mocks just to reach the AI call.
-      aiReviewAllAuthors: true,
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -4168,8 +4154,12 @@ describe("queue processors", () => {
         // Batch-A fields moved off upsertRepositorySettings above and into this fetched .loopover.yml's
         // `settings:` block (config-as-code migration, #6442) so the real yaml-fetch path -- not
         // upsertRepoFocusManifest, which would poison the 6h manifest cache and skip this fetch -- still
-        // supplies them alongside review.exclude_paths.
-        return new Response('settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: "off"\nreview:\n  exclude_paths:\n    - "**/*.generated.ts"\n');
+        // supplies them alongside review.exclude_paths. reviewCheckMode/aiReviewMode/aiReviewAllAuthors are
+        // config-as-code only now too (Batch C, loopover#6444) -- gate.aiReview.mode is "advisory" (NOT
+        // "block": block mode always reviews the full diff, ignoring exclude_paths/path_filters, so only
+        // advisory mode exercises the filterReviewFilesForAi branch). gate.aiReview.allAuthors widens the
+        // AI-spend gate to the unconfirmed contributor author below.
+        return new Response('settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: "off"\ngate:\n  checkMode: required\n  aiReview:\n    mode: advisory\n    allAuthors: true\nreview:\n  exclude_paths:\n    - "**/*.generated.ts"\n');
       }
       // Real GitHub raw-content 404s for every other manifest candidate -- without this, the generic Response.json({}) catch-all below would
       // otherwise 200 the FIRST candidate tried and mask the exclude_paths config crafted above.
@@ -4213,12 +4203,7 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: false,
-      // Batch-C: reviewCheckMode/linkedIssueGateMode stay DB-backed here (not moved to upsertRepoFocusManifest) --
-      // this test exercises the real .loopover.yml raw-fetch path below, and upsertRepoFocusManifest would
-      // poison the 6h manifest cache and skip that fetch entirely.
-      reviewCheckMode: "required",
       autonomy: { update_branch: "auto" },
-      linkedIssueGateMode: "block",
     });
     let postedBody = "";
     const calls = { comments: 0, gateChecks: 0 };
@@ -4283,7 +4268,9 @@ describe("queue processors", () => {
       if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
       if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
       if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
-        return new Response("settings:\n  commentMode: detected_contributors_only\n  publicAudienceMode: gittensor_only\n  publicSignalLevel: standard\n  publicSurface: comment_and_label\n  checkRunMode: \"off\"\n  checkRunDetailLevel: minimal\n  backfillEnabled: true\nreview:\n  max_findings:\n    blockers: 0\n");
+        // reviewCheckMode/linkedIssueGateMode are config-as-code only now (Batch C, loopover#6444) -- set via
+        // gate.checkMode/gate.linkedIssue here instead of upsertRepositorySettings above.
+        return new Response("settings:\n  commentMode: detected_contributors_only\n  publicAudienceMode: gittensor_only\n  publicSignalLevel: standard\n  publicSurface: comment_and_label\n  checkRunMode: \"off\"\n  checkRunDetailLevel: minimal\n  backfillEnabled: true\ngate:\n  checkMode: required\n  linkedIssue: block\nreview:\n  max_findings:\n    blockers: 0\n");
       }
       if (url.includes("/access_tokens")) {
         if (gateFinalized && !failedPostGateMint) {
@@ -4706,11 +4693,6 @@ describe("queue processors", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: false,
-      // Batch-C: reviewCheckMode/aiReviewMode stay DB-backed here (not moved to upsertRepoFocusManifest) --
-      // this test exercises the real .loopover.yml raw-fetch path below, and upsertRepoFocusManifest would
-      // poison the 6h manifest cache and skip that fetch entirely.
-      reviewCheckMode: "required",
-      aiReviewMode: "block",
       gatePack: "oss-anti-slop",
     });
     let inlineReviewComments: Array<{ body: string }> = [];
@@ -4719,9 +4701,10 @@ describe("queue processors", () => {
       const url = input.toString();
       const method = init?.method ?? "GET";
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      // .loopover.yml opts into inline comments AND finding categories together.
+      // .loopover.yml opts into inline comments AND finding categories together. reviewCheckMode/aiReviewMode
+      // are config-as-code only now (Batch C, loopover#6444) -- set via gate.checkMode/gate.aiReview.mode.
       if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
-        return new Response("settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: \"off\"\nreview:\n  inline_comments: true\n  finding_categories: true\n");
+        return new Response("settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: \"off\"\ngate:\n  checkMode: required\n  aiReview:\n    mode: block\nreview:\n  inline_comments: true\n  finding_categories: true\n");
       }
       // Real GitHub raw-content 404s for every other manifest candidate -- without this, Response.json({}) below would 200 the first candidate
       // tried and mask the inline_comments/finding_categories config crafted above.
@@ -4840,10 +4823,7 @@ describe("queue processors", () => {
       AI_DAILY_NEURON_BUDGET: "100000",
     });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
-    // Batch-C: reviewCheckMode/aiReviewMode stay DB-backed here (not moved to upsertRepoFocusManifest) --
-    // this test exercises the real .loopover.yml raw-fetch path below, and upsertRepoFocusManifest would
-    // poison the 6h manifest cache and skip that fetch entirely.
-    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autoLabelEnabled: false, reviewCheckMode: "required", aiReviewMode: "block", gatePack: "oss-anti-slop" });
+    await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autoLabelEnabled: false, gatePack: "oss-anti-slop" });
     let unifiedCommentBody = "";
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -4854,8 +4834,9 @@ describe("queue processors", () => {
         // Batch-A fields moved off upsertRepositorySettings above and into this fetched .loopover.yml's
         // `settings:` block (config-as-code migration, #6442) so the real yaml-fetch path -- not
         // upsertRepoFocusManifest, which would poison the 6h manifest cache and skip this fetch -- still
-        // supplies them alongside review.fixHandoff.
-        return new Response('settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: "off"\nreview:\n  inline_comments: true\n  fixHandoff: true\n');
+        // supplies them alongside review.fixHandoff. reviewCheckMode/aiReviewMode are config-as-code only
+        // now too (Batch C, loopover#6444), set via gate.checkMode/gate.aiReview.mode here.
+        return new Response('settings:\n  commentMode: all_prs\n  publicSurface: comment_only\n  checkRunMode: "off"\ngate:\n  checkMode: required\n  aiReview:\n    mode: block\nreview:\n  inline_comments: true\n  fixHandoff: true\n');
       }
       // Real GitHub raw-content 404s for every other manifest candidate -- without this, Response.json({}) below would 200 the first candidate
       // tried and mask the inline_comments/fixHandoff config crafted above.

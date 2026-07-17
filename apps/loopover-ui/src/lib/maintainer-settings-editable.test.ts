@@ -7,12 +7,7 @@ import {
 } from "@/lib/maintainer-settings-editable";
 
 const SETTINGS: MaintainerSettingsEditable = {
-  reviewCheckMode: "required",
   gatePack: "gittensor",
-  linkedIssueGateMode: "advisory",
-  duplicatePrGateMode: "advisory",
-  qualityGateMode: "advisory",
-  qualityGateMinScore: null,
   mergeReadinessGateMode: "off",
   manifestPolicyGateMode: "off",
   slopGateMode: "off",
@@ -30,19 +25,19 @@ describe("maintainer-settings-editable (#2218)", () => {
   it("buildMaintainerSettingsSavePayload includes every editable key, verbatim, with no patch", () => {
     const payload = buildMaintainerSettingsSavePayload(SETTINGS);
     expect(Object.keys(payload).sort()).toEqual([...MAINTAINER_SETTINGS_EDITABLE_KEYS].sort());
-    expect(payload.linkedIssueGateMode).toBe("advisory");
+    expect(payload.mergeReadinessGateMode).toBe("off");
     expect(payload.autoLabelEnabled).toBe(true);
   });
 
   it("buildMaintainerSettingsSavePayload merges a partial patch over the base settings", () => {
     const payload = buildMaintainerSettingsSavePayload(SETTINGS, {
-      linkedIssueGateMode: "block",
-      duplicatePrGateMode: "block",
+      mergeReadinessGateMode: "block",
+      manifestPolicyGateMode: "block",
     });
-    expect(payload.linkedIssueGateMode).toBe("block");
-    expect(payload.duplicatePrGateMode).toBe("block");
+    expect(payload.mergeReadinessGateMode).toBe("block");
+    expect(payload.manifestPolicyGateMode).toBe("block");
     // Untouched fields pass through unchanged.
-    expect(payload.qualityGateMode).toBe("advisory");
+    expect(payload.slopGateMode).toBe("off");
     expect(payload.autoLabelEnabled).toBe(true);
   });
 
