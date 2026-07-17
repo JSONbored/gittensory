@@ -5,6 +5,7 @@ import { BoundaryBadge, Stat, StatusPill } from "@/components/site/control-primi
 import { TableScroll } from "@/components/site/data-table";
 import { RefreshMeta } from "@/components/site/refresh-meta";
 import { StateActionButton, StateBoundary } from "@/components/site/state-views";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { TrendChart } from "@/components/site/trend-chart";
 import {
@@ -142,7 +143,32 @@ type OperatorDashboard = {
   slopCalibration?: SlopOutcomeCalibration;
 };
 
-function ProductAnalytics() {
+function AnalyticsDashboardSkeleton() {
+  return (
+    <div className="space-y-8" aria-hidden>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-20 rounded-token" />
+          <Skeleton className="h-7 w-72 rounded-token" />
+          <Skeleton className="h-4 w-96 rounded-token" />
+        </div>
+        <Skeleton className="h-8 w-40 rounded-token" />
+      </div>
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 3 }, (_, index) => (
+          <Skeleton key={index} className="h-24 w-full rounded-token" />
+        ))}
+      </section>
+      <section className="grid gap-6 lg:grid-cols-2">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} className="h-48 w-full rounded-token" />
+        ))}
+      </section>
+    </div>
+  );
+}
+
+export function ProductAnalytics() {
   const [windowDays, setWindowDays, windowHydrated] = useLocalStorage<AnalyticsWindowDays>(
     ANALYTICS_WINDOW_STORAGE_KEY,
     DEFAULT_ANALYTICS_WINDOW_DAYS,
@@ -168,6 +194,7 @@ function ProductAnalytics() {
       onRetry={dashboard.reload}
       onRefresh={dashboard.reload}
       loadingTitle="Loading analytics…"
+      loadingSkeleton={<AnalyticsDashboardSkeleton />}
       emptyTitle="No analytics yet"
       emptyDescription="Aggregate adoption and command usage metrics will appear once the API has data."
       errorDescription={dashboard.status === "error" ? dashboard.error : undefined}
