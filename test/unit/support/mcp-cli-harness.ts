@@ -464,6 +464,29 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #543 outcome-learning calibration (read-only). Echoes ?windowDays so the CLI window pass-through is testable.
+    if (request.url?.startsWith("/v1/repos/owner/repo/outcome-calibration") && request.method === "GET") {
+      const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          windowDays: windowDays ? Number(windowDays) : null,
+          slop: {
+            totalResolved: 12,
+            bands: [
+              { band: "clean", sampleSize: 6, merged: 6, closed: 0, mergeRate: 1 },
+              { band: "high", sampleSize: 4, merged: 1, closed: 3, mergeRate: 0.25 },
+            ],
+            overallMergeRate: 0.583,
+            discriminates: true,
+          },
+          recommendations: { total: 9, positive: 6, negative: 2, pending: 1, positiveRate: 0.75 },
+          signals: ["Slop bands discriminate: clean PRs merge 100% vs 25% for high — keep the slop signal advisory-plus."],
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/upstream/drift" && request.method === "GET") {
       response.end(
         JSON.stringify({

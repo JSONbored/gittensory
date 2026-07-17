@@ -95,6 +95,31 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(scoped).toMatch(/Gate precision for owner\/repo \(last 30d\)/);
   });
 
+  it("outcome-calibration reports slop-band + recommendation calibration (plain + json), passing the window through", async () => {
+    const e = await env();
+    const out = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo"], e);
+    expect(out).toMatch(/Outcome calibration for owner\/repo \(all history\): 12 resolved, overall merge rate 58%, slop bands discriminate\./);
+    expect(out).toMatch(/- clean: 6 resolved, 6 merged \/ 0 closed \(100% merge\)/);
+    expect(out).toMatch(/- high: 4 resolved, 1 merged \/ 3 closed \(25% merge\)/);
+    expect(out).toMatch(/Recommendations: 9 total, 6 positive, 2 negative, 1 pending, positive rate 75%\./);
+    expect(out).toMatch(/Slop bands discriminate/);
+    const json = JSON.parse(await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--json"], e)) as {
+      slop: { totalResolved: number; overallMergeRate: number };
+      recommendations: { positiveRate: number };
+    };
+    expect(json.slop).toMatchObject({ totalResolved: 12, overallMergeRate: 0.583 });
+    expect(json.recommendations).toMatchObject({ positiveRate: 0.75 });
+    // Output parity: the CLI --json surface returns exactly what GET /outcome-calibration yields for identical
+    // input -- the same payload the loopover_get_outcome_calibration MCP tool wraps in its toolResult.
+    const direct = await fetch(`${e.LOOPOVER_API_URL}/v1/repos/owner/repo/outcome-calibration`, {
+      headers: { authorization: `Bearer ${e.LOOPOVER_TOKEN}` },
+    }).then((r) => r.json());
+    expect(json).toEqual(direct);
+    // --window-days bounds the recommendation window; the CLI forwards it as ?windowDays and reflects it.
+    const scoped = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--window-days", "30"], e);
+    expect(scoped).toMatch(/Outcome calibration for owner\/repo \(last 30d\)/);
+  });
+
   it("validates inputs: --repo required, id required for approve, known subcommand + action/level", async () => {
     const e = await env();
     await expect(runAsync(["maintain", "status"], e)).rejects.toThrow(/Pass --repo/);
@@ -137,5 +162,6 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(out).toMatch(/approve <id>/);
     expect(out).toMatch(/queue/);
     expect(out).toMatch(/pause/);
+    expect(out).toMatch(/outcome-calibration \[--window-days N\]/);
   });
 });

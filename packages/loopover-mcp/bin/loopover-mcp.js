@@ -2796,6 +2796,8 @@ function printMaintainHelp() {
       `                               actions: ${MAINTAIN_ACTION_CLASSES.join(", ")}`,
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
       "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
+      "  outcome-calibration [--window-days N]",
+      "                               Show slop-band + recommendation outcome calibration (merge rate per slop band).",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -2902,7 +2904,31 @@ async function maintainCli(args) {
     emit(payload, lines.join("\n"));
     return;
   }
-  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision.`);
+  if (subcommand === "outcome-calibration") {
+    // #543 outcome-learning loop: read-only measurement of whether higher-slop bands merge less often and how
+    // agent recommendations are panning out. The API enforces maintainer authorization; the CLI never decides
+    // locally. Optional --window-days bounds the recommendation window the same way the route's ?windowDays
+    // query does (a non-positive value falls through to full history server-side).
+    const windowDays = Number(options.windowDays);
+    const query = windowDays > 0 ? `?windowDays=${encodeURIComponent(windowDays)}` : "";
+    const payload = await apiGet(`${repoBase}/outcome-calibration${query}`);
+    const slop = payload.slop ?? {};
+    const recommendations = payload.recommendations ?? {};
+    const window = payload.windowDays ? `last ${payload.windowDays}d` : "all history";
+    const rate = (value) => (value === null || value === undefined ? "n/a (below sample)" : `${Math.round(value * 100)}%`);
+    const discriminates = slop.discriminates === null || slop.discriminates === undefined ? "" : slop.discriminates ? ", slop bands discriminate" : ", slop bands do not discriminate";
+    const lines = [
+      `Outcome calibration for ${repoFullName} (${window}): ${slop.totalResolved ?? 0} resolved, overall merge rate ${rate(slop.overallMergeRate)}${discriminates}.`,
+      ...(slop.bands ?? []).map(
+        (band) => `- ${band.band}: ${band.sampleSize} resolved, ${band.merged} merged / ${band.closed} closed (${Math.round(band.mergeRate * 100)}% merge)`,
+      ),
+      `Recommendations: ${recommendations.total ?? 0} total, ${recommendations.positive ?? 0} positive, ${recommendations.negative ?? 0} negative, ${recommendations.pending ?? 0} pending, positive rate ${rate(recommendations.positiveRate)}.`,
+      ...(payload.signals ?? []),
+    ];
+    emit(payload, lines.join("\n"));
+    return;
+  }
+  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration.`);
 }
 
 async function runCli(args) {
