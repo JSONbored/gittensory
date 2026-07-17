@@ -31,7 +31,13 @@ export function MessageList({
         errorTitle="Couldn't load the conversation"
         errorDescription="The conversation source did not respond. Retry, or check back once it has recovered."
       >
-        <ol className="flex flex-col gap-4 p-3">
+        {/* The committed-message list is the live region (#7081): a completed turn appends one <li>, so
+            screen readers announce the finished answer once. `polite` (not `assertive`) — chat answers
+            aren't interrupting content. The live-streaming StreamingText renders OUTSIDE this <ol> (in
+            ChatConversation), so its per-chunk token updates never fire an announcement; only the single
+            committed bubble does. StateBoundary's own role="status"/"alert" branches are unaffected — they
+            replace this subtree entirely when loading/empty/error. */}
+        <ol className="flex flex-col gap-4 p-3" aria-live="polite" aria-relevant="additions">
           {messages.map((message) => (
             <li key={message.id}>
               <MessageBubble message={message} />

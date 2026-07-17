@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MessageList } from "./components/chat/message-list";
 import { MessageBubble } from "./components/chat/message-bubble";
@@ -39,6 +39,39 @@ describe("MessageList (#6515) — StateBoundary branches", () => {
   it("does not render the typing indicator when not composing", () => {
     render(<MessageList messages={singleMessage} />);
     expect(screen.queryByRole("status", { name: /is typing/i })).toBeNull();
+  });
+
+  it("marks the committed-message list as a polite live region (#7081)", () => {
+    render(<MessageList messages={singleMessage} />);
+    const list = screen.getByRole("list");
+    expect(list.getAttribute("aria-live")).toBe("polite");
+    // `additions` (not the default `additions text`) so a completed turn announces the new bubble once,
+    // not on every mutation of already-present nodes.
+    expect(list.getAttribute("aria-relevant")).toBe("additions");
+  });
+
+  it("appends the completed turn into the same live region so it is announced once (#7081)", () => {
+    const { rerender } = render(<MessageList messages={singleMessage} />);
+    const before = screen.getByRole("list");
+    expect(before.getAttribute("aria-live")).toBe("polite");
+    expect(within(before).getAllByRole("listitem")).toHaveLength(singleMessage.length);
+
+    const completedTurn: ChatMessage[] = [
+      ...singleMessage,
+      {
+        id: "turn-done",
+        role: "assistant",
+        content: "the finished answer",
+        timestamp: "2026-07-16T08:05:00.000Z",
+        authorName: "LoopOver",
+      },
+    ];
+    rerender(<MessageList messages={completedTurn} />);
+    // Same live region, now carrying the newly-appended bubble — a single announce-able addition.
+    const after = screen.getByRole("list");
+    expect(after.getAttribute("aria-live")).toBe("polite");
+    expect(within(after).getAllByRole("listitem")).toHaveLength(completedTurn.length);
+    expect(within(after).getByText("the finished answer")).toBeTruthy();
   });
 });
 

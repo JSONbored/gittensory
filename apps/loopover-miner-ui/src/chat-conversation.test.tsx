@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ChatConversation } from "./components/chat/conversation";
@@ -62,6 +62,32 @@ describe("ChatConversation (#6518)", () => {
     // On completion the streamed answer is committed into the list and the composer re-enables.
     await waitFor(() => expect(sendButton().disabled).toBe(false));
     expect(screen.getByText("Hello")).toBeTruthy();
+  });
+
+  it("streams the in-flight answer outside the live region, then commits it inside it (#7081)", async () => {
+    const gate = deferred();
+    const streamChatImpl = async function* (_messages: ChatWireMessage[]) {
+      yield "Hel";
+      await gate.promise;
+      yield "lo";
+    };
+    render(<ChatConversation streamChatImpl={streamChatImpl} />);
+    ask("hi");
+
+    // While streaming, the live token text renders in the standalone streaming node, NOT inside the
+    // aria-live <ol> — so per-chunk re-renders can never trigger an announcement.
+    const streaming = await screen.findByTestId("chat-streaming-response");
+    expect(streaming.textContent).toContain("Hel");
+    const liveRegion = screen.getByRole("list");
+    expect(liveRegion.contains(streaming)).toBe(false);
+    expect(within(liveRegion).queryByText(/Hel/)).toBeNull();
+
+    gate.resolve();
+
+    // Once the turn completes the finished answer is committed as a bubble inside the live region — the
+    // single point at which assistive tech announces it.
+    await waitFor(() => expect(within(screen.getByRole("list")).getByText("Hello")).toBeTruthy());
+    expect(screen.queryByTestId("chat-streaming-response")).toBeNull();
   });
 
   it("surfaces a backend failure through the message-list error state and re-enables the composer", async () => {
