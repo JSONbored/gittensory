@@ -490,6 +490,57 @@ describe("createCodingAgentDriver provider resolution (#4289)", () => {
     expect(calls[0]!.opts.cwd).toBe(cliTask.workingDirectory);
   });
 
+  it("#6875: forwards HOME/XDG + the claude provider's OWN credential to the subprocess, never another provider's", async () => {
+    const { spawn, calls } = recordingSpawn();
+    const driver = createCodingAgentDriver({
+      providerName: "claude-cli",
+      spawn,
+      env: {
+        HOME: "/home/miner",
+        XDG_CONFIG_HOME: "/home/miner/.config",
+        PATH: "/usr/bin",
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-token",
+        ANTHROPIC_API_KEY: "anthropic-key-fixture",
+        OPENAI_API_KEY: "openai-key-fixture", // the WRONG provider's key — must NOT reach the claude subprocess
+      },
+    });
+    await driver.run(cliTask);
+    const env = calls[0]!.opts.env;
+    expect(env.HOME).toBe("/home/miner"); // allowlisted location pointer now passes through (was dropped before)
+    expect(env.XDG_CONFIG_HOME).toBe("/home/miner/.config");
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-token"); // provider-specific credential forwarded
+    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-key-fixture");
+    expect(env.OPENAI_API_KEY).toBeUndefined(); // the unrelated provider's key is NOT forwarded
+  });
+
+  it("#6875: forwards the codex provider's OWN credentials, not claude's", async () => {
+    const { spawn, calls } = recordingSpawn();
+    const driver = createCodingAgentDriver({
+      providerName: "codex-cli",
+      spawn,
+      env: { HOME: "/home/miner", OPENAI_API_KEY: "openai-key-fixture", CODEX_ACCESS_TOKEN: "codex-tok", CLAUDE_CODE_OAUTH_TOKEN: "claude-token" },
+    });
+    await driver.run(cliTask);
+    const env = calls[0]!.opts.env;
+    expect(env.OPENAI_API_KEY).toBe("openai-key-fixture");
+    expect(env.CODEX_ACCESS_TOKEN).toBe("codex-tok");
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined(); // claude's key is not forwarded to a codex subprocess
+  });
+
+  it("#6875: forwards no credential when the provider's own credential env vars are unset or empty", async () => {
+    const { spawn, calls } = recordingSpawn();
+    const driver = createCodingAgentDriver({
+      providerName: "claude-cli",
+      spawn,
+      env: { HOME: "/home/miner", CLAUDE_CODE_OAUTH_TOKEN: "" }, // empty string → treated as unset (ANTHROPIC_API_KEY absent)
+    });
+    await driver.run(cliTask);
+    const env = calls[0]!.opts.env;
+    expect(env.HOME).toBe("/home/miner");
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined(); // empty is not forwarded (the length > 0 guard)
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined(); // absent is not forwarded (the typeof guard)
+  });
+
   it("CONSUMES the declared model env key: MINER_CODING_AGENT_CLAUDE_MODEL lands in the claude argv", async () => {
     const { spawn, calls } = recordingSpawn();
     const driver = createCodingAgentDriver({

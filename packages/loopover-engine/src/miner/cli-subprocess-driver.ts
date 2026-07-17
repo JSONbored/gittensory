@@ -69,6 +69,10 @@ const MAX_TRANSCRIPT_CHARS = 8000;
 const MAX_ERROR_DETAIL_CHARS = 500;
 
 const CODING_AGENT_ENV_ALLOWLIST = [
+  // #6875: HOME + the XDG base-dir vars let the spawned `claude`/`codex` CLI locate its own persisted
+  // credential/config file. Without HOME the subprocess is "Not logged in" even with a valid token on disk. These
+  // are non-secret location pointers (the credential itself is forwarded provider-specifically, NOT via this list).
+  "HOME",
   "HTTPS_PROXY",
   "HTTP_PROXY",
   "LANG",
@@ -79,6 +83,9 @@ const CODING_AGENT_ENV_ALLOWLIST = [
   "SSL_CERT_DIR",
   "SSL_CERT_FILE",
   "TERM",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
   "https_proxy",
   "http_proxy",
   "no_proxy",

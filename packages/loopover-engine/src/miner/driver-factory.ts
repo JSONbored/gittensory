@@ -144,6 +144,28 @@ function buildCliArgsWithConfiguredModel(
   };
 }
 
+/** The credential env vars each CLI provider authenticates with (#6875). ONLY the selected provider's credentials
+ *  are forwarded to its subprocess: an operator with keys for both providers who is running `claude-cli` must not
+ *  have the unrelated `OPENAI_API_KEY` reach the claude subprocess, so this is deliberately provider-specific
+ *  rather than a blanket allowlist of every credential name. (The subprocess's HOME/XDG dirs — where a persisted
+ *  credential file lives — are handled separately by CODING_AGENT_ENV_ALLOWLIST in cli-subprocess-driver.ts.) */
+const CLI_PROVIDER_CREDENTIAL_ENV_KEYS: Record<"claude" | "codex", readonly string[]> = {
+  claude: ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  codex: ["OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"],
+};
+
+/** The selected provider's credential env vars that are actually set, as an `env` override the driver merges on
+ *  top of the allowlisted parent env. Empty when none are configured — the caller then fails at "not logged in"
+ *  the same as before, but a configured credential now reaches the subprocess. (#6875) */
+function providerCredentialEnv(command: "claude" | "codex", env: Record<string, string | undefined>): Record<string, string> {
+  const credentials: Record<string, string> = {};
+  for (const key of CLI_PROVIDER_CREDENTIAL_ENV_KEYS[command]) {
+    const value = env[key];
+    if (typeof value === "string" && value.length > 0) credentials[key] = value;
+  }
+  return credentials;
+}
+
 function createCliProvider(
   command: "claude" | "codex",
   modelEnvKey: string,
@@ -168,6 +190,9 @@ function createCliProvider(
     command,
     spawn: options.spawn,
     parentEnv: env,
+    // #6875: forward the selected provider's own credential onto the subprocess env (provider-specific, never a
+    // blanket allowlist). Merged on top of the allowlisted parent env by the driver's buildAllowlistedEnv call.
+    env: providerCredentialEnv(command, env),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(buildArgs !== undefined ? { buildArgs } : {}),
     ...(options.knownSecrets !== undefined ? { knownSecrets: options.knownSecrets } : {}),
