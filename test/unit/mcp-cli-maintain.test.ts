@@ -95,6 +95,34 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(scoped).toMatch(/Gate precision for owner\/repo \(last 30d\)/);
   });
 
+  it("generate-issue-drafts dry-runs by default and never forwards create (#6757)", async () => {
+    const bodies: Array<{ dryRun?: boolean; create?: boolean; limit?: number }> = [];
+    const e = await env({ onIssueDraftRequest: (b) => bodies.push(b) });
+    const out = await runAsync(["maintain", "generate-issue-drafts", "--repo", "owner/repo"], e);
+    // A bare invocation must send {create:false, dryRun:true} — the tool can never silently create.
+    expect(bodies[0]).toMatchObject({ create: false, dryRun: true });
+    expect(out).toMatch(/Contributor issue drafts for owner\/repo \(dry-run\): 1 proposed, 0 created/);
+    // The generated draft title carries an ANSI escape; the plain-text path must strip it (#6261).
+    expect(out).toContain("Add cursor pagination");
+    expect(out).not.toContain("[31m");
+  });
+
+  it("generate-issue-drafts --create forwards {create:true, dryRun:false} and reports created issues (#6757)", async () => {
+    const bodies: Array<{ dryRun?: boolean; create?: boolean; limit?: number }> = [];
+    const e = await env({ onIssueDraftRequest: (b) => bodies.push(b) });
+    const out = await runAsync(["maintain", "generate-issue-drafts", "--repo", "owner/repo", "--create", "--limit", "3"], e);
+    // --create maps to the exact {create:true, dryRun:false} shape the route's create-safety guard demands,
+    // and --limit is forwarded as a number.
+    expect(bodies[0]).toMatchObject({ create: true, dryRun: false, limit: 3 });
+    expect(out).toMatch(/\(create\): 1 proposed, 1 created/);
+    expect(out).toMatch(/#42 https:\/\/github\.com\/owner\/repo\/issues\/42/);
+    const json = JSON.parse(await runAsync(["maintain", "generate-issue-drafts", "--repo", "owner/repo", "--json"], e)) as {
+      dryRun: boolean;
+      createRequested: boolean;
+    };
+    expect(json).toMatchObject({ dryRun: true, createRequested: false });
+  });
+
   it("outcome-calibration reports slop-band merge rates + recommendation outcomes (plain + json), passing the window through (#6735)", async () => {
     const e = await env();
     const out = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo"], e);

@@ -83,6 +83,7 @@ import { buildNotificationFeed } from "../notifications/service";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { getRepositoryCollaboratorPermission } from "../github/app";
 import { performRepoDocRefresh } from "../github/repo-doc-refresh-runner";
+import { generateContributorIssueDrafts } from "../services/contributor-issue-draft";
 import { sanitizePublicComment } from "../github/commands";
 import { fetchPublicContributorProfile } from "../github/public";
 import { listLatestRegistrySnapshots } from "../registry/sync";
@@ -634,6 +635,31 @@ const refreshRepoDocsOutputSchema = {
   pullNumber: z.number().optional(),
   url: z.string().optional(),
   reason: z.string().optional(),
+};
+
+// #6757: dryRun/create/limit mirror the REST route's contributorIssueDraftGenerateSchema EXACTLY (same
+// defaults, same bounds) so the two surfaces cannot drift. `create` alone does not open issues — the handler
+// re-applies the route's explicit_create_requires_dry_run_false guard, so a caller must pass BOTH create:true
+// and dryRun:false, and can never silently create.
+const generateContributorIssueDraftsShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  dryRun: z.boolean().optional().default(true),
+  create: z.boolean().optional().default(false),
+  limit: z.number().int().min(1).max(20).optional().default(5),
+};
+
+const generateContributorIssueDraftsOutputSchema = {
+  repoFullName: z.string(),
+  generatedAt: z.string(),
+  dryRun: z.boolean(),
+  createRequested: z.boolean(),
+  proposed: z.number(),
+  skippedDuplicate: z.number(),
+  skippedDeclined: z.number(),
+  skippedUnsafe: z.number(),
+  created: z.number(),
+  skippedCreateFailed: z.number(),
 };
 
 // #784 (MCP slice) — the agent audit feed: executed actions + approval decisions for a repo.
@@ -1780,6 +1806,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_list_pending_actions: "agent",
   loopover_decide_pending_action: "agent",
   loopover_refresh_repo_docs: "maintainer",
+  loopover_generate_contributor_issue_drafts: "maintainer",
   loopover_get_agent_audit_feed: "agent",
   loopover_explain_score_breakdown: "review",
   loopover_explain_review_risk: "review",
@@ -2531,6 +2558,17 @@ export class LoopoverMcp {
         outputSchema: refreshRepoDocsOutputSchema,
       },
       async (input) => this.toolResult(await this.refreshRepoDocs(input)),
+    );
+
+    register(
+      "loopover_generate_contributor_issue_drafts",
+      {
+        description:
+          "Generate contributor-facing issue drafts for one repo from its lane/config/queue signals. Dry-run BY DEFAULT: it only PREVIEWS drafts unless the caller passes BOTH create:true and dryRun:false, so it can never silently open issues; the write path additionally requires repo write access and is suppressed while the agent is globally paused/frozen. Maintainer access required.",
+        inputSchema: generateContributorIssueDraftsShape,
+        outputSchema: generateContributorIssueDraftsOutputSchema,
+      },
+      async (input) => this.toolResult(await this.generateContributorIssueDrafts(input)),
     );
 
     register(
@@ -4159,6 +4197,43 @@ export class LoopoverMcp {
     return {
       summary: `${result.reused ? "Found the already-open" : "Opened a new"} repo-doc pull request for ${fullName}: ${result.url}`,
       data: { opened: true, reused: result.reused, pullNumber: result.pullNumber, url: result.url },
+    };
+  }
+
+  // #6757: MCP mirror of POST /v1/repos/:owner/:repo/contributor-issue-drafts/generate. requireRepoManageAccess
+  // is checked FIRST (before touching anything), then the route's own explicit_create_requires_dry_run_false
+  // guard is re-applied here so this surface has IDENTICAL create-safety: `create` alone is rejected; only an
+  // explicit {create:true, dryRun:false} reaches the service, which itself still overlays the global agent
+  // kill-switch. The result strips the per-draft `drafts[]` (title/body text) from the public-safe tool data,
+  // surfacing only the counts + posture, like getAgentAuditFeed's scrub.
+  private async generateContributorIssueDrafts(
+    input: z.infer<z.ZodObject<typeof generateContributorIssueDraftsShape>>,
+  ): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoManageAccess(fullName);
+    if (input.create && input.dryRun !== false) {
+      throw new Error("explicit_create_requires_dry_run_false: pass create:true together with dryRun:false to open issues.");
+    }
+    const result = await generateContributorIssueDrafts(this.env, fullName, {
+      dryRun: input.dryRun,
+      create: input.create,
+      limit: input.limit,
+      requestedBy: this.identity.kind === "session" ? this.identity.actor : "mcp",
+    });
+    return {
+      summary: `Contributor issue drafts for ${fullName} (dryRun=${result.dryRun}): ${result.proposed} proposed, ${result.created} created, ${result.skippedDuplicate} duplicate, ${result.skippedDeclined} declined, ${result.skippedUnsafe} unsafe.`,
+      data: {
+        repoFullName: result.repoFullName,
+        generatedAt: result.generatedAt,
+        dryRun: result.dryRun,
+        createRequested: result.createRequested,
+        proposed: result.proposed,
+        skippedDuplicate: result.skippedDuplicate,
+        skippedDeclined: result.skippedDeclined,
+        skippedUnsafe: result.skippedUnsafe,
+        created: result.created,
+        skippedCreateFailed: result.skippedCreateFailed,
+      },
     };
   }
 

@@ -103,7 +103,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state", "refresh-docs"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state", "refresh-docs", "generate-issue-drafts"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -3170,6 +3170,9 @@ function printMaintainHelp() {
       "             [--pull N]        Scope the feed to one pull request.",
       "  automation-state             Show the derived agent automation state (mode, readiness, pending).",
       "  refresh-docs                 Open (or find the already-open) the AGENTS.md/CLAUDE.md generation PR.",
+      "  generate-issue-drafts        Preview contributor issue drafts (dry-run). Never creates without --create.",
+      "             [--create]        Actually open the drafted issues (requires repo write access).",
+      "             [--limit N]       Cap the drafts generated (1-20, default 5).",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -3366,8 +3369,29 @@ async function maintainCli(args) {
     emit(payload, line);
     return;
   }
+  if (subcommand === "generate-issue-drafts") {
+    // #6757: session-authenticated mirror of POST {repoBase}/contributor-issue-drafts/generate (and the remote
+    // loopover_generate_contributor_issue_drafts tool). Dry-run BY DEFAULT — only a bare `--create` opts into
+    // the write path, and it is forwarded as {create:true, dryRun:false}, the exact shape the route's
+    // explicit_create_requires_dry_run_false guard demands. A plain `generate-issue-drafts` can never create.
+    const create = options.create === true;
+    const parsedLimit = Number(options.limit);
+    const body = { create, dryRun: !create, ...(Number.isFinite(parsedLimit) ? { limit: parsedLimit } : {}) };
+    const payload = await apiPost(`${repoBase}/contributor-issue-drafts/generate`, body);
+    const mode = payload.dryRun ? "dry-run" : "create";
+    const lines = [
+      `Contributor issue drafts for ${repoFullName} (${mode}): ${payload.proposed ?? 0} proposed, ${payload.created ?? 0} created, ${payload.skippedDuplicate ?? 0} duplicate, ${payload.skippedDeclined ?? 0} declined, ${payload.skippedUnsafe ?? 0} unsafe, ${payload.skippedCreateFailed ?? 0} create-failed.`,
+      // draft.title/body are generated from untrusted repo issue data, so the plain-text path is sanitized (#6261).
+      ...(payload.drafts ?? []).map((draft) => {
+        const ref = draft.issue ? ` -> #${draft.issue.number} ${draft.issue.url}` : "";
+        return `- [${sanitizePlainTextTerminalOutput(draft.status)}] ${sanitizePlainTextTerminalOutput(draft.title)}${sanitizePlainTextTerminalOutput(ref)}`;
+      }),
+    ];
+    emit(payload, lines.join("\n"));
+    return;
+  }
   throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration | onboarding-pack | audit-feed | automation-state | refresh-docs.`,
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration | onboarding-pack | audit-feed | automation-state | refresh-docs | generate-issue-drafts.`,
   );
 }
 

@@ -173,6 +173,7 @@ export async function startFixtureServer(
     slopRiskStatus?: number;
     prTextLintStatus?: number;
     onPacketRequest?: (body: unknown) => void;
+    onIssueDraftRequest?: (body: { dryRun?: boolean; create?: boolean; limit?: number }) => void;
     onApiRequest?: (request: IncomingMessage) => void;
     validateConfigWarnings?: string[];
     openPrMonitor?: Record<string, unknown>;
@@ -617,6 +618,34 @@ export async function startFixtureServer(
           ],
           recommendations: { total: 20, positive: 14, negative: 3, pending: 3, positiveRate: 0.82 },
           signals: ["Higher-slop bands merge less often — the slop signal is tracking real outcomes."],
+        }),
+      );
+      return;
+    }
+    if (request.url === "/v1/repos/owner/repo/contributor-issue-drafts/generate" && request.method === "POST") {
+      // Reflect the forwarded {dryRun, create, limit} back so the CLI test can assert the exact body it sent.
+      // The draft title carries an ANSI escape to prove the plain-text path is sanitized (#6261).
+      const requestBody = (await readJsonRequest(request)) as { dryRun?: boolean; create?: boolean; limit?: number };
+      options.onIssueDraftRequest?.(requestBody);
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          dryRun: requestBody.dryRun ?? true,
+          createRequested: requestBody.create ?? false,
+          proposed: 1,
+          skippedDuplicate: 0,
+          skippedDeclined: 0,
+          skippedUnsafe: 0,
+          created: requestBody.create ? 1 : 0,
+          skippedCreateFailed: 0,
+          drafts: [
+            {
+              status: "proposed",
+              title: "Add [31mcursor[0m pagination",
+              ...(requestBody.create ? { issue: { number: 42, url: "https://github.com/owner/repo/issues/42" } } : {}),
+            },
+          ],
         }),
       );
       return;
