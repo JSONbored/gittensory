@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { buildFeasibilityVerdict, buildPrTextLint, buildGateDispositions } from "@loopover/engine";
+import { buildFeasibilityVerdict, buildPrTextLint, buildGateDispositions, buildPublicPrBodyDraft } from "@loopover/engine";
 // #6149: the miner write-tools are PURE local-execution spec builders (loopover never performs the write);
 // registering them locally is just importing the same engine builders the remote server uses.
 import {
@@ -1176,6 +1176,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Analyze the current git branch and return a public-safe PR packet. Sends metadata only.",
   },
   {
+    name: "loopover_draft_pr_body",
+    category: "branch",
+    description:
+      "Draft a public-safe, copy/paste PR body from local branch metadata (changed files, tests run, linked issue, duplicate/WIP caution, branch freshness, next steps). Private scoreability/reward/trust context is excluded; source contents are not uploaded. Optional format=markdown returns the rendered body as the primary payload.",
+  },
+  {
     name: "loopover_compare_local_variants",
     category: "branch",
     description: "Compare current-branch metadata variants without uploading source contents.",
@@ -2214,6 +2220,38 @@ registerStdioTool(
   async (input) => {
     const result = await analyzeCurrentBranch(await withClientWorkspaceRoots(input));
     return toolResult("LoopOver public-safe PR packet.", { local: result.local, prPacket: result.analysis.prPacket });
+  },
+);
+
+// #6741: CLI stdio mirror of loopover_draft_pr_body — same analyzeCurrentBranch fetch as prepare_pr_packet,
+// then the shared pure buildPublicPrBodyDraft (now exported from @loopover/engine) runs locally.
+const draftPrBodyShape = {
+  ...currentBranchShape,
+  format: z.enum(["json", "markdown"]).optional(),
+};
+
+registerStdioTool(
+  "loopover_draft_pr_body",
+  {
+    description: stdioToolDescription("loopover_draft_pr_body"),
+    inputSchema: draftPrBodyShape,
+  },
+  async (input) => {
+    const { format, ...branchInput } = input;
+    const result = await analyzeCurrentBranch(await withClientWorkspaceRoots(branchInput));
+    const draft = buildPublicPrBodyDraft(result.analysis);
+    if (format === "markdown") {
+      return toolResult(`Public-safe PR body draft for ${draft.repoFullName} (markdown).\n\n${draft.markdown}`, {
+        markdown: draft.markdown,
+        title: draft.title,
+        repoFullName: draft.repoFullName,
+        sourceUploadDisabled: true,
+      });
+    }
+    return toolResult(
+      `Public-safe PR body draft for ${draft.repoFullName} (metadata only; internal analysis context omitted).\n\n${draft.markdown}`,
+      draft,
+    );
   },
 );
 

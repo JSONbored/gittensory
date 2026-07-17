@@ -756,6 +756,14 @@ export {
   type PredictedGateVerdict,
   type ContributorCalibrationSignal,
 } from "./predicted-gate.js";
+// #6741: public-safe PR body draft from local branch metadata — shared by MCP and the CLI stdio mirror.
+export {
+  EXCLUDED_PRIVATE_PR_BODY_FIELDS,
+  buildPublicPrBodyDraft,
+  type PrBodyDraftSection,
+  type PrBodyDraftSource,
+  type PublicPrBodyDraft,
+} from "./pr-body-draft.js";
 // Focus-manifest parse/compile core (#2280): shared by the maintainer review stack and the miner's
 // `.loopover-miner.yml` goal-spec parser (see miner-goal-spec.ts for the parallel surface).
 export {
