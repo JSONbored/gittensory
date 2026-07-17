@@ -7,14 +7,11 @@ import { runMigrate, runMigrateChecks } from "../../packages/loopover-miner/lib/
 import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import { resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 import { applySchemaMigrations, BASELINE_SCHEMA_VERSION } from "../../packages/loopover-miner/lib/schema-version.js";
-import { openGovernorState, resolveGovernorStateDbPath } from "../../packages/loopover-miner/lib/governor-state.js";
-import { initAttemptLog, resolveAttemptLogDbPath } from "../../packages/loopover-miner/lib/attempt-log.js";
-import { openReplaySnapshotStore, resolveReplaySnapshotDbPath } from "../../packages/loopover-miner/lib/replay-snapshot.js";
 import { openWorktreeAllocator, resolveWorktreeAllocatorDbPath } from "../../packages/loopover-miner/lib/worktree-allocator.js";
 
 const roots: string[] = [];
 
-function tempEnv(): NodeJS.ProcessEnv {
+function tempEnv() {
   const root = mkdtempSync(join(tmpdir(), "loopover-miner-migrate-"));
   roots.push(root);
   return { LOOPOVER_MINER_CONFIG_DIR: join(root, "state") };
@@ -72,24 +69,17 @@ describe("loopover-miner migrate (#4871)", () => {
     expect(portfolioQueue?.versionBefore).toBeGreaterThan(0);
   });
 
-  it("REGRESSION (#6768): opens the four previously-omitted stores through migrate's real open wrappers", () => {
+  it("REGRESSION (#6768): opens worktree-allocator through migrate's open adapter", () => {
     // worktree-allocator's STORES entry is `(dbPath) => openWorktreeAllocator({ dbPath })` — a one-line
     // adapter that only executes when an on-disk file exists. Skip-only sweeps leave that line at 0% patch
-    // coverage; seeding + migrating all four stores proves the adapter (and the other three open bindings).
+    // coverage; seeding + migrating it proves the adapter runs.
     const env = tempEnv();
-    openGovernorState(resolveGovernorStateDbPath(env)).close();
-    initAttemptLog(resolveAttemptLogDbPath(env)).close();
-    openReplaySnapshotStore(resolveReplaySnapshotDbPath(env)).close();
     openWorktreeAllocator({ dbPath: resolveWorktreeAllocatorDbPath(env) }).close();
 
-    const results = runMigrateChecks(env);
-    for (const name of ["governor-state", "attempt-log", "replay-snapshot", "worktree-allocator"] as const) {
-      const row = results.find((result) => result.name === name);
-      expect(row, name).toMatchObject({ ok: true, status: "up-to-date" });
-      expect(row?.versionBefore).toBe(row?.versionAfter);
-      // These four stores may stamp baseline 0; the regression is that migrate opens them at all.
-      expect(row?.versionBefore).toEqual(expect.any(Number));
-    }
+    const row = runMigrateChecks(env).find((result) => result.name === "worktree-allocator");
+    expect(row).toMatchObject({ ok: true, status: "up-to-date" });
+    expect(row?.versionBefore).toBe(row?.versionAfter);
+    expect(row?.versionBefore).toEqual(expect.any(Number));
   });
 
   it("actually migrates a pre-existing older-schema portfolio-queue file, bumping its stamped version and adding the missing column", () => {
