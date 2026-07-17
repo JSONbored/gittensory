@@ -26,9 +26,9 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     tempDir = null;
   });
 
-  async function env(onApiRequest?: (request: import("node:http").IncomingMessage) => void) {
+  async function env(options: Parameters<typeof startFixtureServer>[0] = {}) {
     tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
-    const url = await startFixtureServer(onApiRequest ? { onApiRequest } : {});
+    const url = await startFixtureServer(options);
     return { LOOPOVER_API_URL: url, LOOPOVER_TOKEN: "session-token", LOOPOVER_CONFIG_DIR: tempDir, LOOPOVER_API_TIMEOUT_MS: "1000" };
   }
 
@@ -115,7 +115,7 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
 
   it("onboarding-pack mirrors the session-gated API payload and forwards refresh", async () => {
     const requests: string[] = [];
-    const e = await env((request) => requests.push(request.url ?? ""));
+    const e = await env({ onApiRequest: (request) => requests.push(request.url ?? "") });
 
     const json = JSON.parse(
       await runAsync(["maintain", "onboarding-pack", "--repo", "owner/repo", "--refresh", "--json"], e),
@@ -184,6 +184,33 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
       pendingActionCount: number;
     };
     expect(json).toMatchObject({ repoFullName: "owner/repo", mode: "live", permissionReadiness: "ready", pendingActionCount: 3 });
+  });
+
+  it("refresh-docs reports a newly opened repo-doc PR (plain + json), with output parity between the surfaces (#6743)", async () => {
+    const e = await env({
+      repoDocRefresh: { opened: true, reused: false, pullNumber: 42, url: "https://github.com/owner/repo/pull/42", claudeMode: "symlink" },
+    });
+    const out = await runAsync(["maintain", "refresh-docs", "--repo", "owner/repo"], e);
+    expect(out).toBe("Opened a new repo-doc pull request for owner/repo: https://github.com/owner/repo/pull/42\n");
+    const json = JSON.parse(await runAsync(["maintain", "refresh-docs", "--repo", "owner/repo", "--json"], e)) as {
+      opened: boolean;
+      pullNumber: number;
+    };
+    expect(json).toMatchObject({ opened: true, pullNumber: 42 });
+  });
+
+  it("refresh-docs reports the already-open PR when the route reuses one (#6743)", async () => {
+    const e = await env({
+      repoDocRefresh: { opened: true, reused: true, pullNumber: 42, url: "https://github.com/owner/repo/pull/42", claudeMode: "copy" },
+    });
+    const out = await runAsync(["maintain", "refresh-docs", "--repo", "owner/repo"], e);
+    expect(out).toBe("Found the already-open repo-doc pull request for owner/repo: https://github.com/owner/repo/pull/42\n");
+  });
+
+  it("refresh-docs reports why no PR was opened, sanitizing the reason (#6743)", async () => {
+    const e = await env({ repoDocRefresh: { opened: false, reason: "no changes needed" } });
+    const out = await runAsync(["maintain", "refresh-docs", "--repo", "owner/repo"], e);
+    expect(out).toBe("No repo-doc pull request opened for owner/repo: no changes needed\n");
   });
 
   it("validates inputs: --repo required, id required for approve, known subcommand + action/level", async () => {

@@ -72,6 +72,7 @@ import {
   RepositorySchema,
   AutomationStateSchema,
   RepositorySettingsSchema,
+  RepoDocRefreshResultSchema,
   RoleContextSchema,
   RewardRiskActionSchema,
   ScorePreviewSchema,
@@ -131,6 +132,7 @@ export function buildOpenApiSpec() {
   registry.register("BountyLifecycleEvents", BountyLifecycleEventsSchema);
   registry.register("RepositorySettings", RepositorySettingsSchema);
   registry.register("AutomationState", AutomationStateSchema);
+  registry.register("RepoDocRefreshResult", RepoDocRefreshResultSchema);
   registry.register("InstallationRepair", InstallationRepairSchema);
   registry.register("RepoSettingsPreview", RepoSettingsPreviewSchema);
   registry.register("SkippedPrAuditExport", SkippedPrAuditExportSchema);
@@ -701,6 +703,15 @@ export function buildOpenApiSpec() {
           "Maintainer-only derived automation view (mode, permission readiness, acting action classes, pending-approval count) that the raw /settings row does not include",
         content: { "application/json": { schema: AutomationStateSchema } },
       },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/repos/{owner}/{repo}/repo-docs/refresh",
+    summary: "Open (or find the already-open) AGENTS.md/CLAUDE.md generation pull request",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "The repo-doc pull request result -- opened (new or reused) or a reason it was not opened", content: { "application/json": { schema: RepoDocRefreshResultSchema } } },
     },
   });
   registry.registerPath({

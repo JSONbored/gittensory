@@ -100,7 +100,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state", "refresh-docs"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -3107,6 +3107,7 @@ function printMaintainHelp() {
       "             [--limit N]       Cap the events returned (1-200).",
       "             [--pull N]        Scope the feed to one pull request.",
       "  automation-state             Show the derived agent automation state (mode, readiness, pending).",
+      "  refresh-docs                 Open (or find the already-open) the AGENTS.md/CLAUDE.md generation PR.",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -3293,8 +3294,18 @@ async function maintainCli(args) {
     );
     return;
   }
+  if (subcommand === "refresh-docs") {
+    // #6743: REST mirror of the loopover_refresh_repo_docs MCP tool -- only ever opens a PR (never merges,
+    // closes, or commits directly), so a single synchronous POST with no body is the whole contract.
+    const payload = await apiPost(`${repoBase}/repo-docs/refresh`, {});
+    const line = payload.opened
+      ? `${payload.reused ? "Found the already-open" : "Opened a new"} repo-doc pull request for ${repoFullName}: ${sanitizePlainTextTerminalOutput(payload.url)}`
+      : `No repo-doc pull request opened for ${repoFullName}: ${sanitizePlainTextTerminalOutput(payload.reason)}`;
+    emit(payload, line);
+    return;
+  }
   throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration | onboarding-pack | audit-feed | automation-state.`,
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration | onboarding-pack | audit-feed | automation-state | refresh-docs.`,
   );
 }
 

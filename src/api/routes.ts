@@ -128,6 +128,7 @@ import {
   refreshInstallationHealthForInstallation,
 } from "../github/backfill";
 import { getRepositoryCollaboratorPermission } from "../github/app";
+import { performRepoDocRefresh } from "../github/repo-doc-refresh-runner";
 import type { LoopOverFooterEnv } from "../github/footer";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
 import { fetchPublicContributorProfile, fetchPublicRepoStats } from "../github/public";
@@ -2737,6 +2738,21 @@ export function createApp() {
     const result = await decidePendingAgentAction(c.env, { id: pending.id, decision, decidedBy });
     if (result.status === "already_decided") return c.json({ error: "already_decided", action: result.action }, 409);
     return c.json(result);
+  });
+
+  // #6743 — REST mirror of the loopover_refresh_repo_docs MCP tool (src/mcp/server.ts's refreshRepoDocs):
+  // opens (or finds the already-open) AGENTS.md/CLAUDE.md generation PR. Only ever opens a PR (never merges,
+  // closes, or commits directly), so — like the decision route above — it's safe to run synchronously in one
+  // call rather than needing the propose/decide staging pattern. Trims the runner's internal `claudeMode`
+  // field the same way the MCP tool's own response does, so both mirrors expose the identical public shape.
+  app.post("/v1/repos/:owner/:repo/repo-docs/refresh", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    const result = await performRepoDocRefresh(c.env, fullName);
+    if (!result.opened) return c.json(result);
+    return c.json({ opened: true, reused: result.reused, pullNumber: result.pullNumber, url: result.url });
   });
 
   // #784 audit feed: the agent's executed actions + approval-queue decisions for this repo. Maintainer-scoped,
@@ -6045,6 +6061,7 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   if (isRepoCheckBeforeStartPath(path)) return true;
   if (isRepoValidateLinkedIssuePath(path)) return true;
   if (isRepoAgentAuditFeedPath(path)) return true; // route's requireRepoMaintainer enforces per-repo authority (contributors → 403)
+  if (isRepoDocRefreshPath(path)) return true; // route's requireRepoWriteAccess enforces real per-repo write authority
   if (isRepoAgentPendingActionsPath(path)) return true; // list-only: requireRepoMaintainer; decision POSTs require server tokens
   if (isRepoIncidentReportsPath(path)) return true; // #5672: route's requireRepoMaintainer enforces per-repo authority (contributors → 403)
   if (isRepoContributorIssueDraftGeneratePath(path)) return true;
@@ -6107,6 +6124,12 @@ function isRepoValidateLinkedIssuePath(path: string): boolean {
 
 function isRepoAgentAuditFeedPath(path: string): boolean {
   return /^\/v1\/repos\/[^/]+\/[^/]+\/agent\/audit-feed$/.test(path);
+}
+
+// #6743: coarse path admission only -- the route's own requireRepoWriteAccess enforces real per-repo write
+// authority (a session with mere read/maintainer-data access still 403s there).
+function isRepoDocRefreshPath(path: string): boolean {
+  return /^\/v1\/repos\/[^/]+\/[^/]+\/repo-docs\/refresh$/.test(path);
 }
 
 function isRepoIncidentReportsPath(path: string): boolean {
