@@ -37,6 +37,19 @@ describe("scanBrandingHits", () => {
     expect(capturedArgs).toContain(":(exclude)**/*.test.ts");
   });
 
+  it("scans apps/* workspaces the same way it scans packages/* (src .ts/.tsx and scripts .mjs)", () => {
+    let capturedArgs: string[] = [];
+    const exec = (_root: string, args: string[]) => {
+      capturedArgs = args;
+      return "";
+    };
+    scanBrandingHits({ root: "/fake", exec });
+
+    expect(capturedArgs).toContain("apps/*/src/**/*.ts");
+    expect(capturedArgs).toContain("apps/*/src/**/*.tsx");
+    expect(capturedArgs).toContain("apps/*/scripts/**/*.mjs");
+  });
+
   // Real regression guard, mirroring check-manifest-drift-script.test.ts's own real-repo-state test: proves
   // the actual defaultExec (real `git grep` subprocess, real exit-1-means-empty handling) works against this
   // repo's real tracked files, not just the injected fake above.
@@ -70,6 +83,14 @@ describe("diffBrandingBaseline", () => {
     const failures = diffBrandingBaseline({}, { "src/new.ts": 1 });
 
     expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("increased from 0 to 1");
+  });
+
+  it("detects a new gittensory hit under an apps/*/src path as drift, now that apps/* is in scope", () => {
+    const failures = diffBrandingBaseline({}, { "apps/loopover-ui/src/routes/app.new.tsx": 1 });
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("apps/loopover-ui/src/routes/app.new.tsx");
     expect(failures[0]).toContain("increased from 0 to 1");
   });
 
