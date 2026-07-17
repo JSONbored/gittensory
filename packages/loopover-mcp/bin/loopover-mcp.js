@@ -30,6 +30,8 @@ import { buildSlopAssessment, SLOP_RUBRIC_MARKDOWN } from "@loopover/engine/sign
 import { buildTestEvidenceReport } from "@loopover/engine/signals/test-evidence";
 // #6754: the same pure evaluator the remote MCP tool + /v1/loop/evaluate-escalation both call.
 import { evaluateEscalation } from "@loopover/engine";
+// #6752: the same pure composer the remote MCP tool + /v1/loop/results-payload both call.
+import { buildResultsPayload } from "@loopover/engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -545,6 +547,19 @@ const evaluateEscalationShape = {
   killRequested: z.boolean().optional(),
 };
 
+// #6752: mirrors buildResultsPayloadShape in src/mcp/server.ts exactly, so the local tool, the remote tool, and
+// the REST route all accept an identical payload.
+const resultsPayloadShape = {
+  repoFullName: z.string().min(1),
+  prNumber: z.number().int().nullable().optional(),
+  title: z.string(),
+  changedFiles: z
+    .array(z.object({ path: z.string(), additions: z.number().int().optional(), deletions: z.number().int().optional() }))
+    .max(5000)
+    .optional(),
+  status: z.enum(["open", "merged", "closed"]).optional(),
+};
+
 // #6749: mirrors checkTestEvidenceShape in src/mcp/server.ts VERBATIM (same bounds, same optionality).
 const checkTestEvidenceShape = {
   changedPaths: z.array(z.string().min(1).max(400)).max(2000),
@@ -889,6 +904,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "agent",
     description:
       "Decide whether a rented loop needs a human, and what action to take, from an already-computed run outcome, health tier, and operator/customer signals — the deterministic support/escalation-path logic. Source-free; returns shouldEscalate + action (none/notify/human_review/stop) + severity + reasons. It decides; the caller wires the action. Computed in-process; no API round-trip.",
+  },
+  {
+    name: "loopover_build_results_payload",
+    category: "agent",
+    description:
+      "Package a completed loop iteration into the customer-facing result (#4801): a PR link, a plain-language summary, and a bounded diff preview, from already-computed iteration metadata. Deterministic and source-free — it formats the result, it does not fetch, open, or deliver anything. Computed in-process; no API round-trip.",
   },
   {
     name: "loopover_check_issue_slop",
@@ -1485,6 +1506,18 @@ registerStdioTool(
   // (src/mcp/server.ts) and the /v1/loop/evaluate-escalation route both call, so all three surfaces return a
   // byte-identical decision for identical input, and escalation checks work fully offline.
   (input) => toolResult("LoopOver escalation decision.", evaluateEscalation(input)),
+);
+
+registerStdioTool(
+  "loopover_build_results_payload",
+  {
+    description: stdioToolDescription("loopover_build_results_payload"),
+    inputSchema: resultsPayloadShape,
+  },
+  // Computed in-process from @loopover/engine (#6752) — the same pure buildResultsPayload the remote server
+  // (src/mcp/server.ts) and the /v1/loop/results-payload route both call, so all three surfaces return an
+  // identical payload for identical input, and results composition works fully offline.
+  (input) => toolResult("LoopOver loop results payload.", buildResultsPayload(input)),
 );
 
 registerStdioTool(

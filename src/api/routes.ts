@@ -200,6 +200,7 @@ import { runIssueRagRetrieval, validateIssueRagInput, type IssueRagInput } from 
 import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } from "../signals/boundary-test-generation";
 import { buildTestEvidenceReport } from "../signals/test-evidence";
 import { evaluateEscalation } from "../loop-escalation";
+import { buildResultsPayload } from "../results-payload";
 import { loadPrAiReviewFindings } from "../mcp/pr-ai-review-findings";
 import {
   buildMcpCompatibilityMetadata,
@@ -488,6 +489,19 @@ const evaluateEscalationSchema = z.object({
   healthStatus: z.enum(["healthy", "degraded", "critical"]).optional(),
   customerFlagged: z.boolean().optional(),
   killRequested: z.boolean().optional(),
+});
+
+// #6752: mirrors buildResultsPayloadShape in src/mcp/server.ts VERBATIM (same bounds, same optionality) so the
+// REST surface can never accept an input the MCP tool would reject, or vice versa.
+const resultsPayloadSchema = z.object({
+  repoFullName: z.string().min(1),
+  prNumber: z.number().int().nullable().optional(),
+  title: z.string(),
+  changedFiles: z
+    .array(z.object({ path: z.string(), additions: z.number().int().optional(), deletions: z.number().int().optional() }))
+    .max(5000)
+    .optional(),
+  status: z.enum(["open", "merged", "closed"]).optional(),
 });
 
 // #6749: mirrors checkTestEvidenceShape in src/mcp/server.ts VERBATIM (same bounds, same optionality) so the
@@ -3291,6 +3305,18 @@ export function createApp() {
     const parsed = evaluateEscalationSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_evaluate_escalation_request", issues: parsed.error.issues }, 400);
     return c.json(evaluateEscalation(parsed.data));
+  });
+
+  // #6752: REST mirror of the loopover_build_results_payload MCP tool, bringing it to the same REST/CLI parity
+  // its same-tier sibling loopover_check_slop_risk (/v1/lint/slop-risk) already has. Both are pure, source-free
+  // composers over caller-supplied, already-computed iteration metadata, so this route delegates to the same
+  // buildResultsPayload the tool calls and adds no logic of its own -- it formats the result, it does not fetch,
+  // open, or deliver anything.
+  app.post("/v1/loop/results-payload", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = resultsPayloadSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_results_payload_request", issues: parsed.error.issues }, 400);
+    return c.json(buildResultsPayload(parsed.data));
   });
 
   app.post("/v1/lint/issue-slop", async (c) => {
