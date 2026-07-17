@@ -16,6 +16,7 @@
 // (#6753 registered the loopover_build_progress_snapshot CLI mirror, taking the count from 70 to 71.)
 // (#6942 registered loopover_get_maintainer_lane without bumping this pin — live count became 72.)
 // (#6756 registered the loopover_plan_idea_claims CLI mirror, taking the count from 72 to 73.)
+// (#6740 registered the loopover_explain_gate_disposition CLI mirror, taking the count from 73 to 74.)
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -59,14 +60,14 @@ describe("MCP legacy alias retirement (#4777) — discovery invariants", () => {
   });
   afterEach(disconnect);
 
-  it("lists exactly 73 loopover_ tools and zero gittensory_-prefixed aliases", async () => {
+  it("lists exactly 74 loopover_ tools and zero gittensory_-prefixed aliases", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
     const primary = names.filter((n) => n.startsWith("loopover_"));
     const legacy = names.filter((n) => n.startsWith("gittensory_"));
-    expect(primary.length).toBe(73);
+    expect(primary.length).toBe(74);
     expect(legacy.length).toBe(0);
-    expect(names.length).toBe(73);
+    expect(names.length).toBe(74);
   });
 
   it("no loopover_ tool's description carries a stale deprecation notice", async () => {
@@ -76,11 +77,11 @@ describe("MCP legacy alias retirement (#4777) — discovery invariants", () => {
     }
   });
 
-  it("`loopover-mcp tools --json` reports the same 73-tool count the live server registers", async () => {
+  it("`loopover-mcp tools --json` reports the same 74-tool count the live server registers", async () => {
     const { tools } = await client.listTools();
     const payload = JSON.parse(run(["tools", "--json"])) as { count: number; tools: Array<{ name: string }> };
     expect(payload.count).toBe(tools.length);
-    expect(payload.count).toBe(73);
+    expect(payload.count).toBe(74);
     expect([...payload.tools.map((t) => t.name)].sort()).toEqual([...tools.map((t) => t.name)].sort());
   });
 });
