@@ -87,6 +87,7 @@ const CLI_COMMAND_SPEC = {
   "init-client": [],
   "decision-pack": [],
   "repo-decision": [],
+  "contributor-profile": [],
   "monitor-open-prs": [],
   "analyze-branch": [],
   preflight: [],
@@ -3251,6 +3252,7 @@ async function runCli(args) {
   if (command === "issue-slop") return issueSlopCli(args.slice(1));
   if (command === "decision-pack") return decisionPackCli(options);
   if (command === "repo-decision") return repoDecisionCli(options);
+  if (command === "contributor-profile") return contributorProfileCli(options);
   if (command === "monitor-open-prs") return monitorOpenPrsCli(options);
   if (command === "review-pr") return reviewPrCli(options);
   if (command !== "analyze-branch" && command !== "preflight") {
@@ -3641,6 +3643,26 @@ function printDecisionPackHelp() {
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
   );
+}
+
+// #6737: CLI mirror of the loopover_get_contributor_profile MCP tool and GET /v1/contributors/{login}/profile
+// (requireContributorAccess-gated -- the same gate decision-pack/repo-decision already satisfy). Login resolves
+// from --login / the active session / LOOPOVER_LOGIN / GITHUB_LOGIN, exactly like the sibling contributor
+// commands, so an already-logged-in contributor never retypes their own login. Named `contributor-profile`
+// because the top-level `profile` command already manages MCP client profiles.
+async function contributorProfileCli(options) {
+  const login = options.login ?? activeProfile.session?.login ?? process.env.LOOPOVER_LOGIN ?? process.env.GITHUB_LOGIN;
+  if (!login) throw new Error("Pass --login <github-login>, log in with `loopover-mcp login`, or set LOOPOVER_LOGIN.");
+  const payload = await apiGet(`/v1/contributors/${encodeURIComponent(login)}/profile`);
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}
+`);
+    return;
+  }
+  process.stdout.write(`LoopOver contributor profile for ${login}.
+`);
+  if (payload.summary) process.stdout.write(`${sanitizePlainTextTerminalOutput(payload.summary)}
+`);
 }
 
 async function decisionPackCli(options) {

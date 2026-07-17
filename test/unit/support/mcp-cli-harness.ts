@@ -293,6 +293,17 @@ export async function startFixtureServer(
       );
       return;
     }
+    const contributorProfileMatch = /^\/v1\/contributors\/([^/]+)\/profile$/.exec(new URL(request.url ?? "/", "http://localhost").pathname);
+    if (contributorProfileMatch && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          login: decodeURIComponent(contributorProfileMatch[1]!),
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          summary: "3 registered repos; 12 merged PRs; strongest in review-tooling.",
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/contributors/JSONbored/open-pr-monitor" && request.method === "GET") {
       response.end(JSON.stringify({ ...openPrMonitorFixture(), ...(options.openPrMonitor ?? {}) }));
       return;
