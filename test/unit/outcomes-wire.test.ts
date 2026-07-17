@@ -18,6 +18,7 @@ import {
   type PlannedAgentAction,
 } from "../../src/settings/agent-actions";
 import { recordAuditEvent } from "../../src/db/repositories";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import type { GitHubPullRequestPayload } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -772,6 +773,91 @@ describe("runSelfTuneBreaker — reads recorded pr_outcome ground truth + engage
 
     expect(await isHoldOnly(env, "owner/repo")).toBe(false); // merge breaker auto-cleared
     expect(await isCloseHoldOnly(env, "owner/repo")).toBe(false); // close breaker auto-cleared
+  });
+
+  describe("#6803: review.selftune: false opt-out is absolute for the breaker too, not just the routine tuning pass", () => {
+    it("does NOT engage the merge or close breaker for an opted-out repo, even with data that would otherwise trip both", async () => {
+      const env = createTestEnv();
+      await upsertRepoFocusManifest(env, "owner/opted-out", { review: { selftune: false } });
+      // Same shape as the plain ENGAGES tests above -- would trip both breakers if this repo weren't opted out.
+      for (let i = 0; i < 4; i += 1) await seedDecisionAndOutcome(env, "owner/opted-out", i, "merge", "merged");
+      for (let i = 4; i < 12; i += 1) await seedDecisionAndOutcome(env, "owner/opted-out", i, "merge", "closed");
+      for (let i = 12; i < 16; i += 1) await seedDecisionAndOutcome(env, "owner/opted-out", i, "close", "closed");
+      for (let i = 16; i < 24; i += 1) await seedDecisionAndOutcome(env, "owner/opted-out", i, "close", "merged");
+
+      await runSelfTuneBreaker(env);
+
+      expect(await isHoldOnly(env, "owner/opted-out")).toBe(false);
+      expect(await isCloseHoldOnly(env, "owner/opted-out")).toBe(false);
+    });
+
+    it("does NOT auto-clear an already-engaged flag for an opted-out repo, even with fully recovered precision -- the opt-out is absolute, not one-directional", async () => {
+      const env = createTestEnv();
+      const flags = createFlagStore(env);
+      await flags.setFlag("holdonly:owner/opted-out", true);
+      await flags.setFlag("closehold:owner/opted-out", true);
+      await env.DB.prepare(
+        "UPDATE system_flags SET updated_at = datetime('now', '-2 days') WHERE key IN ('holdonly:owner/opted-out', 'closehold:owner/opted-out')",
+      ).run();
+      await upsertRepoFocusManifest(env, "owner/opted-out", { review: { selftune: false } });
+      // Fully recovered precision -- would auto-clear both breakers (per the AUTO-CLEARS test above) if this
+      // repo weren't opted out.
+      for (let i = 0; i < 12; i += 1) await seedDecisionAndOutcome(env, "owner/opted-out", i, "merge", "merged");
+      for (let i = 12; i < 24; i += 1) await seedDecisionAndOutcome(env, "owner/opted-out", i, "close", "closed");
+
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      await runSelfTuneBreaker(env);
+      log.mockRestore();
+
+      expect(await isHoldOnly(env, "owner/opted-out")).toBe(true);
+      expect(await isCloseHoldOnly(env, "owner/opted-out")).toBe(true);
+    });
+
+    it("also excludes an opted-out repo from the miner-scoped pass (#2352)", async () => {
+      const env = createTestEnv();
+      await upsertRepoFocusManifest(env, "owner/opted-out", { review: { selftune: false } });
+      // Miner-authored rows (miner_authored=1), same shape as the #2352 ENGAGES test: 33% precision, would
+      // otherwise trip the holdonly:owner/opted-out:miner flag.
+      for (let i = 0; i < 4; i += 1) {
+        await env.DB.prepare(
+          "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, miner_authored, created_at) VALUES (?, ?, ?, 'gate_decision', 'merge', 'gittensory-native', ?, NULL, 1, CURRENT_TIMESTAMP)",
+        )
+          .bind(`gd:m:owner/opted-out#${i}`, "owner/opted-out", `owner/opted-out#${i}`, `sha${i}`)
+          .run();
+        await env.DB.prepare(
+          "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?, ?, ?, 'pr_outcome', 'merged', 'gittensory-native', NULL, NULL, CURRENT_TIMESTAMP)",
+        )
+          .bind(`po:m:owner/opted-out#${i}`, "owner/opted-out", `owner/opted-out#${i}`)
+          .run();
+      }
+      for (let i = 4; i < 12; i += 1) {
+        await env.DB.prepare(
+          "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, miner_authored, created_at) VALUES (?, ?, ?, 'gate_decision', 'merge', 'gittensory-native', ?, NULL, 1, CURRENT_TIMESTAMP)",
+        )
+          .bind(`gd:m:owner/opted-out#${i}`, "owner/opted-out", `owner/opted-out#${i}`, `sha${i}`)
+          .run();
+        await env.DB.prepare(
+          "INSERT INTO review_audit (id, project, target_id, event_type, decision, source, head_sha, summary, created_at) VALUES (?, ?, ?, 'pr_outcome', 'closed', 'gittensory-native', NULL, NULL, CURRENT_TIMESTAMP)",
+        )
+          .bind(`po:m:owner/opted-out#${i}`, "owner/opted-out", `owner/opted-out#${i}`)
+          .run();
+      }
+
+      await runSelfTuneBreaker(env);
+
+      expect(await isHoldOnly(env, "owner/opted-out:miner")).toBe(false);
+    });
+
+    it("does not opt out an unrelated repo (the exclusion is per-repo, not global)", async () => {
+      const env = createTestEnv();
+      await upsertRepoFocusManifest(env, "owner/opted-out", { review: { selftune: false } });
+      for (let i = 0; i < 4; i += 1) await seedDecisionAndOutcome(env, "owner/still-tuned", i, "merge", "merged");
+      for (let i = 4; i < 12; i += 1) await seedDecisionAndOutcome(env, "owner/still-tuned", i, "merge", "closed");
+
+      await runSelfTuneBreaker(env);
+
+      expect(await isHoldOnly(env, "owner/still-tuned")).toBe(true);
+    });
   });
 
   it("never throws (fails safe) even when review_audit reads blow up", async () => {

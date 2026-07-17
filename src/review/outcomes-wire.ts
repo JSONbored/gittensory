@@ -26,6 +26,7 @@
 import { recordAuditEvent } from "../db/repositories";
 import { tryEnqueueDecisionPackRebuild } from "../services/decision-pack";
 import { incr } from "../selfhost/metrics";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import type { GitHubWebhookPayload } from "../types";
 import { errorMessage, nowIso } from "../utils/json";
 import {
@@ -537,6 +538,52 @@ function minerBreakerScope(project: string): string {
   return `${project}${MINER_BREAKER_SCOPE_SUFFIX}`;
 }
 
+/** Strip the `:miner` scope suffix a project key MAY carry, so both `listEngagedProjectScopes`'s scoped keys
+ *  and `GateEvalReport.rows[].project` resolve to the same real repo full name the opt-out check needs. */
+function baseProjectName(project: string): string {
+  return project.endsWith(MINER_BREAKER_SCOPE_SUFFIX) ? project.slice(0, -MINER_BREAKER_SCOPE_SUFFIX.length) : project;
+}
+
+/** #6803: the accuracy circuit-breaker (this whole pass) previously had no per-repo opt-out at all, unlike its
+ *  sibling `selfTuneRepos()` (selftune-wire.ts), which already correctly excludes a repo whose `.loopover.yml`
+ *  sets `review.selftune: false` from the routine tuning pass. Per that flag's own documented intent
+ *  ("excludes this repo from the tuning pass"), the opt-out is ABSOLUTE: it excludes a repo from every part of
+ *  self-tune, not just the routine pass, so the breaker must never engage OR auto-clear holdonly/closehold for
+ *  an opted-out repo either -- a manifest-load error fails OPEN (repo stays included), matching
+ *  `selfTuneRepos()`'s own same fail-safe precedent, since a settings-read blip must never silently widen what
+ *  the breaker acts on. */
+async function isSelfTuneOptedOut(env: Env, repoFullName: string): Promise<boolean> {
+  const manifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+  return manifest?.review.selftune === false;
+}
+
+/** Filter a {@link GateEvalReport}'s rows AND a scope's already-engaged flag list down to the projects that are
+ *  NOT self-tune-opted-out, resolving each project key's real repo name first (`:miner`-suffixed keys included)
+ *  -- the two lists this module's every downstream computation (engage candidates, clear candidates) derives
+ *  from, so filtering both here is sufficient for the opt-out to be absolute. */
+async function excludeSelfTuneOptedOut(
+  env: Env,
+  report: GateEvalReport,
+  engagedHoldonly: readonly string[],
+  engagedClosehold: readonly string[],
+): Promise<{ report: GateEvalReport; engagedHoldonly: string[]; engagedClosehold: string[] }> {
+  const candidateProjects = new Set([
+    ...report.rows.map((row) => baseProjectName(row.project)),
+    ...engagedHoldonly.map(baseProjectName),
+    ...engagedClosehold.map(baseProjectName),
+  ]);
+  const optedOut = new Set<string>();
+  for (const repoFullName of candidateProjects) {
+    if (await isSelfTuneOptedOut(env, repoFullName)) optedOut.add(repoFullName);
+  }
+  if (optedOut.size === 0) return { report, engagedHoldonly: [...engagedHoldonly], engagedClosehold: [...engagedClosehold] };
+  return {
+    report: { ...report, rows: report.rows.filter((row) => !optedOut.has(baseProjectName(row.project))) },
+    engagedHoldonly: engagedHoldonly.filter((project) => !optedOut.has(baseProjectName(project))),
+    engagedClosehold: engagedClosehold.filter((project) => !optedOut.has(baseProjectName(project))),
+  };
+}
+
 /** Run the full engage + auto-clear sequence for one {@link GateEvalReport} (either the plain project-keyed
  *  report or a miner-rescoped one). `eventPrefix` namespaces the emitted log events (`""` for the existing
  *  human/mixed pass, `"miner_"` for the #2352 miner-scoped pass) so an operator can tell which population
@@ -638,22 +685,23 @@ export async function runSelfTuneBreaker(env: Env): Promise<void> {
     const engagedScopes = await listEngagedProjectScopes(env);
     const isMinerScope = (project: string): boolean => project.endsWith(MINER_BREAKER_SCOPE_SUFFIX);
 
-    await runBreakerPassForReport(
-      flags,
+    // #6803: exclude every self-tune-opted-out repo from both passes -- see excludeSelfTuneOptedOut's own doc
+    // comment for why this must happen before engage/clear candidates are computed, not filtered after.
+    const plainPass = await excludeSelfTuneOptedOut(
+      env,
       report,
       engagedScopes.holdonly.filter((project) => !isMinerScope(project)),
       engagedScopes.closehold.filter((project) => !isMinerScope(project)),
-      nowMs,
-      "",
     );
-    await runBreakerPassForReport(
-      flags,
+    const minerPass = await excludeSelfTuneOptedOut(
+      env,
       minerReport,
       engagedScopes.holdonly.filter(isMinerScope),
       engagedScopes.closehold.filter(isMinerScope),
-      nowMs,
-      "miner_",
     );
+
+    await runBreakerPassForReport(flags, plainPass.report, plainPass.engagedHoldonly, plainPass.engagedClosehold, nowMs, "");
+    await runBreakerPassForReport(flags, minerPass.report, minerPass.engagedHoldonly, minerPass.engagedClosehold, nowMs, "miner_");
   } catch (error) {
     console.warn(
       JSON.stringify({
