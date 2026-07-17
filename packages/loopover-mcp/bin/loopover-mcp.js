@@ -412,6 +412,10 @@ const followUpIssueShape = {
 const loginShape = {
   login: z.string().min(1),
 };
+const prOutcomeShape = {
+  login: z.string().min(1),
+  limit: z.number().int().positive().max(200).optional(),
+};
 
 const loginRepoShape = {
   login: z.string().min(1),
@@ -1097,6 +1101,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "discovery",
     description:
       "Inspect a contributor's open PRs on registered repos, classify queue state, and return public-safe next-step packets from cached metadata.",
+  },
+  {
+    name: "loopover_pr_outcome",
+    category: "review",
+    description:
+      "Return a contributor's own post-merge outcome history — for each merged PR, a public-safe attribution of what it did for their standing. Self-scoped to the authenticated login. Mirrors GET /v1/contributors/{login}/pr-outcomes.",
   },
   {
     name: "loopover_compare_pr_variants",
@@ -1941,6 +1951,18 @@ registerStdioTool(
   async ({ login, owner, repo }) => {
     const payload = await getRepoDecisionWithCache(login, owner, repo);
     return toolResult(repoDecisionToolSummary(login, `${owner}/${repo}`, payload), payload);
+  },
+);
+
+registerStdioTool(
+  "loopover_pr_outcome",
+  {
+    description: stdioToolDescription("loopover_pr_outcome"),
+    inputSchema: prOutcomeShape,
+  },
+  async ({ login, limit }) => {
+    const payload = await getContributorPrOutcomes(login, limit);
+    return toolResult(prOutcomeToolSummary(login, payload), payload);
   },
 );
 
@@ -5196,6 +5218,16 @@ function repoDecisionToolSummary(login, repoFullName, payload) {
 
 function getOpenPrMonitor(login) {
   return apiGet(`/v1/contributors/${encodeURIComponent(login)}/open-pr-monitor`);
+}
+
+function getContributorPrOutcomes(login, limit) {
+  const query = limit ? `?limit=${encodeURIComponent(limit)}` : "";
+  return apiGet(`/v1/contributors/${encodeURIComponent(login)}/pr-outcomes${query}`);
+}
+
+function prOutcomeToolSummary(login, payload) {
+  const count = typeof payload?.count === "number" ? payload.count : (payload?.outcomes?.length ?? 0);
+  return `LoopOver post-merge outcomes for ${login}: ${count} merged PR(s).`;
 }
 
 // Mirror the API's own `summary` when it sends one, so the CLI and the loopover_monitor_open_prs MCP

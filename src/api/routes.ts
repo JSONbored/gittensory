@@ -268,6 +268,7 @@ import {
 } from "../signals/extension-contributor-context";
 import { attachDataQuality, buildCoreSignalFidelity, buildFreshnessSloReport, buildRepoDataQuality, buildSignalFidelity } from "../signals/data-quality";
 import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-monitor";
+import { buildContributorPrOutcomes, CONTRIBUTOR_PR_OUTCOMES_DEFAULT_LIMIT } from "../signals/contributor-pr-outcomes";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildIssueSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN } from "../signals/issue-slop";
@@ -3257,6 +3258,20 @@ export function createApp() {
     const unauthorized = await requireContributorAccess(c, login);
     if (unauthorized) return unauthorized;
     return c.json(await buildContributorOpenPrMonitor(c.env, login));
+  });
+
+  // #6747: REST mirror of the loopover_pr_outcome MCP tool — a contributor's own merged-PR outcome history.
+  // Self-scoped by requireContributorAccess (same gate as the tool); shares buildContributorPrOutcomes so the
+  // two surfaces can't drift. `limit` is clamped to a sane range, defaulting to the tool's own default.
+  app.get("/v1/contributors/:login/pr-outcomes", async (c) => {
+    const login = c.req.param("login");
+    const unauthorized = await requireContributorAccess(c, login);
+    if (unauthorized) return unauthorized;
+    const limit = Math.max(
+      1,
+      Math.min(200, Number(c.req.query("limit") ?? CONTRIBUTOR_PR_OUTCOMES_DEFAULT_LIMIT) || CONTRIBUTOR_PR_OUTCOMES_DEFAULT_LIMIT),
+    );
+    return c.json(await buildContributorPrOutcomes(c.env, login, limit));
   });
 
   app.get("/v1/contributors/:login/repos/:owner/:repo/decision", async (c) => {
