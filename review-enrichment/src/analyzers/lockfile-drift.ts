@@ -384,6 +384,44 @@ export function extractLockfileChanges(
   return changes;
 }
 
+/** Per-item OSV.dev query — the fallback the batch path degrades to when `/v1/querybatch` fails, mirroring
+ *  dependency-scan.ts's fetchOsvDirect so a transient batch-API failure yields slower-but-complete results
+ *  instead of silently dropping the whole chunk's findings. */
+async function fetchOsvDirect(
+  ecosystem: string,
+  name: string,
+  version: string,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+  options: Pick<ScanOptions, "analysis" | "diagnostics" | "limits"> = {},
+): Promise<Cve[]> {
+  if (signal?.aborted) return [];
+  const fetchOptions = {
+    endpointCategory: "osv-query",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ package: { name, ecosystem }, version }),
+    signal,
+    fetchImpl,
+    diagnostics: options.diagnostics,
+    phase: "lockfile-drift",
+    subcall: "osv-query",
+    maxBytes: 1024 * 1024,
+    maxCallsPerCategory: options.limits?.maxOsvQueries ?? MAX_OSV_QUERIES,
+  };
+  const response = options.analysis
+    ? await options.analysis.fetchJson<{ vulns?: OsvVuln[] }>(
+        "https://api.osv.dev/v1/query",
+        fetchOptions,
+      )
+    : await boundedFetchJson<{ vulns?: OsvVuln[] }>(
+        "https://api.osv.dev/v1/query",
+        fetchOptions,
+      );
+  if (!response.ok) return [];
+  return toCves(response.data.vulns);
+}
+
 /** Batch-query OSV.dev for lockfile resolutions. Best-effort: returns empty CVE arrays on any failure. */
 export async function queryOsvBatch(
   changes: LockfileChange[],
@@ -422,7 +460,22 @@ export async function queryOsvBatch(
       : await boundedFetchJson<{
         results?: Array<{ vulns?: OsvVuln[] }>;
       }>("https://api.osv.dev/v1/querybatch", fetchOptions);
-    if (!response.ok) continue;
+    if (!response.ok) {
+      for (const change of chunk) {
+        results.set(
+          `${change.ecosystem}::${change.package}@${change.to}`,
+          await fetchOsvDirect(
+            change.ecosystem,
+            change.package,
+            change.to,
+            fetchImpl,
+            signal,
+            options,
+          ),
+        );
+      }
+      continue;
+    }
     chunk.forEach((change, index) => {
       results.set(
         `${change.ecosystem}::${change.package}@${change.to}`,

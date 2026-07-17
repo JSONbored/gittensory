@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { extractLockfileChanges } from "../dist/analyzers/lockfile-drift.js";
+import { extractLockfileChanges, queryOsvBatch, scanLockfileDrift } from "../dist/analyzers/lockfile-drift.js";
 
 test("extractLockfileChanges matches lockfile basenames case-insensitively", () => {
   const changes = extractLockfileChanges([
@@ -251,4 +251,111 @@ test("extractLockfileChanges skips malformed/partial lockfile hunks rather than 
   ]);
 
   assert.deepEqual(changes, []);
+});
+
+// #7009: queryOsvBatch used to `if (!response.ok) continue;` on a batch-endpoint failure, silently dropping
+// every change in that chunk — unlike dependency-scan.ts, which degrades to per-item /v1/query calls. These
+// pin the added fallback: a batch hiccup must produce slower-but-complete per-item results, never a lost chunk.
+
+/** A minimal OSV `Response` the bounded fetch reader accepts: no content-length, no stream body, so it reads
+ *  via `text()`. Mirrors how api.osv.dev replies to a single or batch query. */
+function osvResponse(payload: unknown) {
+  return { ok: true, status: 200, headers: { get: () => null }, body: null, text: async () => JSON.stringify(payload) };
+}
+function osvFailure(status = 503) {
+  return { ok: false, status, headers: { get: () => null } };
+}
+const lockChange = (pkg: string, to: string) =>
+  ({ file: "package-lock.json", line: 1, ecosystem: "npm" as const, package: pkg, from: null, to });
+
+test("queryOsvBatch: a successful batch maps each change's vulns and never falls back to per-item queries", async () => {
+  let perItemCalls = 0;
+  const fetchImpl = (async (url: string) => {
+    if (url.endsWith("/v1/query")) perItemCalls += 1;
+    return osvResponse({ results: [{ vulns: [{ id: "OSV-batch" }] }, { vulns: [] }] });
+  }) as unknown as typeof fetch;
+  const result = await queryOsvBatch([lockChange("lodash", "4.17.21"), lockChange("leftpad", "1.0.1")], fetchImpl);
+  assert.deepEqual(result.get("npm::lodash@4.17.21")?.map((c) => c.id), ["OSV-batch"]);
+  assert.deepEqual(result.get("npm::leftpad@1.0.1"), []);
+  assert.equal(perItemCalls, 0);
+});
+
+test("queryOsvBatch: on a batch-endpoint failure, falls back to per-item OSV queries instead of dropping the chunk", async () => {
+  const urls: string[] = [];
+  const fetchImpl = (async (url: string, init: { body: string }) => {
+    urls.push(url);
+    if (url.endsWith("/v1/querybatch")) return osvFailure(503);
+    const name = (JSON.parse(init.body) as { package: { name: string } }).package.name;
+    return osvResponse({ vulns: name === "lodash" ? [{ id: "OSV-lodash", summary: "prototype pollution" }] : [] });
+  }) as unknown as typeof fetch;
+  const result = await queryOsvBatch([lockChange("lodash", "4.17.21"), lockChange("leftpad", "1.0.1")], fetchImpl);
+  // the failed batch degraded to per-item queries — the vulnerable package's CVE survives...
+  assert.deepEqual(result.get("npm::lodash@4.17.21")?.map((c) => c.id), ["OSV-lodash"]);
+  // ...and the clean package is still recorded (empty, not silently missing)
+  assert.deepEqual(result.get("npm::leftpad@1.0.1"), []);
+  assert.ok(urls.some((u) => u.endsWith("/v1/querybatch")));
+  assert.equal(urls.filter((u) => u.endsWith("/v1/query")).length, 2);
+});
+
+test("queryOsvBatch: a per-item fallback that also fails records an empty result rather than omitting the change", async () => {
+  const fetchImpl = (async (url: string) => (url.endsWith("/v1/querybatch") ? osvFailure(503) : osvFailure(500))) as unknown as typeof fetch;
+  const result = await queryOsvBatch([lockChange("lodash", "4.17.21")], fetchImpl);
+  assert.ok(result.has("npm::lodash@4.17.21"));
+  assert.deepEqual(result.get("npm::lodash@4.17.21"), []);
+});
+
+test("queryOsvBatch: the per-item fallback routes through an injected AnalysisContext when one is supplied", async () => {
+  const seen: string[] = [];
+  const analysis = {
+    fetchJson: async (url: string, init: { body: string }) => {
+      seen.push(url);
+      if (url.endsWith("/v1/querybatch")) return { ok: false, status: 503 };
+      const name = (JSON.parse(init.body) as { package: { name: string } }).package.name;
+      return { ok: true, status: 200, data: { vulns: name === "lodash" ? [{ id: "OSV-ctx" }] : [] } };
+    },
+  };
+  const noDirectFetch = (async () => {
+    throw new Error("analysis context supplied — the raw fetchImpl must not be used");
+  }) as unknown as typeof fetch;
+  const result = await queryOsvBatch([lockChange("lodash", "4.17.21")], noDirectFetch, undefined, {
+    analysis: analysis as never,
+  });
+  assert.deepEqual(result.get("npm::lodash@4.17.21")?.map((c) => c.id), ["OSV-ctx"]);
+  assert.ok(seen.some((u) => u.endsWith("/v1/query")));
+});
+
+test("queryOsvBatch: a mid-batch abort short-circuits the per-item fallback to empty results", async () => {
+  const controller = new AbortController();
+  const fetchImpl = (async (url: string) => {
+    if (url.endsWith("/v1/querybatch")) {
+      controller.abort();
+      return osvFailure(503);
+    }
+    throw new Error("per-item query must not run once the signal is aborted");
+  }) as unknown as typeof fetch;
+  const result = await queryOsvBatch([lockChange("lodash", "4.17.21")], fetchImpl, controller.signal);
+  assert.deepEqual(result.get("npm::lodash@4.17.21"), []);
+});
+
+test("scanLockfileDrift: a batch-API failure still surfaces a per-item CVE finding for a vulnerable lockfile bump", async () => {
+  const fetchImpl = (async (url: string, init: { body: string }) => {
+    if (url.endsWith("/v1/querybatch")) return osvFailure(503);
+    const name = (JSON.parse(init.body) as { package: { name: string } }).package.name;
+    return osvResponse({ vulns: name === "lodash" ? [{ id: "OSV-lodash", summary: "prototype pollution" }] : [] });
+  }) as unknown as typeof fetch;
+  const findings = await scanLockfileDrift(
+    {
+      files: [
+        {
+          path: "package-lock.json",
+          patch: ['@@ -9,0 +10,2 @@', '+    "node_modules/lodash": {', '+      "version": "4.17.21"'].join("\n"),
+        },
+      ],
+    } as Parameters<typeof scanLockfileDrift>[0],
+    fetchImpl,
+  );
+  // end-to-end: the transient batch failure degraded to a per-item query, so the vulnerable bump is still reported.
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]?.package, "lodash");
+  assert.deepEqual(findings[0]?.cves.map((c) => c.id), ["OSV-lodash"]);
 });
