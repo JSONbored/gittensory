@@ -203,6 +203,7 @@ import { buildBoundaryTestGenerationFinding, buildBoundaryTestGenerationSpec } f
 import { buildTestEvidenceReport } from "../signals/test-evidence";
 import { evaluateEscalation } from "../loop-escalation";
 import { buildResultsPayload } from "../results-payload";
+import { buildProgressSnapshot } from "../loop-progress";
 import { validateIdeaSubmission, buildTaskGraph } from "../idea-intake";
 import { loadPrAiReviewFindings } from "../mcp/pr-ai-review-findings";
 import {
@@ -523,6 +524,19 @@ const resultsPayloadSchema = z.object({
     .max(5000)
     .optional(),
   status: z.enum(["open", "merged", "closed"]).optional(),
+});
+
+// #6753: mirrors buildProgressSnapshotShape in src/mcp/server.ts VERBATIM (same bounds, same optionality) so the
+// REST surface can never accept an input the MCP tool would reject, or vice versa.
+const progressSnapshotSchema = z.object({
+  iteration: z.number().int(),
+  maxIterations: z.number().int().nullable().optional(),
+  phase: z.enum(["queued", "claiming", "coding", "reviewing", "submitting", "done"]),
+  status: z.enum(["running", "converged", "abandoned", "error"]),
+  recentActivity: z
+    .array(z.object({ step: z.string(), detail: z.string().optional(), at: z.string().optional() }))
+    .max(1000)
+    .optional(),
 });
 
 // #6749: mirrors checkTestEvidenceShape in src/mcp/server.ts VERBATIM (same bounds, same optionality) so the
@@ -3349,6 +3363,18 @@ export function createApp() {
     const parsed = resultsPayloadSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_results_payload_request", issues: parsed.error.issues }, 400);
     return c.json(buildResultsPayload(parsed.data));
+  });
+
+  // #6753: REST mirror of the loopover_build_progress_snapshot MCP tool, bringing it to the same REST/CLI parity
+  // its same-tier sibling loopover_check_slop_risk (/v1/lint/slop-risk) already has. Both are pure, source-free
+  // composers over caller-supplied, already-computed loop state, so this route delegates to the same
+  // buildProgressSnapshot the tool calls and adds no logic of its own -- it formats the snapshot, it does not
+  // fetch or stream anything.
+  app.post("/v1/loop/progress-snapshot", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = progressSnapshotSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_progress_snapshot_request", issues: parsed.error.issues }, 400);
+    return c.json(buildProgressSnapshot(parsed.data));
   });
 
   // #6755: REST mirror of the loopover_intake_idea MCP tool, bringing it to the same REST/CLI parity its

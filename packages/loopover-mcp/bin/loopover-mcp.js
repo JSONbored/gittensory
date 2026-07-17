@@ -32,6 +32,8 @@ import { buildTestEvidenceReport } from "@loopover/engine/signals/test-evidence"
 import { evaluateEscalation } from "@loopover/engine";
 // #6752: the same pure composer the remote MCP tool + /v1/loop/results-payload both call.
 import { buildResultsPayload } from "@loopover/engine";
+// #6753: the same pure composer the remote MCP tool + /v1/loop/progress-snapshot both call.
+import { buildProgressSnapshot } from "@loopover/engine";
 // #6755: the same pure bridge the remote MCP tool + /v1/loop/intake-idea both call.
 import { validateIdeaSubmission, buildTaskGraph } from "@loopover/engine";
 import { z } from "zod";
@@ -578,6 +580,19 @@ const resultsPayloadShape = {
   status: z.enum(["open", "merged", "closed"]).optional(),
 };
 
+// #6753: mirrors buildProgressSnapshotShape in src/mcp/server.ts exactly, so the local tool, the remote tool, and
+// the REST route all accept an identical payload.
+const buildProgressSnapshotShape = {
+  iteration: z.number().int(),
+  maxIterations: z.number().int().nullable().optional(),
+  phase: z.enum(["queued", "claiming", "coding", "reviewing", "submitting", "done"]),
+  status: z.enum(["running", "converged", "abandoned", "error"]),
+  recentActivity: z
+    .array(z.object({ step: z.string(), detail: z.string().optional(), at: z.string().optional() }))
+    .max(1000)
+    .optional(),
+};
+
 // #6749: mirrors checkTestEvidenceShape in src/mcp/server.ts VERBATIM (same bounds, same optionality).
 const checkTestEvidenceShape = {
   changedPaths: z.array(z.string().min(1).max(400)).max(2000),
@@ -974,6 +989,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "agent",
     description:
       "Package a completed loop iteration into the customer-facing result (#4801): a PR link, a plain-language summary, and a bounded diff preview, from already-computed iteration metadata. Deterministic and source-free — it formats the result, it does not fetch, open, or deliver anything. Computed in-process; no API round-trip.",
+  },
+  {
+    name: "loopover_build_progress_snapshot",
+    category: "agent",
+    description:
+      "Build a near-real-time progress snapshot for a running rented loop (#4800): phase, status, iteration/percent-complete, and a bounded recent-activity tail, from already-computed loop state. Deterministic and source-free; a customer surface pushes it on change rather than polling on a fixed interval. Computed in-process; no API round-trip.",
   },
   {
     name: "loopover_intake_idea",
@@ -1601,6 +1622,18 @@ registerStdioTool(
   // (src/mcp/server.ts) and the /v1/loop/results-payload route both call, so all three surfaces return an
   // identical payload for identical input, and results composition works fully offline.
   (input) => toolResult("LoopOver loop results payload.", buildResultsPayload(input)),
+);
+
+registerStdioTool(
+  "loopover_build_progress_snapshot",
+  {
+    description: stdioToolDescription("loopover_build_progress_snapshot"),
+    inputSchema: buildProgressSnapshotShape,
+  },
+  // Computed in-process from @loopover/engine (#6753) — the same pure buildProgressSnapshot the remote server
+  // (src/mcp/server.ts) and the /v1/loop/progress-snapshot route both call, so all three surfaces return an
+  // identical snapshot for identical input, and progress composition works fully offline.
+  (input) => toolResult("LoopOver loop progress snapshot.", buildProgressSnapshot(input)),
 );
 
 registerStdioTool(
