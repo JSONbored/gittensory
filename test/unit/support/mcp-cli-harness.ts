@@ -548,6 +548,17 @@ export async function startFixtureServer(
       return;
     }
     // #554 gate precision telemetry (read-only). Echoes ?windowDays so the CLI window pass-through is testable.
+    if (request.url === "/v1/repos/owner/repo/agent/pending-actions" && request.method === "POST") {
+      const body = (await readJsonRequest(request)) as { actionClass?: string; pullNumber?: number; reason?: string };
+      response.statusCode = 201;
+      response.end(
+        JSON.stringify({
+          created: true,
+          action: { id: "pa-new", actionClass: body.actionClass, pullNumber: body.pullNumber, status: "pending", reason: body.reason ?? null },
+        }),
+      );
+      return;
+    }
     if (request.url?.startsWith("/v1/repos/owner/repo/gate-precision") && request.method === "GET") {
       const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");
       response.end(

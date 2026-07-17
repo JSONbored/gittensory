@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTONOMY_LEVELS } from "../../src/settings/autonomy";
-import { closeFixtureServer, repoOnboardingPackFixture, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
+import { closeFixtureServer, repoOnboardingPackFixture, runAsync, runExpectingFailure, startFixtureServer } from "./support/mcp-cli-harness";
 
 // #6153: MAINTAIN_AUTONOMY_LEVELS is a hand-synced copy of the live enum (the CLI reaches @loopover/engine only
 // through its published export map, which doesn't surface AUTONOMY_LEVELS), so nothing but a test can catch the
@@ -111,6 +111,31 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     // --window-days bounds the recommendation window; the CLI forwards it as ?windowDays and reflects it.
     const scoped = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo", "--window-days", "30"], e);
     expect(scoped).toMatch(/Outcome calibration for owner\/repo \(last 30d\)/);
+  });
+
+  it("propose stages a new pending action (plain + json), forwarding class/pull/reason to the create route (#6744)", async () => {
+    const requests: string[] = [];
+    const e = await env((request) => requests.push(`${request.method} ${request.url}`));
+
+    const plain = await runAsync(["maintain", "propose", "review", "7", "--repo", "owner/repo", "--reason", "looks clean"], e);
+    expect(plain).toMatch(/Staged a review on owner\/repo#7 for maintainer approval\./);
+    expect(requests.at(-1)).toBe("POST /v1/repos/owner/repo/agent/pending-actions");
+
+    const json = JSON.parse(await runAsync(["maintain", "propose", "merge", "8", "--repo", "owner/repo", "--json"], e)) as {
+      created: boolean;
+      action: { actionClass: string; pullNumber: number; status: string };
+    };
+    expect(json).toMatchObject({ created: true, action: { actionClass: "merge", pullNumber: 8, status: "pending" } });
+  });
+
+  it("propose validates the pull number and required class locally, before any request (#6744)", async () => {
+    const e = await env();
+    const noNumber = runExpectingFailure(["maintain", "propose", "review", "--repo", "owner/repo"], e);
+    expect(`${noNumber.stdout}${noNumber.stderr}`).toMatch(/positive <pull-number>/);
+    const badNumber = runExpectingFailure(["maintain", "propose", "review", "0", "--repo", "owner/repo"], e);
+    expect(`${badNumber.stdout}${badNumber.stderr}`).toMatch(/positive <pull-number>/);
+    const noClass = runExpectingFailure(["maintain", "propose", "--repo", "owner/repo"], e);
+    expect(`${noClass.stdout}${noClass.stderr}`).toMatch(/Usage: loopover-mcp maintain propose/);
   });
 
   it("onboarding-pack mirrors the session-gated API payload and forwards refresh", async () => {

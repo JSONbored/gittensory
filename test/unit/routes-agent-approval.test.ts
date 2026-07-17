@@ -38,7 +38,7 @@ vi.mock("../../src/github/backfill", async (importOriginal) => {
 import { mergePullRequest } from "../../src/github/pr-actions";
 import { createSessionForGitHubUser } from "../../src/auth/security";
 import { createApp } from "../../src/api/routes";
-import { createPendingAgentActionIfAbsent, getPendingAgentAction, recordAuditEvent, upsertInstallation, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, upsertRepositorySettings } from "../../src/db/repositories";
+import { createPendingAgentActionIfAbsent, getPendingAgentAction, listPendingAgentActions, recordAuditEvent, upsertInstallation, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, upsertRepositorySettings } from "../../src/db/repositories";
 import { createTestEnv } from "../helpers/d1";
 
 const app = createApp();
@@ -358,6 +358,76 @@ describe("agent audit-feed route (#784)", () => {
       const res = await app.request("/v1/repos/owner/repo/agent/audit-feed?pull=7", { headers: headers(env) }, env);
       const body = (await res.json()) as { events: Array<{ detail: string | null }> };
       expect(body.events[0]?.detail).toBeNull();
+    });
+  });
+
+  describe("propose a new pending action (POST .../agent/pending-actions) — #6744", () => {
+    async function seedInstalledRepo(env: Env, opts: { pull?: { number: number; headSha: string } } = {}) {
+      // The 3rd arg pins the repo's installationId (the column getRepository reads), matching how the sibling
+      // tests below seed an installed repo.
+      await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 5);
+      if (opts.pull) {
+        await upsertPullRequestFromGitHub(env, "owner/repo", { number: opts.pull.number, title: "PR", state: "open", user: { login: "contributor" }, head: { sha: opts.pull.headSha }, labels: [], body: "x" });
+      }
+    }
+    const propose = (env: Env, body: unknown) =>
+      app.request("/v1/repos/owner/repo/agent/pending-actions", { method: "POST", headers: headers(env), body: JSON.stringify(body) }, env);
+
+    it("stages a new action (201, created) pinned to the PR head, with every optional param passed through", async () => {
+      const env = createTestEnv();
+      await seedInstalledRepo(env, { pull: { number: 7, headSha: "h7" } });
+      const res = await propose(env, { actionClass: "review", pullNumber: 7, reason: "looks clean", label: "ready", reviewBody: "LGTM", mergeMethod: "squash", closeComment: "n/a" });
+      expect(res.status).toBe(201);
+      await expect(res.json()).resolves.toMatchObject({ created: true, action: { actionClass: "review", pullNumber: 7, status: "pending", reason: "looks clean" } });
+      // Head-SHA pinning (#2255) + every optional param reached the stored action's params.
+      const [staged] = await listPendingAgentActions(env, { repoFullName: "owner/repo", status: "pending" });
+      expect(staged?.params).toMatchObject({ expectedHeadSha: "h7", label: "ready", reviewBody: "LGTM", mergeMethod: "squash", closeComment: "n/a" });
+    });
+
+    it("stages an action for a PR with no cached head, omitting every absent optional param AND the head pin", async () => {
+      const env = createTestEnv();
+      await seedInstalledRepo(env); // no cached PR row for #8 → no head SHA to pin
+      const res = await propose(env, { actionClass: "merge", pullNumber: 8 });
+      expect(res.status).toBe(201);
+      await expect(res.json()).resolves.toMatchObject({ created: true, action: { actionClass: "merge", pullNumber: 8, status: "pending", reason: null } });
+      const [staged] = await listPendingAgentActions(env, { repoFullName: "owner/repo", status: "pending" });
+      expect(staged?.params).toEqual({});
+    });
+
+    it("is idempotent per (repo, pull, actionClass): a second identical propose returns 200 created:false", async () => {
+      const env = createTestEnv();
+      await seedInstalledRepo(env, { pull: { number: 7, headSha: "h7" } });
+      expect((await propose(env, { actionClass: "review", pullNumber: 7 })).status).toBe(201);
+      const second = await propose(env, { actionClass: "review", pullNumber: 7 });
+      expect(second.status).toBe(200);
+      await expect(second.json()).resolves.toMatchObject({ created: false, action: { actionClass: "review", pullNumber: 7 } });
+    });
+
+    it("rejects a malformed body and an invalid action class with 400, staging nothing", async () => {
+      const env = createTestEnv();
+      await seedInstalledRepo(env, { pull: { number: 7, headSha: "h7" } });
+      // Unparseable JSON → the .catch(() => null) fallback → schema rejects null.
+      const malformed = await app.request("/v1/repos/owner/repo/agent/pending-actions", { method: "POST", headers: headers(env), body: "not json" }, env);
+      expect(malformed.status).toBe(400);
+      await expect(malformed.json()).resolves.toMatchObject({ error: "invalid_pending_action" });
+      const badClass = await propose(env, { actionClass: "explode", pullNumber: 7 });
+      expect(badClass.status).toBe(400);
+      expect(await listPendingAgentActions(env, { repoFullName: "owner/repo", status: "pending" })).toHaveLength(0);
+    });
+
+    it("returns 409 when the LoopOver App is not installed on the repo", async () => {
+      const env = createTestEnv();
+      // Repo exists but carries no installation id → cannot open the App-authenticated action.
+      await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } });
+      const res = await propose(env, { actionClass: "review", pullNumber: 7 });
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toMatchObject({ error: "app_not_installed" });
+    });
+
+    it("requires authentication", async () => {
+      const env = createTestEnv();
+      const res = await app.request("/v1/repos/owner/repo/agent/pending-actions", { method: "POST", body: JSON.stringify({ actionClass: "review", pullNumber: 7 }) }, env);
+      expect([401, 403]).toContain(res.status);
     });
   });
 });

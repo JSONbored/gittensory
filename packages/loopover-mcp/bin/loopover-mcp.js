@@ -100,7 +100,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state", "propose"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -3099,6 +3099,8 @@ function printMaintainHelp() {
       "  set-level <action> <level>   Set the autonomy level for one action class.",
       `                               actions: ${MAINTAIN_ACTION_CLASSES.join(", ")}`,
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
+      "  propose <class> <pull#>      Stage a new pending action for approval (never auto-executes).",
+      "             [--reason ...]    Optional reason recorded with the staged action.",
       "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
       "  outcome-calibration          Show slop-band merge rates and recommendation-outcome calibration.",
       "             [--window-days N]  Bound the recommendation window (default: full history).",
@@ -3231,6 +3233,25 @@ async function maintainCli(args) {
       ...(payload.signals ?? []),
     ];
     emit(payload, lines.join("\n"));
+    return;
+  }
+  if (subcommand === "propose") {
+    // #6744 create side of the approval-queue trio: stage a new pending action for maintainer approval (it
+    // never auto-executes). Mirrors POST .../agent/pending-actions and the loopover_propose_action tool. The
+    // action class is validated server-side (the route's 400 surfaces a bad class), so no client-side list to
+    // drift against.
+    const actionClass = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    const pullNumber = Number(args[2]);
+    if (!actionClass) throw new Error("Usage: loopover-mcp maintain propose <action-class> <pull-number> --repo owner/repo.");
+    if (!Number.isInteger(pullNumber) || pullNumber <= 0) {
+      throw new Error("Pass a positive <pull-number>: loopover-mcp maintain propose <action-class> <pull-number> --repo owner/repo.");
+    }
+    const payload = await apiPost(`${repoBase}/agent/pending-actions`, {
+      actionClass,
+      pullNumber,
+      ...(options.reason ? { reason: options.reason } : {}),
+    });
+    emit(payload, `${payload.created ? "Staged" : "Already staged"} a ${sanitizePlainTextTerminalOutput(actionClass)} on ${repoFullName}#${pullNumber} for maintainer approval.`);
     return;
   }
   if (subcommand === "onboarding-pack") {

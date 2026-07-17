@@ -52,6 +52,7 @@ import {
   getRepository,
   getRepoQueueTrendSnapshot,
   getRepositorySettings,
+  createPendingAgentActionIfAbsent,
   getPendingAgentAction,
   listAgentAuditEvents,
   listAuditEventsForTarget,
@@ -1023,6 +1024,19 @@ function internalOpsAgentConfig(env: Env): OpsAgentConfig {
   const slug = env.GITHUB_APP_SLUG?.trim() || "loopover";
   return { slug, secrets: { internalSecret: "INTERNAL_JOB_TOKEN" } };
 }
+
+// #6744 body for the create side of the approval-queue trio (POST /v1/repos/:owner/:repo/agent/pending-actions).
+// Mirrors the loopover_propose_action MCP tool's proposeActionShape (same bounds), minus owner/repo which are
+// path params here.
+const proposePendingActionBodySchema = z.object({
+  pullNumber: z.number().int().positive(),
+  actionClass: z.enum(["review", "request_changes", "approve", "merge", "close", "label", "review_state_label"]),
+  reason: z.string().max(500).optional(),
+  label: z.string().min(1).max(100).optional(),
+  reviewBody: z.string().max(60000).optional(),
+  mergeMethod: z.enum(["merge", "squash", "rebase"]).optional(),
+  closeComment: z.string().max(60000).optional(),
+});
 
 export function createApp() {
   const app = new Hono<AppBindings>();
@@ -2737,6 +2751,42 @@ export function createApp() {
     const result = await decidePendingAgentAction(c.env, { id: pending.id, decision, decidedBy });
     if (result.status === "already_decided") return c.json({ error: "already_decided", action: result.action }, 409);
     return c.json(result);
+  });
+
+  // #6744 create side of the approval-queue trio (list/decide already existed): stage a NEW pending action for
+  // maintainer approval. Mirrors the loopover_propose_action MCP tool -- write-gated, head-SHA-pinned (so the
+  // accept path's force-push freshness guard is armed rather than a silent no-op, #2255), idempotent per
+  // (repo, pull, actionClass).
+  app.post("/v1/repos/:owner/:repo/agent/pending-actions", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoWriteAccess(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    const parsed = proposePendingActionBodySchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_pending_action", issues: parsed.error.issues }, 400);
+    const repo = await getRepository(c.env, fullName);
+    if (!repo?.installationId) return c.json({ error: "app_not_installed", detail: "The LoopOver App is not installed on this repository." }, 409);
+    const pr = await getPullRequest(c.env, fullName, parsed.data.pullNumber);
+    const params = {
+      ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
+      ...(parsed.data.reviewBody !== undefined ? { reviewBody: parsed.data.reviewBody } : {}),
+      ...(parsed.data.mergeMethod !== undefined ? { mergeMethod: parsed.data.mergeMethod } : {}),
+      ...(parsed.data.closeComment !== undefined ? { closeComment: parsed.data.closeComment } : {}),
+      ...(pr?.headSha ? { expectedHeadSha: pr.headSha } : {}),
+    };
+    const { action, created } = await createPendingAgentActionIfAbsent(c.env, {
+      repoFullName: fullName,
+      pullNumber: parsed.data.pullNumber,
+      installationId: repo.installationId,
+      actionClass: parsed.data.actionClass,
+      autonomyLevel: "auto_with_approval",
+      params,
+      reason: parsed.data.reason ?? null,
+    });
+    return c.json(
+      { created, action: { id: action.id, actionClass: action.actionClass, pullNumber: action.pullNumber, status: action.status, reason: action.reason } },
+      created ? 201 : 200,
+    );
   });
 
   // #784 audit feed: the agent's executed actions + approval-queue decisions for this repo. Maintainer-scoped,
