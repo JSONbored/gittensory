@@ -910,6 +910,17 @@ export const AutomationStateSchema = z
   })
   .openapi("AutomationState");
 
+// #6743 — the public result shape of the loopover_refresh_repo_docs MCP tool and its REST
+// (`POST /v1/repos/:owner/:repo/repo-docs/refresh`) mirror. Both trim RepoDocPullRequestResult's internal
+// `claudeMode` field (src/github/repo-doc-pr.ts) the same way, so this schema matches what each surface
+// actually returns, not the runner's raw result.
+export const RepoDocRefreshResultSchema = z
+  .discriminatedUnion("opened", [
+    z.object({ opened: z.literal(true), reused: z.boolean(), pullNumber: z.number().int(), url: z.string() }),
+    z.object({ opened: z.literal(false), reason: z.string() }),
+  ])
+  .openapi("RepoDocRefreshResult");
+
 export const RepoSettingsPreviewSchema = z
   .object({
     repoFullName: z.string(),

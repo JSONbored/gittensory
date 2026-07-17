@@ -178,6 +178,9 @@ export async function startFixtureServer(
     openPrMonitor?: Record<string, unknown>;
     intakeStatus?: number;
     localBranchAnalysisStatus?: number;
+    /** #6743: overrides the repo-doc refresh route's default "opened a new PR" response, e.g. to exercise
+     *  the reused-PR or not-opened branches. */
+    repoDocRefresh?: unknown;
     /** #6792: queued /v1/auth/github/device/poll responses, consumed one per request -- the last entry
      *  repeats once exhausted. Lets a test simulate a transient 429 (or GitHub's own slow_down/pending
      *  statuses) before the device flow eventually resolves. Requires deviceFlowStart to be set too. */
@@ -507,6 +510,22 @@ export async function startFixtureServer(
     if (request.url === "/v1/repos/owner/repo/settings" && request.method === "PUT") {
       const body = (await readJsonRequest(request)) as { agentPaused?: boolean; autonomy?: Record<string, string> };
       response.end(JSON.stringify({ repoFullName: "owner/repo", agentPaused: body.agentPaused === true, ...(body.autonomy ? { autonomy: body.autonomy } : {}) }));
+      return;
+    }
+    // #6743 repo-doc refresh (write). Defaults to the "opened a new PR" shape; a test can override via
+    // options.repoDocRefresh to exercise the reused / not-opened branches.
+    if (request.url === "/v1/repos/owner/repo/repo-docs/refresh" && request.method === "POST") {
+      response.end(
+        JSON.stringify(
+          options.repoDocRefresh ?? {
+            opened: true,
+            reused: false,
+            pullNumber: 42,
+            url: "https://github.com/owner/repo/pull/42",
+            claudeMode: "symlink",
+          },
+        ),
+      );
       return;
     }
     // #6733 agent audit feed (read-only). Echoes the forwarded query so the CLI's pass-through is testable, and
