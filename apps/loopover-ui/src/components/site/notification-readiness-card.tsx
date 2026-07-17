@@ -2,6 +2,7 @@ import { Bell, BellOff } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { StatusPill } from "./control-primitives";
+import { ErrorState, LoadingState } from "./state-views";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { useLocalStorage } from "@/lib/use-local-storage";
 
@@ -112,12 +113,15 @@ export function NotificationReadinessCard() {
             ))}
           </ul>
         </div>
+      ) : model.status === "loading" ? (
+        <LoadingState className="mt-3" title="Loading notification model…" />
       ) : (
-        <p className="mt-3 text-token-sm text-muted-foreground">
-          {model.status === "loading"
-            ? "Loading notification model…"
-            : "Notification model unavailable."}
-        </p>
+        <ErrorState
+          className="mt-3"
+          description={model.error}
+          errorKind={model.errorKind}
+          onRetry={model.reload}
+        />
       )}
     </section>
   );
