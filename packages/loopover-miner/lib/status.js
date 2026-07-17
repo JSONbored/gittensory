@@ -25,6 +25,7 @@ import { resolveGovernorStateDbPath } from "./governor-state.js";
 import { resolveAttemptLogDbPath } from "./attempt-log.js";
 import { resolveReplaySnapshotDbPath } from "./replay-snapshot.js";
 import { resolveWorktreeAllocatorDbPath } from "./worktree-allocator.js";
+import { resolveContributionProfileCacheDbPath } from "./contribution-profile-cache.js";
 
 // Slim laptop-mode CLI commands (#2288): `status` (what's installed + where local state lives) and `doctor` (is
 // this laptop set up correctly). Both are read-only and 100% local — no repo-scanning, no coding-agent invocation,
@@ -316,6 +317,7 @@ function storeIntegrityChecks(env) {
     ["attempt-log", resolveAttemptLogDbPath(env)],
     ["replay-snapshot", resolveReplaySnapshotDbPath(env)],
     ["worktree-allocator", resolveWorktreeAllocatorDbPath(env)],
+    ["contribution-profile", resolveContributionProfileCacheDbPath(env)],
   ];
   return stores.map(([name, dbPath]) => checkStoreIntegrity(`store-integrity:${name}`, dbPath));
 }
