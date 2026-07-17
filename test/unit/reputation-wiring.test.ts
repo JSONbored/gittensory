@@ -323,6 +323,114 @@ describe("shouldSkipAiForReputation (helper)", () => {
   });
 });
 
+describe("ORB/AMS reputation bridge wiring (#6801)", () => {
+  const repoFullName = "acme/widgets";
+  const submitter = "bridge-dev";
+  const strongAmsRecord = [
+    { repoFullName, authorLogin: submitter, state: "merged" },
+    { repoFullName, authorLogin: submitter, state: "merged" },
+    { repoFullName, authorLogin: submitter, state: "merged" },
+  ];
+
+  async function seedLowReputation(env: Env) {
+    for (let i = 0; i < 7; i++) {
+      await seedReviewTarget(env, {
+        project: repoFullName,
+        repo: repoFullName,
+        number: i + 1,
+        installationId: 999,
+        submitter,
+        status: "closed",
+        reasonCode: "dual_review_declined",
+      });
+    }
+    // Keep the quality outcomes recent while making their submission cadence old enough not to trip the
+    // independent 24-hour machine-paced check after AMS upgrades the quality signal.
+    await env.DB.prepare("UPDATE review_targets SET created_at = '2026-01-01T00:00:00.000Z' WHERE submitter = ?").bind(submitter).run();
+  }
+
+  it("REGRESSION (#6801): feature on upgrades a low local signal and changes the end-to-end gate decision", async () => {
+    const env = createTestEnv({
+      LOOPOVER_REVIEW_REPUTATION: "true",
+      LOOPOVER_REVIEW_AMS_REPUTATION_BRIDGE: "true",
+      LOOPOVER_AMS_TRACK_RECORD_URL: "https://ams.internal",
+    });
+    await seedLowReputation(env);
+    await upsertRepoFocusManifest(env, repoFullName, { features: { amsReputationBridge: true } });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(input.toString()).toBe(`https://ams.internal/track-record/${submitter}`);
+      return Response.json(strongAmsRecord);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const effective = await getEffectiveSubmitterReputation(env, { repoFullName, submitter });
+      expect(effective.signal).toBe("trusted");
+      expect(await shouldSkipAiForReputation(env, { project: repoFullName, submitter })).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the pre-bridge output unchanged when any activation gate is off", async () => {
+    const cases = [
+      { reputation: "false", bridge: "true", manifest: true },
+      { reputation: "true", bridge: "false", manifest: true },
+      { reputation: "true", bridge: "true", manifest: false },
+    ] as const;
+
+    for (const testCase of cases) {
+      const env = createTestEnv({
+        LOOPOVER_REVIEW_REPUTATION: testCase.reputation,
+        LOOPOVER_REVIEW_AMS_REPUTATION_BRIDGE: testCase.bridge,
+        LOOPOVER_AMS_TRACK_RECORD_URL: "https://ams.internal",
+      });
+      await seedLowReputation(env);
+      await upsertRepoFocusManifest(env, repoFullName, { features: { amsReputationBridge: testCase.manifest } });
+      const local = await getSubmitterReputation(env, repoFullName, submitter);
+      const fetchMock = vi.fn(async () => Response.json(strongAmsRecord));
+      vi.stubGlobal("fetch", fetchMock);
+      try {
+        expect(await getEffectiveSubmitterReputation(env, { repoFullName, submitter })).toEqual(local);
+        expect(fetchMock).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
+  it("never downgrades the locally-computed signal when the enabled bridge does not vouch", async () => {
+    const env = createTestEnv({
+      LOOPOVER_REVIEW_REPUTATION: "true",
+      LOOPOVER_REVIEW_AMS_REPUTATION_BRIDGE: "true",
+      LOOPOVER_AMS_TRACK_RECORD_URL: "https://ams.internal",
+    });
+    await seedLowReputation(env);
+    await upsertRepoFocusManifest(env, repoFullName, { features: { amsReputationBridge: true } });
+    const local = await getSubmitterReputation(env, repoFullName, submitter);
+    const fetchMock = vi.fn(async () =>
+      Response.json(Array.from({ length: 9 }, () => ({ repoFullName, authorLogin: submitter, state: "closed" }))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      expect(await getEffectiveSubmitterReputation(env, { repoFullName, submitter })).toEqual(local);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails safe to the local signal when manifest resolution throws", async () => {
+    const env = createTestEnv({
+      LOOPOVER_REVIEW_REPUTATION: "true",
+      LOOPOVER_REVIEW_AMS_REPUTATION_BRIDGE: "true",
+      DB: undefined as unknown as D1Database,
+    });
+    const effective = await getEffectiveSubmitterReputation(env, { repoFullName, submitter: undefined });
+    expect(effective.signal).toBe("neutral");
+  });
+});
+
 describe("getEffectiveSubmitterReputation (#4513, install-wide for a confirmed miner)", () => {
   function stubMinerFetch(githubUsername: string) {
     return async (input: RequestInfo | URL) => {

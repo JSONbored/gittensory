@@ -15,6 +15,10 @@
 
 import { getRepository } from "../db/repositories";
 import { isConfirmedOfficialMiner } from "../gittensor/miner-detection-cache";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { bridgeAmsReputation } from "./ams-reputation-bridge";
+import { isAmsReputationBridgeEnabled, resolveAmsTrackRecordEndpoint } from "./ams-reputation-bridge-wire";
+import { resolveConvergedFeature } from "./feature-activation";
 import {
   getSubmitterCadence,
   getSubmitterReputation,
@@ -61,6 +65,15 @@ export function shouldDowngradeToDeterministic(stats: SubmitterStats): boolean {
   return false;
 }
 
+async function applyAmsReputationBridge(env: Env, repoFullName: string, submitter: string | undefined, local: SubmitterStats): Promise<SubmitterStats> {
+  if (!isReputationEnabled(env)) return local;
+  if (!isAmsReputationBridgeEnabled(env)) return local;
+  const manifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+  if (!resolveConvergedFeature(env, manifest, "amsReputationBridge", repoFullName)) return local;
+  const signal = await bridgeAmsReputation(local.signal, submitter, { endpoint: resolveAmsTrackRecordEndpoint(env) });
+  return signal === local.signal ? local : { ...local, signal };
+}
+
 /**
  * Resolve the EFFECTIVE reputation signal for a submitter (#4513): the per-repo signal from
  * {@link getSubmitterReputation}, additionally widened to an install-wide view for a CONFIRMED official
@@ -68,8 +81,8 @@ export function shouldDowngradeToDeterministic(stats: SubmitterStats): boolean {
  * (non-miner) submitter or one already flagged per-repo pays no extra lookup. Closes a real blind spot: a
  * fleet identity spreading thin across many repos in one install never accumulates same-repo sample density,
  * so the per-repo-only signal stays permanently "neutral" for it even while it burns full AI-review spend on
- * every submission. Fail-safe throughout: an identity-check or install-wide-read failure just keeps the
- * per-repo result, never throws, never upgrades a signal the per-repo read didn't already produce.
+ * every submission. The final local signal then passes through the feature-gated, upgrade-only AMS bridge
+ * (#6801). Fail-safe throughout: identity, install-wide, manifest, or AMS failures keep the local result.
  */
 export async function getEffectiveSubmitterReputation(
   env: Env,
@@ -77,18 +90,19 @@ export async function getEffectiveSubmitterReputation(
   cfg?: ReputationConfig,
 ): Promise<SubmitterStats> {
   const perRepo = await getSubmitterReputation(env, args.repoFullName, args.submitter ?? undefined, cfg);
-  if (shouldDowngradeToDeterministic(perRepo)) return perRepo;
+  if (shouldDowngradeToDeterministic(perRepo)) return applyAmsReputationBridge(env, args.repoFullName, args.submitter?.trim(), perRepo);
   const submitter = args.submitter?.trim();
-  if (!submitter) return perRepo;
+  if (!submitter) return applyAmsReputationBridge(env, args.repoFullName, submitter, perRepo);
   /* v8 ignore next -- isConfirmedOfficialMiner already catches every internal failure point itself and never rejects; this guards only a future implementation change. */
   const isMiner = await isConfirmedOfficialMiner(env, submitter).catch(() => false);
-  if (!isMiner) return perRepo;
+  if (!isMiner) return applyAmsReputationBridge(env, args.repoFullName, submitter, perRepo);
   const repo = await getRepository(env, args.repoFullName).catch(() => null);
-  if (!repo?.installationId) return perRepo;
+  if (!repo?.installationId) return applyAmsReputationBridge(env, args.repoFullName, submitter, perRepo);
   // getSubmitterReputationAcrossInstall already degrades to neutral internally on any read failure (mirrors
   // getSubmitterReputation) -- nothing to catch here.
   const acrossInstall = await getSubmitterReputationAcrossInstall(env, repo.installationId, submitter, cfg);
-  return shouldDowngradeToDeterministic(acrossInstall) ? acrossInstall : perRepo;
+  const local = shouldDowngradeToDeterministic(acrossInstall) ? acrossInstall : perRepo;
+  return applyAmsReputationBridge(env, args.repoFullName, submitter, local);
 }
 
 /**
@@ -109,9 +123,8 @@ export async function shouldSkipAiForReputation(
   args: { project: string; submitter: string | null | undefined },
 ): Promise<boolean> {
   if (!isReputationEnabled(env)) return false;
-  // Combines both extensions to the base per-repo signal: install-wide widening for a confirmed miner
-  // (#4513, getEffectiveSubmitterReputation) first, then the cadence check (#4514) as an independent
-  // second signal -- neither subsumes the other, so both must run, not just whichever merged more recently.
+  // Combines the extensions to the base per-repo signal: install-wide widening for a confirmed miner and the
+  // upgrade-only AMS bridge inside getEffectiveSubmitterReputation, then cadence (#4514) independently.
   const stats = await getEffectiveSubmitterReputation(env, { repoFullName: args.project, submitter: args.submitter });
   if (shouldDowngradeToDeterministic(stats)) return true;
   const cadence = await getSubmitterCadence(env, args.project, args.submitter ?? undefined);
