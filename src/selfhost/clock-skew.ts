@@ -8,6 +8,11 @@
 // outbound request, sampled at exactly the cadence the vulnerable code path itself runs.
 
 let lastSkewSeconds = 0;
+// Wall-clock time (ms) of the last SUCCESSFUL skew sample, or null until the first one (#7000). Because a
+// sample is only taken when a JWT token mint call observes a `Date` header, a long-lived cached/broker-provided
+// token can mean no mint (and thus no fresh sample) for a while — during which `lastSkewSeconds` keeps reporting
+// an old reading as if it were current. Tracking the sample time lets the metric expose that staleness.
+let lastSampleAtMs: number | null = null;
 
 /**
  * Update the last-observed clock-skew sample from a GitHub response's `Date` header. Positive means
@@ -21,6 +26,7 @@ export function recordClockSkewFromResponse(response: Response): void {
   const remoteMs = Date.parse(dateHeader);
   if (!Number.isFinite(remoteMs)) return;
   lastSkewSeconds = (Date.now() - remoteMs) / 1000;
+  lastSampleAtMs = Date.now();
 }
 
 /** The most recently observed clock-skew sample in seconds (0 until the first successful sample). */
@@ -28,7 +34,19 @@ export function clockSkewSecondsSample(): number {
   return lastSkewSeconds;
 }
 
-/** Test-only: reset the module-level sample between tests. */
+/**
+ * Age in seconds since the last successful clock-skew sample, or `-1` when no sample has been taken yet (#7000).
+ * The `-1` sentinel follows the same "no reading available" convention `d1-size-probe.ts` and
+ * `loopover_host_load_avg1_per_core` use, so an operator can distinguish a fresh reading from a stale one
+ * instead of an old sample silently looking current.
+ */
+export function clockSkewSampleAgeSeconds(): number {
+  if (lastSampleAtMs === null) return -1;
+  return (Date.now() - lastSampleAtMs) / 1000;
+}
+
+/** Test-only: reset the module-level sample state between tests. */
 export function resetClockSkewForTest(): void {
   lastSkewSeconds = 0;
+  lastSampleAtMs = null;
 }
