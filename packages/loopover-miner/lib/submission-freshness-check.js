@@ -15,13 +15,26 @@
 // FAIL CLOSED: an unreachable/failed live-state fetch is treated as stale (aborts), never as "no evidence of
 // staleness, so proceed" -- mirrors this package's fail-closed convention elsewhere (harness-submission-
 // trigger.js's predicted_gate_unavailable/slop_assessment_unavailable, iterate-loop.ts's ambiguous-on-error).
+// That fail-closed OUTCOME is unchanged; a single transient blip just gets a bounded retry-with-backoff to
+// resolve itself FIRST (#7089) -- the same window claim-conflict-resolver.js's resolveClaimConflict (#6058)
+// already gives its own call to this identical fetchLiveIssueSnapshot, reusing http-retry.js's shared backoff.
+// Aborting here discards a fully-completed create/iterate loop's local work, so riding out a brief 5xx /
+// GraphQL-index propagation lag before failing closed matters more here than in the post-submission case.
 //
 // NOT a rejection outcome: staleness is caught BEFORE any PR exists, so it is not the same lifecycle event as
 // rejection-state-machine.js's DISENGAGED_OUTCOME (which handles an EXISTING PR a maintainer closed). "No PR,
 // no noisy failure" here just means: return a quiet not-fresh result, same shape as any other blocked gate
 // decision in this package -- never throw, never surface anything to the target repo.
 
+import { defaultRetryBackoffMs } from "./http-retry.js";
+
 export const SUBMISSION_FRESHNESS_ABORT_EVENT = "submission_freshness_abort";
+
+// Bounded retry for the pre-submission live-state fetch (#7089), mirroring claim-conflict-resolver.js's
+// resolveClaimConflict (#6058): a few attempts with exponential backoff let a transient GitHub blur (a brief
+// 5xx, or GraphQL-index propagation lag) resolve itself before we fail closed, without an unbounded loop.
+const DEFAULT_SNAPSHOT_MAX_ATTEMPTS = 3;
+const defaultSnapshotSleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
 /**
  * Evaluate whether a submission candidate's live repo state is still fresh enough to proceed toward open_pr.
@@ -34,8 +47,14 @@ export const SUBMISSION_FRESHNESS_ABORT_EVENT = "submission_freshness_abort";
  *   fetchLiveIssueSnapshot: (repoFullName: string, issueNumber: number) => Promise<{ state: "open"|"closed", referencingPrs: Array<{ number: number, state: "open"|"closed"|"merged", authorLogin: string }> } | null>,
  *   eventLedger: { appendEvent(event: { type: string, repoFullName?: string, payload: Record<string, unknown> }): unknown },
  * }} deps
+ * @param {{ maxAttempts?: number, sleepFn?: (ms: number) => Promise<unknown>, backoffMs?: (attempt: number) => number }} [options]
+ *   Bounded retry for the live-state snapshot fetch (#7089): up to `maxAttempts` (default 3) attempts with
+ *   `backoffMs(attempt)` backoff between them, returning as soon as a real (non-null, well-formed) snapshot is
+ *   obtained. Optional -- every existing caller works unchanged. Pure over the injected `sleepFn`/`backoffMs`
+ *   -- no real timers in tests. Only the fetch itself is retried; a well-formed snapshot's own signals
+ *   (issue_closed / already_addressed) are decided once, never retried.
  */
-export async function checkSubmissionFreshness(candidate, deps) {
+export async function checkSubmissionFreshness(candidate, deps, options = {}) {
   if (!candidate || typeof candidate !== "object") throw new Error("invalid_freshness_candidate");
   const repoFullName = typeof candidate.repoFullName === "string" ? candidate.repoFullName.trim() : "";
   if (!repoFullName) throw new Error("invalid_repo_full_name");
@@ -49,18 +68,34 @@ export async function checkSubmissionFreshness(candidate, deps) {
   if (typeof fetchLiveIssueSnapshot !== "function") throw new Error("invalid_live_state_fetcher");
   if (!eventLedger || typeof eventLedger.appendEvent !== "function") throw new Error("invalid_event_ledger");
 
+  const maxAttempts =
+    Number.isFinite(options.maxAttempts) && options.maxAttempts >= 1 ? Math.floor(options.maxAttempts) : DEFAULT_SNAPSHOT_MAX_ATTEMPTS;
+  const sleepFn = typeof options.sleepFn === "function" ? options.sleepFn : defaultSnapshotSleep;
+  const backoffMs = typeof options.backoffMs === "function" ? options.backoffMs : defaultRetryBackoffMs;
+
   const claim = claimLedger.listClaims({ repoFullName }).find((c) => c.issueNumber === candidate.issueNumber);
   if (!claim || claim.status !== "active") {
     return abort(eventLedger, repoFullName, candidate.issueNumber, "claim_superseded");
   }
 
-  let snapshot;
-  try {
-    snapshot = await fetchLiveIssueSnapshot(repoFullName, candidate.issueNumber);
-  } catch {
-    snapshot = null;
+  let snapshot = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let current;
+    try {
+      current = await fetchLiveIssueSnapshot(repoFullName, candidate.issueNumber);
+    } catch {
+      current = null;
+    }
+    if (current && typeof current === "object") {
+      // A real, well-formed snapshot resolves the transient window: stop retrying and decide on it now.
+      snapshot = current;
+      break;
+    }
+    // Back off before the next attempt (transient 5xx / index-propagation lag); never after the last one.
+    if (attempt < maxAttempts) await sleepFn(backoffMs(attempt));
   }
-  if (!snapshot || typeof snapshot !== "object") {
+  if (!snapshot) {
+    // Retry budget exhausted with no usable snapshot -- fail closed exactly as before (#7089 only widens the window).
     return abort(eventLedger, repoFullName, candidate.issueNumber, "live_state_unavailable");
   }
 

@@ -29,4 +29,14 @@ export type SubmissionFreshnessDeps = {
 
 export type SubmissionFreshnessResult = { fresh: true } | { fresh: false; reason: FreshnessAbortReason };
 
-export function checkSubmissionFreshness(candidate: SubmissionFreshnessCandidate, deps: SubmissionFreshnessDeps): Promise<SubmissionFreshnessResult>;
+export type SubmissionFreshnessRetryOptions = {
+  maxAttempts?: number;
+  sleepFn?: (ms: number) => Promise<unknown>;
+  backoffMs?: (attempt: number) => number;
+};
+
+export function checkSubmissionFreshness(
+  candidate: SubmissionFreshnessCandidate,
+  deps: SubmissionFreshnessDeps,
+  options?: SubmissionFreshnessRetryOptions,
+): Promise<SubmissionFreshnessResult>;
