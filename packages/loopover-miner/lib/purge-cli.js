@@ -1,7 +1,8 @@
 // `loopover-miner purge` (#5564, #6599): an explicit, operator-invoked right-to-be-forgotten path across the local
-// ledgers. Deletes every row for one repo from the six stores that have a real `repoColumn` (claim-ledger,
-// event-ledger, governor-ledger, prediction-ledger, portfolio-queue, run-state), via each store's own
-// `purgeByRepo` method (which reuses `store-maintenance.js`'s shared, identifier-guarded `purgeStoreByRepo`).
+// ledgers. Deletes every row for one repo from the stores that have a real `repoColumn` (claim-ledger,
+// event-ledger, governor-ledger, prediction-ledger, portfolio-queue, run-state, contribution-profile-cache, and
+// governor-state's two repo-scoped tables — #7091), via each store's own `purgeByRepo` method (which reuses
+// `store-maintenance.js`'s shared, identifier-guarded `purgeStoreByRepo`).
 // `attempt-log.js` is deliberately reported as not-purgeable rather than silently skipped or approximated: its
 // payload is a free-form `Record<string, unknown>` with no dedicated repo column, so a precise per-repo match
 // isn't possible there without risking false matches -- see store-maintenance.js's own purge-spec doc comment.
@@ -17,6 +18,8 @@ import { initGovernorLedger, resolveGovernorLedgerDbPath } from "./governor-ledg
 import { initPredictionLedger, resolvePredictionLedgerDbPath } from "./prediction-ledger.js";
 import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "./portfolio-queue.js";
 import { initRunStateStore, resolveRunStateDbPath } from "./run-state.js";
+import { initContributionProfileCache, resolveContributionProfileCacheDbPath } from "./contribution-profile-cache.js";
+import { openGovernorState, resolveGovernorStateDbPath } from "./governor-state.js";
 import { resolveAttemptLogDbPath } from "./attempt-log.js";
 import {
   CLAIM_LEDGER_PURGE_SPEC,
@@ -25,6 +28,9 @@ import {
   PREDICTION_LEDGER_PURGE_SPEC,
   PORTFOLIO_QUEUE_PURGE_SPEC,
   RUN_STATE_PURGE_SPEC,
+  CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC,
+  GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC,
+  GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC,
   countStoreByRepo,
   describeError,
 } from "./store-maintenance.js";
@@ -42,6 +48,10 @@ const REAL_PURGE_TARGETS = [
   { name: "prediction-ledger", optionKey: "initPredictionLedger", opener: initPredictionLedger, resolveDbPath: resolvePredictionLedgerDbPath, spec: PREDICTION_LEDGER_PURGE_SPEC },
   { name: "portfolio-queue", optionKey: "initPortfolioQueueStore", opener: initPortfolioQueueStore, resolveDbPath: resolvePortfolioQueueDbPath, spec: PORTFOLIO_QUEUE_PURGE_SPEC },
   { name: "run-state", optionKey: "initRunStateStore", opener: initRunStateStore, resolveDbPath: resolveRunStateDbPath, spec: RUN_STATE_PURGE_SPEC },
+  { name: "contribution-profile-cache", optionKey: "initContributionProfileCache", opener: initContributionProfileCache, resolveDbPath: resolveContributionProfileCacheDbPath, spec: CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC },
+  // governor-state holds TWO repo-scoped tables in one DB file; its store.purgeByRepo deletes both against a
+  // single handle (never reopening the file), and its dry-run count sums both via `specs` (#7091).
+  { name: "governor-state", optionKey: "openGovernorState", opener: openGovernorState, resolveDbPath: resolveGovernorStateDbPath, specs: [GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC, GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC] },
 ];
 
 function parseRepoArg(value, usage) {
@@ -113,8 +123,13 @@ export function runPurgeDryRun(parsed, options = {}) {
   const resolveDbPaths = options.resolveDbPaths ?? {};
   const stores = REAL_PURGE_TARGETS.map((target) => {
     const dbPath = (resolveDbPaths[target.name] ?? target.resolveDbPath)();
+    // A target scopes one table (`spec`) or -- for governor-state -- several in one file (`specs`); sum the
+    // per-table counts against the single read-only handle so the preview matches what a real purge removes.
+    const specs = target.specs ?? [target.spec];
     try {
-      const wouldPurge = countExistingRows(dbPath, (db) => countStoreByRepo(db, target.spec, parsed.repoFullName));
+      const wouldPurge = countExistingRows(dbPath, (db) =>
+        specs.reduce((sum, spec) => sum + countStoreByRepo(db, spec, parsed.repoFullName), 0),
+      );
       return { store: target.name, wouldPurge };
     } catch (error) {
       return { store: target.name, wouldPurge: null, error: describeError(error) };

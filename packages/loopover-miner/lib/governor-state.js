@@ -1,5 +1,10 @@
 import { DEFAULT_FORGE_CONFIG } from "./forge-config.js";
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
+import {
+  GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC,
+  GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC,
+  purgeStoreByRepo,
+} from "./store-maintenance.js";
 
 // Governor cross-attempt state persistence (#5134, Wave 3.5). Every governor-*.js wrapper
 // (governor-chokepoint.js) is a pure in/out transform: it computes and RETURNS
@@ -303,6 +308,23 @@ export function openGovernorState(dbPath = resolveGovernorStateDbPath()) {
           ? listSubmissionsAllStatement.all(limit)
           : listSubmissionsByRepoStatement.all(normalizeRepoFullName(filter.repoFullName), limit);
       return rows.map(rowToSubmission);
+    },
+    /**
+     * Delete every repo-scoped row for one repo across BOTH governor tables against this single open handle
+     * (#7091) — the right-to-be-forgotten path `loopover-miner purge` invokes. `governor_reputation_history` is
+     * purged on `repo_full_name` alone (its key is composite with `api_base_url`), so nothing survives on any
+     * forge host. `governor_scalar_state` is deliberately untouched — it has no repo dimension. Returns the
+     * total rows removed across both tables.
+     *
+     * @param {string} repoFullName
+     * @returns {number} rows deleted across both repo-scoped tables
+     */
+    purgeByRepo(repoFullName) {
+      const normalized = normalizeRepoFullName(repoFullName);
+      return (
+        purgeStoreByRepo(db, GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC, normalized) +
+        purgeStoreByRepo(db, GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC, normalized)
+      );
     },
     close() {
       db.close();

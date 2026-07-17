@@ -13,6 +13,7 @@
 // no internal clock read in the prune path so it stays deterministic and unit-testable.
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { CONTRIBUTION_PROFILE_STORE_TABLE } from "./contribution-profile.js";
 
 /** Env opt-ins for ledger retention (unset ⇒ retention disabled). */
 export const LEDGER_RETENTION_DAYS_ENV = "LOOPOVER_MINER_LEDGER_RETENTION_DAYS";
@@ -34,6 +35,18 @@ export const GOVERNOR_LEDGER_PURGE_SPEC = { table: "governor_events", repoColumn
 export const PREDICTION_LEDGER_PURGE_SPEC = { table: "predictions", repoColumn: "repo_full_name" };
 export const PORTFOLIO_QUEUE_PURGE_SPEC = { table: "miner_portfolio_queue", repoColumn: "repo_full_name" };
 export const RUN_STATE_PURGE_SPEC = { table: "miner_run_state", repoColumn: "repo_full_name" };
+
+/** Three more repo-scoped stores the original six missed (#7091), same `repoColumn` shape and same internal-
+ *  constant-only discipline. The contribution-profile-cache table name comes from its schema module's own
+ *  `CONTRIBUTION_PROFILE_STORE_TABLE` constant so this spec can't drift from a second hardcoded literal.
+ *  governor-state holds two genuinely repo-scoped tables (reputation history + own submissions);
+ *  `governor_scalar_state` is intentionally excluded — it is a single whole-run scalar row with no repo
+ *  dimension. `governor_reputation_history` is purged on `repo_full_name` alone (its key is composite with
+ *  `api_base_url`), so a right-to-be-forgotten sweep clears the repo across every forge host it was recorded
+ *  against, not just the default one. */
+export const CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC = { table: CONTRIBUTION_PROFILE_STORE_TABLE, repoColumn: "repo_full_name" };
+export const GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC = { table: "governor_reputation_history", repoColumn: "repo_full_name" };
+export const GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC = { table: "governor_own_submissions", repoColumn: "repo_full_name" };
 
 const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

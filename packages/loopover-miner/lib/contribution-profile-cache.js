@@ -13,6 +13,10 @@ import {
   resolveLocalStoreDbPath,
 } from "./local-store.js";
 import { applySchemaMigrations } from "./schema-version.js";
+import {
+  CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC,
+  purgeStoreByRepo,
+} from "./store-maintenance.js";
 
 const defaultDbFileName = "contribution-profile-cache.sqlite3";
 let defaultContributionProfileCache = null;
@@ -110,6 +114,17 @@ export function initContributionProfileCache(
       const fetchedAt = new Date(nowMs).toISOString();
       putStatement.run(repoFullName, JSON.stringify(profile), fetchedAt);
       return { repoFullName, fetchedAt };
+    },
+    /**
+     * Delete the cached profile for one repo (#7091) — the right-to-be-forgotten path `loopover-miner purge`
+     * invokes. Returns the number of rows removed (0 or 1, since repo_full_name is the primary key). Reuses
+     * store-maintenance.js's identifier-guarded purgeStoreByRepo, exactly like the other repo-scoped stores.
+     *
+     * @param {string} repoFullName
+     * @returns {number} rows deleted
+     */
+    purgeByRepo(repoFullName) {
+      return purgeStoreByRepo(db, CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC, normalizeRepoFullName(repoFullName));
     },
     close() {
       db.close();

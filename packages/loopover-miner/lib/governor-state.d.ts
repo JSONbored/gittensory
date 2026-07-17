@@ -33,6 +33,8 @@ export type GovernorState = {
   saveReputationHistory(repoFullName: string, history: RepoOutcomeHistory, apiBaseUrl?: string): RepoOutcomeHistory;
   recordOwnSubmission(record: OwnSubmissionRecord): OwnSubmissionRecord;
   listRecentOwnSubmissions(filter?: ListRecentOwnSubmissionsFilter): OwnSubmissionRecord[];
+  /** Delete every repo-scoped row for one repo across both governor tables (#7091); returns total rows removed. */
+  purgeByRepo(repoFullName: string): number;
   close(): void;
 };
 

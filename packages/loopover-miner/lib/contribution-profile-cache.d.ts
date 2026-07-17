@@ -12,6 +12,8 @@ export type ContributionProfileCache = {
     profile: ContributionProfile,
     nowMs?: number,
   ): { repoFullName: string; fetchedAt: string };
+  /** Delete the cached profile for one repo (#7091); returns rows removed (0 or 1). */
+  purgeByRepo(repoFullName: string): number;
   close(): void;
 };
 
