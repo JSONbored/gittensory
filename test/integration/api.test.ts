@@ -962,6 +962,24 @@ describe("api routes", () => {
       cohorts: { miner: { overall: expect.any(Object) }, human: { overall: expect.any(Object) } },
     });
 
+    // #6742 derived automation state: maintainer-scoped, read-only. The DERIVED view (mode / permissionReadiness
+    // / actingActionClasses / pendingActionCount) that GET /settings does not return.
+    const automationUnauthenticated = await app.request("/v1/repos/entrius/allways-ui/automation-state", {}, env);
+    expect(automationUnauthenticated.status).toBe(401);
+    const automationState = await app.request("/v1/repos/entrius/allways-ui/automation-state", { headers: apiHeaders(env) }, env);
+    expect(automationState.status).toBe(200);
+    await expect(automationState.json()).resolves.toMatchObject({
+      repoFullName: "entrius/allways-ui",
+      configured: expect.any(Boolean),
+      autonomy: expect.any(Object),
+      agentPaused: expect.any(Boolean),
+      agentDryRun: expect.any(Boolean),
+      mode: expect.stringMatching(/^(paused|dry_run|live)$/),
+      permissionReadiness: expect.stringMatching(/^(not_required|ready|reconsent_required)$/),
+      actingActionClasses: expect.any(Array),
+      pendingActionCount: expect.any(Number),
+    });
+
     const maintainerNoiseUnauthenticated = await app.request("/v1/repos/entrius/allways-ui/maintainer-noise", {}, env);
     expect(maintainerNoiseUnauthenticated.status).toBe(401);
     const maintainerNoise = await app.request("/v1/repos/entrius/allways-ui/maintainer-noise", { headers: apiHeaders(env) }, env);

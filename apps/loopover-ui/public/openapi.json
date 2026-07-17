@@ -14154,6 +14154,151 @@
           "defaultProfile",
           "analyzers"
         ]
+      },
+      "AutomationState": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "autonomy": {
+            "type": "object",
+            "properties": {
+              "review": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "request_changes": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "approve": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "merge": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "close": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "review_state_label": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "update_branch": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              },
+              "assign": {
+                "type": "string",
+                "enum": [
+                  "observe",
+                  "auto_with_approval",
+                  "auto"
+                ]
+              }
+            }
+          },
+          "autoMaintain": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "agentPaused": {
+            "type": "boolean"
+          },
+          "agentDryRun": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "paused",
+              "dry_run",
+              "live"
+            ]
+          },
+          "permissionReadiness": {
+            "type": "string",
+            "enum": [
+              "not_required",
+              "ready",
+              "reconsent_required"
+            ]
+          },
+          "actingActionClasses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "review",
+                "request_changes",
+                "approve",
+                "merge",
+                "close",
+                "label",
+                "review_state_label",
+                "update_branch",
+                "assign"
+              ]
+            }
+          },
+          "pendingActionCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "repoFullName",
+          "configured",
+          "autonomy",
+          "agentPaused",
+          "agentDryRun",
+          "mode",
+          "permissionReadiness",
+          "actingActionClasses",
+          "pendingActionCount"
+        ]
       }
     },
     "parameters": {},
@@ -18297,6 +18442,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EnrichmentAnalyzersTaxonomyDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/automation-state": {
+      "get": {
+        "summary": "Derived agent automation state for a repository",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Maintainer-only derived automation view (mode, permission readiness, acting action classes, pending-approval count) that the raw /settings row does not include",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationState"
                 }
               }
             }

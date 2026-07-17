@@ -77,6 +77,7 @@ import {
   recordProductUsageEvent,
 } from "../db/repositories";
 import { decidePendingAgentAction } from "../services/agent-approval-queue";
+import { automationStateSummary, buildAutomationState } from "../services/automation-state";
 import { nowIso } from "../utils/json";
 import { buildNotificationFeed } from "../notifications/service";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } from "../gittensor/api";
@@ -4026,31 +4027,10 @@ export class LoopoverMcp {
   private async getAutomationState(input: { owner: string; repo: string }): Promise<ToolPayload> {
     const fullName = `${input.owner}/${input.repo}`;
     await this.requireRepoAccess(fullName);
-    const [repo, settings, pendingActionCount] = await Promise.all([
-      getRepository(this.env, fullName),
-      resolveRepositorySettings(this.env, fullName),
-      countPendingAgentActions(this.env, { repoFullName: fullName, status: "pending" }),
-    ]);
-    const autonomy = settings.autonomy;
-    const actingActionClasses = AGENT_ACTION_CLASSES.filter((actionClass) => isActingAutonomyLevel(resolveAutonomy(autonomy, actionClass)));
-    const installation = repo?.installationId ? await getInstallation(this.env, repo.installationId) : null;
-    const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(this.env) || (await isGlobalAgentFrozen(this.env)), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
-    const permissionReadiness = resolveAgentPermissionReadiness({ autonomy, installationPermissions: installation?.permissions ?? null });
-    return {
-      summary: `Agent automation for ${fullName}: mode=${mode}, ${actingActionClasses.length} acting class(es), ${pendingActionCount} pending approval(s).`,
-      data: {
-        repoFullName: fullName,
-        configured: actingActionClasses.length > 0,
-        autonomy,
-        autoMaintain: settings.autoMaintain,
-        agentPaused: settings.agentPaused === true,
-        agentDryRun: settings.agentDryRun === true,
-        mode,
-        permissionReadiness,
-        actingActionClasses,
-        pendingActionCount,
-      },
-    };
+    // Shared with GET /v1/repos/:owner/:repo/automation-state (#6742) so the two surfaces cannot drift.
+    const state = await buildAutomationState(this.env, fullName);
+    // Spread into a plain object: ToolPayload.data is a Record, and a typed interface has no implicit index sig.
+    return { summary: automationStateSummary(state), data: { ...state } };
   }
 
   // #6087 — pause/resume: the write-side kill-switch counterpart to loopover_get_automation_state's read-only

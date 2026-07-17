@@ -278,6 +278,7 @@ import { computeContributorCalibration } from "../review/predicted-gate-calibrat
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
 import { buildMaintainerActivationPreview } from "../services/maintainer-activation";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
+import { buildAutomationState } from "../services/automation-state";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { computeOpsStats, isOpsEnabled, resolveOpsManifestOverride } from "../review/ops-wire";
   import { deleteLiveOverride, listOverrideAudit, loadOverride, loadShadowOverride, sanitizeOverridePayload, authoritativeGateOverride, toLiveGateThresholdFields, type StorageEnv } from "../review/auto-apply";
@@ -2670,6 +2671,18 @@ export function createApp() {
     // value -- a config-as-code-only field (Batch A, loopover#6442) would otherwise always show its hardcoded
     // default here regardless of what the repo's .loopover.yml actually configures.
     return c.json(await resolveRepositorySettings(c.env, fullName));
+  });
+
+  // #6742 read-side automation state: the DERIVED view (mode / permissionReadiness / pendingActionCount /
+  // acting classes) that /settings deliberately does not return -- symmetric with the write-side PUT /settings
+  // and the CLI's maintain pause/resume/set-level. Maintainer-gated like /settings; shares buildAutomationState
+  // with the loopover_get_automation_state MCP tool so the two surfaces cannot drift.
+  app.get("/v1/repos/:owner/:repo/automation-state", async (c) => {
+    const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
+    const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (gate instanceof Response) return gate;
+    return c.json(await buildAutomationState(c.env, fullName));
   });
 
   // #130 maintainer settings editor: PATCH-style save of the gate / slop / label / surface / command-auth

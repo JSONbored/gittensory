@@ -509,6 +509,24 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #6742 derived automation state (read-only). Returns the derived mode/readiness/acting-classes view.
+    if (request.url?.startsWith("/v1/repos/owner/repo/automation-state") && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          configured: true,
+          autonomy: { merge: "auto", close: "auto_with_approval" },
+          autoMaintain: "auto",
+          agentPaused: false,
+          agentDryRun: false,
+          mode: "live",
+          permissionReadiness: "ready",
+          actingActionClasses: ["merge", "close"],
+          pendingActionCount: 3,
+        }),
+      );
+      return;
+    }
     // #554 gate precision telemetry (read-only). Echoes ?windowDays so the CLI window pass-through is testable.
     if (request.url?.startsWith("/v1/repos/owner/repo/gate-precision") && request.method === "GET") {
       const windowDays = new URL(request.url, "http://localhost").searchParams.get("windowDays");

@@ -70,6 +70,7 @@ import {
   RepoSyncStateSchema,
   RepoSettingsPreviewSchema,
   RepositorySchema,
+  AutomationStateSchema,
   RepositorySettingsSchema,
   RoleContextSchema,
   RewardRiskActionSchema,
@@ -129,6 +130,7 @@ export function buildOpenApiSpec() {
   registry.register("BountyAdvisory", BountyAdvisorySchema);
   registry.register("BountyLifecycleEvents", BountyLifecycleEventsSchema);
   registry.register("RepositorySettings", RepositorySettingsSchema);
+  registry.register("AutomationState", AutomationStateSchema);
   registry.register("InstallationRepair", InstallationRepairSchema);
   registry.register("RepoSettingsPreview", RepoSettingsPreviewSchema);
   registry.register("SkippedPrAuditExport", SkippedPrAuditExportSchema);
@@ -686,6 +688,19 @@ export function buildOpenApiSpec() {
     request: { params: z.object({ owner: z.string(), repo: z.string() }) },
     responses: {
       200: { description: "LoopOver repository automation settings", content: { "application/json": { schema: RepositorySettingsSchema } } },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/automation-state",
+    summary: "Derived agent automation state for a repository",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: {
+        description:
+          "Maintainer-only derived automation view (mode, permission readiness, acting action classes, pending-approval count) that the raw /settings row does not include",
+        content: { "application/json": { schema: AutomationStateSchema } },
+      },
     },
   });
   registry.registerPath({

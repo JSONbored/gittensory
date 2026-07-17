@@ -100,7 +100,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -3051,6 +3051,7 @@ function printMaintainHelp() {
       "  audit-feed [--since ISO]     Show the agent audit feed (who did what, when).",
       "             [--limit N]       Cap the events returned (1-200).",
       "             [--pull N]        Scope the feed to one pull request.",
+      "  automation-state             Show the derived agent automation state (mode, readiness, pending).",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -3220,8 +3221,25 @@ async function maintainCli(args) {
     );
     return;
   }
+  if (subcommand === "automation-state") {
+    // #6742: read-side counterpart to the write-side pause/resume/set-level above. Mirrors GET {repoBase}/
+    // automation-state (and the loopover_get_automation_state MCP tool) — the DERIVED mode/permissionReadiness/
+    // acting-classes/pending-count view the raw settings row omits. Read-only; the API enforces maintainer auth.
+    const payload = await apiGet(`${repoBase}/automation-state`);
+    const acting = payload.actingActionClasses ?? [];
+    emit(
+      payload,
+      [
+        `Agent automation for ${repoFullName}: mode=${payload.mode}, ${acting.length} acting class(es), ${payload.pendingActionCount ?? 0} pending approval(s).`,
+        `  permission readiness: ${payload.permissionReadiness}`,
+        `  auto-maintain: ${payload.autoMaintain ?? "unset"}${payload.agentDryRun ? " (dry-run)" : ""}`,
+        acting.length > 0 ? `  acting classes: ${acting.join(", ")}` : "  acting classes: none",
+      ].join("\n"),
+    );
+    return;
+  }
   throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack | audit-feed.`,
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration | onboarding-pack | audit-feed | automation-state.`,
   );
 }
 

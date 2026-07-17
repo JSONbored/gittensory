@@ -879,6 +879,37 @@ export const RepositorySettingsSchema = z
   })
   .openapi("RepositorySettings");
 
+// #6742: the derived automation view returned by GET /v1/repos/:owner/:repo/automation-state, matching
+// buildAutomationState's AutomationState shape. Distinct from RepositorySettings: these are computed fields
+// (mode/permissionReadiness/pendingActionCount/acting classes), not the stored settings row.
+const AGENT_ACTION_CLASS_VALUES = [
+  "review",
+  "request_changes",
+  "approve",
+  "merge",
+  "close",
+  "label",
+  "review_state_label",
+  "update_branch",
+  "assign",
+] as const;
+const AUTONOMY_LEVEL_VALUES = ["observe", "auto_with_approval", "auto"] as const;
+
+export const AutomationStateSchema = z
+  .object({
+    repoFullName: z.string(),
+    configured: z.boolean(),
+    autonomy: z.record(z.enum(AGENT_ACTION_CLASS_VALUES), z.enum(AUTONOMY_LEVEL_VALUES)),
+    autoMaintain: z.boolean().nullable().optional(),
+    agentPaused: z.boolean(),
+    agentDryRun: z.boolean(),
+    mode: z.enum(["paused", "dry_run", "live"]),
+    permissionReadiness: z.enum(["not_required", "ready", "reconsent_required"]),
+    actingActionClasses: z.array(z.enum(AGENT_ACTION_CLASS_VALUES)),
+    pendingActionCount: z.number(),
+  })
+  .openapi("AutomationState");
+
 export const RepoSettingsPreviewSchema = z
   .object({
     repoFullName: z.string(),

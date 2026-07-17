@@ -170,6 +170,22 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(payload.echoedQuery).toEqual({ since: null, limit: null, pull: null });
   });
 
+  it("automation-state shows the derived agent automation view (plain + json), with output parity (#6742)", async () => {
+    const e = await env();
+    const out = await runAsync(["maintain", "automation-state", "--repo", "owner/repo"], e);
+    expect(out).toMatch(/Agent automation for owner\/repo: mode=live, 2 acting class\(es\), 3 pending approval\(s\)\./);
+    expect(out).toMatch(/permission readiness: ready/);
+    expect(out).toMatch(/acting classes: merge, close/);
+    // Parity: --json re-serializes the API payload untouched, so the derived fields reach both surfaces.
+    const json = JSON.parse(await runAsync(["maintain", "automation-state", "--repo", "owner/repo", "--json"], e)) as {
+      repoFullName: string;
+      mode: string;
+      permissionReadiness: string;
+      pendingActionCount: number;
+    };
+    expect(json).toMatchObject({ repoFullName: "owner/repo", mode: "live", permissionReadiness: "ready", pendingActionCount: 3 });
+  });
+
   it("validates inputs: --repo required, id required for approve, known subcommand + action/level", async () => {
     const e = await env();
     await expect(runAsync(["maintain", "status"], e)).rejects.toThrow(/Pass --repo/);
