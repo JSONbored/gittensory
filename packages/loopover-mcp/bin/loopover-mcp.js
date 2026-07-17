@@ -1035,6 +1035,12 @@ const STDIO_TOOL_DESCRIPTORS = [
       "Return the repo's label-policy audit (configured-vs-live labels, missing configured labels, suspicious status/source-style labels, and trusted-label-pipeline readiness) from the private LoopOver API.",
   },
   {
+    name: "loopover_get_maintainer_lane",
+    category: "maintainer",
+    description:
+      "Return the repo's maintainer-lane triage report (the lane recommendation alongside the configured maintainer cut, queue health, config quality, and contributor-intake health) from the private LoopOver API. Advisory only.",
+  },
+  {
     name: "loopover_get_burden_forecast",
     category: "maintainer",
     description:
@@ -1760,6 +1766,26 @@ registerStdioTool(
       repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
       generatedAt: intelligence?.generatedAt,
       labelAudit: intelligence?.labelAudit ?? null,
+    });
+  },
+);
+
+// #6739: CLI mirror of the remote server's loopover_get_maintainer_lane. maintainerLane ships in the same
+// buildRepoIntelligenceResponse payload the sibling loopover_get_label_audit already GETs, so this is a thin
+// extraction over that identical route rather than a new fetch shape.
+registerStdioTool(
+  "loopover_get_maintainer_lane",
+  {
+    description: stdioToolDescription("loopover_get_maintainer_lane"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const intelligence = await apiGet(`${prefix}/intelligence`);
+    return toolResult("LoopOver maintainer lane.", {
+      repoFullName: intelligence?.repoFullName ?? `${owner}/${repo}`,
+      generatedAt: intelligence?.generatedAt,
+      maintainerLane: intelligence?.maintainerLane ?? null,
     });
   },
 );
