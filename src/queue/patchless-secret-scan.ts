@@ -1,5 +1,6 @@
 import type { FileFetcher } from "../review/review-grounding";
 import type { AdvisoryFinding, PullRequestFileRecord } from "../types";
+import { mapWithConcurrency } from "./map-with-concurrency";
 
 /** Per-file cap when synthesizing a patch for GitHub's patch-less (binary/large) PR files. */
 export const SECRET_SCAN_PATCH_FALLBACK_MAX_CHARS = 512_000;
@@ -159,17 +160,7 @@ async function mapPatchLessSecretScanFilesWithConcurrency<T, R>(
   limit: number,
   mapper: (item: T) => Promise<R>,
 ): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  return mapWithConcurrency(items, limit, mapper);
 }
 
 /** When GitHub omits inline `patch` (binary/large files), fetch post-change content and synthesize `+` lines so
