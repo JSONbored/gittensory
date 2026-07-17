@@ -1,6 +1,6 @@
 #!/bin/sh
 # Automated Docker resource hygiene for a 24/7 self-hosted loopover stack (#audit-rate-headroom). Runs on
-# the HOST (via the systemd timer in systemd/loopover-docker-prune.{service,timer}.example), not as a
+# the HOST (via the templated systemd timer in systemd/loopover-docker-prune@.{service,timer}.example), not as a
 # compose service: reclaiming unused images and build cache needs real Docker daemon access, which this
 # repo deliberately does not grant to any container (see docker-compose.yml's docker-proxy and runner
 # service comments on why raw docker.sock exposure into a container is avoided).

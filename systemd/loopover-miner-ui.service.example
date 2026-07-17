@@ -12,7 +12,7 @@
 #
 # WHY A PERSISTENT SERVICE, NOT A .timer: like loopover-miner.service.example, this is a long-running HTTP
 # server, not a periodic batch job -- a Type=simple service supervised by systemd is the right shape, the
-# same way loopover-docker-prune.*.example (a genuine periodic job) is NOT.
+# same way loopover-docker-prune@.*.example (a genuine periodic job) is NOT.
 #
 # Install (adjust the placeholders below to your host; run from a full monorepo checkout, not a global
 # npm install -- this app has no published package):

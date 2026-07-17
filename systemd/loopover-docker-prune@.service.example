@@ -1,0 +1,33 @@
+# Runs scripts/selfhost-docker-prune.sh on a schedule (paired with loopover-docker-prune@.timer.example)
+# to reclaim unused Docker images and build cache before disk fills up on a long-running self-host
+# deployment. Templated (`@.service`) so one unit file covers every host without hand-editing paths.
+#
+# The instance name is a systemd path instance: leading `-` + path with `/` replaced by `-`.
+# `%I` expands to the unescaped absolute path (e.g. `-opt-loopover` → `/opt/loopover`).
+#
+# Install (example: checkout lives at /opt/loopover):
+#   sudo cp systemd/loopover-docker-prune@.service.example /etc/systemd/system/loopover-docker-prune@.service
+#   sudo cp systemd/loopover-docker-prune@.timer.example /etc/systemd/system/loopover-docker-prune@.timer
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now loopover-docker-prune@-opt-loopover.timer
+#
+# Other checkouts: enable another instance with that path encoded the same way
+# (e.g. `/srv/loopover-prod` → `loopover-docker-prune@-srv-loopover-prod.timer`).
+#
+# This is a HOST-level unit, not a Docker Compose service: reclaiming images/build-cache needs real Docker
+# daemon access, which no container in docker-compose.yml is granted (see that file's docker-proxy and
+# runner service comments for why raw /var/run/docker.sock exposure into a container is avoided).
+
+[Unit]
+Description=LoopOver self-host Docker resource hygiene (image + build-cache prune) for %I
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%I
+ExecStart=/bin/sh %I/scripts/selfhost-docker-prune.sh
+# Optional: override the default 7-day (168h) safety window before an unused image/build-cache entry is
+# eligible for removal. Prefer a drop-in under loopover-docker-prune@<instance>.service.d/ rather than
+# editing this template when values differ per host.
+# Environment=LOOPOVER_DOCKER_PRUNE_RETAIN_HOURS=168

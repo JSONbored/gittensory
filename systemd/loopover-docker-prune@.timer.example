@@ -1,0 +1,16 @@
+# Pairs with loopover-docker-prune@.service.example. See that file for install instructions.
+# Instance name must match the service instance (same path encoding, e.g. `-opt-loopover`).
+
+[Unit]
+Description=Run loopover-docker-prune@%i.service daily
+Requires=loopover-docker-prune@%i.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+# Spread the run over a window instead of firing at exactly midnight on every host.
+RandomizedDelaySec=30m
+Unit=loopover-docker-prune@%i.service
+
+[Install]
+WantedBy=timers.target

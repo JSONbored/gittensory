@@ -444,12 +444,13 @@ less than 7 days is left alone, so a recent deploy is never at risk):
 
 <CodeBlock
   lang="bash"
-  code={`sudo cp systemd/loopover-docker-prune.service.example /etc/systemd/system/loopover-docker-prune.service
-sudo cp systemd/loopover-docker-prune.timer.example /etc/systemd/system/loopover-docker-prune.timer
-sudo $EDITOR /etc/systemd/system/loopover-docker-prune.service   # set WorkingDirectory / ExecStart to your path
+  code={`sudo cp systemd/loopover-docker-prune@.service.example /etc/systemd/system/loopover-docker-prune@.service
+sudo cp systemd/loopover-docker-prune@.timer.example /etc/systemd/system/loopover-docker-prune@.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now loopover-docker-prune.timer`}
+# Instance = systemd path encoding of the checkout root (e.g. /opt/loopover → -opt-loopover)
+sudo systemctl enable --now loopover-docker-prune@-opt-loopover.timer`}
 />
+
 
 Run it manually at any time with `docker system df` before and after to see what
 it reclaimed: `sh scripts/selfhost-docker-prune.sh`.
