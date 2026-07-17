@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.1.1](https://github.com/JSONbored/loopover/compare/mcp-v3.1.0...mcp-v3.1.1) (2026-07-17)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^3.0.0 to ^3.2.1
+
 ## [3.1.0](https://github.com/JSONbored/loopover/compare/mcp-v3.0.0...mcp-v3.1.0) (2026-07-17)
 
 
