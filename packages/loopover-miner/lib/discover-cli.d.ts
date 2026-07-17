@@ -12,6 +12,8 @@ import type {
 } from "./opportunity-ranker.js";
 import type { PolicyDocCacheStore } from "./policy-doc-cache.js";
 import type { PolicyVerdictCacheStore } from "./policy-verdict-cache.js";
+import type { ContributionProfileCache } from "./contribution-profile-cache.js";
+import type { ResolveContributionProfilesResult } from "./contribution-profile-resolution.js";
 import type { EnqueueRankedDiscoverySummary } from "./portfolio-discovery.js";
 import type { PortfolioQueueStore } from "./portfolio-queue.js";
 import type { RankedCandidatesStore } from "./ranked-candidates.js";
@@ -41,6 +43,14 @@ export type DiscoverFanOutSummary = {
 /** The subset of a ranked entry that `renderDiscoverSummary` reads for its top-candidates listing. */
 export type DiscoverRankedEntry = Pick<RankedCandidateIssue, "repoFullName" | "issueNumber" | "title" | "rankScore">;
 
+/** One candidate `applyEligibilityFilter` (#6798) dropped before ranking, and why. */
+export type DiscoverExcludedCandidate = {
+  repoFullName: string;
+  issueNumber: number;
+  title: string;
+  reasons: string[];
+};
+
 export type DiscoverResult = {
   fanOutCount: number;
   warnings: CandidateIssueWarning[];
@@ -50,6 +60,8 @@ export type DiscoverResult = {
   /** True when ranking fell back to the built-in default goal spec because no per-tenant spec was supplied (#4784). */
   usedDefaultGoalSpec?: boolean;
   enqueueSummary: EnqueueRankedDiscoverySummary;
+  /** Candidates a target repo's own ContributionProfile excluded before ranking (#6798), and why. */
+  excludedByEligibility: DiscoverExcludedCandidate[];
 };
 
 export type RunDiscoverOptions = {
@@ -67,6 +79,7 @@ export type RunDiscoverOptions = {
   initPolicyDocCache?: () => PolicyDocCacheStore;
   initPolicyVerdictCache?: () => PolicyVerdictCacheStore;
   initRankedCandidatesStore?: () => RankedCandidatesStore;
+  initContributionProfileCache?: () => ContributionProfileCache;
   fetchCandidateIssuesWithSummary?: (
     targets: FanoutTarget[],
     githubToken: string,
@@ -85,6 +98,14 @@ export type RunDiscoverOptions = {
     rankedIssues: RankedCandidateIssue[],
     options: { queueStore: PortfolioQueueStore },
   ) => EnqueueRankedDiscoverySummary;
+  /** Overrides the real per-repo ContributionProfile resolution (#6798) — same "test injects the pipeline
+   *  stage, not the transport" convention as the fan-out/rank/enqueue overrides above. Defaults to the real
+   *  `resolveContributionProfiles`, which calls the network directly (no `fetchImpl` plumbing exists elsewhere
+   *  in this file either); a caller that wants to avoid real GitHub calls in a test provides this instead. */
+  resolveContributionProfiles?: (
+    repoFullNames: string[],
+    options: Record<string, unknown>,
+  ) => Promise<ResolveContributionProfilesResult>;
   /** Invoked with the real structured result at each success return point (dry-run and full-run), in addition
    *  to (never instead of) the plain exit-code return -- mirrors `RunAttemptOptions.onResult`. Never fires on a
    *  parse-error/unexpected-error `reportCliFailure` branch, matching runAttempt's own asymmetry (#6522). */

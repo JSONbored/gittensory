@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initPolicyDocCacheStore } from "../../packages/loopover-miner/lib/policy-doc-cache.js";
 import { initPolicyVerdictCacheStore } from "../../packages/loopover-miner/lib/policy-verdict-cache.js";
 import {
@@ -9,6 +9,7 @@ import {
   initPortfolioQueueStore,
 } from "../../packages/loopover-miner/lib/portfolio-queue.js";
 import { initRankedCandidatesStore } from "../../packages/loopover-miner/lib/ranked-candidates.js";
+import { initContributionProfileCache } from "../../packages/loopover-miner/lib/contribution-profile-cache.js";
 import {
   parseDiscoverArgs,
   renderDiscoverSummary,
@@ -21,6 +22,21 @@ const NOW = Date.parse("2026-07-09T12:00:00.000Z");
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
+
+// Contribution-profile resolution (#6798) calls the real GitHub API directly (no fetchImpl plumbing exists for
+// it, matching every other network call in this file) -- default every test to a fast, deterministic 404 so
+// eligibility filtering degrades to "profile absent, nothing excluded" instead of a real (or hanging) network
+// call. Tests that specifically exercise eligibility filtering override this with their own stub or the
+// resolveContributionProfiles injection point instead. Also points the cache at a fresh per-test temp file
+// (mirroring the other three caches' tempXCacheStore() convention, without needing an initContributionProfileCache
+// override in every one of this file's many existing runDiscover calls) so no test ever touches the real
+// ~/.config/loopover-miner default path.
+beforeEach(() => {
+  vi.stubGlobal("fetch", async () => new Response("", { status: 404 }));
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-cpc-default-"));
+  roots.push(root);
+  vi.stubEnv("LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB", join(root, "contribution-profile-cache.sqlite3"));
+});
 
 function tempQueueStore() {
   const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-"));
@@ -59,6 +75,15 @@ function tempRankedCandidatesStore() {
   return store;
 }
 
+// Same reasoning as tempPolicyDocCacheStore above, for the contribution-profile cache (#6797).
+function tempContributionProfileCacheStore() {
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-cpc-"));
+  roots.push(root);
+  const store = initContributionProfileCache(join(root, "contribution-profile-cache.sqlite3"));
+  stores.push(store);
+  return store;
+}
+
 function fanOutIssue(overrides: Record<string, unknown> = {}) {
   return {
     owner: "acme",
@@ -67,6 +92,7 @@ function fanOutIssue(overrides: Record<string, unknown> = {}) {
     issueNumber: 1,
     title: "Add queue retry helper",
     labels: ["help wanted"],
+    assignees: [],
     commentsCount: 1,
     createdAt: "2026-07-09T10:00:00.000Z",
     updatedAt: "2026-07-09T10:00:00.000Z",
@@ -81,6 +107,8 @@ afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   closeDefaultPortfolioQueueStore();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -201,6 +229,7 @@ describe("renderDiscoverSummary (#4247)", () => {
         { repoFullName: "acme/widgets", issueNumber: 2, title: "Fix flaky test", rankScore: 0.4 },
       ],
       enqueueSummary: { enqueued: 2, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(text).toContain("fanned out: 2 candidate issue(s)");
     expect(text).toContain("ai-policy warnings: 1");
@@ -227,6 +256,7 @@ describe("renderDiscoverSummary (#4247)", () => {
         },
       ],
       enqueueSummary: { enqueued: 1, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
 
     expect(text).toContain("normal SPOOFED: enqueued: 999 red CLICK codexe");
@@ -249,6 +279,7 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitResetAt: null,
       ranked: [{ repoFullName: "acme/widgets", issueNumber: 1, title: "x", rankScore: 0.1 }],
       enqueueSummary: { enqueued: 0, skippedBelowMinRank: 1, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(withSkips).toContain("skipped (below min rank): 1");
 
@@ -259,6 +290,7 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitResetAt: null,
       ranked: [],
       enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(empty).toContain("no candidates found.");
     // Without the flag the fall-back note is absent (the default-goal-spec branch is opt-in on the result).
@@ -274,6 +306,7 @@ describe("renderDiscoverSummary (#4247)", () => {
       ranked: [{ repoFullName: "acme/widgets", issueNumber: 1, title: "x", rankScore: 0.8 }],
       usedDefaultGoalSpec: true,
       enqueueSummary: { enqueued: 1, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(text).toContain("ranked with the built-in default goal spec");
   });
@@ -286,6 +319,7 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitResetAt: "2026-07-09T13:30:00.000Z",
       ranked: [],
       enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(withTelemetry).toContain("rate-limit remaining: 12 (resets 2026-07-09T13:30:00.000Z)");
 
@@ -297,6 +331,7 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitResetAt: null,
       ranked: [],
       enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(throttled).toContain("rate-limit remaining: 0");
     expect(throttled).not.toContain("resets");
@@ -308,6 +343,7 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitResetAt: null,
       ranked: [],
       enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      excludedByEligibility: [],
     });
     expect(noTelemetry).toContain("rate-limit remaining: unknown");
   });
@@ -1124,5 +1160,161 @@ describe("runDiscover onResult hook (#6522)", () => {
 
     expect(exitCode).not.toBe(0);
     expect(onResult).not.toHaveBeenCalled();
+  });
+});
+
+describe("runDiscover contribution-profile eligibility filtering (#6798)", () => {
+  function eligibilityProfile(repoFullName: string) {
+    return {
+      repoFullName,
+      schemaVersion: 1,
+      generatedAt: "2026-07-09T12:00:00.000Z",
+      eligibilityLabels: {
+        value: [{ field: "name" as const, contains: "help wanted" }],
+        confidence: "explicit" as const,
+        provenance: [],
+      },
+      exclusionLabels: { value: null, confidence: "absent" as const, provenance: [] },
+      prBody: { value: null, confidence: "absent" as const, provenance: [] },
+      completeness: "explicit" as const,
+    };
+  }
+
+  it("excludes an ineligible candidate before ranking/enqueueing and surfaces it in the result", async () => {
+    const portfolioQueue = tempQueueStore();
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+      issues: [
+        fanOutIssue({ issueNumber: 1, title: "Eligible one", labels: ["help wanted"] }),
+        fanOutIssue({ issueNumber: 2, title: "No label here", labels: ["bug"] }),
+      ],
+      warnings: [],
+      rateLimitRemaining: null,
+      rateLimitResetAt: null,
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const resolveContributionProfiles = vi.fn(async (repoFullNames: string[]) => ({
+      profilesByRepo: new Map(repoFullNames.map((name) => [name, eligibilityProfile(name)])),
+      labelDescriptionsByRepo: new Map(),
+    }));
+
+    const exitCode = await runDiscover(["acme/widgets"], {
+      nowMs: NOW,
+      fetchCandidateIssuesWithSummary,
+      resolveContributionProfiles,
+      initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
+      initPolicyVerdictCache: () => tempPolicyVerdictCacheStore(),
+      initRankedCandidatesStore: () => tempRankedCandidatesStore(),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(portfolioQueue.listQueue().map((entry) => entry.identifier)).toEqual(["issue:1"]);
+    const logged = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .map((call) => call[0])
+      .join("\n");
+    expect(logged).toContain("excluded by contribution-profile eligibility: 1");
+    expect(logged).toContain("acme/widgets#2");
+    expect(logged).toContain("missing eligibility label");
+  });
+
+  it("--dry-run also applies eligibility filtering, and resolves profiles with cache: null", async () => {
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+      issues: [
+        fanOutIssue({ issueNumber: 1, title: "Eligible one", labels: ["help wanted"] }),
+        fanOutIssue({ issueNumber: 2, title: "No label here", labels: ["bug"] }),
+      ],
+      warnings: [],
+      rateLimitRemaining: null,
+      rateLimitResetAt: null,
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const resolveContributionProfiles = vi.fn(async (repoFullNames: string[]) => ({
+      profilesByRepo: new Map(repoFullNames.map((name) => [name, eligibilityProfile(name)])),
+      labelDescriptionsByRepo: new Map(),
+    }));
+    const onResult = vi.fn();
+
+    const exitCode = await runDiscover(["acme/widgets", "--dry-run"], {
+      nowMs: NOW,
+      fetchCandidateIssuesWithSummary,
+      resolveContributionProfiles,
+      onResult,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(resolveContributionProfiles).toHaveBeenCalledWith(
+      ["acme/widgets"],
+      expect.objectContaining({ cache: null }),
+    );
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ranked: [expect.objectContaining({ issueNumber: 1 })],
+        excludedByEligibility: [expect.objectContaining({ issueNumber: 2, reasons: ["missing eligibility label"] })],
+      }),
+    );
+  });
+
+  it("opens and closes the default on-disk contribution-profile cache when no override is supplied", async () => {
+    const portfolioQueue = tempQueueStore();
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+      issues: [fanOutIssue()],
+      warnings: [],
+      rateLimitRemaining: null,
+      rateLimitResetAt: null,
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    // No initContributionProfileCache override: runDiscover opens the default on-disk cache at the (per-test
+    // stubbed) env path and closes it in its finally block. The stubbed global fetch (404) makes the underlying
+    // extraction fully-absent, so no candidate is excluded -- this test only cares that the cache file exists
+    // and is a valid, reopenable store afterward.
+    const exitCode = await runDiscover(["acme/widgets"], {
+      nowMs: NOW,
+      fetchCandidateIssuesWithSummary,
+      initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
+      initPolicyVerdictCache: () => tempPolicyVerdictCacheStore(),
+      initRankedCandidatesStore: () => tempRankedCandidatesStore(),
+    });
+    expect(exitCode).toBe(0);
+
+    const cacheDbPath = process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB;
+    expect(cacheDbPath).toBeDefined();
+    expect(existsSync(cacheDbPath!)).toBe(true);
+
+    const reopened = initContributionProfileCache(cacheDbPath);
+    stores.push(reopened);
+    expect(reopened.get("acme/widgets")).not.toBeNull();
+  });
+
+  it("REGRESSION: a corrupt/unopenable contribution-profile cache degrades to no cache instead of failing discovery", async () => {
+    const portfolioQueue = tempQueueStore();
+    const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+      issues: [fanOutIssue()],
+      warnings: [],
+      rateLimitRemaining: null,
+      rateLimitResetAt: null,
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const initContributionProfileCache = vi.fn(() => {
+      throw new Error("disk full");
+    });
+
+    // Deliberately omits nowMs (unlike this file's other runDiscover calls) to also cover the branch where
+    // applyEligibilityFilter derives no explicit generatedAt override, falling through to extraction's own
+    // real-clock default.
+    const exitCode = await runDiscover(["acme/widgets"], {
+      initPortfolioQueue: () => portfolioQueue,
+      initPolicyDocCache: () => tempPolicyDocCacheStore(),
+      initPolicyVerdictCache: () => tempPolicyVerdictCacheStore(),
+      initRankedCandidatesStore: () => tempRankedCandidatesStore(),
+      initContributionProfileCache,
+      fetchCandidateIssuesWithSummary,
+    });
+
+    // Same discipline as the other caches above: a pure performance optimization, so an open failure must never
+    // abort discovery -- eligibility filtering just falls back to extracting live every run.
+    expect(exitCode).toBe(0);
+    expect(initContributionProfileCache).toHaveBeenCalledTimes(1);
   });
 });

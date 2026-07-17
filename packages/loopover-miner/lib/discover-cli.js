@@ -8,6 +8,9 @@ import {
 import { rankCandidateIssuesWithSummary } from "./opportunity-ranker.js";
 import { initPolicyDocCacheStore } from "./policy-doc-cache.js";
 import { initPolicyVerdictCacheStore } from "./policy-verdict-cache.js";
+import { initContributionProfileCache } from "./contribution-profile-cache.js";
+import { resolveContributionProfiles } from "./contribution-profile-resolution.js";
+import { filterEligibleCandidates } from "./contribution-profile-eligibility.js";
 import { enqueueRankedDiscovery } from "./portfolio-discovery.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { initRankedCandidatesStore } from "./ranked-candidates.js";
@@ -140,7 +143,46 @@ export function renderDiscoverSummary(result) {
     const title = sanitizeDiscoverDisplayText(entry.title);
     lines.push(`  ${entry.repoFullName}#${entry.issueNumber}  score=${entry.rankScore.toFixed(4)}  ${title}`);
   }
+  if (result.excludedByEligibility.length > 0) {
+    lines.push("", `excluded by contribution-profile eligibility: ${result.excludedByEligibility.length}`);
+    for (const entry of result.excludedByEligibility.slice(0, 10)) {
+      const title = sanitizeDiscoverDisplayText(entry.title);
+      lines.push(`  ${entry.repoFullName}#${entry.issueNumber}  ${title}  (${entry.reasons.join(", ")})`);
+    }
+  }
   return lines.join("\n");
+}
+
+// Contribution-eligibility filtering (#6798): resolves each distinct target repo's ContributionProfile (cached
+// (#6797) when fresh, extracted live (#6796) otherwise) and excludes candidates that fail it -- BEFORE ranking,
+// so an ineligible candidate never occupies a ranked/enqueued slot. `cache: null` (the dry-run caller) always
+// extracts live, matching the same "no local-store write during a dry run" rule the other two caches already
+// follow. Never throws: extraction and the cache are both individually fail-safe (see contribution-profile-
+// resolution.js), so a network or disk problem degrades to "profile absent, filter nothing" rather than aborting
+// discovery.
+async function applyEligibilityFilter(issues, options) {
+  const resolveProfiles = options.resolveContributionProfiles ?? resolveContributionProfiles;
+  const repoFullNames = [...new Set(issues.map((issue) => issue.repoFullName))];
+  const { profilesByRepo, labelDescriptionsByRepo } = await resolveProfiles(repoFullNames, {
+    cache: options.contributionProfileCache,
+    githubToken: options.githubToken,
+    apiBaseUrl: options.apiBaseUrl,
+    nowMs: options.nowMs,
+    generatedAt: options.nowMs !== undefined ? new Date(options.nowMs).toISOString() : undefined,
+  });
+  return filterEligibleCandidates(issues, profilesByRepo, { labelDescriptionsByRepo });
+}
+
+/** Shapes `filterEligibleCandidates`'s excluded list into the plain, JSON/text-friendly rows `result` and
+ *  `renderDiscoverSummary` surface -- flattening each candidate's own fields alongside its exclusion reasons,
+ *  rather than the nested `{ issue, reasons }` the filter itself returns. */
+function excludedCandidateRows(excluded) {
+  return excluded.map(({ issue, reasons }) => ({
+    repoFullName: issue.repoFullName,
+    issueNumber: issue.issueNumber,
+    title: issue.title,
+    reasons,
+  }));
 }
 
 export async function runDiscover(args, options = {}) {
@@ -175,7 +217,14 @@ export async function runDiscover(args, options = {}) {
         parsed.search !== null
           ? await searchTargets(parsed.search, githubToken, fanOutOptions)
           : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
-      const rankedSummary = rankIssues(fanOut.issues, {
+      const { eligible, excluded } = await applyEligibilityFilter(fanOut.issues, {
+        contributionProfileCache: null,
+        githubToken,
+        apiBaseUrl,
+        nowMs: options.nowMs,
+        resolveContributionProfiles: options.resolveContributionProfiles,
+      });
+      const rankedSummary = rankIssues(eligible, {
         nowMs: options.nowMs,
         goalSpecsByRepo: options.goalSpecsByRepo,
         goalSpecContentByRepo: options.goalSpecContentByRepo,
@@ -191,6 +240,7 @@ export async function runDiscover(args, options = {}) {
         ranked: rankedSummary.issues,
         usedDefaultGoalSpec: rankedSummary.usedDefaultGoalSpec,
         enqueueSummary,
+        excludedByEligibility: excludedCandidateRows(excluded),
       };
       // Structured-outcome hook (#6522), mirroring runAttempt's onResult convention: fires only at a real
       // structured success point (never the reportCliFailure branches), in addition to -- never instead of --
@@ -260,6 +310,19 @@ export async function runDiscover(args, options = {}) {
     rankedCandidatesStore = null;
     ownsRankedCandidatesStore = false;
   }
+
+  // Cache of extracted per-repo ContributionProfiles (#6797), same "own try/catch, degrade to null" discipline as
+  // the two policy caches above: a corrupt/unwritable cache DB must degrade to "extract live every run" rather
+  // than fail discovery outright -- eligibility filtering below still works, just without the cache's speedup.
+  let contributionProfileCache = null;
+  let ownsContributionProfileCache = false;
+  try {
+    ownsContributionProfileCache = options.initContributionProfileCache === undefined;
+    contributionProfileCache = (options.initContributionProfileCache ?? initContributionProfileCache)();
+  } catch {
+    contributionProfileCache = null;
+    ownsContributionProfileCache = false;
+  }
   const fanOutOptions = { apiBaseUrl, forge: options.forge, policyDocCache, policyVerdictCache };
 
   try {
@@ -268,10 +331,18 @@ export async function runDiscover(args, options = {}) {
         ? await searchTargets(parsed.search, githubToken, fanOutOptions)
         : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
 
+    const { eligible, excluded } = await applyEligibilityFilter(fanOut.issues, {
+      contributionProfileCache,
+      githubToken,
+      apiBaseUrl,
+      nowMs: options.nowMs,
+      resolveContributionProfiles: options.resolveContributionProfiles,
+    });
+
     // Pass any caller-supplied per-tenant goal specs through to the ranker so lane fit uses the tenant's
     // conventions instead of silently falling back to loopover's defaults (#4784); the fallback is surfaced via
     // `usedDefaultGoalSpec` below rather than hidden.
-    const rankedSummary = rankIssues(fanOut.issues, {
+    const rankedSummary = rankIssues(eligible, {
       nowMs: options.nowMs,
       goalSpecsByRepo: options.goalSpecsByRepo,
       goalSpecContentByRepo: options.goalSpecContentByRepo,
@@ -296,6 +367,7 @@ export async function runDiscover(args, options = {}) {
       ranked: rankedSummary.issues,
       usedDefaultGoalSpec: rankedSummary.usedDefaultGoalSpec,
       enqueueSummary,
+      excludedByEligibility: excludedCandidateRows(excluded),
     };
 
     // Structured-outcome hook (#6522) for the full-run success point -- same convention as the dry-run branch
@@ -314,5 +386,6 @@ export async function runDiscover(args, options = {}) {
     if (ownsPolicyDocCache && policyDocCache) policyDocCache.close();
     if (ownsPolicyVerdictCache && policyVerdictCache) policyVerdictCache.close();
     if (ownsRankedCandidatesStore && rankedCandidatesStore) rankedCandidatesStore.close();
+    if (ownsContributionProfileCache && contributionProfileCache) contributionProfileCache.close();
   }
 }

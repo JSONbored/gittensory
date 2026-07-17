@@ -45,6 +45,16 @@ tenant goal spec to the ranker, printing `usedDefaultGoalSpec` so a fall-back to
 rather than silent. See [`docs/repo-agnostic-capability-audit.md`](docs/repo-agnostic-capability-audit.md) for the
 #4780 audit this executes.
 
+`discover` also filters candidates against each target repo's own contribution-eligibility conventions before
+ranking/enqueueing (#6793/#6798): it resolves a `ContributionProfile` per repo — generic label-taxonomy/
+CONTRIBUTING.md extraction (`lib/contribution-profile-extract.js`), cached locally with a 7-day TTL
+(`lib/contribution-profile-cache.js`) — and excludes a candidate missing a required eligibility label, carrying
+an exclusion label, or assigned to the repo's own owner login. **Safe-default posture:** a label rule only
+excludes when the profile actually resolved a matcher for it; a repo whose conventions couldn't be read at all
+(no eligibility/exclusion signal found) excludes nothing via those rules rather than silently skipping real
+work. `--json` and the human-readable summary both surface any excluded candidates and why
+(`excludedByEligibility`). See [`docs/contribution-profile.md`](docs/contribution-profile.md) for the schema.
+
 The package also includes repo stack auto-detection: `detectRepoStack` (`lib/stack-detection.js`) inspects an
 already-cloned target repo's manifest / lockfile / config files and returns a structured description — language,
 package manager, and the build / test / lint / format commands — for Node (npm/yarn/pnpm/bun), Python

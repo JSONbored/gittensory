@@ -81,6 +81,7 @@ describe("fetchCandidateIssues (#2307)", () => {
         issueNumber: 7,
         title: "Issue 7",
         labels: ["help wanted", "good first issue"],
+        assignees: [],
         commentsCount: 2,
         createdAt: "2026-07-01T00:00:00Z",
         updatedAt: "2026-07-01T01:00:00Z",
@@ -91,6 +92,30 @@ describe("fetchCandidateIssues (#2307)", () => {
     ]);
     expect(calls.every((call) => call.method === "GET")).toBe(true);
     expect(calls.every((call) => call.authorization === "Bearer placeholder-token")).toBe(true);
+  });
+
+  it("maps assignee logins from the same issue payload, ignoring a malformed entry (#6798)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/contents/AI-USAGE.md")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/contents/CONTRIBUTING.md")) return jsonResponse({}, { status: 404 });
+      if (url.includes("/issues?")) {
+        return jsonResponse([
+          {
+            ...issue(9),
+            assignees: [{ login: "repo-owner" }, { missing: true }, "not-an-object"],
+          },
+        ]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await fetchCandidateIssues([{ owner: "acme", repo: "widgets" }], "placeholder-token", {
+      apiBaseUrl: API,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.assignees).toEqual(["repo-owner"]);
   });
 
   it("hard-skips a banned repo without listing issues", async () => {

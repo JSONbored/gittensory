@@ -20,6 +20,7 @@ function rawIssue(overrides: Record<string, unknown> = {}) {
     issueNumber: 145,
     title: "Add miner extension badge",
     labels: ["help wanted", "gittensor:feature"],
+    assignees: [],
     commentsCount: 1,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-02T00:00:00.000Z",

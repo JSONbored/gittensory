@@ -20,6 +20,7 @@ function rawIssue(overrides: Record<string, unknown> = {}) {
     issueNumber: 42,
     title: "Add queue retry helper",
     labels: ["help wanted"],
+    assignees: [],
     commentsCount: 1,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-02T00:00:00.000Z",

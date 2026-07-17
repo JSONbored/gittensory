@@ -66,11 +66,12 @@ For provider selection and the CLI-specific model/timeout overrides, see
      policy-verdict-cache.sqlite3  # cache of resolved AI-usage-policy verdicts (#4843)
      deny-hook-synthesis.sqlite3   # synthesized PreToolUse deny-hook proposals (#4522)
      orb-export.sqlite3            # opt-in anonymized Orb telemetry export state (#4277)
+     contribution-profile-cache.sqlite3  # cached per-repo AMS contribution-eligibility signals (#6797)
    ```
 
    Not every file appears immediately: `laptop-state` is written by `init`, and each of the others is created
    the first time its subsystem actually runs (an attempt, a discovery pass, a replay, an Orb export, …), so a
-   fresh install that has only run `status`/`doctor` will show a subset. All sixteen default into this one
+   fresh install that has only run `status`/`doctor` will show a subset. All seventeen default into this one
    directory. Override the directory for every store at once with `LOOPOVER_MINER_CONFIG_DIR` or
    `XDG_CONFIG_HOME` (same resolution chain as `@loopover/mcp`); every store except `laptop-state.sqlite3`
    (directory only) also honors its own `LOOPOVER_MINER_<NAME>_DB` path override — e.g.

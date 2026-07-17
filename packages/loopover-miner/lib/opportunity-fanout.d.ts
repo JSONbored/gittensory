@@ -33,6 +33,8 @@ export type RawCandidateIssue = {
   issueNumber: number;
   title: string;
   labels: string[];
+  /** Assignee logins (#6798), already present in the same list/search payload as labels — no extra request. */
+  assignees: string[];
   commentsCount: number;
   createdAt: string | null;
   updatedAt: string | null;
