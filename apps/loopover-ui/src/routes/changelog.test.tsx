@@ -19,7 +19,7 @@ function renderWithClient(ui: ReactNode) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
-// Deliberately NOT the "0.9.0" MCP_PACKAGE_KNOWN_LATEST_VERSION fallback the component renders in its
+// Deliberately NOT MCP_PACKAGE_KNOWN_LATEST_VERSION, the fallback the component renders in its
 // always-present intro paragraph even before data loads -- using a distinct fixture version means a
 // match can only come from the real fetched data, not a loading-state false positive.
 const NPM_METADATA = {
