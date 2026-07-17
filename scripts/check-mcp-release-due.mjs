@@ -18,7 +18,13 @@ async function main() {
   const report = buildMcpReleaseReport({ latestTag, packageVersion, publishedVersion, commits });
 
   if (args.output) writeFileSync(args.output, `${JSON.stringify(report, null, 2)}\n`);
-  if (args.upsertIssue && report.due) await upsertIssue(report);
+  if (args.upsertIssue) {
+    if (report.due) {
+      await upsertIssue(report);
+    } else {
+      await closeResolvedIssueIfPresent(report);
+    }
+  }
   if (args.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (!args.json && !args.output) {
     process.stdout.write(report.due ? `MCP release due: ${report.proposedVersion}\n` : "No MCP release due.\n");
@@ -80,13 +86,7 @@ function git(args) {
 }
 
 async function upsertIssue(report) {
-  const repository = process.env.GITHUB_REPOSITORY;
-  const token = process.env.GITHUB_TOKEN;
-  if (!repository) throw new Error("GITHUB_REPOSITORY is required for --upsert-issue");
-  if (!token) throw new Error("GITHUB_TOKEN is required for --upsert-issue");
-  const [owner, repo] = repository.split("/");
-  if (!owner || !repo) throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
-
+  const { owner, repo, token } = resolveRepoAndToken();
   const issue = buildMcpReleaseIssue(report);
   const existingIssue = await findExistingIssue({ owner, repo, token });
   if (existingIssue) {
@@ -107,6 +107,40 @@ async function upsertIssue(report) {
     body: issue,
   });
   process.stdout.write(`Opened issue #${created.number}: ${issue.title}\n`);
+}
+
+// upsertIssue only ever opens/refreshes the tracking issue while a release is due -- without this,
+// the issue it created is never closed once release-please catches up (confirmed live: #6145 stayed
+// open and stale after mcp-v3.1.0's release-please PR merged, since no due=false run had ever closed it).
+export async function closeResolvedIssueIfPresent(report) {
+  const { owner, repo, token } = resolveRepoAndToken();
+  const existingIssue = await findExistingIssue({ owner, repo, token });
+  if (!existingIssue) return;
+
+  const body = `MCP is caught up: latest tag \`${report.latestTag ?? "none"}\` matches the package version \`${report.packageVersion}\`, and npm's published version is \`${report.publishedVersion ?? "unknown"}\`, with no unreleased MCP-related commits. Closing -- release-please's own Release PR reopens this signal automatically if a new release becomes due.`;
+  await githubRequest({
+    token,
+    method: "POST",
+    path: `/repos/${owner}/${repo}/issues/${existingIssue.number}/comments`,
+    body: { body },
+  });
+  await githubRequest({
+    token,
+    method: "PATCH",
+    path: `/repos/${owner}/${repo}/issues/${existingIssue.number}`,
+    body: { state: "closed", state_reason: "completed" },
+  });
+  process.stdout.write(`Closed issue #${existingIssue.number}: release caught up.\n`);
+}
+
+function resolveRepoAndToken() {
+  const repository = process.env.GITHUB_REPOSITORY;
+  const token = process.env.GITHUB_TOKEN;
+  if (!repository) throw new Error("GITHUB_REPOSITORY is required for --upsert-issue");
+  if (!token) throw new Error("GITHUB_TOKEN is required for --upsert-issue");
+  const [owner, repo] = repository.split("/");
+  if (!owner || !repo) throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
+  return { owner, repo, token };
 }
 
 async function findExistingIssue({ owner, repo, token }) {

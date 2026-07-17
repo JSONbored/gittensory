@@ -280,8 +280,8 @@ import { buildReviewRiskExplanation } from "../signals/review-risk";
 import { buildNotificationFeed } from "../notifications/service";
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
-import { buildIssueSlopAssessment, ISSUE_SLOP_RUBRIC_MARKDOWN } from "../signals/issue-slop";
-import { buildSlopAssessment, SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
+import { buildIssueSlopAssessment } from "../signals/issue-slop";
+import { buildSlopAssessment } from "../signals/slop";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { computeContributorCalibration } from "../review/predicted-gate-calibration-ledger";
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
@@ -3471,7 +3471,10 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = slopRiskSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_slop_risk_request", issues: parsed.error.issues }, 400);
-    return c.json({ ...buildSlopAssessment(parsed.data), rubric: SLOP_RUBRIC_MARKDOWN });
+    // #6990: return band + findings only — withhold the numeric score and rubric thresholds exactly as the
+    // loopover_check_slop_risk MCP tool blunts them, so the REST surface can't reverse-engineer the weights.
+    const assessment = buildSlopAssessment(parsed.data);
+    return c.json({ band: assessment.band, findings: assessment.findings });
   });
 
   // #6748: REST mirror of the loopover_check_improvement_potential MCP tool, bringing it to the same parity its
@@ -3592,7 +3595,9 @@ export function createApp() {
     const body = await c.req.json().catch(() => null);
     const parsed = issueSlopSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_issue_slop_request", issues: parsed.error.issues }, 400);
-    return c.json({ ...buildIssueSlopAssessment(parsed.data), rubric: ISSUE_SLOP_RUBRIC_MARKDOWN });
+    // #6990: band + findings only — same blunting as the loopover_check_issue_slop MCP tool (no score/rubric).
+    const assessment = buildIssueSlopAssessment(parsed.data);
+    return c.json({ band: assessment.band, findings: assessment.findings });
   });
 
   app.post(OPPORTUNITIES_FIND_PATH, async (c) => {

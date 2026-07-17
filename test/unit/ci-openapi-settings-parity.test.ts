@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { diffFieldSets, extractRepositorySettingsFieldNames, TYPES_PATH } from "../../scripts/check-openapi-settings-parity.mjs";
-import { RepositorySettingsSchema } from "../../src/openapi/schemas";
+import { diffFieldSets, extractRepoSettingsPreviewFieldNames, extractRepositorySettingsFieldNames, SETTINGS_PREVIEW_PATH, TYPES_PATH } from "../../scripts/check-openapi-settings-parity.mjs";
+import { RepoSettingsPreviewSchema, RepositorySettingsSchema } from "../../src/openapi/schemas";
 
 // #2556: RepositorySettingsSchema (hand-authored Zod) can silently drift from the RepositorySettings TS
 // type -- this is the structural-diff guard closing that gap. ui:openapi:check only verified the generated
@@ -53,5 +53,49 @@ describe("OpenAPI settings-parity check (#2556)", () => {
     expect(() => RepositorySettingsSchema.partial().parse({ contributorOpenPrCap: 101 })).toThrow();
     expect(() => RepositorySettingsSchema.partial().parse({ contributorOpenIssueCap: 101 })).toThrow();
     expect(RepositorySettingsSchema.partial().parse({ contributorOpenPrCap: 100, contributorOpenIssueCap: 100 })).toMatchObject({ contributorOpenPrCap: 100, contributorOpenIssueCap: 100 });
+  });
+});
+
+// #7011: the header comment names RepoSettingsPreviewSchema too, but main() only guarded RepositorySettings.
+// This block covers the added second check -- RepoSettingsPreviewSchema.settings against buildRepoSettingsPreview's
+// return shape (the RepoSettingsPreview.settings type), mirroring the RepositorySettings coverage above.
+describe("OpenAPI settings-preview parity check (#7011)", () => {
+  it("extracts only the direct field names of the nested settings block, skipping nested and sibling fields", () => {
+    const source = [
+      "export type RepoSettingsPreview = {",
+      "  repoFullName: string;",
+      "  settings: {",
+      "    publicSurface: RepositorySettings[\"publicSurface\"];",
+      "    qualityGateMinScore?: number | null | undefined;",
+      "    commandAuthorization: {",
+      "      defaultAllowed: CommandAuthorizationRole[];",
+      "      commandOverrides: Array<{ command: string; allowedRoles: CommandAuthorizationRole[] }>;",
+      "    };",
+      "  };",
+      "  commandAuthorizationPreview: {",
+      "    commandName: string;",
+      "  };",
+      "};",
+    ].join("\n");
+    const fields = extractRepoSettingsPreviewFieldNames(source);
+    expect(fields).toEqual(new Set(["publicSurface", "qualityGateMinScore", "commandAuthorization"]));
+  });
+
+  it("throws when the RepoSettingsPreview type start marker is missing", () => {
+    expect(() => extractRepoSettingsPreviewFieldNames("export type Unrelated = { settings: { a: string } };")).toThrow(/Could not find/);
+  });
+
+  it("throws when the settings block is missing from the type", () => {
+    expect(() => extractRepoSettingsPreviewFieldNames("export type RepoSettingsPreview = {\n  repoFullName: string;\n};")).toThrow(/settings/);
+  });
+
+  it("throws when the settings block is never closed", () => {
+    expect(() => extractRepoSettingsPreviewFieldNames("export type RepoSettingsPreview = {\n  settings: {\n    publicSurface: string;")).toThrow(/closing/);
+  });
+
+  it("the real RepoSettingsPreview type and RepoSettingsPreviewSchema.settings are in parity (regression guard)", () => {
+    const previewFields = extractRepoSettingsPreviewFieldNames(readFileSync(SETTINGS_PREVIEW_PATH, "utf8"));
+    const schemaFields = new Set(Object.keys(RepoSettingsPreviewSchema.shape.settings.shape));
+    expect(diffFieldSets(previewFields, schemaFields)).toEqual({ missingFromSchema: [], extraInSchema: [] });
   });
 });

@@ -120,6 +120,27 @@ describe("background service worker", () => {
     expect(failed).toMatchObject({ ok: false, error: "connection refused" });
   });
 
+  it("REGRESSION (#7006): rejects an over-quota live-fetch payload instead of writing a partial one", async () => {
+    // Build a candidates array whose serialized JSON exceeds the 8 MiB byte-size ceiling options.js enforces,
+    // so the live-fetch path must fail closed rather than silently write past the shared storage quota.
+    const filler = "x".repeat(1024);
+    const candidates = Array.from({ length: 9 * 1024 }, (_, i) => ({ repoFullName: `acme/${i}`, note: filler }));
+    const oversized = await loadExtensionModules({ fetchImpl: jsonFetch(200, { candidates }) });
+    const result = await oversized.backgroundInternals.syncRankedCandidatesFromMinerUi();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/too large/);
+    // The write is never attempted -- storage keeps whatever it already had, matching every other failure branch.
+    expect(oversized.localSetCalls).toHaveLength(0);
+  });
+
+  it("REGRESSION (#7006): a payload within the quota still writes normally", async () => {
+    const candidates = [{ repoFullName: "acme/widgets", issueNumber: 1, rankScore: 0.8 }];
+    const withinQuota = await loadExtensionModules({ fetchImpl: jsonFetch(200, { candidates }) });
+    const result = await withinQuota.backgroundInternals.syncRankedCandidatesFromMinerUi();
+    expect(result.ok).toBe(true);
+    expect(withinQuota.localSetCalls).toHaveLength(1);
+  });
+
   it("REGRESSION (#7007): bounds the miner-ui fetch with a 3s AbortSignal timeout", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const { backgroundInternals } = await loadExtensionModules({

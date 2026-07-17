@@ -11,6 +11,9 @@ const SYNC_RANKED_CANDIDATES_MESSAGE = "loopover-miner:sync-ranked-candidates";
 // (miner-ui running but unresponsive) should fail fast and let the next 10-minute alarm retry, following the
 // timeout pattern established in review-enrichment/src/external-fetch.ts.
 const RANKED_CANDIDATES_FETCH_TIMEOUT_MS = 3000;
+// Mirrors options.js's manual-paste guard (#4863): the chrome.storage.local 10 MiB QUOTA_BYTES is shared
+// across every key, so a live-fetched payload gets the same 8 MiB ceiling the paste flow already enforces.
+const MAX_RANKED_CANDIDATES_JSON_BYTES = 8 * 1024 * 1024;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
@@ -122,6 +125,17 @@ async function syncRankedCandidatesFromMinerUi() {
     const candidates = Array.isArray(payload?.candidates) ? payload.candidates : null;
     if (!candidates) {
       return { ok: false, error: "miner UI returned an unexpected payload shape", minerUiUrl };
+    }
+    // Same byte-size guard options.js's manual-paste flow enforces (#4863, ported here for #7006): measure the
+    // real serialized UTF-8 size (not JS string .length) against the shared 10 MiB QUOTA_BYTES limit, so a
+    // live fetch can't silently write a partial payload past the quota the way an unbounded paste could.
+    const byteLength = new TextEncoder().encode(JSON.stringify(candidates)).length;
+    if (byteLength > MAX_RANKED_CANDIDATES_JSON_BYTES) {
+      return {
+        ok: false,
+        error: `ranked candidates payload is too large (${byteLength.toLocaleString()} bytes; limit ${MAX_RANKED_CANDIDATES_JSON_BYTES.toLocaleString()})`,
+        minerUiUrl,
+      };
     }
     const savedAt = Date.now();
     await chrome.storage.local.set({ rankedCandidates: candidates, rankedCandidatesSavedAt: savedAt });

@@ -96,7 +96,7 @@ describe("loopover-mcp CLI — review-pr", () => {
     expect(plain).toMatch(/- preflight: pass/);
     expect(plain).toMatch(/- slop_risk: pass/);
     expect(plain).toMatch(/- pr_text_lint: pass/);
-    expect(plain).toMatch(/Slop risk: 0 \(clean\)/);
+    expect(plain).toMatch(/Slop risk: clean/);
     expect(plain).toMatch(/PR text lint: strong \(score 100\)/);
   });
 

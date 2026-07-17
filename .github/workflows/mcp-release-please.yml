@@ -16,11 +16,20 @@ name: Package Release Please
 # default, these four packages have genuinely independent release cadences and separate publish
 # targets/workflows, and bundling them would work against this repo's small-focused-PR convention.
 #
-# Runs on a schedule rather than every push to main: release-please is idempotent (it recomputes
-# purely from conventional-commit history since each component's last release tag), so batching has
-# zero functional impact -- it only reduces how often the Release PR(s) refresh against this repo's
-# push volume. workflow_dispatch stays available for an on-demand run.
+# Runs on every push to main, not just a schedule: release-please is idempotent (it recomputes
+# purely from conventional-commit history since each component's last release tag), so the extra
+# runs cost nothing when there's no new commit or merged Release PR to act on. The push trigger is
+# not just about refreshing the Release PR's proposed diff sooner -- it's what actually completes a
+# release: merging a component's Release PR only tags it, creates the GitHub Release, and dispatches
+# the matching publish workflow on release-please's THIS run, so without a push trigger a merge sits
+# fully un-published until the next cron tick (confirmed live: mcp-v3.1.0's Release PR merged 8
+# minutes after a cron run had already passed, leaving it tagged-in-package.json-but-unpublished for
+# what would have been up to 2 days). The schedule stays as a redundant safety net in case a
+# push-triggered run is ever skipped/fails; workflow_dispatch stays available for an on-demand run.
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "0 16 */2 * *"
   workflow_dispatch:

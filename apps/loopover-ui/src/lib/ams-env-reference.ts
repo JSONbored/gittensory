@@ -42,6 +42,11 @@ export const AMS_ENV_REFERENCE_ROWS: MinerEnvReferenceRow[] = [
     defaultValue: "",
   },
   {
+    name: "LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB",
+    firstReference: "lib/contribution-profile-cache.js",
+    defaultValue: null,
+  },
+  {
     name: "LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB",
     firstReference: "lib/deny-hook-synthesis.js",
     defaultValue: "",
@@ -167,6 +172,7 @@ export const AMS_ENV_REFERENCE_MARKDOWN = [
   "| `LOOPOVER_MINER_ATTEMPT_LOG_DB` | `lib/attempt-log.js` | (none) |",
   "| `LOOPOVER_MINER_CLAIM_LEDGER_DB` | `lib/claim-ledger.js` | (none) |",
   '| `LOOPOVER_MINER_CONFIG_DIR` | `lib/deny-hook-synthesis.js` | `""` |',
+  "| `LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB` | `lib/contribution-profile-cache.js` | (none) |",
   '| `LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB` | `lib/deny-hook-synthesis.js` | `""` |',
   "| `LOOPOVER_MINER_EVENT_LEDGER_DB` | `lib/event-ledger.js` | (none) |",
   '| `LOOPOVER_MINER_GOVERNOR_LEDGER_DB` | `lib/governor-ledger.js` | `""` |',

@@ -66,6 +66,7 @@ jobs:
               - '.github/workflows/**'
               - 'wrangler.jsonc'
               - 'worker-configuration.d.ts'
+              - '.loopover.yml'
             observability:
               - 'grafana/dashboards/**'
               - 'prometheus/rules/**'
@@ -269,6 +270,16 @@ jobs:
       - name: Selfhost env-reference drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ui == 'true' }}
         run: npm run selfhost:env-reference:check
+      # Miner/AMS twin of the selfhost check above -- same generated-artifact-drift class, same
+      # local-only-until-now gap (an `env.SOMETHING` read added under packages/loopover-miner/**
+      # with no CI signal that packages/loopover-miner/docs/env-reference.md and
+      # apps/loopover-ui/src/lib/ams-env-reference.ts had gone stale). Confirmed harmful live: this
+      # exact gap let a stale env-reference block an unrelated MCP npm release, since the release
+      # workflow was the only place this check ever ran. Gated on `ui` too, same reason as its sibling:
+      # the generated UI-side file lives under apps/loopover-ui/**.
+      - name: Miner env-reference drift check
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' }}
+        run: npm run miner:env-reference:check
       # Same generated-artifact-drift class, extracted from src/github/commands.ts's command catalogs (#3046).
       # Also local-only until now; same backend-or-ui gating rationale as the step above.
       - name: Command reference drift check
@@ -282,6 +293,27 @@ jobs:
       - name: Docs drift check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ui == 'true' }}
         run: npm run docs:drift-check
+      # Cross-checks the bundled fallback YAML in src/config/loopover-repo-focus-manifest.ts against the
+      # real root .loopover.yml -- see the script's own header comment. Same local-only-until-now gap as
+      # the drift checks above: nothing in this workflow previously ran it, so the two could silently
+      # diverge with zero CI signal. .loopover.yml itself is now part of the `backend` path filter above
+      # specifically so an edit to ONLY that file still re-triggers this job.
+      - name: Manifest drift check
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
+        run: npm run manifest:drift-check
+      # Mechanical drift tripwire for the hand-duplicated src/{review,settings,signals} <-> loopover-engine
+      # twin files, plus a version-skew check on the installed @loopover/engine (#4260). Same
+      # local-only-until-now gap as the drift checks above.
+      - name: Engine-parity drift check
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' }}
+        run: npm run engine-parity:drift-check
+      # Guards against the "gittensory" branding creeping back into runtime source after the LoopOver
+      # rebrand -- see the script's own header comment (#6786 is the concrete incident this was written
+      # for). Scoped broadly (src/** plus every workspace package's bin/lib/src/scripts dirs), so it's
+      # gated broadly to match; same local-only-until-now gap as the drift checks above.
+      - name: Branding drift check
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' }}
+        run: npm run branding-drift:check
       - name: Validate observability configs
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.observability == 'true' }}
         env:

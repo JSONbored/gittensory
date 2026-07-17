@@ -1448,7 +1448,10 @@ describe("api routes", () => {
     );
     expect(slopRisk.status).toBe(200);
     const slopRiskBody = await slopRisk.json();
-    expect(slopRiskBody).toMatchObject({ slopRisk: expect.any(Number), band: expect.stringMatching(/clean|low|elevated|high/), findings: expect.any(Array), rubric: expect.any(String) });
+    // #6990: blunted to band + findings only — the numeric score and rubric are withheld (as the MCP tool does).
+    expect(slopRiskBody).toMatchObject({ band: expect.stringMatching(/clean|low|elevated|high/), findings: expect.any(Array) });
+    expect(slopRiskBody).not.toHaveProperty("slopRisk");
+    expect(slopRiskBody).not.toHaveProperty("rubric");
     expect(JSON.stringify(slopRiskBody)).not.toMatch(/hotkey|coldkey|wallet|payout|reward/i);
 
     // Session identities (not just the API token) can reach it — it is allowlisted like the other local self-checks.
@@ -1469,7 +1472,11 @@ describe("api routes", () => {
       env,
     );
     expect(issueSlop.status).toBe(200);
-    await expect(issueSlop.json()).resolves.toMatchObject({ slopRisk: expect.any(Number), band: expect.stringMatching(/clean|low|elevated|high/), rubric: expect.any(String) });
+    const issueSlopBody = await issueSlop.json();
+    // #6990: blunted the same way — band + findings only, no numeric score or rubric.
+    expect(issueSlopBody).toMatchObject({ band: expect.stringMatching(/clean|low|elevated|high/), findings: expect.any(Array) });
+    expect(issueSlopBody).not.toHaveProperty("slopRisk");
+    expect(issueSlopBody).not.toHaveProperty("rubric");
 
     const invalidIssueSlop = await app.request("/v1/lint/issue-slop", { method: "POST", headers: apiHeaders(env), body: JSON.stringify({ title: 123 }) }, env);
     expect(invalidIssueSlop.status).toBe(400);

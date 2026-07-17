@@ -75,6 +75,13 @@ function loadBackgroundWithFakeChrome({
     __LOOPOVER_MINER_EXTENSION_TEST__: true,
     chrome,
     fetch: fetchImpl,
+    // node:vm's createContext() is a fresh, isolated realm with none of the outer process's globals --
+    // background.js's live-fetch path bounds its fetch with AbortSignal.timeout(...) (#4c0b19f4) and
+    // measures the real serialized byte size via TextEncoder for the quota guard (#7062), so the sandbox
+    // needs both real globals injected or those calls throw "<Global> is not defined" on any payload that
+    // reaches the success path.
+    AbortSignal,
+    TextEncoder,
   };
   context.globalThis = context;
   const vmContext = createContext(context);

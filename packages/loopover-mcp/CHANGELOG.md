@@ -1,5 +1,10 @@
 # Changelog
 
+## mcp-v3.1.1 - 2026-07-17
+
+### Fixes
+- Blunt slop-risk / issue-slop REST + CLI to match the MCP tools (#6990) (#7052)
+
 ## [3.1.0](https://github.com/JSONbored/loopover/compare/mcp-v3.0.0...mcp-v3.1.0) (2026-07-17)
 
 

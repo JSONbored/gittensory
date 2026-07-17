@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Unprivileged: resolves the version, runs the full test gate, and packs the tarball -- all with
+  # Unprivileged: resolves the version, runs the MCP package's own build/test/pack, all with
   # contents: read only. npm ci here executes dependency lifecycle scripts; keeping that in a job
   # with no write/id-token permission means a compromised build dependency has nothing to abuse
   # (Superagent P2 / mirrors metagraphed's publish-client.yml "validate" job, codex #251).
@@ -39,6 +39,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify release commit is on main
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::MCP package releases must be cut from a commit reachable from main."
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -77,16 +88,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # packages/loopover-mcp's own test suite pulls in src/mcp/find-opportunities.ts transitively
-      # (via packages/loopover-miner/lib/opportunity-fanout.js), which imports @loopover/engine.
-      # That package's dist/ is gitignored (see ci.yml's own build --workspace @loopover/engine
-      # step for the same reason) -- without building it first, the MCP release validation gate below
-      # fails with "Failed to resolve entry for package @loopover/engine" on every run.
+      # packages/loopover-mcp's CLI test suite (test/unit/mcp-cli-*.test.ts) spawns the real binary,
+      # which imports @loopover/engine. That package's dist/ is gitignored (see ci.yml's own
+      # build --workspace @loopover/engine step for the same reason) -- without building it first,
+      # the CLI test suite below fails with "Failed to resolve entry for package @loopover/engine".
       - name: Build loopover-engine
         run: npm run build --workspace @loopover/engine
 
-      - name: MCP release validation gate
-        run: npm run test:release:mcp
+      # engine/miner/ui-kit's own publish workflows only validate their OWN package (a workspace
+      # test run + pack/smoke-test) -- mcp previously ran the full npm run test:ci (every workspace,
+      # every drift-check, ui:lint/build, migrations, etc.), coupling an MCP release to the health of
+      # the entire monorepo. Confirmed harmful live: an unrelated packages/loopover-miner env-reference
+      # doc going stale blocked MCP's publish outright, even though MCP's own package code was
+      # completely unaffected -- and main's required CI already re-verifies whole-repo health on
+      # every PR, including release-please's own, so re-running all of it here is redundant with what
+      # already gated the merge. Scoped down to match its siblings instead: MCP's own syntax check
+      # (node --check, same as build:mcp) plus its own CLI test suite -- test/unit/mcp-cli-*.test.ts
+      # specifically (imports packages/loopover-mcp and spawns the built binary), NOT the sibling
+      # test/unit/mcp-*.test.ts files that exercise the Worker's separate remote MCP server
+      # (src/mcp/server.ts, a different deployable entirely).
+      - name: MCP package syntax validation
+        run: npm run build:mcp
+
+      - name: MCP CLI test suite
+        run: npx vitest run mcp-cli-
 
       # Build + pack happen in THIS unprivileged job (no id-token). The privileged publish job below
       # never runs npm install/build, so a compromised build dependency can't reach the OIDC token.
@@ -137,6 +162,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify release commit is on main
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::MCP package releases must be cut from a commit reachable from main."
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6

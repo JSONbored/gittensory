@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isReleaseWatchIssue } from "../../scripts/check-mcp-release-due.mjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeResolvedIssueIfPresent, isReleaseWatchIssue } from "../../scripts/check-mcp-release-due.mjs";
 import { buildMcpReleaseIssue, buildMcpReleaseReport, renderMcpChangelog, selectMcpReleaseCommits } from "../../scripts/mcp-release-core.mjs";
 
 type TestCommit = {
@@ -115,5 +115,96 @@ describe("MCP release changelog detection", () => {
         user: { login: "public-contributor" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("closeResolvedIssueIfPresent (#6145 follow-up)", () => {
+  const resolvedReport = {
+    due: false,
+    proposedVersion: "3.1.0",
+    latestTag: "mcp-v3.1.0",
+    latestTagVersion: "3.1.0",
+    packageVersion: "3.1.0",
+    publishedVersion: "3.1.0",
+    releaseType: null,
+    commits: [],
+    changedFiles: [],
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_TOKEN;
+  });
+
+  it("comments and closes an existing open watch issue once the release has caught up", async () => {
+    process.env.GITHUB_REPOSITORY = "acme/widgets";
+    process.env.GITHUB_TOKEN = "test-token";
+    const calls: Array<{ method: string; url: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        calls.push({ method, url: String(input), body: init?.body ? JSON.parse(init.body as string) : undefined });
+        if (method === "GET") {
+          return new Response(
+            JSON.stringify([
+              {
+                number: 6145,
+                title: "MCP release due: 4.0.0",
+                body: "<!-- loopover:mcp-release-due -->",
+                user: { login: "github-actions[bot]" },
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }),
+    );
+
+    await closeResolvedIssueIfPresent(resolvedReport);
+
+    expect(calls).toHaveLength(3);
+    const commentCall = calls.find((call) => call.method === "POST" && call.url.includes("/comments"));
+    const patchCall = calls.find((call) => call.method === "PATCH");
+    expect(commentCall?.url).toContain("/issues/6145/comments");
+    expect(commentCall?.body).toMatchObject({ body: expect.stringContaining("caught up") });
+    expect(patchCall?.url).toContain("/issues/6145");
+    expect(patchCall?.body).toEqual({ state: "closed", state_reason: "completed" });
+  });
+
+  it("does nothing when no open watch issue exists", async () => {
+    process.env.GITHUB_REPOSITORY = "acme/widgets";
+    process.env.GITHUB_TOKEN = "test-token";
+    const fetchMock = vi.fn(async () => new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await closeResolvedIssueIfPresent(resolvedReport);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores an open issue authored by someone other than github-actions[bot]", async () => {
+    process.env.GITHUB_REPOSITORY = "acme/widgets";
+    process.env.GITHUB_TOKEN = "test-token";
+    // findExistingIssue pages until an empty page ends the search -- page 1 returns a non-matching
+    // issue, page 2 must come back empty or the (real) pagination loop keeps requesting pages 3..10.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            { number: 9, title: "MCP release due: 4.0.0", body: "<!-- loopover:mcp-release-due -->", user: { login: "someone-else" } },
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValue(new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await closeResolvedIssueIfPresent(resolvedReport);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

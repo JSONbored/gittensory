@@ -234,6 +234,8 @@ export type RepoSettingsPreview = {
     checkRunDetailLevel: RepositorySettings["checkRunDetailLevel"];
     regateSweepOrderMode: RepositorySettings["regateSweepOrderMode"];
     reviewCheckMode: RepositorySettings["reviewCheckMode"];
+    autoProjectMilestoneMatch: RepositorySettings["autoProjectMilestoneMatch"];
+    autoProjectMilestoneMatchBackend: RepositorySettings["autoProjectMilestoneMatchBackend"];
     gatePack: RepositorySettings["gatePack"];
     linkedIssueGateMode: RepositorySettings["linkedIssueGateMode"];
     duplicatePrGateMode: RepositorySettings["duplicatePrGateMode"];
@@ -368,6 +370,8 @@ export function buildRepoSettingsPreview(args: {
       checkRunDetailLevel: settings.checkRunDetailLevel,
       regateSweepOrderMode: settings.regateSweepOrderMode,
       reviewCheckMode: settings.reviewCheckMode,
+      autoProjectMilestoneMatch: settings.autoProjectMilestoneMatch,
+      autoProjectMilestoneMatchBackend: settings.autoProjectMilestoneMatchBackend,
       gatePack: settings.gatePack,
       linkedIssueGateMode: settings.linkedIssueGateMode,
       duplicatePrGateMode: settings.duplicatePrGateMode,

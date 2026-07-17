@@ -3577,7 +3577,7 @@ async function reviewPrCli(options) {
   process.stdout.write(`Pre-PR review: ${payload.overallStatus}\n`);
   for (const section of payload.sections) process.stdout.write(`- ${section.name}: ${section.status}\n`);
   process.stdout.write(`Preflight: ${payload.preflight.status}\n`);
-  if (payload.slopRisk) process.stdout.write(`Slop risk: ${payload.slopRisk.slopRisk} (${payload.slopRisk.band})\n`);
+  if (payload.slopRisk) process.stdout.write(`Slop risk: ${payload.slopRisk.band}\n`);
   else if (payload.slopRiskError) process.stdout.write(`Slop risk: unavailable (${payload.slopRiskError})\n`);
   if (payload.prTextLint) process.stdout.write(`PR text lint: ${payload.prTextLint.verdict} (score ${payload.prTextLint.score})\n`);
   else if (payload.prTextLintError) process.stdout.write(`PR text lint: unavailable (${payload.prTextLintError})\n`);
@@ -3764,9 +3764,9 @@ async function slopRiskCli(args) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
-  // #6261: the whole payload is the API's, so the score line is sanitized alongside the findings -- leaving `band`
-  // raw would keep this exact command exploitable by the exact response the findings are being protected from.
-  process.stdout.write(`Slop risk: ${sanitizePlainTextTerminalOutput(payload.slopRisk)} (${sanitizePlainTextTerminalOutput(payload.band)})\n`);
+  // #6990: the route now returns band + findings only (no numeric score/rubric), matching the MCP tool's
+  // blunting; print the band alone so the CLI can't leak the exact score the REST surface no longer sends.
+  process.stdout.write(`Slop risk: ${sanitizePlainTextTerminalOutput(payload.band)}\n`);
   for (const finding of payload.findings ?? [])
     process.stdout.write(`- ${sanitizePlainTextTerminalOutput(finding.title)}: ${sanitizePlainTextTerminalOutput(finding.detail)}\n`);
 }
@@ -3845,9 +3845,8 @@ async function issueSlopCli(args) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
-  // #6261: same as slop-risk, and the sharper case of the two -- the body being assessed is routinely a THIRD
-  // party's issue text, so a hostile issue is the expected input here, not a hypothetical one.
-  process.stdout.write(`Issue slop risk: ${sanitizePlainTextTerminalOutput(payload.slopRisk)} (${sanitizePlainTextTerminalOutput(payload.band)})\n`);
+  // #6990: band + findings only, matching the route's blunting (no numeric score/rubric leaked through the CLI).
+  process.stdout.write(`Issue slop risk: ${sanitizePlainTextTerminalOutput(payload.band)}\n`);
   for (const finding of payload.findings ?? [])
     process.stdout.write(`- ${sanitizePlainTextTerminalOutput(finding.title)}: ${sanitizePlainTextTerminalOutput(finding.detail)}\n`);
 }

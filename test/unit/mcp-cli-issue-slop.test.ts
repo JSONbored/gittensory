@@ -31,7 +31,7 @@ describe("loopover-mcp CLI — issue-slop", () => {
       ],
       e,
     );
-    expect(plain).toMatch(/Issue slop risk: 0 \(clean\)/);
+    expect(plain).toMatch(/Issue slop risk: clean/);
 
     const json = JSON.parse(
       await runAsync(
@@ -45,8 +45,11 @@ describe("loopover-mcp CLI — issue-slop", () => {
         ],
         e,
       ),
-    ) as { slopRisk: number; band: string; findings: unknown[]; rubric: string };
-    expect(json).toMatchObject({ slopRisk: 0, band: "clean", findings: [], rubric: expect.any(String) });
+    ) as { band: string; findings: unknown[] };
+    // #6990: band + findings only — no numeric score or rubric.
+    expect(json).toMatchObject({ band: "clean", findings: [] });
+    expect(json).not.toHaveProperty("slopRisk");
+    expect(json).not.toHaveProperty("rubric");
     expect(JSON.stringify(json)).not.toMatch(/wallet|hotkey|reward|trust score/i);
   });
 
@@ -80,13 +83,13 @@ describe("loopover-mcp CLI — issue-slop", () => {
   it("surfaces elevated issue slop findings in plain output", async () => {
     const e = await env();
     const json = JSON.parse(await runAsync(["issue-slop", "--title", "Add retries", "--body", "", "--json"], e)) as {
-      slopRisk: number;
       band: string;
       findings: Array<{ title: string }>;
     };
-    expect(json).toMatchObject({ slopRisk: 30, band: "elevated" });
+    expect(json).toMatchObject({ band: "elevated" });
+    expect(json).not.toHaveProperty("slopRisk");
     const plain = await runAsync(["issue-slop", "--title", "Add retries", "--body", ""], e);
-    expect(plain).toMatch(/Issue slop risk: 30 \(elevated\)/);
+    expect(plain).toMatch(/Issue slop risk: elevated/);
     expect(plain).toMatch(/Issue has no description/);
   });
 

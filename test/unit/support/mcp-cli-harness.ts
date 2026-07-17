@@ -1164,11 +1164,10 @@ export function slopRiskFixture(input: {
       : elevated
         ? [{ code: "missing_test_evidence", title: "Missing test evidence", severity: "warning", detail: "Add or update tests for the changed behavior." }]
         : [];
+  // #6990: the route returns band + findings only (numeric score + rubric withheld); the fixture mirrors that.
   return {
-    slopRisk,
     band: slopRisk <= 0 ? "clean" : slopRisk < 25 ? "low" : slopRisk < 60 ? "elevated" : "high",
     findings,
-    rubric: "Fixture slop rubric.",
   };
 }
 
@@ -1231,10 +1230,9 @@ export function issueSlopFixture(input: { title?: string; body?: string } = {}) 
       : titleOnly
         ? [{ code: "title_restatement", title: "Issue body only restates the title", severity: "warning", detail: "Add specific detail beyond the title." }]
         : [];
+  // #6990: blunted like the route — band + findings only, no numeric score or rubric.
   return {
-    slopRisk,
     band: slopRisk <= 0 ? "clean" : slopRisk < 25 ? "low" : slopRisk < 60 ? "elevated" : "high",
     findings,
-    rubric: "Fixture issue slop rubric.",
   };
 }
