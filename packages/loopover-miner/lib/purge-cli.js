@@ -20,6 +20,7 @@ import { initPortfolioQueueStore, resolvePortfolioQueueDbPath } from "./portfoli
 import { initRunStateStore, resolveRunStateDbPath } from "./run-state.js";
 import { initContributionProfileCache, resolveContributionProfileCacheDbPath } from "./contribution-profile-cache.js";
 import { openGovernorState, resolveGovernorStateDbPath } from "./governor-state.js";
+import { initPolicyVerdictCacheStore, resolvePolicyVerdictCacheDbPath } from "./policy-verdict-cache.js";
 import { resolveAttemptLogDbPath } from "./attempt-log.js";
 import {
   CLAIM_LEDGER_PURGE_SPEC,
@@ -31,6 +32,7 @@ import {
   CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC,
   GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC,
   GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC,
+  POLICY_VERDICT_CACHE_PURGE_SPEC,
   countStoreByRepo,
   describeError,
 } from "./store-maintenance.js";
@@ -52,6 +54,7 @@ const REAL_PURGE_TARGETS = [
   // governor-state holds TWO repo-scoped tables in one DB file; its store.purgeByRepo deletes both against a
   // single handle (never reopening the file), and its dry-run count sums both via `specs` (#7091).
   { name: "governor-state", optionKey: "openGovernorState", opener: openGovernorState, resolveDbPath: resolveGovernorStateDbPath, specs: [GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC, GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC] },
+  { name: "policy-verdict-cache", optionKey: "initPolicyVerdictCacheStore", opener: initPolicyVerdictCacheStore, resolveDbPath: resolvePolicyVerdictCacheDbPath, spec: POLICY_VERDICT_CACHE_PURGE_SPEC },
 ];
 
 function parseRepoArg(value, usage) {

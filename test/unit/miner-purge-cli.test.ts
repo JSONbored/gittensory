@@ -16,6 +16,7 @@ import {
   initContributionProfileCache,
   closeDefaultContributionProfileCache,
 } from "../../packages/loopover-miner/lib/contribution-profile-cache.js";
+import { initPolicyVerdictCacheStore } from "../../packages/loopover-miner/lib/policy-verdict-cache.js";
 import { openGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
 import { emptyContributionProfile } from "../../packages/loopover-miner/lib/contribution-profile.js";
 import {
@@ -26,6 +27,7 @@ import {
 
 const roots: string[] = [];
 const closeables: Array<{ close(): void }> = [];
+const POLICY_VERDICT = { allowed: true, matchedPhrase: null, source: "AI-USAGE.md" } as const;
 
 function tempDir() {
   const root = mkdtempSync(join(tmpdir(), "loopover-miner-purge-cli-"));
@@ -83,7 +85,7 @@ describe("parsePurgeArgs (#5564)", () => {
 });
 
 describe("runPurge --dry-run (#5564, #6599)", () => {
-  it("counts matching rows across the eight real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
+  it("counts matching rows across the nine real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
     const root = tempDir();
     const claimDbPath = join(root, "claim-ledger.sqlite3");
     const eventDbPath = join(root, "event-ledger.sqlite3");
@@ -92,6 +94,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     const portfolioDbPath = join(root, "portfolio-queue.sqlite3");
     const runStateDbPath = join(root, "run-state.sqlite3");
     const cacheDbPath = join(root, "contribution-profile-cache.sqlite3");
+    const policyVerdictCacheDbPath = join(root, "policy-verdict-cache.sqlite3");
     const governorStateDbPath = join(root, "governor-state.sqlite3");
     const attemptLogDbPath = join(root, "attempt-log.sqlite3"); // never created — dry run must not touch it
 
@@ -142,6 +145,11 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     cache.put(emptyContributionProfile("acme/other", "2026-07-17T00:00:00.000Z"));
     cache.close();
 
+    const policyVerdictCache = initPolicyVerdictCacheStore(policyVerdictCacheDbPath);
+    policyVerdictCache.put("acme/widgets", "AI-USAGE.md", '"v1"', POLICY_VERDICT);
+    policyVerdictCache.put("acme/other", "AI-USAGE.md", '"v2"', POLICY_VERDICT);
+    policyVerdictCache.close();
+
     // governor-state's two repo-scoped tables. reputation history for acme/widgets is recorded under TWO
     // api_base_urls (both count for the repo, since the purge filters on repo_full_name alone) plus two own
     // submissions; the whole-run scalar row (governor_scalar_state) is not repo-scoped and never counted.
@@ -161,6 +169,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "portfolio-queue": () => portfolioDbPath,
       "run-state": () => runStateDbPath,
       "contribution-profile-cache": () => cacheDbPath,
+      "policy-verdict-cache": () => policyVerdictCacheDbPath,
       "governor-state": () => governorStateDbPath,
       "attempt-log": () => attemptLogDbPath,
     };
@@ -181,6 +190,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
         { store: "contribution-profile-cache", wouldPurge: 1 },
         // governor-state sums BOTH tables: 2 reputation rows (two api_base_urls) + 2 own submissions = 4.
         { store: "governor-state", wouldPurge: 4 },
+        { store: "policy-verdict-cache", wouldPurge: 1 },
       ],
       attemptLogNote: ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
       attemptLogTotalRows: 0,
@@ -211,13 +221,14 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "portfolio-queue": () => join(root, "portfolio-queue.sqlite3"),
       "run-state": () => join(root, "run-state.sqlite3"),
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
+      "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"], { resolveDbPaths })).toBe(0);
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(result.stores).toHaveLength(8);
+    expect(result.stores).toHaveLength(9);
     expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
     expect(result.attemptLogTotalRows).toBe(0);
     for (const resolve of Object.values(resolveDbPaths)) {
@@ -253,6 +264,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "portfolio-queue": () => join(root, "portfolio-queue.sqlite3"),
       "run-state": () => join(root, "run-state.sqlite3"),
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
+      "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
       "attempt-log": () => attemptLogDbPath,
     };
@@ -280,6 +292,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "portfolio-queue": () => join(root, "portfolio-queue.sqlite3"),
       "run-state": () => join(root, "run-state.sqlite3"),
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
+      "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
@@ -320,6 +333,7 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       LOOPOVER_MINER_PORTFOLIO_QUEUE_DB: process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB,
       LOOPOVER_MINER_RUN_STATE_DB: process.env.LOOPOVER_MINER_RUN_STATE_DB,
       LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB: process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB,
+      LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB: process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB,
       LOOPOVER_MINER_GOVERNOR_STATE_DB: process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB,
       LOOPOVER_MINER_ATTEMPT_LOG_DB: process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB,
     };
@@ -330,13 +344,14 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB = join(root, "portfolio-queue.sqlite3");
     process.env.LOOPOVER_MINER_RUN_STATE_DB = join(root, "run-state.sqlite3");
     process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB = join(root, "contribution-profile-cache.sqlite3");
+    process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = join(root, "policy-verdict-cache.sqlite3");
     process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB = join(root, "governor-state.sqlite3");
     process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB = join(root, "attempt-log.sqlite3");
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"])).toBe(0);
       const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-      expect(result.stores).toHaveLength(8);
+      expect(result.stores).toHaveLength(9);
       expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
       // Nothing was created — dry run against nonexistent default-path stores makes zero writes.
       expect(existsSync(process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB)).toBe(false);
@@ -374,6 +389,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRunStateStore: () => runState,
       initContributionProfileCache: () => cache,
       openGovernorState: () => governorState,
+      initPolicyVerdictCacheStore: () => fakeStore(0),
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -392,6 +408,7 @@ describe("runPurge (real, #5564, #6599)", () => {
         { store: "run-state", purged: 1 },
         { store: "contribution-profile-cache", purged: 1 },
         { store: "governor-state", purged: 4 },
+        { store: "policy-verdict-cache", purged: 0 },
         { store: "attempt-log", purged: null, note: ATTEMPT_LOG_NOT_PURGEABLE_NOTE },
       ],
     });
@@ -432,6 +449,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRunStateStore: () => runState,
       initContributionProfileCache: () => fakeStore(0),
       openGovernorState: () => fakeStore(0),
+      initPolicyVerdictCacheStore: () => fakeStore(0),
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -467,6 +485,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRunStateStore: () => fakeStore(0),
       initContributionProfileCache: () => fakeStore(0),
       openGovernorState: () => fakeStore(0),
+      initPolicyVerdictCacheStore: () => fakeStore(0),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--json"], options as never)).toBe(2);
@@ -486,6 +505,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       initRunStateStore: () => fakeStore(0),
       initContributionProfileCache: () => fakeStore(0),
       openGovernorState: () => fakeStore(0),
+      initPolicyVerdictCacheStore: () => fakeStore(0),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--json"], options as never)).toBe(2);
@@ -506,6 +526,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       LOOPOVER_MINER_PORTFOLIO_QUEUE_DB: process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB,
       LOOPOVER_MINER_RUN_STATE_DB: process.env.LOOPOVER_MINER_RUN_STATE_DB,
       LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB: process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB,
+      LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB: process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB,
       LOOPOVER_MINER_GOVERNOR_STATE_DB: process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB,
     };
     const claimDbPath = join(root, "claim-ledger.sqlite3");
@@ -518,6 +539,7 @@ describe("runPurge (real, #5564, #6599)", () => {
     process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB = portfolioDbPath;
     process.env.LOOPOVER_MINER_RUN_STATE_DB = runStateDbPath;
     process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB = join(root, "contribution-profile-cache.sqlite3");
+    process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = join(root, "policy-verdict-cache.sqlite3");
     process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB = join(root, "governor-state.sqlite3");
     try {
       // Seed real rows via the default store paths before purging through them.
@@ -584,6 +606,7 @@ describe("runPurge (real, #5564, #6599)", () => {
       "portfolio-queue": () => portfolioDbPath,
       "run-state": () => runStateDbPath,
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
+      "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
@@ -608,6 +631,7 @@ describe("runPurge (real, #5564, #6599)", () => {
         initRunStateStore: () => runStateStore,
         initContributionProfileCache: () => fakeStore(0),
         openGovernorState: () => fakeStore(0),
+        initPolicyVerdictCacheStore: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const purged = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -654,6 +678,7 @@ describe("runPurge (real, #5564, #6599)", () => {
         initRunStateStore: () => fakeStore(0),
         initContributionProfileCache: () => cacheStore,
         openGovernorState: () => governorStore,
+        initPolicyVerdictCacheStore: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -671,5 +696,37 @@ describe("runPurge (real, #5564, #6599)", () => {
     expect(governorStore.loadReputationHistory("acme/other")).toEqual({ decided: 1, unfavorable: 0 });
     expect(governorStore.listRecentOwnSubmissions({ repoFullName: "acme/other" })).toHaveLength(1);
     expect(governorStore.loadPauseState()).toMatchObject({ paused: true, reason: "maintenance" });
+  });
+
+  it("REGRESSION (#6987): really deletes policy-verdict-cache rows for the repo, leaving other repos intact", () => {
+    const root = tempDir();
+    const policyDbPath = join(root, "policy-verdict-cache.sqlite3");
+
+    const seeded = initPolicyVerdictCacheStore(policyDbPath);
+    seeded.put("acme/widgets", "AI-USAGE.md", '"v1"', POLICY_VERDICT);
+    seeded.put("acme/other", "AI-USAGE.md", '"v2"', POLICY_VERDICT);
+    seeded.close();
+
+    const policyStore = initPolicyVerdictCacheStore(policyDbPath);
+    closeables.push(policyStore);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      runPurge(["--repo", "acme/widgets", "--json"], {
+        openClaimLedger: () => fakeStore(0),
+        initEventLedger: () => fakeStore(0),
+        initGovernorLedger: () => fakeStore(0),
+        initPredictionLedger: () => fakeStore(0),
+        initPortfolioQueueStore: () => fakeStore(0),
+        initRunStateStore: () => fakeStore(0),
+        initContributionProfileCache: () => fakeStore(0),
+        openGovernorState: () => fakeStore(0),
+        initPolicyVerdictCacheStore: () => policyStore,
+      } as never),
+    ).toBe(0);
+    const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(summary.stores).toContainEqual({ store: "policy-verdict-cache", purged: 1 });
+    expect(policyStore.get("acme/widgets")).toBeNull();
+    expect(policyStore.get("acme/other")).not.toBeNull();
   });
 });

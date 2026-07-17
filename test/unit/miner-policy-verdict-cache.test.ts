@@ -135,4 +135,17 @@ describe("loopover-miner policy-verdict cache store (#4843)", () => {
   it("throws on an empty explicit db path", () => {
     expect(() => initPolicyVerdictCacheStore("")).toThrow("invalid_policy_verdict_cache_db_path");
   });
+
+  it("purgeByRepo deletes only the given repo scope's row and returns the count (#6987)", () => {
+    const store = openStore();
+    store.put("acme/widgets", "AI-USAGE.md", '"v1"', VERDICT);
+    store.put("acme/other", "AI-USAGE.md", '"v2"', VERDICT);
+    expect(store.purgeByRepo("acme/widgets")).toBe(1);
+    expect(store.get("acme/widgets")).toBeNull();
+    expect(store.get("acme/other")).not.toBeNull();
+  });
+
+  it("purgeByRepo returns 0 when the repo scope has no cached verdict (#6987)", () => {
+    expect(openStore().purgeByRepo("acme/widgets")).toBe(0);
+  });
 });

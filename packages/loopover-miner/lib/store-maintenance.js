@@ -48,6 +48,12 @@ export const CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC = { table: CONTRIBUTION_PROFI
 export const GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC = { table: "governor_reputation_history", repoColumn: "repo_full_name" };
 export const GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC = { table: "governor_own_submissions", repoColumn: "repo_full_name" };
 
+/** policy-verdict-cache (#6987), another repo-scoped store the earlier sweeps missed. Its `repo_scope TEXT
+ *  PRIMARY KEY` is the per-repo column (a tenant forge host + `owner/repo`), the same `repoColumn` shape and
+ *  internal-constant-only discipline as the specs above. `policy-doc-cache.js` stays out (keyed by URL, no repo
+ *  column, exactly like `attempt-log.js`). */
+export const POLICY_VERDICT_CACHE_PURGE_SPEC = { table: "policy_verdict_cache", repoColumn: "repo_scope" };
+
 const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** A readable message for a caught value, whether or not it is an Error. */

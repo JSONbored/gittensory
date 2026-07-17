@@ -30,6 +30,7 @@ const STORE_NAMES = [
   "replay-snapshot",
   "worktree-allocator",
   "contribution-profile",
+  "policy-verdict-cache",
 ];
 
 afterEach(() => {
@@ -38,7 +39,7 @@ afterEach(() => {
 });
 
 describe("loopover-miner migrate (#4871)", () => {
-  it("covers the exact same twelve stores doctor's store-integrity sweep covers, in the same order, and skips every one when nothing has been created yet", () => {
+  it("covers the exact same thirteen stores doctor's store-integrity sweep covers, in the same order, and skips every one when nothing has been created yet", () => {
     const env = tempEnv();
     const results = runMigrateChecks(env);
 

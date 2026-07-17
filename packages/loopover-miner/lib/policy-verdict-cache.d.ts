@@ -24,6 +24,8 @@ export type PolicyVerdictCacheStore = {
     etag: string,
     verdict: AiPolicyVerdict,
   ): PolicyVerdictCacheWrite;
+  /** Delete every cached verdict row for one repo scope (#6987); returns the number of rows removed. */
+  purgeByRepo(repoScope: string): number;
   close(): void;
 };
 

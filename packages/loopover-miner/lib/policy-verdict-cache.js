@@ -1,5 +1,6 @@
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 import { applySchemaMigrations } from "./schema-version.js";
+import { POLICY_VERDICT_CACHE_PURGE_SPEC, purgeStoreByRepo } from "./store-maintenance.js";
 
 // Local cache of resolved AI-usage-policy verdicts (#4843). Even with #4842's conditional-GET doc cache, the small
 // but non-zero cost of resolving `resolveAiPolicyVerdict` from raw doc text was still paid on every discover run.
@@ -98,6 +99,14 @@ export function initPolicyVerdictCacheStore(dbPath = resolvePolicyVerdictCacheDb
       const updatedAt = new Date().toISOString();
       putStatement.run(normalizedRepoScope, normalizedDecisiveDoc, normalizedEtag, serializedVerdict, updatedAt);
       return { repoScope: normalizedRepoScope, decisiveDoc: normalizedDecisiveDoc, etag: normalizedEtag, verdict, updatedAt };
+    },
+    /**
+     * Delete every cached verdict row for one repo scope (#6987) -- the right-to-be-forgotten path
+     * `loopover-miner purge` invokes. Returns the number of rows removed. Reuses store-maintenance.js's
+     * identifier-guarded purgeStoreByRepo, exactly like the other repo-scoped stores.
+     */
+    purgeByRepo(repoScope) {
+      return purgeStoreByRepo(db, POLICY_VERDICT_CACHE_PURGE_SPEC, normalizeRepoScope(repoScope));
     },
     close() {
       db.close();

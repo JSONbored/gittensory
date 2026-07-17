@@ -18,6 +18,7 @@ export const RUN_STATE_PURGE_SPEC: LedgerPurgeSpec;
 export const CONTRIBUTION_PROFILE_CACHE_PURGE_SPEC: LedgerPurgeSpec;
 export const GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC: LedgerPurgeSpec;
 export const GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC: LedgerPurgeSpec;
+export const POLICY_VERDICT_CACHE_PURGE_SPEC: LedgerPurgeSpec;
 
 export type StoreIntegrityResult = { name: string; ok: boolean; detail: string };
 export type LedgerRetentionPolicy = { maxAgeMs?: number; maxRows?: number };
