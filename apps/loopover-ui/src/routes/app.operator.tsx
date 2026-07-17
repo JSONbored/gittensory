@@ -12,6 +12,7 @@ import {
 import { DeadLetterQueuePanel } from "@/components/site/dead-letter-queue-panel";
 import { NotificationReadinessCard } from "@/components/site/notification-readiness-card";
 import { StateActionButton, StateBoundary } from "@/components/site/state-views";
+import { Skeleton } from "@/components/ui/skeleton";
 import { getApiOrigin } from "@/lib/api/origin";
 import { apiFetch } from "@/lib/api/request";
 import { useApiResource } from "@/lib/api/use-api-resource";
@@ -96,7 +97,29 @@ type RecommendationQualityTotals = {
 
 type ReportExportFormat = "markdown" | "json";
 
-function OperatorDashboard() {
+function OperatorDashboardSkeleton() {
+  return (
+    <div className="space-y-8" aria-hidden>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-16 rounded-token" />
+          <Skeleton className="h-7 w-56 rounded-token" />
+          <Skeleton className="h-4 w-80 rounded-token" />
+        </div>
+        <Skeleton className="h-8 w-28 rounded-token" />
+      </div>
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 3 }, (_, index) => (
+          <Skeleton key={index} className="h-24 w-full rounded-token" />
+        ))}
+      </section>
+      <Skeleton className="h-56 w-full rounded-token" />
+      <Skeleton className="h-72 w-full rounded-token" />
+    </div>
+  );
+}
+
+export function OperatorDashboard() {
   const dashboard = useApiResource<OperatorDashboardResponse>(
     "/v1/app/operator-dashboard",
     "Operator dashboard",
@@ -140,6 +163,7 @@ function OperatorDashboard() {
       onRetry={dashboard.reload}
       onRefresh={dashboard.reload}
       loadingTitle="Loading operator dashboard…"
+      loadingSkeleton={<OperatorDashboardSkeleton />}
       emptyTitle="No operator metrics yet"
       emptyDescription="Deployment health and value metrics appear once backend data is available."
       errorDescription={dashboard.status === "error" ? dashboard.error : undefined}
