@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTONOMY_LEVELS } from "../../src/settings/autonomy";
-import { closeFixtureServer, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
+import { closeFixtureServer, repoOnboardingPackFixture, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
 
 // #6153: MAINTAIN_AUTONOMY_LEVELS is a hand-synced copy of the live enum (the CLI reaches @loopover/engine only
 // through its published export map, which doesn't surface AUTONOMY_LEVELS), so nothing but a test can catch the
@@ -26,9 +26,9 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     tempDir = null;
   });
 
-  async function env() {
+  async function env(onApiRequest?: (request: import("node:http").IncomingMessage) => void) {
     tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
-    const url = await startFixtureServer();
+    const url = await startFixtureServer(onApiRequest ? { onApiRequest } : {});
     return { LOOPOVER_API_URL: url, LOOPOVER_TOKEN: "session-token", LOOPOVER_CONFIG_DIR: tempDir, LOOPOVER_API_TIMEOUT_MS: "1000" };
   }
 
@@ -95,6 +95,22 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(scoped).toMatch(/Gate precision for owner\/repo \(last 30d\)/);
   });
 
+  it("onboarding-pack mirrors the session-gated API payload and forwards refresh", async () => {
+    const requests: string[] = [];
+    const e = await env((request) => requests.push(request.url ?? ""));
+
+    const json = JSON.parse(
+      await runAsync(["maintain", "onboarding-pack", "--repo", "owner/repo", "--refresh", "--json"], e),
+    );
+    expect(json).toEqual(repoOnboardingPackFixture);
+    expect(requests.at(-1)).toBe("/v1/repos/owner/repo/onboarding-pack/preview?refresh=true");
+
+    const plain = await runAsync(["maintain", "onboarding-pack", "--repo", "owner/repo"], e);
+    expect(plain).toContain("LoopOver onboarding pack preview for owner/repo (preview-only, not published).");
+    expect(plain).toContain(repoOnboardingPackFixture.preview.previewMarkdown);
+    expect(requests.at(-1)).toBe("/v1/repos/owner/repo/onboarding-pack/preview?refresh=false");
+  });
+
   it("validates inputs: --repo required, id required for approve, known subcommand + action/level", async () => {
     const e = await env();
     await expect(runAsync(["maintain", "status"], e)).rejects.toThrow(/Pass --repo/);
@@ -137,5 +153,6 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(out).toMatch(/approve <id>/);
     expect(out).toMatch(/queue/);
     expect(out).toMatch(/pause/);
+    expect(out).toMatch(/onboarding-pack/);
   });
 });

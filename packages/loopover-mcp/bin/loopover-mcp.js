@@ -94,7 +94,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision"],
+  maintain: ["status", "queue", "approve", "reject", "pause", "resume", "set-level", "precision", "onboarding-pack"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -2829,6 +2829,7 @@ function printMaintainHelp() {
       `                               actions: ${MAINTAIN_ACTION_CLASSES.join(", ")}`,
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
       "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
+      "  onboarding-pack [--refresh]  Preview the repo's contributor onboarding pack.",
       "",
       "Pass --json for machine-readable output.",
     ].join("\n") + "\n",
@@ -2935,7 +2936,20 @@ async function maintainCli(args) {
     emit(payload, lines.join("\n"));
     return;
   }
-  throw new Error(`Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision.`);
+  if (subcommand === "onboarding-pack") {
+    const payload = await apiGet(`${repoBase}/onboarding-pack/preview?refresh=${options.refresh === true ? "true" : "false"}`);
+    emit(
+      payload,
+      [
+        `LoopOver onboarding pack preview for ${repoFullName} (preview-only, not published).`,
+        sanitizePlainTextTerminalOutput(JSON.stringify(payload.preview ?? payload, null, 2)),
+      ].join("\n"),
+    );
+    return;
+  }
+  throw new Error(
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | onboarding-pack.`,
+  );
 }
 
 async function runCli(args) {
