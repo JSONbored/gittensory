@@ -26,12 +26,15 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function createFakeIo(options: { maskedAnswers?: string[]; textAnswers?: string[] } = {}) {
+function createFakeIo(options: { maskedAnswers?: string[]; textAnswers?: string[]; isInteractive?: boolean } = {}) {
   const lines: string[] = [];
   const maskedQueue = [...(options.maskedAnswers ?? [])];
   const textQueue = [...(options.textAnswers ?? [])];
   return {
     lines,
+    // Defaults to `true` (a real terminal) -- every pre-#6846 test exercises the interactive flow and never
+    // sets this, so the default must match that existing, unchanged behavior.
+    isInteractive: options.isInteractive ?? true,
     async promptMasked(question: string) {
       lines.push(`MASKED?${question}`);
       return maskedQueue.shift() ?? "";
@@ -152,6 +155,22 @@ describe("loopover-miner init --interactive wizard (#5176)", () => {
       expect(exitCode).toBe(0);
     });
 
+    it("#6846: fails fast with actionable guidance instead of prompting when stdin isn't a real TTY", async () => {
+      const stateDir = join(tempRoot(), "state");
+      const cwd = tempRoot();
+      const env = { LOOPOVER_MINER_CONFIG_DIR: stateDir };
+      const io = createFakeIo({ isInteractive: false });
+
+      const exitCode = await runInteractiveInit(env, cwd, io);
+
+      expect(exitCode).toBe(3);
+      // Never reaches a prompt (would hang forever on a real no-TTY stdin) -- no MASKED?/TEXT? lines recorded.
+      expect(io.lines.some((line) => line.startsWith("MASKED?") || line.startsWith("TEXT?"))).toBe(false);
+      expect(io.lines.some((line) => line.includes("requires a real terminal"))).toBe(true);
+      expect(io.lines.some((line) => line.includes("ANTHROPIC_API_KEY"))).toBe(true);
+      expect(existsSync(join(stateDir, ".env"))).toBe(false);
+    });
+
     it("re-prompts when the token is left empty before accepting a valid one", async () => {
       const stateDir = join(tempRoot(), "state");
       const cwd = tempRoot();
@@ -269,6 +288,19 @@ describe("loopover-miner init --interactive wizard (#5176)", () => {
   });
 
   describe("createWizardIo (real terminal adapter, driven over fake streams)", () => {
+    it("#6846: isInteractive reflects the real input stream's isTTY, in both directions", () => {
+      const { inStream: ttyIn, outStream: ttyOut } = createFakeTty();
+      const ttyIo = createWizardIo(ttyIn, ttyOut);
+      expect(ttyIo.isInteractive).toBe(true);
+      ttyIo.close();
+
+      const { outStream: nonTtyOut } = createFakeTty();
+      const nonTtyIn = new Readable({ read() {} }); // no isTTY set -- mirrors a piped/no-pty stdin
+      const nonTtyIo = createWizardIo(nonTtyIn, nonTtyOut);
+      expect(nonTtyIo.isInteractive).toBe(false);
+      nonTtyIo.close();
+    });
+
     it("promptText resolves the typed line", async () => {
       const { inStream, outStream } = createFakeTty();
       const io = createWizardIo(inStream, outStream);
@@ -316,13 +348,16 @@ describe("loopover-miner init --interactive wizard (#5176)", () => {
   });
 
   it("e2e: `loopover-miner init --interactive` dispatches to the wizard, not the non-interactive path", () => {
-    // No stdin input is piped, so the wizard blocks on its first prompt and the process is torn down once
-    // Node detects the unsettled top-level await -- this only asserts the CLI routes `--interactive` to the
-    // wizard (distinct prompt text, distinct code path) without hanging; the full multi-turn prompt flow is
-    // exercised precisely and deterministically by the direct runInteractiveInit tests above.
+    // No stdin input is piped, and a spawned child process never has a real TTY on its stdin either way --
+    // pre-#6846, this meant the wizard blocked forever on its first prompt (see that fix's own tests for the
+    // hang this eliminates); now it fails fast with the wizard's own real-terminal-required message. That
+    // message is itself proof the CLI routed `--interactive` to the wizard (distinct code path, distinct
+    // output) rather than the plain, non-interactive `init` path -- this test's actual assertion -- so it
+    // still exercises exactly what it always intended to, just without the hang. The full multi-turn prompt
+    // flow is exercised precisely and deterministically by the direct runInteractiveInit tests above.
     const stateDir = tempRoot();
     const result = runCliResult(["init", "--interactive"], { LOOPOVER_MINER_CONFIG_DIR: stateDir });
-    expect(result.output).toContain("GitHub token (input hidden)");
+    expect(result.output).toContain("requires a real terminal");
     expect(result.output).not.toContain("initialized " + stateDir);
   });
 });

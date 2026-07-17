@@ -133,6 +133,20 @@ export async function promptCompanionVars(io, provider) {
  * injected so tests never make a real network call or wait on a real timer during device-flow polling.
  */
 export async function runInteractiveInit(env, cwd, io, options = {}) {
+  // #6846: fail fast, not silently forever. `io.isInteractive` is only ever `false` for a real
+  // `createWizardIo()` adapter over a non-TTY stdin (a test's fake `io` has no such field and stays
+  // interactive by default, so every existing test is unaffected) -- an operator running this over a
+  // no-pty SSH session or a CI/fleet script gets clear, actionable guidance instead of a hang on the
+  // wizard's first prompt, which can never receive a real line of input.
+  if (io.isInteractive === false) {
+    io.writeLine("init --interactive requires a real terminal (no TTY detected on stdin).");
+    io.writeLine("For an unattended/fleet setup, skip this wizard and set these env vars directly instead:");
+    io.writeLine("  - GITHUB_TOKEN (your GitHub credential)");
+    io.writeLine("  - MINER_CODING_AGENT_PROVIDER (claude-cli or codex-cli)");
+    io.writeLine("  - ANTHROPIC_API_KEY for claude-cli, or OPENAI_API_KEY for codex-cli");
+    io.writeLine("Then verify with: loopover-miner doctor");
+    return 3;
+  }
   const githubToken = await collectGithubToken(io, env, options);
   const provider = await promptProviderSelection(io);
 
@@ -181,6 +195,11 @@ export function createWizardIo(input = process.stdin, output = process.stdout) {
     originalWriteToOutput(masking ? "*" : stringToWrite);
   };
   return {
+    // #6846: whether `input` is a real, interactive terminal -- `runInteractiveInit` checks this BEFORE
+    // issuing its first prompt, so a no-TTY invocation (piped stdin, a plain `ssh host "loopover-miner init
+    // --interactive"` with no allocated pty) fails fast with actionable guidance instead of hanging forever
+    // on a `readline` prompt that can never receive a real line of input.
+    isInteractive: Boolean(input.isTTY),
     promptText(question) {
       return new Promise((resolve) => rl.question(question, resolve));
     },

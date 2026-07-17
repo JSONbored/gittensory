@@ -3,6 +3,10 @@ export type WizardIo = {
   promptMasked(question: string): Promise<string>;
   writeLine(text: string): void;
   close?: () => void;
+  /** Whether this `io`'s underlying input is a real, interactive terminal. Optional -- a fake test `io` that
+   *  omits it is treated as interactive (matching every pre-#6846 test's existing behavior); `createWizardIo`'s
+   *  real adapter always sets it from the actual stream's `isTTY`. */
+  isInteractive?: boolean;
 };
 
 export type RunInteractiveInitOptions = {
@@ -30,4 +34,4 @@ export function runInteractiveInit(
 export function createWizardIo(
   input?: NodeJS.ReadableStream,
   output?: NodeJS.WritableStream,
-): WizardIo & { close: () => void };
+): WizardIo & { close: () => void; isInteractive: boolean };
