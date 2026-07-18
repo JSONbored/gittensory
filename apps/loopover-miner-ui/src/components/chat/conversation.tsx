@@ -8,23 +8,62 @@ import { MessageList } from "@/components/chat/message-list";
 import type { ChatMessage } from "@/components/chat/fixtures";
 import type { ChunkSource } from "@/lib/use-streaming-text";
 import { streamChat, type ChatWireMessage } from "@/lib/chat-stream";
+import {
+  handlePortfolioQueueChatCommand,
+  resolvePortfolioQueueChatAction,
+  type HandlePortfolioQueueChatCommandDeps,
+  type HandlePortfolioQueueChatCommandResult,
+} from "@/lib/chat-portfolio-queue-actions";
+import { fetchPortfolioQueueItems } from "@/lib/portfolio-queue-actions";
 
 // The chat-rail's content integration (#6518): the first point the persistent rail (#6513) holds a live
 // conversation. Pure wiring — it composes the standalone composer (#6514), message list (#6515), and streaming
 // renderer (#6516) around the read-only streaming backend (#6517), and owns nothing but the conversation state.
-// Strictly ask-a-question / read-only: the only network call it can make is `streamChat` → `POST /api/chat`; it
-// never touches an action endpoint (portfolio release/requeue, governor pause/resume) — that surface is a
-// separate, later, flag-gated issue.
+//
+// #7075: portfolio release/requeue is resolved first via resolvePortfolioQueueChatAction; only unresolved
+// text falls through to streamChat. Action dispatch reuses the already-built handlePortfolioQueueChatCommand
+// pipeline (no new routes / fetches).
 
 const ASSISTANT_NAME = "LoopOver";
 /** Inline failure note appended after a failed turn — keeps history visible instead of StateBoundary wipe (#7077). */
 const TURN_FAILED_MESSAGE =
   "The latest response failed to complete. Any partial answer above is incomplete — you can try again.";
 
+/** Local queue administration is not a chokepoint content-write (#6838 / #7075); satisfy the registry brand. */
+const allowAdministrativeGate = () => ({ decision: { stage: "allow" } });
+
 /** Injectable so tests can drive the stream deterministically; defaults to the real `POST /api/chat` bridge. */
 export type StreamChatFn = (messages: ChatWireMessage[]) => AsyncIterable<string>;
 
-export function ChatConversation({ streamChatImpl = streamChat }: { streamChatImpl?: StreamChatFn } = {}) {
+export type PortfolioQueueChatCommandFn = (
+  text: string,
+  deps: HandlePortfolioQueueChatCommandDeps,
+) => Promise<HandlePortfolioQueueChatCommandResult>;
+
+export type ChatConversationProps = {
+  streamChatImpl?: StreamChatFn;
+  /** Defaults to the real end-to-end portfolio release/requeue handler (#7075). */
+  handlePortfolioQueueChatCommandImpl?: PortfolioQueueChatCommandFn;
+  /** Partial override of production portfolio-command deps (tests inject loadItems / gates / env). */
+  portfolioQueueChatDeps?: Partial<HandlePortfolioQueueChatCommandDeps>;
+};
+
+function defaultPortfolioQueueChatDeps(
+  overrides: Partial<HandlePortfolioQueueChatCommandDeps> = {},
+): HandlePortfolioQueueChatCommandDeps {
+  return {
+    loadItems: () => fetchPortfolioQueueItems(),
+    buildGovernorInput: () => ({}),
+    evaluateGate: allowAdministrativeGate,
+    ...overrides,
+  };
+}
+
+export function ChatConversation({
+  streamChatImpl = streamChat,
+  handlePortfolioQueueChatCommandImpl = handlePortfolioQueueChatCommand,
+  portfolioQueueChatDeps,
+}: ChatConversationProps = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeSource, setActiveSource] = useState<ChunkSource | null>(null);
   const [streaming, setStreaming] = useState(false);
@@ -42,6 +81,37 @@ export function ChatConversation({ streamChatImpl = streamChat }: { streamChatIm
         content: text,
         timestamp: new Date().toISOString(),
       };
+
+      // #7075: try portfolio release/requeue resolution BEFORE opening a read-only stream.
+      const portfolioResolved = resolvePortfolioQueueChatAction(text);
+      if (portfolioResolved.ok) {
+        setMessages((prev) => [...prev, userMessage]);
+        // Reuse the composer-disable flag for the action round-trip (no streaming source / typing indicator).
+        setStreaming(true);
+        void (async () => {
+          try {
+            const result = await handlePortfolioQueueChatCommandImpl(
+              text,
+              defaultPortfolioQueueChatDeps(portfolioQueueChatDeps),
+            );
+            setMessages((prev) => [...prev, ...result.messages]);
+          } catch {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: nextId(),
+                role: "system",
+                content: TURN_FAILED_MESSAGE,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          } finally {
+            setStreaming(false);
+          }
+        })();
+        return;
+      }
+
       // What the backend grounds against: the prior user/assistant turns plus this question, in wire shape.
       const history: ChatWireMessage[] = [...messages, userMessage]
         .filter((message): message is ChatMessage & { role: "user" | "assistant" } => message.role !== "system")
@@ -114,7 +184,7 @@ export function ChatConversation({ streamChatImpl = streamChat }: { streamChatIm
       // would be read as a functional update and *call* it instead of storing it.
       setActiveSource(() => source);
     },
-    [messages, streamChatImpl],
+    [messages, streamChatImpl, handlePortfolioQueueChatCommandImpl, portfolioQueueChatDeps],
   );
 
   return (

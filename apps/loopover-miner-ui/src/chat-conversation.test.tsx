@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ChatConversation } from "./components/chat/conversation";
 import type { ChatWireMessage } from "./lib/chat-stream";
@@ -133,5 +133,64 @@ describe("ChatConversation (#6518)", () => {
     expect(screen.getByText("Hel")).toBeTruthy();
     expect(screen.getByText(/latest response failed to complete/i)).toBeTruthy();
     expect(screen.queryByText(/Couldn't load the conversation/i)).toBeNull();
+  });
+
+  it("REGRESSION (#7075): a release-shaped message dispatches through the portfolio handler, not streamChat", async () => {
+    let streamCalls = 0;
+    const streamChatImpl = async function* (_messages: ChatWireMessage[]): AsyncGenerator<string> {
+      streamCalls += 1;
+      yield "should not stream";
+    };
+    const handlePortfolioQueueChatCommandImpl = vi.fn(async (text: string) => {
+      expect(text).toBe("release acme/widgets");
+      return {
+        dispatched: true,
+        messages: [
+          {
+            id: "sys-release",
+            role: "system" as const,
+            content: "Queue release succeeded for acme/widgets (issue:12).",
+            timestamp: "2026-07-16T09:00:00.000Z",
+          },
+        ],
+      };
+    });
+
+    render(
+      <ChatConversation
+        streamChatImpl={streamChatImpl}
+        handlePortfolioQueueChatCommandImpl={handlePortfolioQueueChatCommandImpl}
+      />,
+    );
+    ask("release acme/widgets");
+
+    await waitFor(() => expect(handlePortfolioQueueChatCommandImpl).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(/Queue release succeeded for acme\/widgets/i)).toBeTruthy());
+    expect(screen.getByText("release acme/widgets")).toBeTruthy();
+    expect(streamCalls).toBe(0);
+    expect(sendButton().disabled).toBe(false);
+  });
+
+  it("REGRESSION (#7075): an ordinary question still reaches streamChat unchanged", async () => {
+    const seen: ChatWireMessage[][] = [];
+    const streamChatImpl = async function* (messages: ChatWireMessage[]) {
+      seen.push(messages);
+      yield "grounded answer";
+    };
+    const handlePortfolioQueueChatCommandImpl = vi.fn(async () => {
+      throw new Error("must not dispatch portfolio actions for ordinary questions");
+    });
+
+    render(
+      <ChatConversation
+        streamChatImpl={streamChatImpl}
+        handlePortfolioQueueChatCommandImpl={handlePortfolioQueueChatCommandImpl}
+      />,
+    );
+    ask("what is stuck?");
+
+    await waitFor(() => expect(screen.getByText("grounded answer")).toBeTruthy());
+    expect(handlePortfolioQueueChatCommandImpl).not.toHaveBeenCalled();
+    expect(seen[0]).toEqual([{ role: "user", content: "what is stuck?" }]);
   });
 });
