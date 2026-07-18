@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.2.3](https://github.com/JSONbored/loopover/compare/engine-v3.2.2...engine-v3.2.3) (2026-07-18)
+
+
+### Fixes
+
+* **advisory:** redact the check-run leak terms sanitizePublicComment already caught ([39a431b](https://github.com/JSONbored/loopover/commit/39a431bdda222283c46808fbb1d964aaa3deaf42))
+* **advisory:** redact the check-run leak terms sanitizePublicComment already caught ([3b956f4](https://github.com/JSONbored/loopover/commit/3b956f4675bbdd265ad7dacc65c6ed17b7a01679)), closes [#7074](https://github.com/JSONbored/loopover/issues/7074)
+* **config:** recognize federatedIntelligence manifest block in lint and preview ([95ba59a](https://github.com/JSONbored/loopover/commit/95ba59aa2731dc3802ca90ea9326c9ca8f7e2916))
+* **config:** recognize federatedIntelligence manifest block in lint and preview ([1c80fb8](https://github.com/JSONbored/loopover/commit/1c80fb84b88c2ce4028e8435056025bfca4da914))
+
 ## [3.2.2](https://github.com/JSONbored/loopover/compare/engine-v3.2.1...engine-v3.2.2) (2026-07-17)
 
 

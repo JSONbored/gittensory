@@ -5,6 +5,21 @@
 ### Fixes
 - Blunt slop-risk / issue-slop REST + CLI to match the MCP tools (#6990) (#7052)
 
+## [3.2.3](https://github.com/JSONbored/loopover/compare/mcp-v3.2.2...mcp-v3.2.3) (2026-07-18)
+
+
+### Fixes
+
+* **api:** blunt slop-risk / issue-slop REST + CLI to match the MCP tools ([#6990](https://github.com/JSONbored/loopover/issues/6990)) ([#7052](https://github.com/JSONbored/loopover/issues/7052)) ([9971476](https://github.com/JSONbored/loopover/commit/99714764769db457ad7e9ae4ef7ffa97b3895fed))
+* **release:** scope MCP publish validation to its own package ([86ee117](https://github.com/JSONbored/loopover/commit/86ee11744f7c7d2f76c9d64345391f61651256c8))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^3.2.2 to ^3.2.3
+
 ## [3.2.2](https://github.com/JSONbored/loopover/compare/mcp-v3.2.1...mcp-v3.2.2) (2026-07-17)
 
 

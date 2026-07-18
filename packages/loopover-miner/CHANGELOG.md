@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.2.3](https://github.com/JSONbored/loopover/compare/miner-v3.2.2...miner-v3.2.3) (2026-07-18)
+
+
+### Fixes
+
+* **miner:** bound oauth-device-flow.js's GitHub fetches with a request timeout ([cd9aedf](https://github.com/JSONbored/loopover/commit/cd9aedf7cceb45146302158225193bb963ab4eca))
+* **miner:** bound oauth-device-flow.js's GitHub fetches with a request timeout ([77ca20f](https://github.com/JSONbored/loopover/commit/77ca20fdcc30d05137b41a5848bce156110c238a))
+* **miner:** fail closed when a chat-action handler throws ([8ba48bd](https://github.com/JSONbored/loopover/commit/8ba48bd707dcf002a31991ac434be8cd6a7822d8))
+* **miner:** fail closed when a chat-action handler throws ([bdb11d9](https://github.com/JSONbored/loopover/commit/bdb11d974d961594b4555582bd2b7c811b8cde16)), closes [#6989](https://github.com/JSONbored/loopover/issues/6989)
+* **miner:** purge contribution-profile-cache and governor-state's repo-scoped tables ([#7091](https://github.com/JSONbored/loopover/issues/7091)) ([#7110](https://github.com/JSONbored/loopover/issues/7110)) ([6cb2c17](https://github.com/JSONbored/loopover/commit/6cb2c17eb038bb78cf664737c62363f3b8b6fd05))
+* **miner:** reclaim worktree slots by lease age, not cross-container PID liveness ([#7131](https://github.com/JSONbored/loopover/issues/7131)) ([237530a](https://github.com/JSONbored/loopover/commit/237530a80d390e1baa7e53612267456ac16b821a)), closes [#7085](https://github.com/JSONbored/loopover/issues/7085)
+* **miner:** retry transient 5xx/rate-limit in contribution-profile getJson ([#7126](https://github.com/JSONbored/loopover/issues/7126)) ([ec15d24](https://github.com/JSONbored/loopover/commit/ec15d24f20fb18b51980142eff1ff11097695c2b)), closes [#7090](https://github.com/JSONbored/loopover/issues/7090)
+* **miner:** retry transient live-state fetch in checkSubmissionFreshness before failing closed ([#7129](https://github.com/JSONbored/loopover/issues/7129)) ([2183167](https://github.com/JSONbored/loopover/commit/21831675a22a05a806a438d166ac086af7b42785)), closes [#7089](https://github.com/JSONbored/loopover/issues/7089)
+* **miner:** wire policy_verdict_cache into purge/status/migrate local stores ([#7136](https://github.com/JSONbored/loopover/issues/7136)) ([d0fbe82](https://github.com/JSONbored/loopover/commit/d0fbe82c61b53d09ce03580129246becd1fbb0a4)), closes [#6987](https://github.com/JSONbored/loopover/issues/6987)
+* **release:** scope MCP publish validation to its own package ([86ee117](https://github.com/JSONbored/loopover/commit/86ee11744f7c7d2f76c9d64345391f61651256c8))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^3.2.2 to ^3.2.3
+
 ## [3.2.2](https://github.com/JSONbored/loopover/compare/miner-v3.2.1...miner-v3.2.2) (2026-07-17)
 
 
