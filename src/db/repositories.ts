@@ -3570,6 +3570,9 @@ export async function recordAiUsageEvent(
     costUsd?: number | null | undefined;
     detail?: string | null | undefined;
     metadata?: Record<string, unknown> | undefined;
+    // #7176: tenant attribution for centralized hosted billing. Optional -- self-host callers omit it and the
+    // column stays null, byte-identical to today; hosted containers pass their installation id.
+    installationId?: string | null | undefined;
   },
 ): Promise<void> {
   const db = getDb(env.DB);
@@ -3589,6 +3592,7 @@ export async function recordAiUsageEvent(
     costUsd: Math.max(0, finiteNumber(event.costUsd)),
     detail: event.detail ?? null,
     metadataJson: jsonString(event.metadata ?? {}),
+    installationId: event.installationId ?? null,
     createdAt: nowIso(),
   });
 }
@@ -3599,6 +3603,20 @@ export async function sumAiEstimatedNeuronsSince(env: Env, sinceIso: string): Pr
     .select({ total: sql<number>`coalesce(sum(${aiUsageEvents.estimatedNeurons}), 0)` })
     .from(aiUsageEvents)
     .where(and(gte(aiUsageEvents.createdAt, sinceIso), eq(aiUsageEvents.status, "ok")));
+  /* v8 ignore next -- SQL aggregate sum always returns one row; fallback protects D1 driver anomalies. */
+  return Number(row?.total ?? 0);
+}
+
+/** #7176: total AI cost (USD) attributed to one tenant (installation) since a timestamp, for centralized hosted
+ *  billing. Mirrors sumAiEstimatedNeuronsSince's shape; scoped by installation_id instead of a global window, and
+ *  covered by the ai_usage_events_installation_created_idx index. Self-host rows (null installation_id) are never
+ *  matched by an equality filter, so this is inherently hosted-only. */
+export async function sumAiCostForTenantSince(env: Env, installationId: string, sinceIso: string): Promise<number> {
+  const db = getDb(env.DB);
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${aiUsageEvents.costUsd}), 0)` })
+    .from(aiUsageEvents)
+    .where(and(eq(aiUsageEvents.installationId, installationId), gte(aiUsageEvents.createdAt, sinceIso)));
   /* v8 ignore next -- SQL aggregate sum always returns one row; fallback protects D1 driver anomalies. */
   return Number(row?.total ?? 0);
 }

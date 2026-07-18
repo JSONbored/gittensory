@@ -1304,10 +1304,15 @@ export const aiUsageEvents = sqliteTable(
     costUsd: real("cost_usd").notNull().default(0),
     detail: text("detail"),
     metadataJson: text("metadata_json").notNull().default("{}"),
+    // #7176: tenant attribution for centralized hosted billing (ORB + AMS). Nullable -- self-host rows have no
+    // installation concept; hosted containers populate it at insert time. Applies to the BYOK audit rows too.
+    installationId: text("installation_id"),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   },
   (table) => ({
     featureCreated: index("ai_usage_events_feature_created_idx").on(table.feature, table.createdAt),
+    // Covers the per-tenant billing aggregate (sumAiCostForTenantSince).
+    installationCreated: index("ai_usage_events_installation_created_idx").on(table.installationId, table.createdAt),
     actorCreated: index("ai_usage_events_actor_created_idx").on(table.actor, table.createdAt),
     providerCreated: index("ai_usage_events_provider_created_idx").on(table.provider, table.createdAt),
     // Covers the daily-budget query (sumAiEstimatedNeuronsSince): WHERE status='ok' AND created_at >= ?.
