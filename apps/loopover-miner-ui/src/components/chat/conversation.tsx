@@ -17,6 +17,9 @@ import { streamChat, type ChatWireMessage } from "@/lib/chat-stream";
 // separate, later, flag-gated issue.
 
 const ASSISTANT_NAME = "LoopOver";
+/** Inline failure note appended after a failed turn — keeps history visible instead of StateBoundary wipe (#7077). */
+const TURN_FAILED_MESSAGE =
+  "The latest response failed to complete. Any partial answer above is incomplete — you can try again.";
 
 /** Injectable so tests can drive the stream deterministically; defaults to the real `POST /api/chat` bridge. */
 export type StreamChatFn = (messages: ChatWireMessage[]) => AsyncIterable<string>;
@@ -28,7 +31,6 @@ export function ChatConversation({ streamChatImpl = streamChat }: { streamChatIm
   // #7078: true from submit until the first SSE text chunk — drives MessageList's TypingIndicator so the
   // pre-first-token round-trip isn't a silent gap. Cleared on first chunk, stream completion, or error.
   const [awaitingFirstChunk, setAwaitingFirstChunk] = useState(false);
-  const [errored, setErrored] = useState(false);
   const idCounter = useRef(0);
   const nextId = () => `m${(idCounter.current += 1)}`;
 
@@ -46,7 +48,6 @@ export function ChatConversation({ streamChatImpl = streamChat }: { streamChatIm
         .map((message) => ({ role: message.role, content: message.content }));
 
       setMessages((prev) => [...prev, userMessage]);
-      setErrored(false);
       setAwaitingFirstChunk(true);
       setStreaming(true);
 
@@ -80,7 +81,28 @@ export function ChatConversation({ streamChatImpl = streamChat }: { streamChatIm
               },
             ]);
           } catch {
-            setErrored(true);
+            // #7077: never gate MessageList on isError (that replaces the whole history via StateBoundary).
+            // Commit any partial streamed text, then append an inline system failure note so prior turns stay.
+            const failedAt = new Date().toISOString();
+            setMessages((prev) => {
+              const next = [...prev];
+              if (answer.length > 0) {
+                next.push({
+                  id: nextId(),
+                  role: "assistant",
+                  content: answer,
+                  timestamp: failedAt,
+                  authorName: ASSISTANT_NAME,
+                });
+              }
+              next.push({
+                id: nextId(),
+                role: "system",
+                content: TURN_FAILED_MESSAGE,
+                timestamp: failedAt,
+              });
+              return next;
+            });
           } finally {
             setAwaitingFirstChunk(false);
             setStreaming(false);
@@ -99,7 +121,7 @@ export function ChatConversation({ streamChatImpl = streamChat }: { streamChatIm
     <div className="flex h-full flex-col gap-2 p-4">
       <p className="font-mono text-token-xs uppercase tracking-[0.2em] text-primary">Chat</p>
       <div className="min-h-0 flex-1 overflow-hidden">
-        <MessageList messages={messages} isError={errored} composing={streaming && awaitingFirstChunk} />
+        <MessageList messages={messages} composing={streaming && awaitingFirstChunk} />
         {streaming && activeSource ? (
           <div className="flex gap-3 px-3 pt-4" data-testid="chat-streaming-response">
             <Avatar className="size-8 shrink-0">

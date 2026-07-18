@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="360" viewBox="0 0 980 360" role="img" aria-label="Chat error before and after preserving history">
+  <rect width="980" height="360" fill="#1a1d21"/>
+  <text x="230" y="32" text-anchor="middle" fill="#9aa3ad" font-family="ui-monospace, monospace" font-size="13">BEFORE  full wipe</text>
+  <text x="750" y="32" text-anchor="middle" fill="#9aa3ad" font-family="ui-monospace, monospace" font-size="13">AFTER (#7077)</text>
+  <rect x="30" y="50" width="400" height="280" rx="8" fill="#23272c" stroke="#3a4149"/>
+  <rect x="550" y="50" width="400" height="280" rx="8" fill="#23272c" stroke="#3a4149"/>
+  <text x="50" y="120" fill="#f85149" font-family="system-ui, sans-serif" font-size="14">Couldn't load the conversation</text>
+  <text x="50" y="150" fill="#6b7280" font-family="system-ui, sans-serif" font-size="12">prior turns replaced by ErrorState</text>
+  <text x="570" y="100" fill="#e6edf3" font-family="system-ui, sans-serif" font-size="13">first question</text>
+  <text x="570" y="130" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="13">first answer</text>
+  <text x="570" y="170" fill="#e6edf3" font-family="system-ui, sans-serif" font-size="13">second question</text>
+  <text x="570" y="200" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="13">Hel</text>
+  <text x="570" y="240" fill="#d2a8ff" font-family="system-ui, sans-serif" font-size="12">The latest response failed&</text>
+  <text x="570" y="280" fill="#8b949e" font-family="system-ui, sans-serif" font-size="12">history + partial answer kept</text>
+</svg>

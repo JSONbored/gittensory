@@ -64,7 +64,7 @@ describe("ChatConversation (#6518)", () => {
     expect(screen.getByText("Hello")).toBeTruthy();
   });
 
-  it("surfaces a backend failure through the message-list error state and re-enables the composer", async () => {
+  it("surfaces a backend failure as an inline system note and re-enables the composer (#7077)", async () => {
     const streamChatImpl = async function* (_messages: ChatWireMessage[]): AsyncGenerator<string> {
       yield* []; // yields nothing, then fails — models a backend/stream error mid-request
       throw new Error("connection refused");
@@ -72,7 +72,9 @@ describe("ChatConversation (#6518)", () => {
     render(<ChatConversation streamChatImpl={streamChatImpl} />);
     ask("hi");
 
-    await waitFor(() => expect(screen.getByText(/Couldn't load the conversation/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/latest response failed to complete/i)).toBeTruthy());
+    expect(screen.getByText("hi")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load the conversation/i)).toBeNull();
     expect(sendButton().disabled).toBe(false);
   });
 
@@ -94,5 +96,42 @@ describe("ChatConversation (#6518)", () => {
 
     await waitFor(() => expect(screen.getByText("Hello")).toBeTruthy());
     expect(screen.queryByRole("status", { name: /is typing/i })).toBeNull();
+  });
+
+  it("REGRESSION (#7077): a second-turn failure leaves the first successful turn visible", async () => {
+    let calls = 0;
+    const streamChatImpl = async function* (_messages: ChatWireMessage[]): AsyncGenerator<string> {
+      calls += 1;
+      if (calls === 1) {
+        yield "first answer";
+        return;
+      }
+      throw new Error("connection refused");
+    };
+    render(<ChatConversation streamChatImpl={streamChatImpl} />);
+    ask("first question");
+    await waitFor(() => expect(screen.getByText("first answer")).toBeTruthy());
+
+    ask("second question");
+    await waitFor(() => expect(screen.getByText(/latest response failed to complete/i)).toBeTruthy());
+    expect(screen.getByText("first question")).toBeTruthy();
+    expect(screen.getByText("first answer")).toBeTruthy();
+    expect(screen.getByText("second question")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load the conversation/i)).toBeNull();
+    expect(sendButton().disabled).toBe(false);
+  });
+
+  it("REGRESSION (#7077): partial streamed text is preserved after a mid-stream failure", async () => {
+    const streamChatImpl = async function* (_messages: ChatWireMessage[]): AsyncGenerator<string> {
+      yield "Hel";
+      throw new Error("connection reset");
+    };
+    render(<ChatConversation streamChatImpl={streamChatImpl} />);
+    ask("hi");
+
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    expect(screen.getByText("Hel")).toBeTruthy();
+    expect(screen.getByText(/latest response failed to complete/i)).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load the conversation/i)).toBeNull();
   });
 });
