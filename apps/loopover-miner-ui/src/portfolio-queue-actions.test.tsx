@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchPortfolioQueueItems,
@@ -268,6 +268,27 @@ describe("PortfolioPage queue actions (#4857)", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("queue_entry_not_in_progress"));
     expect(releaseItem).toHaveBeenCalledWith(inProgressItem);
     expect(loadPortfolioQueueItems).toHaveBeenCalledTimes(1);
+  });
+
+  describe("live refresh (#7082)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("re-polls the queue-actions items on the shared cadence, without any user action", async () => {
+      vi.useFakeTimers();
+      const loadPortfolioQueueItems = vi.fn(async () => ({ ok: true as const, items: [inProgressItem] }));
+      render(
+        <PortfolioPage
+          loadPortfolioQueue={loadPortfolioQueue}
+          loadPortfolioQueueItems={loadPortfolioQueueItems}
+          pollIntervalMs={1000}
+        />,
+      );
+      await vi.waitFor(() => expect(loadPortfolioQueueItems).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(loadPortfolioQueueItems).toHaveBeenCalledTimes(2));
+    });
   });
 });
 

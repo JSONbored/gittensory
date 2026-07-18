@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Bar, BarChart, Cell, XAxis, YAxis } from "recharts";
 
 import { Button } from "@loopover/ui-kit/components/button";
@@ -28,6 +28,7 @@ import {
   type LedgersSummary,
 } from "../lib/ledgers";
 import { fetchGovernorPauseState, pauseGovernor, resumeGovernor, type GovernorPauseStateResult } from "../lib/governor";
+import { DEFAULT_POLL_INTERVAL_MS, usePolledFetch } from "../lib/use-polled-fetch";
 
 export const Route = createFileRoute("/ledgers")({
   component: LedgersPage,
@@ -407,35 +408,30 @@ export function LedgersPage({
   loadGovernorPauseState = fetchGovernorPauseState,
   pauseGovernorAction = pauseGovernor,
   resumeGovernorAction = resumeGovernor,
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: {
   loadLedgers?: () => Promise<LedgersResult>;
   loadGovernorPauseState?: () => Promise<GovernorPauseStateResult>;
   pauseGovernorAction?: (reason?: string) => Promise<GovernorPauseStateResult>;
   resumeGovernorAction?: () => Promise<GovernorPauseStateResult>;
+  pollIntervalMs?: number;
 }) {
-  const [result, setResult] = useState<LedgersResult | null>(null);
   const [pauseState, setPauseState] = useState<GovernorPauseStateResult | null>(null);
+  const [lastPolledPauseState, setLastPolledPauseState] = useState<GovernorPauseStateResult | null>(null);
   const [actionPending, setActionPending] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    void loadLedgers().then((loaded) => {
-      if (!cancelled) setResult(loaded);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadLedgers]);
+  // Join the app's shared live-refresh cadence so newly-recorded claims/events appear without a manual reload,
+  // matching the Overview page's claims card that reads the same data source (#7082).
+  const result = usePolledFetch(loadLedgers, pollIntervalMs);
 
-  useEffect(() => {
-    let cancelled = false;
-    void loadGovernorPauseState().then((loaded) => {
-      if (!cancelled) setPauseState(loaded);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadGovernorPauseState]);
+  // Poll the governor pause-state on the same cadence. Each fresh poll result is synced into `pauseState` during
+  // render, while the operator's own pause/resume action writes `pauseState` directly so it reflects immediately,
+  // not only on the next tick (#7082).
+  const polledPauseState = usePolledFetch(loadGovernorPauseState, pollIntervalMs);
+  if (polledPauseState !== lastPolledPauseState) {
+    setLastPolledPauseState(polledPauseState);
+    setPauseState(polledPauseState);
+  }
 
   const runGovernorAction = (action: () => Promise<GovernorPauseStateResult>) => {
     setActionPending(true);

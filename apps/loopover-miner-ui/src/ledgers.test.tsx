@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fetchLedgers, LEDGERS_API_PATH, type LedgersResult, type LedgersSummary } from "./lib/ledgers";
 import { type GovernorPauseState, type GovernorPauseStateResult } from "./lib/governor";
@@ -366,6 +366,42 @@ describe("LedgersPage (#4855)", () => {
       );
       await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("connection refused"));
       expect(screen.getByText(/No ledger activity yet/i)).toBeTruthy();
+    });
+  });
+
+  describe("live refresh (#7082)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("re-polls the ledger summary on the shared cadence, without any user action", async () => {
+      vi.useFakeTimers();
+      const loadLedgers = vi.fn(async (): Promise<LedgersResult> => ({ ok: true, summary: fixtureSummary }));
+      render(
+        <LedgersPage
+          loadLedgers={loadLedgers}
+          loadGovernorPauseState={loadGovernorPauseStateDefault}
+          pollIntervalMs={1000}
+        />,
+      );
+      await vi.waitFor(() => expect(loadLedgers).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(loadLedgers).toHaveBeenCalledTimes(2));
+    });
+
+    it("re-polls the governor pause-state on the shared cadence, without any user action", async () => {
+      vi.useFakeTimers();
+      const loadGovernorPauseState = vi.fn(loadGovernorPauseStateDefault);
+      render(
+        <LedgersPage
+          loadLedgers={async () => ({ ok: true, summary: fixtureSummary })}
+          loadGovernorPauseState={loadGovernorPauseState}
+          pollIntervalMs={1000}
+        />,
+      );
+      await vi.waitFor(() => expect(loadGovernorPauseState).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(loadGovernorPauseState).toHaveBeenCalledTimes(2));
     });
   });
 });

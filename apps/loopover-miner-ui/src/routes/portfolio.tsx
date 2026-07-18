@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Bar, BarChart, Cell, XAxis, YAxis } from "recharts";
 
 import { Button } from "@loopover/ui-kit/components/button";
@@ -405,19 +405,16 @@ export function PortfolioPage({
 }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [actionPending, setActionPending] = useState(false);
-  const [itemsResult, setItemsResult] = useState<PortfolioQueueItemsResult | null>(null);
   const [actionResult, setActionResult] = useState<PortfolioQueueActionResult | null>(null);
 
   const loadSummary = useCallback(() => loadPortfolioQueue(), [loadPortfolioQueue, refreshKey]);
   const summaryResult = usePolledFetch(loadSummary, pollIntervalMs);
 
-  const refreshItems = useCallback(() => {
-    void loadPortfolioQueueItems().then(setItemsResult);
-  }, [loadPortfolioQueueItems, refreshKey]);
-
-  useEffect(() => {
-    refreshItems();
-  }, [refreshItems]);
+  // Poll the queue-actions items on the shared cadence too, independently of the summary card's own poll — a slow
+  // or failed fetch in one section must not block the other. Bumping refreshKey after the operator's own action
+  // re-fetches immediately, additive to the timer rather than replacing it (#7082).
+  const loadItems = useCallback(() => loadPortfolioQueueItems(), [loadPortfolioQueueItems, refreshKey]);
+  const itemsResult = usePolledFetch(loadItems, pollIntervalMs);
 
   const runQueueAction = (action: () => Promise<PortfolioQueueActionResult>) => {
     setActionPending(true);
@@ -425,7 +422,6 @@ export function PortfolioPage({
       setActionResult(next);
       if (next.ok) {
         setRefreshKey((key) => key + 1);
-        refreshItems();
       }
       setActionPending(false);
     });
