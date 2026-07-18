@@ -4,6 +4,9 @@
 // global-only aggregate, so the miner-ui and the CLI share one data path rather than maintaining two. It still
 // never republishes raw queue identifiers or rank-derived priorities — only status counts, grouped by repo.
 
+import { demoFetchPortfolioQueue } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const PORTFOLIO_QUEUE_API_PATH = "/api/portfolio-queue";
 
 export const QUEUE_STATUSES = ["queued", "in_progress", "done"] as const;
@@ -53,6 +56,7 @@ function isPortfolioQueueSummary(value: unknown): value is PortfolioQueueSummary
 
 /** Fetch the local queue summary; failures surface as a typed error result the view renders, never a crash. */
 export async function fetchPortfolioQueue(fetchImpl: typeof fetch = fetch): Promise<PortfolioQueueResult> {
+  if (isDemoMode()) return demoFetchPortfolioQueue();
   try {
     const response = await fetchImpl(PORTFOLIO_QUEUE_API_PATH);
     if (!response.ok) return { ok: false, error: `local portfolio-queue API responded ${response.status}` };

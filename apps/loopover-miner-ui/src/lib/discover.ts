@@ -2,6 +2,9 @@
 // Mirrors governor.ts's shape: a typed discriminated result, never a thrown exception for an HTTP-level failure,
 // and a guard narrowing the parsed payload. Safe only because vite-auth.ts authenticates every /api/* request.
 
+import { demoRequestDiscover } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const DISCOVER_API_PATH = "/api/discover";
 
 /** Non-secret discover inputs — never a credential; the server resolves its own token, exactly as the CLI does. */
@@ -39,6 +42,7 @@ export async function requestDiscover(
   input: DiscoverActionInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DiscoverActionResult> {
+  if (isDemoMode()) return demoRequestDiscover(input);
   try {
     const response = await fetchImpl(DISCOVER_API_PATH, {
       method: "POST",

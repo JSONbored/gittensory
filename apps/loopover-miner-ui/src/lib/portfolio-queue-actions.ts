@@ -2,6 +2,13 @@
 // the miner-ui"). Mirrors the CLI's `loopover-miner queue release` / `queue requeue` commands via the
 // authenticated dev-server bridge in vite-portfolio-queue-actions-api.ts.
 
+import {
+  demoFetchPortfolioQueueItems,
+  demoReleasePortfolioQueueItem,
+  demoRequeuePortfolioQueueItem,
+} from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const PORTFOLIO_QUEUE_ITEMS_API_PATH = "/api/portfolio-queue/items";
 export const PORTFOLIO_QUEUE_RELEASE_API_PATH = "/api/portfolio-queue/release";
 export const PORTFOLIO_QUEUE_REQUEUE_API_PATH = "/api/portfolio-queue/requeue";
@@ -70,6 +77,7 @@ function parseActionResponse(response: Response, label: string): Promise<Portfol
 
 /** Fetch actionable queue rows (in_progress + done) for release/requeue controls. */
 export async function fetchPortfolioQueueItems(fetchImpl: typeof fetch = fetch): Promise<PortfolioQueueItemsResult> {
+  if (isDemoMode()) return demoFetchPortfolioQueueItems();
   try {
     const response = await fetchImpl(PORTFOLIO_QUEUE_ITEMS_API_PATH);
     return await parseItemsResponse(response, "local portfolio-queue items API");
@@ -86,6 +94,7 @@ export function releasePortfolioQueueItem(
   item: Pick<PortfolioQueueActionItem, "repoFullName" | "identifier" | "apiBaseUrl">,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PortfolioQueueActionResult> {
+  if (isDemoMode()) return Promise.resolve(demoReleasePortfolioQueueItem(item));
   return postPortfolioQueueAction(PORTFOLIO_QUEUE_RELEASE_API_PATH, item, fetchImpl);
 }
 
@@ -94,6 +103,7 @@ export function requeuePortfolioQueueItem(
   item: Pick<PortfolioQueueActionItem, "repoFullName" | "identifier" | "apiBaseUrl">,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PortfolioQueueActionResult> {
+  if (isDemoMode()) return Promise.resolve(demoRequeuePortfolioQueueItem(item));
   return postPortfolioQueueAction(PORTFOLIO_QUEUE_REQUEUE_API_PATH, item, fetchImpl);
 }
 

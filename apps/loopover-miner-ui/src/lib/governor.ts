@@ -3,6 +3,9 @@
 // response, a guard narrowing the parsed JSON payload) but adds two WRITE actions, the miner-ui's first — safe
 // only because vite-auth.ts (#4858) now authenticates every /api/* request, including these.
 
+import { demoFetchGovernorPauseState, demoPauseGovernor, demoResumeGovernor } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const GOVERNOR_PAUSE_STATE_API_PATH = "/api/governor/pause-state";
 export const GOVERNOR_PAUSE_API_PATH = "/api/governor/pause";
 export const GOVERNOR_RESUME_API_PATH = "/api/governor/resume";
@@ -36,6 +39,7 @@ async function parseGovernorPauseStateResponse(
 
 /** Fetch the governor's current pause state; failures surface as a typed error result the view renders, never a crash. */
 export async function fetchGovernorPauseState(fetchImpl: typeof fetch = fetch): Promise<GovernorPauseStateResult> {
+  if (isDemoMode()) return demoFetchGovernorPauseState();
   try {
     const response = await fetchImpl(GOVERNOR_PAUSE_STATE_API_PATH);
     return await parseGovernorPauseStateResponse(response, "local governor pause-state API");
@@ -69,10 +73,12 @@ async function postGovernorAction(
 
 /** Pause the governor, optionally with a reason (mirrors `loopover-miner governor pause [--reason <text>]`). */
 export function pauseGovernor(reason?: string, fetchImpl: typeof fetch = fetch): Promise<GovernorPauseStateResult> {
+  if (isDemoMode()) return Promise.resolve(demoPauseGovernor(reason));
   return postGovernorAction(GOVERNOR_PAUSE_API_PATH, reason ? { reason } : {}, fetchImpl);
 }
 
 /** Resume the governor (mirrors `loopover-miner governor resume`). */
 export function resumeGovernor(fetchImpl: typeof fetch = fetch): Promise<GovernorPauseStateResult> {
+  if (isDemoMode()) return Promise.resolve(demoResumeGovernor());
   return postGovernorAction(GOVERNOR_RESUME_API_PATH, {}, fetchImpl);
 }

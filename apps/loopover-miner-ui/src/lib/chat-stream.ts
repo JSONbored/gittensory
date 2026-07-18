@@ -7,6 +7,9 @@
 // stream. A validation failure comes back as a plain non-streamed 4xx JSON body, surfaced here as a thrown error
 // before any token is yielded.
 
+import { demoStreamChat } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 /** The wire event union the endpoint emits (mirrored from vite-chat-api.ts's `ChatSseEvent`; the app
  *  deliberately doesn't import the server plugin module just for its type). */
 export type ChatStreamEvent =
@@ -41,6 +44,10 @@ export async function* streamChat(
   messages: ChatWireMessage[],
   fetchImpl: FetchImpl = (input, init) => fetch(input, init),
 ): AsyncGenerator<string> {
+  if (isDemoMode()) {
+    yield* demoStreamChat();
+    return;
+  }
   const response = await fetchImpl(CHAT_API_PATH, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

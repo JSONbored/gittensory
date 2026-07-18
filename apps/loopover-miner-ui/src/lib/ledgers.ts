@@ -4,6 +4,9 @@
 // enforce). This client just fetches that summary and validates its shape; a failure surfaces as a typed error
 // result the view renders, never a crash.
 
+import { demoFetchLedgers } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const LEDGERS_API_PATH = "/api/ledgers";
 
 export const CLAIM_STATUSES = ["active", "released", "expired"] as const;
@@ -56,6 +59,7 @@ function isLedgersSummary(value: unknown): value is LedgersSummary {
 
 /** Fetch the local ledgers summary; failures surface as a typed error result the view renders, never a crash. */
 export async function fetchLedgers(fetchImpl: typeof fetch = fetch): Promise<LedgersResult> {
+  if (isDemoMode()) return demoFetchLedgers();
   try {
     const response = await fetchImpl(LEDGERS_API_PATH);
     if (!response.ok) return { ok: false, error: `local ledgers API responded ${response.status}` };

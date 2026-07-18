@@ -3,6 +3,9 @@
 // endpoint (see `vite-run-state-api.ts`), which itself calls into `packages/loopover-miner/lib/run-state.js`'s
 // existing exports.
 
+import { demoFetchRunStates } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const RUN_STATE_API_PATH = "/api/run-state";
 
 /** One `miner_run_state` row as served by the local API — mirrors `run-state.js`'s row shape. */
@@ -45,6 +48,7 @@ export function runStateRowKey(row: Pick<RunStateRow, "apiBaseUrl" | "repoFullNa
 /** Fetch the local run-state rows. Failures (server down, malformed payload) surface as a typed error result —
  *  the view renders them as a message, never a crash. `fetchImpl` is injectable for tests. */
 export async function fetchRunStates(fetchImpl: typeof fetch = fetch): Promise<RunHistoryResult> {
+  if (isDemoMode()) return demoFetchRunStates();
   try {
     const response = await fetchImpl(RUN_STATE_API_PATH);
     if (!response.ok) return { ok: false, error: `local run-state API responded ${response.status}` };

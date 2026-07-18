@@ -4,6 +4,9 @@
 // request. `/api/attempt` can run for minutes (a real worktree + coding-agent iteration), so a caller that needs
 // a deadline applies it here at the fetch layer — the route imposes none.
 
+import { demoRequestAttempt } from "./demo-data";
+import { isDemoMode } from "./demo-mode";
+
 export const ATTEMPT_API_PATH = "/api/attempt";
 
 /** Non-secret attempt inputs — never a credential; `runAttempt` resolves its own token server-side. */
@@ -44,6 +47,7 @@ export async function requestAttempt(
   input: AttemptActionInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<AttemptActionResult> {
+  if (isDemoMode()) return demoRequestAttempt(input);
   try {
     const response = await fetchImpl(ATTEMPT_API_PATH, {
       method: "POST",

@@ -165,10 +165,8 @@ describe("Codecov policy", () => {
     expect(trustedWith.token).toBe("${{ secrets.CODECOV_TOKEN }}");
   });
 
-  it("uploads loopover-ui's bundle stats without letting an upload hiccup fail CI", () => {
-    // loopover-miner-ui deliberately has no build step in this job at all (self-hosted operator
-    // dashboard, not something we deploy -- see "UI build"'s own comment), so there is nothing to
-    // upload bundle stats for on that app here.
+  it("uploads loopover-ui and loopover-miner-ui bundle stats without letting an upload hiccup fail CI", () => {
+    // Both SPAs now have a CI build step (#5963 added miner-ui); bundle uploads stay non-blocking.
     const workflow = readYaml(".github/workflows/ci.yml");
     const validateCode = nestedRecord(workflow, ["jobs", "validate-code"]);
     const steps = recordArray(validateCode.steps, "jobs.validate-code.steps");
@@ -178,6 +176,9 @@ describe("Codecov policy", () => {
     expect(buildIndex).toBeGreaterThan(-1);
     expect(bundleIndex).toBeGreaterThan(buildIndex);
 
+    const buildStep = steps[buildIndex]!;
+    expect(String(buildStep.run)).toContain("npm --workspace @loopover/ui-miner run build");
+
     const bundleStep = steps[bundleIndex]!;
     // Unlike the coverage uploads above, nothing gates a merge on bundle size -- a Codecov outage or a
     // missing token must never fail CI for an otherwise-honest PR.
@@ -185,7 +186,9 @@ describe("Codecov policy", () => {
     expect(String(bundleStep.if)).toContain("github.event.pull_request.head.repo.fork != true");
     const bundleEnv = record(bundleStep.env, "bundle step env");
     expect(bundleEnv.CODECOV_TOKEN).toBe("${{ secrets.CODECOV_TOKEN }}");
-    expect(bundleStep.run).toBe("npm run bundle-analysis --workspace @loopover/ui");
+    expect(bundleStep.run).toBe(
+      "npm run bundle-analysis --workspace @loopover/ui && npm run bundle-analysis --workspace @loopover/ui-miner",
+    );
 
     const uiPkg = JSON.parse(readFileSync("apps/loopover-ui/package.json", "utf8")) as {
       scripts: Record<string, string>;
@@ -195,6 +198,16 @@ describe("Codecov policy", () => {
       "bundle-analyzer ./dist/client --bundle-name=loopover-ui --upload-token=$CODECOV_TOKEN",
     );
     expect(uiPkg.devDependencies["@codecov/bundle-analyzer"]).toBeDefined();
+
+    const minerUiPkg = JSON.parse(readFileSync("apps/loopover-miner-ui/package.json", "utf8")) as {
+      scripts: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    expect(minerUiPkg.scripts["bundle-analysis"]).toBe(
+      "bundle-analyzer ./dist --bundle-name=loopover-miner-ui --upload-token=$CODECOV_TOKEN",
+    );
+    expect(minerUiPkg.scripts["build:demo"]).toBe("vite build --mode demo");
+    expect(minerUiPkg.devDependencies["@codecov/bundle-analyzer"]).toBeDefined();
   });
 
   it("captures review-enrichment node:test coverage for Codecov (#6250)", () => {

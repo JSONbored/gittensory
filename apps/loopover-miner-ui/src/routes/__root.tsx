@@ -1,8 +1,10 @@
 import { Outlet, createRootRoute, Link } from "@tanstack/react-router";
 import * as React from "react";
+import { DemoModeBanner } from "@/components/demo-mode-banner";
 import { GrafanaFooterLink } from "@/components/grafana-footer-link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ChatRail } from "@/components/chat-rail";
+import { isDemoMode } from "@/lib/demo-mode";
 
 export const Route = createRootRoute({
   component: RootComponent,
@@ -41,11 +43,14 @@ export function RootShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <DemoModeBanner />
       <header className="sticky top-0 z-40 border-b-hairline bg-background/85 backdrop-blur">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6">
           <div className="min-w-0 flex-1">
             <p className="text-token-xs uppercase tracking-[0.2em] text-primary font-mono">LoopOver Miner</p>
-            <h1 className="text-token-lg font-display font-semibold">Local dashboard</h1>
+            <h1 className="text-token-lg font-display font-semibold">
+              {isDemoMode() ? "Demo dashboard" : "Local dashboard"}
+            </h1>
           </div>
           <nav
             aria-label="Primary"

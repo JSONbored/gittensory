@@ -8,7 +8,11 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
+    "build:demo": "vite build --mode demo",
     "preview": "vite preview",
+    "preview:demo": "vite preview --mode demo",
+    "bundle-analysis": "bundle-analyzer ./dist --bundle-name=loopover-miner-ui --upload-token=$CODECOV_TOKEN",
+    "deploy:demo": "npm run build:demo && wrangler deploy",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --coverage",
@@ -26,6 +30,7 @@
     "vite-tsconfig-paths": "^6.1.1"
   },
   "devDependencies": {
+    "@codecov/bundle-analyzer": "^2.0.1",
     "@eslint/js": "^9.39.4",
     "@tanstack/router-plugin": "^1.168.19",
     "@testing-library/dom": "^10.4.1",

@@ -512,22 +512,22 @@ jobs:
       # steps directly instead of the aggregate script, skipping that redundant regen.
       - name: UI build
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
-        run: npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build
-      # Bundle-size regression tracking for the deployed marketing/product site (loopover-ui only --
-      # loopover-miner-ui is a self-hosted operator dashboard with no build step in this job at all, see
-      # "UI build" above). Fork-excluded (no secrets.CODECOV_TOKEN on a fork PR, same boundary as the
-      # coverage-upload steps below) and non-blocking (continue-on-error): unlike coverage, nothing gates
-      # merges on bundle size, so an upload hiccup must never fail CI. Uses @codecov/bundle-analyzer's
-      # standalone CLI against the built dist/client directly rather than a bundler-plugin hook --
-      # @codecov/vite-plugin's latest release doesn't support this repo's Vite 8 yet (peer range caps at
-      # 6.x; this repo's Vite 8 runs on rolldown, not classic rollup, so @codecov/rollup-plugin doesn't fit
-      # either) -- revisit wiring the plugin in once upstream catches up.
+        run: npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build && npm --workspace @loopover/ui-miner run build
+      # Bundle-size regression tracking for the deployed marketing/product site (loopover-ui) and the
+      # miner-ui demo/self-host SPA (loopover-miner-ui, #5963). Fork-excluded (no secrets.CODECOV_TOKEN
+      # on a fork PR, same boundary as the coverage-upload steps below) and non-blocking
+      # (continue-on-error): unlike coverage, nothing gates merges on bundle size, so an upload hiccup
+      # must never fail CI. Uses @codecov/bundle-analyzer's standalone CLI against the built dist
+      # directly rather than a bundler-plugin hook -- @codecov/vite-plugin's latest release doesn't
+      # support this repo's Vite 8 yet (peer range caps at 6.x; this repo's Vite 8 runs on rolldown,
+      # not classic rollup, so @codecov/rollup-plugin doesn't fit either) -- revisit wiring the plugin
+      # in once upstream catches up.
       - name: Upload UI bundle stats to Codecov
         if: ${{ (github.event_name == 'push' || needs.changes.outputs.ui == 'true') && github.event.pull_request.head.repo.fork != true }}
         continue-on-error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        run: npm run bundle-analysis --workspace @loopover/ui
+        run: npm run bundle-analysis --workspace @loopover/ui && npm run bundle-analysis --workspace @loopover/ui-miner
 
   # The full-suite coverage run, sharded (#ci-shard-coverage). This alone was ~9-10 of the ~11 minutes a
   # typical backend PR spent in validate-code, because vitest schedules whole test FILES atomically to

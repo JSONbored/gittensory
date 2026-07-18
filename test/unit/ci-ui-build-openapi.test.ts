@@ -16,7 +16,7 @@ describe("UI build steps skip the redundant OpenAPI regen", () => {
     const step = workflow.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
 
     expect(step).toContain(
-      "run: npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build",
+      "run: npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build && npm --workspace @loopover/ui-miner run build",
     );
     expect(step).not.toContain("npm run ui:build");
   });
@@ -28,5 +28,12 @@ describe("UI build steps skip the redundant OpenAPI regen", () => {
       "run: npm run ui:openapi:check && npm run ui:lint && npm run ui:typecheck && npm run extension:lint && npm run miner-extension:lint && npm run extension:typecheck && npm run miner-extension:typecheck && npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build",
     );
     expect(workflow).not.toContain("&& npm run ui:build");
+  });
+
+  it("miner-ui-demo-deploy.yml builds the demo mode SPA on workflow_dispatch (#5963)", () => {
+    const workflow = read(".github/workflows/miner-ui-demo-deploy.yml");
+    expect(workflow).toContain("workflow_dispatch");
+    expect(workflow).toContain("npm --workspace @loopover/ui-miner run build:demo");
+    expect(workflow).toContain("npx wrangler deploy");
   });
 });

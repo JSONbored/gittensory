@@ -2,20 +2,37 @@
 
 Local, read-only dashboard for a laptop or fleet miner instance. It mirrors the main
 `apps/loopover-ui/` tooling versions (React 19, TanStack Router, Vite, Tailwind v4) but intentionally
-does **not** adopt that app's Cloudflare Worker deploy model or `@lovable.dev/*` scaffold dependency.
+does **not** adopt that app's Nitro SSR / production Cloudflare deploy model or `@lovable.dev/*`
+scaffold dependency.
 
 The miner package invariant is client-side only with no required phone-home to boot
-(`packages/loopover-miner/DEPLOYMENT.md`). This app is a plain Vite dev server / static build that a
-local miner CLI can serve later — not a Wrangler deploy target.
+(`packages/loopover-miner/DEPLOYMENT.md`). Self-host operators run a plain Vite dev server / static
+build with local SQLite-backed `/api/*` plugins. Separately, a **demo-mode** static build
+(`VITE_DEMO_MODE`, #5963) deploys as Workers Static Assets for a public prototype that informs
+#5229 — synthetic data only, no operator credentials.
 
 The Phase 6 data views have shipped: an overview summary (`routes/index.tsx`, #4853) alongside dedicated
-run-history, portfolio, and ledgers views, each fed by the local read-only `/api/*` endpoints below.
+run-history, portfolio, and ledgers views, each fed by the local read-only `/api/*` endpoints below
+(or by in-bundle demo fixtures when `VITE_DEMO_MODE=true`).
 
 ## Configuration
 
 | Env var                     | Required | Description                                                                                                                                                                                                                                            |
 | --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `VITE_MINER_UI_GRAFANA_URL` | No       | If set (and non-empty), renders a footer link to your ORB/Grafana dashboard at this URL. Unset ⇒ no link. Must be `VITE_`-prefixed so Vite exposes it to the client bundle. It is a plain navigational link — no token or credential is ever appended. |
+| `VITE_DEMO_MODE`            | No       | When `"true"` (baked by `npm run build:demo` / `vite build --mode demo` via `vite.config.ts`), client fetchers serve synthetic sample data and skip `/api/*`. Used for the public Cloudflare Worker demo only — never for a real miner.                |
+
+## Public demo Worker (#5963)
+
+```bash
+npm --workspace @loopover/ui-kit run build
+npm --workspace @loopover/ui-miner run build:demo   # vite build --mode demo
+npm --workspace @loopover/ui-miner run deploy:demo  # wrangler deploy → loopover-miner-ui-demo
+```
+
+Or trigger `.github/workflows/miner-ui-demo-deploy.yml` (`workflow_dispatch`). Custom domain routes are
+omitted until DNS is provisioned; the Worker publishes on `*.workers.dev`. This demo is **not** a
+decision that hosted AMS ships a web dashboard — that remains #5229.
 
 ## Local API authentication
 

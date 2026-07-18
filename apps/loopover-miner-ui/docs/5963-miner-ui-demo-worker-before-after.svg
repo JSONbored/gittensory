@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-label="Before and after for miner-ui demo mode (#5963)">
+  <rect width="960" height="420" fill="#0f1419"/>
+  <text x="24" y="36" fill="#8b9bab" font-family="ui-monospace,monospace" font-size="14">#5963 miner-ui public demo Worker</text>
+
+  <rect x="24" y="56" width="440" height="340" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="40" y="88" fill="#f85149" font-family="ui-sans-serif,system-ui" font-size="16" font-weight="600">Before</text>
+  <text x="40" y="120" fill="#c9d1d9" font-family="ui-sans-serif,system-ui" font-size="14">Self-host only (Vite + SQLite APIs)</text>
+  <text x="40" y="148" fill="#8b9bab" font-family="ui-sans-serif,system-ui" font-size="13">No CI build / no CF Worker / no public URL</text>
+  <text x="40" y="176" fill="#8b9bab" font-family="ui-sans-serif,system-ui" font-size="13">#5229 evaluated without a working prototype</text>
+  <rect x="40" y="210" width="400" height="150" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="56" y="240" fill="#8b9bab" font-family="ui-monospace,monospace" font-size="12">Local dashboard</text>
+  <text x="56" y="270" fill="#484f58" font-family="ui-sans-serif,system-ui" font-size="12">[ empty / needs operator host ]</text>
+  <text x="56" y="300" fill="#484f58" font-family="ui-sans-serif,system-ui" font-size="12">/api/* ’ node:sqlite (not on CF)</text>
+
+  <rect x="496" y="56" width="440" height="340" rx="8" fill="#161b22" stroke="#238636"/>
+  <text x="512" y="88" fill="#3fb950" font-family="ui-sans-serif,system-ui" font-size="16" font-weight="600">After</text>
+  <text x="512" y="120" fill="#c9d1d9" font-family="ui-sans-serif,system-ui" font-size="14">VITE_DEMO_MODE static SPA on Workers</text>
+  <text x="512" y="148" fill="#8b9bab" font-family="ui-sans-serif,system-ui" font-size="13">CI build + Codecov bundle + workflow_dispatch deploy</text>
+  <text x="512" y="176" fill="#8b9bab" font-family="ui-sans-serif,system-ui" font-size="13">Synthetic fixtures  no credentials / live ledgers</text>
+  <rect x="512" y="210" width="400" height="150" rx="6" fill="#0d1117" stroke="#238636"/>
+  <text x="528" y="240" fill="#3fb950" font-family="ui-monospace,monospace" font-size="12">Demo dashboard</text>
+  <text x="528" y="268" fill="#c9d1d9" font-family="ui-sans-serif,system-ui" font-size="12">Public demo  synthetic sample data only</text>
+  <text x="528" y="296" fill="#8b9bab" font-family="ui-sans-serif,system-ui" font-size="12">run-history / portfolio / ledgers / chat canned</text>
+  <text x="528" y="324" fill="#8b9bab" font-family="ui-sans-serif,system-ui" font-size="12">Worker: loopover-miner-ui-demo</text>
+</svg>
