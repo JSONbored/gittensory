@@ -33,6 +33,15 @@ open indefinitely looking like backlog when it isn't. This has already happened 
 repo (a whole "HELD tracker" milestone with 47/48 items silently done, several individual issues) —
 assume it keeps happening, don't assume today's backlog is clean.
 
+**Verify against synced upstream, not a stale local checkout.** Before treating any local grep/read
+as evidence that an issue's described work does or doesn't exist, confirm the code you're reading
+matches the default branch's current tip — fetch and fast-forward the checkout (or use a disposable
+worktree off `origin/main` if the primary checkout is dirty or has unpushed work on another branch)
+before doing any verification. A checkout that's merely _clean_ isn't the same as _current_ — a
+stale-but-clean checkout silently produced false "already done"/"not done" conclusions here and in a
+sibling repo's gardening run on 2026-07-17/18, causing duplicate issues to be filed for already-shipped
+work. Confirm sync every run; never assume a previous run's freshness carried over.
+
 **Method — GitHub's cross-reference timeline, not text search:**
 
 1. Pull the full open-issue list: `gh issue list --repo JSONbored/loopover --state open --limit 1000 --json number,title,labels,milestone,createdAt`.
