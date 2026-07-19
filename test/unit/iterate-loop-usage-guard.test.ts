@@ -83,4 +83,16 @@ describe("runIterateLoop usage guard (#5827)", () => {
     expect(result.finalMeterTotals.turns).toBe(0);
     expect(result.finalMeterTotals.costUsd).toBe(0.02);
   });
+
+  it("clamps out-of-contract turnsUsed/costUsd out of the totalTurnsUsed/totalCostUsd accumulators too (#7246)", async () => {
+    for (const bad of [Number.NaN, -5, Number.POSITIVE_INFINITY]) {
+      const { deps } = collectingDeps(driverReturning({ ok: true, changedFiles: ["src/upload.ts"], summary: "x", turnsUsed: bad as number, costUsd: bad as number }));
+      const result = await runIterateLoop(passingInput(), deps);
+      // Before #7246 these used only `?? 0`, so NaN/negative/Infinity flowed straight into the running totals.
+      expect(result.totalTurnsUsed).toBe(0);
+      expect(result.totalCostUsd).toBe(0);
+      expect(Number.isFinite(result.totalTurnsUsed)).toBe(true);
+      expect(Number.isFinite(result.totalCostUsd)).toBe(true);
+    }
+  });
 });

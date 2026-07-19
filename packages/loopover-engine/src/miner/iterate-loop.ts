@@ -420,8 +420,8 @@ async function runIterateLoopCore(input: IterateLoopInput, deps: IterateLoopDeps
       maxTurns: input.maxTurnsPerIteration,
     });
     const iterationElapsedMs = Math.max(0, nowMs() - iterationStartMs);
-    totalTurnsUsed += driverResult.turnsUsed ?? 0;
-    totalCostUsd += driverResult.costUsd ?? 0;
+    totalTurnsUsed += finiteNonNegativeUsage(driverResult.turnsUsed);
+    totalCostUsd += finiteNonNegativeUsage(driverResult.costUsd);
     // Real per-iteration tokens (#5653): CodingAgentDriverResult.tokensUsed is now populated by every driver
     // that reports one (Agent SDK's own result-message usage, or CLI JSON/JSONL stdout) -- 0 only when the
     // driver genuinely reports no token signal for this iteration, same honest-absence discipline as costUsd.
