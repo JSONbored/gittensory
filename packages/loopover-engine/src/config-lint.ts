@@ -63,7 +63,7 @@ export function lintManifestText(text: string | null | undefined): SelfHostConfi
 }
 
 function recognizedFieldsFor(text: string | null | undefined): string[] {
-  const parsed = parseCanonicalTopLevelObject(text);
+  const parsed = parseManifestTopLevelObject(text);
   if (parsed === null) return [];
   return TOP_LEVEL_FIELDS.filter(
     (field) => field !== "source" && Object.prototype.hasOwnProperty.call(parsed, field),
@@ -77,10 +77,7 @@ const RETIRED_FIELD_MIGRATION_WARNINGS: Record<string, string> = {
 };
 
 export function unknownTopLevelWarnings(text: string | null | undefined): string[] {
-  const raw = text ?? "";
-  const trimmed = raw.trim();
-  if (!trimmed || isOversize(raw)) return [];
-  const parsed = parseTopLevelObject(trimmed);
+  const parsed = parseManifestTopLevelObject(text);
   if (parsed === null) return [];
   const keys = Object.keys(parsed).filter((key) => !TOP_LEVEL_FIELD_SET.has(key));
   // `hasOwnProperty.call`, NOT `key in`: a manifest field named like an Object.prototype member
@@ -96,30 +93,24 @@ export function unknownTopLevelWarnings(text: string | null | undefined): string
   ];
 }
 
-function parseCanonicalTopLevelObject(text: string | null | undefined): Record<string, unknown> | null {
+// Single top-level-object parser shared by both `recognizedFieldsFor` and `unknownTopLevelWarnings` so the two
+// can never disagree on whether a given manifest text parses. When the text looks like JSON (`{`/`[`) but
+// `JSON.parse` throws, it retries with `parseYaml`: YAML flow mappings can start with "{" or "[" (e.g. unquoted
+// keys) while still being valid manifest syntax, so a strict-JSON failure alone must not be treated as unparseable.
+function parseManifestTopLevelObject(text: string | null | undefined): Record<string, unknown> | null {
   const raw = text ?? "";
   const trimmed = raw.trim();
   if (!trimmed || isOversize(raw)) return null;
   const looksLikeJson = trimmed.startsWith("{") || trimmed.startsWith("[");
-  try {
-    return topLevelObjectOrNull(looksLikeJson ? JSON.parse(trimmed) : parseYaml(trimmed));
-  } catch {
-    return null;
-  }
-}
-
-function parseTopLevelObject(text: string): Record<string, unknown> | null {
-  const looksLikeJson = text.startsWith("{") || text.startsWith("[");
   if (looksLikeJson) {
     try {
-      const parsed = JSON.parse(text);
-      return topLevelObjectOrNull(parsed);
+      return topLevelObjectOrNull(JSON.parse(trimmed));
     } catch {
-      // YAML flow mappings can start with "{" or "[" while still being valid manifest syntax.
+      // Fall through to YAML: a `{`/`[` prefix can be a valid YAML flow mapping that is invalid strict JSON.
     }
   }
   try {
-    return topLevelObjectOrNull(parseYaml(text));
+    return topLevelObjectOrNull(parseYaml(trimmed));
   } catch {
     return null;
   }

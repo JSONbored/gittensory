@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lintManifestText } from "../../src/selfhost/config-lint";
+import { lintManifestText, unknownTopLevelWarnings } from "../../src/selfhost/config-lint";
 import { MAX_FOCUS_MANIFEST_BYTES } from "../../src/signals/focus-manifest";
 
 describe("lintManifestText (#2079)", () => {
@@ -271,12 +271,29 @@ unknownSecretKey: super-secret-value
     const result = lintManifestText("{wantedPaths: [src/], unknownSecretKey: secret}");
 
     expect(result.ok).toBe(false);
-    expect(result.recognizedFields).toEqual([]);
+    // recognizedFieldsFor now applies the same JSON->YAML fallback as unknownTopLevelWarnings, so a flow-mapping
+    // manifest that is valid YAML but invalid strict JSON reports its real recognized fields instead of [].
+    expect(result.recognizedFields).toEqual(["wantedPaths"]);
     expect(result.warnings).toEqual([
       "Manifest content was not valid JSON; ignoring it and falling back to deterministic signals.",
       "Manifest contains unknown top-level field: unknownSecretKey.",
     ]);
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("REGRESSION (#7244): recognizes fields in a YAML flow-mapping manifest starting with '{' consistently with unknown-field detection", () => {
+    // `{settings: ..., wantedPaths: ..., mysteryKey: ...}` is a valid YAML flow mapping but invalid strict JSON
+    // (unquoted keys). unknownTopLevelWarnings already fell back to YAML and saw the real fields; recognizedFieldsFor
+    // did NOT (it caught the JSON.parse failure and returned null -> []), so buildConfigLintReport silently reported
+    // zero recognized fields for a fully-parseable, valid manifest. Both must now agree the manifest parses.
+    const text = "{settings: {commentMode: all_prs}, wantedPaths: [src/], mysteryKey: hidden}";
+    const result = lintManifestText(text);
+
+    // recognizedFieldsFor (surfaced via result.recognizedFields) sees the real fields instead of silently empty.
+    expect(result.recognizedFields).toEqual(["wantedPaths", "settings"]);
+    // ...consistent with unknownTopLevelWarnings, which flags the unknown key on the SAME parsed object.
+    expect(unknownTopLevelWarnings(text)).toEqual(["Manifest contains unknown top-level field: mysteryKey."]);
+    expect(JSON.stringify(result)).not.toContain("hidden");
   });
 
   it("keeps known JSON manifests quiet and non-object JSON invalid", () => {
