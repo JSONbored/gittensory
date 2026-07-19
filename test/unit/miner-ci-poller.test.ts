@@ -433,3 +433,106 @@ describe("miner CI check-run poller (#2323)", () => {
     timeoutSpy.mockRestore();
   });
 });
+
+describe("miner CI poller — input/normalization edge cases", () => {
+  it("treats an empty apiBaseUrl string as 'use the default GitHub base'", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://api.github.com/repos/acme/widgets/pulls/42") return prResponse("head-sha");
+      if (url === "https://api.github.com/repos/acme/widgets/commits/head-sha/check-runs?per_page=100&page=1") {
+        return checksResponse([checkRun("validate", "completed", "success")]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    await expect(pollCheckRuns("acme/widgets", 42, { apiBaseUrl: "", fetchFn })).resolves.toMatchObject({ conclusion: "success" });
+  });
+
+  it("rejects a non-string repoFullName before any fetch", async () => {
+    const fetchFn = vi.fn();
+    await expect(pollCheckRuns(42 as unknown as string, 1, { apiBaseUrl: API, fetchFn })).rejects.toThrow("invalid_repo_full_name");
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a github error whose body carries no message as the bare status code", async () => {
+    // A 5xx with no `message` in the JSON body: fetchWithRetry rides it out to exhaustion, then githubError
+    // formats it as the bare `github_500` (the no-message ternary arms), not `github_500: <text>`.
+    const fetchFn = vi.fn(async () => jsonResponse({}, { status: 500 }));
+    await expect(
+      pollCheckRuns("acme/widgets", 11, { apiBaseUrl: API, fetchFn, sleepFn: () => Promise.resolve() }),
+    ).rejects.toMatchObject({ code: "github_500", message: "github_500" });
+  });
+
+  it("treats a response whose json() rejects as a null payload (missing head SHA)", async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => {
+        throw new Error("invalid json");
+      },
+    }));
+    await expect(
+      pollCheckRuns("acme/widgets", 42, { apiBaseUrl: API, fetchFn: fetchFn as never }),
+    ).rejects.toThrow("github_pr_head_sha_missing");
+  });
+
+  it("normalizes null / non-object / unknown-conclusion check-run entries without crashing", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(prResponse("head-sha"))
+      .mockResolvedValueOnce(
+        checksResponse([null, "not-an-object", { status: "completed", conclusion: "mystery_conclusion" }, {}]),
+      );
+    const result = await pollCheckRuns("acme/widgets", 42, { apiBaseUrl: API, fetchFn });
+    expect(result.conclusion).toBe("pending");
+    expect(result.checks.map((c) => c.conclusion)).toEqual(["pending", "pending", "pending", "pending"]);
+    expect(result.checks.map((c) => c.name)).toEqual(["", "", "", ""]);
+    // The completed-but-unknown-conclusion entry keeps its real status but normalizes conclusion to pending.
+    expect(result.checks[2]).toMatchObject({ status: "completed", conclusion: "pending" });
+    // The null / non-object / empty entries default status to "unknown".
+    expect(result.checks[0]).toMatchObject({ status: "unknown", detailsUrl: null, startedAt: null, completedAt: null });
+  });
+
+  it("throws when a later page returns zero checks while pagination is still incomplete", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/pulls/42")) return prResponse("head-sha");
+      if (url.endsWith("page=1")) {
+        // Non-empty page 1 with a rel="next" link AND a higher total_count forces continuation to page 2.
+        return jsonResponse(
+          { total_count: 5, check_runs: [checkRun("validate", "in_progress")] },
+          { headers: { link: `<${API}/repos/acme/widgets/commits/head-sha/check-runs?per_page=100&page=2>; rel="next"` } },
+        );
+      }
+      // Page 2: empty check_runs, NO total_count, no next link -> no progress possible -> pagination-incomplete.
+      return jsonResponse({ check_runs: [] });
+    });
+    await expect(
+      pollCheckRuns("acme/widgets", 42, { apiBaseUrl: API, fetchFn }),
+    ).rejects.toThrow("github_check_runs_pagination_incomplete");
+  });
+
+  it("uses the global fetch and the built-in setTimeout sleep when fetchFn and sleepFn are omitted", async () => {
+    const stub = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/pulls/42")) return prResponse("head-sha");
+      if (url.includes("/check-runs")) {
+        const priorCheckRuns = stub.mock.calls.filter(([request]) => String(request).includes("/check-runs")).length;
+        return priorCheckRuns === 1
+          ? checksResponse([checkRun("validate", "queued")])
+          : checksResponse([checkRun("validate", "completed", "success")]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    vi.stubGlobal("fetch", stub);
+    try {
+      // No fetchFn (-> global fetch fallback) and no sleepFn (-> the default setTimeout-based sleeper), with a 1ms
+      // backoff so the one real pending->terminal retry stays instant.
+      const result = await pollCheckRuns("acme/widgets", 42, { apiBaseUrl: API, maxAttempts: 2, minIntervalMs: 1, maxIntervalMs: 1 });
+      expect(result.conclusion).toBe("success");
+      expect(stub).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

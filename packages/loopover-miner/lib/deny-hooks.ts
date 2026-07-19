@@ -4,4 +4,4 @@
 // pure (no IO, no globals, no Date/random). The type contract (DenyRule/DenyVerdict/ProposedToolCall) is the same
 // shape the engine module implements, re-exported here so this module's own public surface is unchanged.
 export { DEFAULT_DENY_RULES, evaluateDenyHooks } from "@loopover/engine";
-//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiZGVueS1ob29rcy5qcyIsInNvdXJjZVJvb3QiOiIiLCJzb3VyY2VzIjpbImRlbnktaG9va3MudHMiXSwibmFtZXMiOltdLCJtYXBwaW5ncyI6IkFBQUEsK0dBQStHO0FBQy9HLHlHQUF5RztBQUN6RyxrSEFBa0g7QUFDbEgsa0hBQWtIO0FBQ2xILHlHQUF5RztBQUN6RyxPQUFPLEVBQUUsa0JBQWtCLEVBQUUsaUJBQWlCLEVBQUUsTUFBTSxrQkFBa0IsQ0FBQyJ9
+export type { DenyRule, DenyVerdict, ProposedToolCall } from "@loopover/engine";

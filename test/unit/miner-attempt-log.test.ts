@@ -210,6 +210,53 @@ describe("loopover-miner attempt log (#4294)", () => {
     expect(() => log.readAttemptLogEvents()).toThrow("corrupted_attempt_log_row");
   });
 
+  it("rejects a payload blob that parses to a valid-JSON NON-object (scalar/array) on read", () => {
+    // Distinct from "{bad" above (JSON.parse throws): here JSON.parse SUCCEEDS but yields a non-object, so the
+    // explicit shape guard in rowToEntry throws rather than the parse catch.
+    const log = tempAttemptLog();
+    log.appendAttemptLogEvent({ eventType: "attempt_started", ...baseEvent });
+    const raw = new DatabaseSync(log.dbPath);
+    raw.prepare("UPDATE attempt_log_events SET payload_json = ? WHERE id = 1").run("123");
+    raw.close();
+    expect(() => log.readAttemptLogEvents()).toThrow("corrupted_attempt_log_row");
+  });
+
+  it("requires an explicit attempt id to export (a nullish id is not a valid scope)", () => {
+    const log = tempAttemptLog();
+    expect(() => log.exportAttemptLogJsonl(undefined as unknown as string)).toThrow(/invalid_attempt_id/);
+    expect(() => log.exportAttemptLogJsonl(null as unknown as string)).toThrow(/invalid_attempt_id/);
+  });
+
+  it("rolls back and rethrows when the INSERT fails inside the append transaction", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-log-rollback-"));
+    roots.push(root);
+    const dbPath = join(root, "attempt-log.sqlite3");
+    // Pre-create the store with a BEFORE INSERT trigger that aborts every append -- a deterministic DB-level
+    // failure inside appendAttemptLogEvent's transaction, exercising its ROLLBACK + rethrow path.
+    const raw = new DatabaseSync(dbPath);
+    raw.exec(`
+      CREATE TABLE attempt_log_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seq INTEGER NOT NULL UNIQUE,
+        attempt_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        action_class TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
+    raw.exec("CREATE TRIGGER boom BEFORE INSERT ON attempt_log_events BEGIN SELECT RAISE(ABORT, 'insert_blocked'); END;");
+    raw.close();
+
+    const log = initAttemptLog(dbPath);
+    logs.push(log);
+    expect(() => log.appendAttemptLogEvent({ eventType: "attempt_started", ...baseEvent })).toThrow();
+    // The aborted transaction rolled back cleanly: no partial row leaked.
+    expect(log.readAttemptLogEvents()).toEqual([]);
+  });
+
   it("uses the default singleton helpers and closes cleanly", () => {
     const root = mkdtempSync(join(tmpdir(), "loopover-miner-attempt-log-default-"));
     roots.push(root);

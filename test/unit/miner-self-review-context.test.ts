@@ -743,4 +743,295 @@ describe("live gate thresholds probe (#6487)", () => {
     expect(timeoutSpy.mock.calls.some(([ms]) => ms === 350)).toBe(true);
     timeoutSpy.mockRestore();
   });
+
+  it("applyLiveGateThresholdsToManifest applies scope caps even when confidence_floor is null (readiness untouched)", () => {
+    const base = parseFocusManifestContent("gate:\n  readiness:\n    mode: block\n    minScore: 70\n  size:\n    mode: block\n    maxFiles: 20\n    maxLines: 500\n", "repo_file");
+    const overlaid = applyLiveGateThresholdsToManifest(base, { confidence_floor: null, scope_cap_files: 5, scope_cap_lines: 100 });
+    expect(overlaid.gate.readinessMinScore).toBe(70);
+    expect(overlaid.gate.sizeMaxFiles).toBe(5);
+    expect(overlaid.gate.sizeMaxLines).toBe(100);
+  });
+
+  it("defaults the ORB base URL when loopoverAuth carries a session token but no apiUrl", async () => {
+    const fetchImpl = routedFetch({
+      "/live-gate-thresholds": () => jsonResponse({ confidence_floor: 0.8, scope_cap_files: null, scope_cap_lines: null }),
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => textResponse("gate:\n  readiness:\n    mode: block\n    minScore: 10\n"),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    // A nonexistent config path forces resolveLoopoverBackendSession to null, so the apiUrl falls all the way
+    // through to the hardcoded https://api.loopover.ai default -- the probe URL still routes by its path suffix.
+    const result = await fetchSelfReviewContext("acme/widgets", {
+      fetchImpl: fetchImpl as never,
+      loopoverAuth: { sessionToken: "mcp-token" },
+      env: { LOOPOVER_CONFIG_PATH: "/nonexistent-loopover/config.json" } as never,
+    });
+    expect(result.manifest.gate.readinessMinScore).toBe(80);
+  });
+
+  it("keeps the static manifest when the probe response's json() rejects", async () => {
+    const fetchImpl = routedFetch({
+      "/live-gate-thresholds": () => ({ ok: true, status: 200, json: async () => { throw new Error("bad json"); }, text: async () => "" }),
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => textResponse("gate:\n  duplicates: block\n"),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", {
+      fetchImpl: fetchImpl as never,
+      loopoverAuth: { apiUrl: "https://orb.test", sessionToken: "mcp-token" },
+      env: {} as never,
+    });
+    expect(result.manifest.gate.duplicates).toBe("block");
+  });
+});
+
+describe("fetchSelfReviewContext — sparse payloads and fallback branches", () => {
+  it("throws on a non-string repoFullName", async () => {
+    await expect(fetchSelfReviewContext(123 as never)).rejects.toThrow("invalid_repo_full_name");
+  });
+
+  it("fills honest null/empty defaults for every absent optional field (repo, issue, and PR)", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([{ number: 5, title: "sparse issue", state: "open" }]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([{ number: 60, title: "sparse pr", state: "open" }]),
+      "/repos/acme/widgets": () => jsonResponse({}),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    expect(result.repo).toEqual({
+      fullName: "acme/widgets",
+      owner: "acme",
+      name: "widgets",
+      installationId: undefined,
+      isInstalled: false,
+      isRegistered: false,
+      isPrivate: false,
+      htmlUrl: null,
+      defaultBranch: null,
+      registryConfig: null,
+    });
+    expect(result.issues[0]).toEqual({
+      repoFullName: "acme/widgets",
+      number: 5,
+      title: "sparse issue",
+      state: "open",
+      authorLogin: null,
+      authorAssociation: null,
+      htmlUrl: null,
+      body: "",
+      createdAt: null,
+      updatedAt: null,
+      closedAt: null,
+      labels: [],
+      linkedPrs: [],
+    });
+    expect(result.pullRequests[0]).toEqual({
+      repoFullName: "acme/widgets",
+      number: 60,
+      title: "sparse pr",
+      state: "open",
+      authorLogin: null,
+      authorAssociation: null,
+      headSha: null,
+      headRef: null,
+      baseRef: null,
+      htmlUrl: null,
+      mergedAt: null,
+      isDraft: null,
+      mergeableState: null,
+      reviewDecision: null,
+      body: "",
+      createdAt: null,
+      updatedAt: null,
+      closedAt: null,
+      labels: [],
+      linkedIssues: [],
+    });
+  });
+
+  it("keeps only labels shaped as an object with a string name", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () =>
+        jsonResponse([issuePayload({ labels: ["string-label", { color: "red" }, { name: 42 }, { name: "kept" }, null] })]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    expect(result.issues[0]?.labels).toEqual(["kept"]);
+  });
+
+  it("ignores a zero PR/issue number in a closing keyword", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([issuePayload({ body: "Closes PR #0" })]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([prPayload({ body: "Closes #0" })]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    expect(result.issues[0]?.linkedPrs).toEqual([]);
+    expect(result.pullRequests[0]?.linkedIssues).toEqual([]);
+  });
+
+  it("honors custom apiBaseUrl / rawContentBaseUrl / gittensorApiBase / maxPages option strings", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([issuePayload()]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => textResponse("gate:\n  duplicates: block\n"),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", {
+      fetchImpl: fetchImpl as never,
+      apiBaseUrl: "https://api.github.com",
+      rawContentBaseUrl: "https://raw.githubusercontent.com",
+      gittensorApiBase: "https://api.gittensor.io",
+      perPage: 10,
+      maxPages: 3,
+      loopoverAuth: null,
+    });
+    expect(result.issues).toHaveLength(1);
+    expect(result.manifest.gate.duplicates).toBe("block");
+  });
+
+  it("emits no authorization header when the github token is not a string", async () => {
+    let capturedAuth: string | undefined = "sentinel";
+    const fetchImpl = async (url: string, init: { headers?: Record<string, string> }) => {
+      if (url.includes("/repos/acme/widgets") && !url.includes("issues") && !url.includes("pulls")) {
+        capturedAuth = init.headers?.authorization;
+        return jsonResponse(REPO_PAYLOAD);
+      }
+      if (url.includes("/repos/acme/widgets/issues")) return jsonResponse([]);
+      if (url.includes("/repos/acme/widgets/pulls")) return jsonResponse([]);
+      if (url.includes("raw.githubusercontent.com")) return jsonResponse(null, 404);
+      if (url.includes("api.gittensor.io/miners")) return jsonResponse([]);
+      return jsonResponse(null, 404);
+    };
+    await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, githubToken: 123 as never, loopoverAuth: null });
+    expect(capturedAuth).toBeUndefined();
+  });
+
+  it("fails closed when the repo and contributor responses' json() reject", async () => {
+    const badJson = () => ({ ok: true, status: 200, json: async () => { throw new Error("bad json"); }, text: async () => "" });
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": badJson,
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": badJson,
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, contributorLogin: "someone", loopoverAuth: null });
+    expect(result.repo).toBeNull();
+    expect(result.confirmedContributor).toBe(false);
+  });
+
+  it("returns false for confirmedContributor when the miners payload is not an array", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse({ not: "an array" }),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, contributorLogin: "miner-bot", loopoverAuth: null });
+    expect(result.confirmedContributor).toBe(false);
+  });
+
+  it("reads a manifest whose content-length header is present but within the byte cap", async () => {
+    const withLen = () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "26" }),
+      json: async () => null,
+      text: async () => "gate:\n  duplicates: block\n",
+    });
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": withLen,
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.manifest.gate.duplicates).toBe("block");
+  });
+
+  it("skips a manifest candidate whose text() resolves to a non-string", async () => {
+    const nonStringText = () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => null,
+      text: async () => 12345 as unknown as string,
+    });
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": nonStringText,
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.manifest.present).toBe(false);
+  });
+
+  it("rejects an oversized manifest read via the text() path (no content-length header)", async () => {
+    const bigText = "x".repeat(MAX_FOCUS_MANIFEST_BYTES + 10);
+    const bigResp = () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => null,
+      text: async () => bigText,
+    });
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": bigResp,
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.manifest.present).toBe(false);
+  });
+
+  it("fully decodes a streamed manifest that completes under the byte cap", async () => {
+    const chunks = [new TextEncoder().encode("gate:\n  duplicates: block\n")];
+    const fetchImpl = async (url: string) => {
+      if (url.includes("raw.githubusercontent.com")) return chunkedManifestResponse(chunks, () => {});
+      if (url.includes("/repos/acme/widgets/issues")) return jsonResponse([]);
+      if (url.includes("/repos/acme/widgets/pulls")) return jsonResponse([]);
+      if (url.includes("/repos/acme/widgets")) return jsonResponse(REPO_PAYLOAD);
+      if (url.includes("api.gittensor.io/miners")) return jsonResponse([]);
+      return jsonResponse(null, 404);
+    };
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.manifest.gate.duplicates).toBe("block");
+  });
+
+  it("falls back to the global fetch when fetchImpl is omitted", async () => {
+    const stub = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => textResponse("gate:\n  duplicates: block\n"),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+    vi.stubGlobal("fetch", stub);
+    try {
+      const result = await fetchSelfReviewContext("acme/widgets", { loopoverAuth: null, env: { LOOPOVER_CONFIG_PATH: "/nonexistent-loopover/config.json" } as never });
+      expect(result.repo).not.toBeNull();
+      expect(result.manifest.gate.duplicates).toBe("block");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

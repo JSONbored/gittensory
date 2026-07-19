@@ -143,6 +143,12 @@ describe("detectRepoStack — Node (#4785)", () => {
   it("ignores a non-object scripts field", () => {
     expect(detect({ "package.json": pkg({ scripts: ["build"] }) })).toMatchObject({ buildCommand: null, testCommand: null });
   });
+
+  it("treats a valid-JSON but non-object package.json (a bare scalar) as no package metadata", () => {
+    // JSON.parse succeeds but yields a non-object, so parseJson returns null via its `: null` arm (distinct from
+    // the throwing "{ not json" case above): still a Node repo, npm default, no scripts.
+    expect(detect({ "package.json": "42" })).toMatchObject({ detected: true, language: "javascript", packageManager: "npm", buildCommand: null });
+  });
 });
 
 describe("detectRepoStack — Python (#4785)", () => {
