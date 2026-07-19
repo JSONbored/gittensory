@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { FORBIDDEN_CONTENT } from "./forbidden-content.mjs";
 
 const ALLOWED = [
-  /^bin\/loopover-miner\.js$/,
+  /^bin\/loopover-miner\.(js|d\.ts)$/,
   /^bin\/loopover-miner-mcp\.(js|d\.ts)$/,
   /^lib\/[a-z0-9-]+\.(js|d\.ts)$/,
   /^package\.json$/,
