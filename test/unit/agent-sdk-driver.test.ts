@@ -84,6 +84,9 @@ describe("createAgentSdkCodingAgentDriver", () => {
     expect(captured.input!.options.cwd).toBe(task.workingDirectory);
     expect(captured.input!.options.maxTurns).toBe(6);
     expect(captured.input!.options.permissionMode).toBe("acceptEdits");
+    // Read + Bash are explicitly allowlisted (#7245): acceptEdits alone auto-approves only file EDITs, so a
+    // headless task that must explore the repo and run tests would otherwise have every Read/Bash call denied.
+    expect(captured.input!.options.allowedTools).toEqual(["Read", "Bash"]);
     expect(captured.input!.options.hooks).toBe(hooks);
   });
 

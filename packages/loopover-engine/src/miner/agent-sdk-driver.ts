@@ -30,6 +30,7 @@ export type AgentSdkQueryOptions = {
   cwd: string;
   maxTurns: number;
   permissionMode: "acceptEdits";
+  allowedTools: readonly string[];
   hooks?: AgentSdkHooks | undefined;
 };
 
@@ -160,9 +161,13 @@ export function createAgentSdkCodingAgentDriver(
           options: {
             cwd: task.workingDirectory,
             maxTurns: task.maxTurns,
-            // Same edit-permission scope as the CLI-subprocess driver (#4266): `--permission-mode acceptEdits`
-            // there, `acceptEdits` here — file edits run unattended inside the scoped worktree, nothing broader.
+            // Match the CLI-subprocess driver's headless permission scope (#4266, #6840): `acceptEdits` auto-
+            // approves file EDIT tool calls inside the scoped worktree, but does NOT grant `Read` or `Bash` — a
+            // real task needs both to explore the repo and run tests, so without an explicit allowlist every such
+            // call was denied and the driver silently produced zero work. Grant exactly `Read` + `Bash` (the CLI's
+            // `--allowedTools Read Bash`), nothing broader; `bypassPermissions` would drop every other safety rail.
             permissionMode: "acceptEdits",
+            allowedTools: ["Read", "Bash"],
             hooks: options.hooks,
           },
         });
