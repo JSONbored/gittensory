@@ -106,6 +106,24 @@ describe("rankCandidateIssues (#2302 follow-up)", () => {
     expect(summary.usedDefaultGoalSpec).toBe(false);
   });
 
+  it("does not report a blanket default-goal-spec note when only SOME ranked repos lack a spec (#7226)", () => {
+    const summary = rankCandidateIssuesWithSummary(
+      [
+        rawIssue({ repo: "widgets", repoFullName: "acme/widgets", issueNumber: 1 }),
+        rawIssue({ repo: "gadgets", repoFullName: "acme/gadgets", issueNumber: 2 }),
+      ],
+      {
+        nowMs: NOW,
+        // Only acme/widgets has a per-tenant spec supplied+applied; acme/gadgets falls back to the default.
+        goalSpecContentByRepo: { "acme/widgets": "minerEnabled: true\npreferredLabels: [help wanted]\n" },
+      },
+    );
+    // Both repos are ranked and one genuinely used a supplied spec, so the batch is NOT "all default" —
+    // the blanket "no per-tenant .loopover-miner.yml supplied" note must NOT fire. Before #7226 this was `true`.
+    expect(summary.issues).toHaveLength(2);
+    expect(summary.usedDefaultGoalSpec).toBe(false);
+  });
+
   it("raises dupRisk when repo-level contention inputs are provided", () => {
     const calm = rankCandidateIssues([rawIssue()], { nowMs: NOW, highRiskDuplicateClusters: 0, openPullRequests: 4 });
     const busy = rankCandidateIssues([rawIssue()], { nowMs: NOW, highRiskDuplicateClusters: 4, openPullRequests: 4 });

@@ -91,7 +91,11 @@ function rankedUsesDefaultGoalSpec(ranked, options = {}) {
   const goalSpecsByRepo = buildGoalSpecsByRepo(options);
   const specRepos = Object.keys(goalSpecsByRepo);
   if (ranked.length === 0) return specRepos.length === 0;
-  return ranked.some((issue) => {
+  // The "ranked with the built-in default goal spec (no per-tenant .loopover-miner.yml supplied)" note is only
+  // truthful when the WHOLE batch fell back to the default -- so require EVERY ranked repo to lack a supplied spec,
+  // not just any one of them (#7226). With `.some`, a single spec-less repo made a mixed batch (where other repos
+  // genuinely had a spec supplied and applied) print the blanket note as if none did.
+  return ranked.every((issue) => {
     const target = issue.repoFullName.trim().toLowerCase();
     return !specRepos.some((repo) => repo.trim().toLowerCase() === target);
   });
