@@ -74,7 +74,14 @@ export function recordPrOutcomeSnapshot(input, options = {}) {
  * Reconstruct the latest outcome per repo/PR from the ledger's ascending append-only event stream (mirrors
  * manage-status.js's `indexLatestManageUpdates`). Reads via the injected ledger's `readEvents(filter)` and reduces
  * the pure result — a later event for the same repo/PR supersedes an earlier one. Returns a `Map` keyed by
- * `repoFullName:prNumber`.
+ * `repoFullName:prNumber`, in TRUE latest-event order (not first-insertion order): a repo/PR that receives a
+ * second, correcting event later in the stream (e.g. closed-without-merge, then reopened and merged — a real,
+ * reachable case: pr-disposition-poller.js can legitimately re-observe and re-record a reopened PR's new terminal
+ * state) is deleted and re-set on each occurrence, so its position in `.values()`/`.keys()` iteration always
+ * reflects when it was MOST recently updated, matching the "a later event supersedes an earlier one" doc claim
+ * above literally rather than only in the stored VALUE (#7222 — `Map.set` on an already-present key updates the
+ * value in place but does not move it, so consumers relying on iteration-order-as-recency, e.g. loop-reentry.js's
+ * `countConsecutiveDisengagements`, would otherwise miscount after a correction like this).
  */
 export function readPrOutcomes(eventLedger, filter = {}) {
   const events = eventLedger && typeof eventLedger.readEvents === "function" ? eventLedger.readEvents(filter) : [];
@@ -84,7 +91,9 @@ export function readPrOutcomes(eventLedger, filter = {}) {
     if (typeof event.repoFullName !== "string" || !event.repoFullName.trim()) continue;
     const normalized = normalizePrOutcomePayload(event.payload);
     if (!normalized) continue;
-    latest.set(`${event.repoFullName}:${normalized.prNumber}`, { ...normalized, repoFullName: event.repoFullName });
+    const key = `${event.repoFullName}:${normalized.prNumber}`;
+    latest.delete(key);
+    latest.set(key, { ...normalized, repoFullName: event.repoFullName });
   }
   return latest;
 }

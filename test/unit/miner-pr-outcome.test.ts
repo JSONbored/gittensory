@@ -105,4 +105,17 @@ describe("readPrOutcomes (#4274)", () => {
     expect(readPrOutcomes({} as never).size).toBe(0);
     expect(readPrOutcomes({ readEvents: () => null } as never).size).toBe(0);
   });
+
+  it("REGRESSION (#7222): a same-key correction moves the key to the end of iteration order, not just its value", () => {
+    const ledger = mockLedger();
+    // insertion order: acme/widgets:1, acme/widgets:2 — then a correcting event for the FIRST key.
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 1, decision: "closed", reason: "gate_close" }, { eventLedger: ledger });
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 2, decision: "closed", reason: "gate_close" }, { eventLedger: ledger });
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 1, decision: "merged" }, { eventLedger: ledger }); // corrects key 1, recorded LAST
+    const latest = readPrOutcomes(ledger);
+    // a plain Map.set on an already-present key would leave key 1 in its original (first) position; the fix
+    // deletes-then-sets so the corrected key reflects when it was MOST recently updated, matching the doc claim.
+    expect([...latest.keys()]).toEqual(["acme/widgets:2", "acme/widgets:1"]);
+    expect(latest.get("acme/widgets:1")?.decision).toBe("merged");
+  });
 });

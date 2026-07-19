@@ -112,6 +112,22 @@ describe("attemptLoopReentry (#2338)", () => {
     expect(countConsecutiveDisengagements(eventLedger, "acme/widgets")).toBe(0);
   });
 
+  it("REGRESSION (#7222): a corrected outcome (reopened-then-merged after later PRs resolved) resets the streak, not just its own value", () => {
+    const eventLedger = tempEventLedger();
+    // PR #1 closed-without-merge first, then #2 and #3 close after it -- a real streak of 3.
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 1, decision: "closed", closedAt: new Date().toISOString(), reason: "stale" }, { eventLedger });
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 2, decision: "closed", closedAt: new Date().toISOString(), reason: "stale" }, { eventLedger });
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 3, decision: "closed", closedAt: new Date().toISOString(), reason: "stale" }, { eventLedger });
+    expect(countConsecutiveDisengagements(eventLedger, "acme/widgets")).toBe(3);
+
+    // PR #1 -- the earliest-inserted key -- is reopened and merged AFTER #2 and #3. Before #7222's fix, Map
+    // insertion order left #1's entry frozen at its original (oldest) position, so the backward walk still saw
+    // #3, #2 as the "most recent" and miscounted the streak at 2 instead of the correct 0.
+    recordPrOutcomeSnapshot({ repoFullName: "acme/widgets", prNumber: 1, decision: "merged", closedAt: new Date().toISOString() }, { eventLedger });
+
+    expect(countConsecutiveDisengagements(eventLedger, "acme/widgets")).toBe(0);
+  });
+
   it("the hourly rate cap suppresses re-entry independent of the per-repo circuit breaker, and does not move the run-state or dequeue", () => {
     const eventLedger = tempEventLedger();
     const portfolioQueue = tempPortfolioQueue();
