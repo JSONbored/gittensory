@@ -798,6 +798,8 @@ describe("runDiscover (#4247)", () => {
           initPolicyVerdictCache: () => tempPolicyVerdictCacheStore(),
           initRankedCandidatesStore: () => tempRankedCandidatesStore(),
           fetchCandidateIssuesWithSummary,
+          // A token is set, so the default profile resolver would otherwise reach the network — no-op it (#6798).
+          resolveContributionProfiles: async () => new Map(),
         },
       );
 
