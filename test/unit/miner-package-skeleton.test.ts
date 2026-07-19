@@ -41,7 +41,7 @@ describe("loopover-miner package skeleton (#2287)", () => {
     expect(miner.dependencies["@loopover/engine"]).toBeDefined();
     expect(miner.engines.node).toMatch(/^>=22(?:\.\d+){0,2}$/);
     expect(miner.files).toEqual(expect.arrayContaining(["bin", "lib"]));
-    expect(miner.scripts.build.startsWith("node --check bin/loopover-miner.js")).toBe(true);
+    expect(miner.scripts.build.startsWith("tsc -p tsconfig.json && node --check bin/loopover-miner.js")).toBe(true);
   });
 
   it("starts the CLI bin with a node shebang", () => {

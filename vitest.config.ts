@@ -30,6 +30,10 @@ export default defineConfig({
         "src/**/*.ts",
         "packages/loopover-engine/src/**/*.ts",
         "packages/loopover-miner/lib/**/*.js",
+        // Files already converted to real TypeScript (#7290) execute as the compiled .js above, but
+        // v8's coverage provider remaps through the inline sourcemap tsc emits, attributing coverage to
+        // the .ts source instead -- this entry is what keeps that remapped file in the report.
+        "packages/loopover-miner/lib/**/*.ts",
         "packages/discovery-index/src/**/*.ts",
         // review-enrichment is a standalone (non-workspace) package with its own node:test suite; its
         // coverage is collected separately via `npm run rees:coverage` (c8 over the built dist, remapped
@@ -40,7 +44,11 @@ export default defineConfig({
       // as a side effect of import) -- like the main app's own src/server.ts, it's exercised by a Docker
       // build+boot path, not unit-coverable without actually binding a port. See codecov.yml's matching
       // ignore entry; app.ts (everything server.ts wires together) is what tests actually import.
-      exclude: ["src/env.d.ts", "apps/**", "packages/discovery-index/src/server.ts"],
+      //
+      // packages/loopover-miner/lib/**/*.ts (above) also glob-matches its own still-hand-maintained
+      // *.d.ts siblings (a ".d.ts" path ends in ".ts" too) -- those aren't real modules and can't be
+      // parsed as coverage source, so they're excluded the same way src/env.d.ts already is.
+      exclude: ["src/env.d.ts", "apps/**", "packages/discovery-index/src/server.ts", "packages/loopover-miner/lib/**/*.d.ts"],
       // Emit lcov for Codecov to compute patch (changed-lines) coverage.
       reporter: ["text", "lcov"],
       // The 99% requirement now lives in codecov.yml as a *patch* gate (changed
