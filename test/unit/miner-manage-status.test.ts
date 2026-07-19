@@ -64,6 +64,12 @@ describe("loopover-miner manage status (#2325)", () => {
     expect(renderManageStatusTable([])).toBe("no managed pull requests");
   });
 
+  it("fails closed on a malformed portfolioQueue or eventLedger source", () => {
+    const { portfolioQueue, eventLedger } = tempStores();
+    expect(() => collectManageStatus({ portfolioQueue: null, eventLedger } as never)).toThrow("invalid_portfolio_queue");
+    expect(() => collectManageStatus({ portfolioQueue, eventLedger: null } as never)).toThrow("invalid_event_ledger");
+  });
+
   it("merges portfolio queue rows with the latest manage_pr_update event per PR", () => {
     const { portfolioQueue, eventLedger } = tempStores();
     portfolioQueue.enqueue({ repoFullName: "acme/widgets", identifier: "pr:12", priority: 3 });
