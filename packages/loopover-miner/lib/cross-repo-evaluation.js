@@ -33,6 +33,23 @@ export const DEFAULT_CROSS_REPO_MANIFEST_RELATIVE_PATH = "benchmarks/cross-repo/
 export const MAX_CROSS_REPO_MANIFEST_BYTES = 65_536;
 export const MAX_CROSS_REPO_MANIFEST_REPOS = 100;
 
+// True UTF-8 byte count for the size guard (#7223): JS string `.length` is UTF-16 code units, which under-counts
+// any multi-byte character (up to 4x for astral-plane code points), so `MAX_CROSS_REPO_MANIFEST_BYTES` -- named
+// and warned about in BYTES -- was actually being compared against a code-unit count. Mirrors the identical helper
+// in the three siblings this parser's own comment claims to follow: fleet-run-manifest.ts, miner-goal-spec.ts,
+// and ams-policy-spec.ts.
+function utf8ByteLength(value) {
+  let bytes = 0;
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint <= 0x7f) bytes += 1;
+    else if (codePoint <= 0x7ff) bytes += 2;
+    else if (codePoint <= 0xffff) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+
 function cloneEmptyManifest(warnings = []) {
   return { present: false, manifest: { repos: [] }, warnings };
 }
@@ -125,7 +142,7 @@ export function parseCrossRepoEvaluationManifest(content) {
   }
   const trimmed = content.trim();
   if (!trimmed) return cloneEmptyManifest();
-  if (trimmed.length > MAX_CROSS_REPO_MANIFEST_BYTES) {
+  if (utf8ByteLength(trimmed) > MAX_CROSS_REPO_MANIFEST_BYTES) {
     return cloneEmptyManifest([
       `CrossRepoEvaluationManifest exceeded ${MAX_CROSS_REPO_MANIFEST_BYTES} bytes; ignoring the file.`,
     ]);

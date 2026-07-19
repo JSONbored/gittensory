@@ -86,6 +86,22 @@ describe("cross-repo evaluation harness (#4788)", () => {
       expect(parsed.warnings[0]).toContain("exceeded");
     });
 
+    it("measures the size guard in true UTF-8 bytes, not UTF-16 code units (#7223)", () => {
+      // A small manifest carrying all four code-point widths — 1-byte 'a', 2-byte 'é', 3-byte '中', 4-byte '😀' —
+      // stays well under the cap and parses normally (exercises every branch of the byte counter).
+      const mixed = parseCrossRepoEvaluationManifest('{"repos":[],"note":"aé中😀"}');
+      expect(mixed.warnings.some((warning) => warning.includes("exceeded"))).toBe(false);
+      expect(mixed.present).toBe(true);
+
+      // 25,000 three-byte characters: UTF-16 `.length` is 25,000 (under the cap) but the real UTF-8 size is
+      // 75,000 bytes (over it). The old code-unit guard wrongly admitted this; the byte guard rejects it up front.
+      const oversizeByBytes = "中".repeat(25_000);
+      expect(oversizeByBytes.length).toBeLessThanOrEqual(MAX_CROSS_REPO_MANIFEST_BYTES);
+      const parsed = parseCrossRepoEvaluationManifest(oversizeByBytes);
+      expect(parsed.present).toBe(false);
+      expect(parsed.warnings[0]).toContain("exceeded");
+    });
+
     it("normalizes string and object repo entries and skips invalid duplicates", () => {
       const parsed = parseCrossRepoEvaluationManifest(
         JSON.stringify({
