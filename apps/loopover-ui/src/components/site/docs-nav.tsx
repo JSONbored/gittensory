@@ -53,6 +53,7 @@ export const docsNav: DocsGroup[] = [
         items: [
           { to: "/docs/self-hosting-operations", label: "Operations" },
           { to: "/docs/self-hosting-backup-scaling", label: "Backup & scaling" },
+          { to: "/docs/capacity", label: "Capacity & throughput" },
           { to: "/docs/self-hosting-troubleshooting", label: "Troubleshooting" },
         ],
       },

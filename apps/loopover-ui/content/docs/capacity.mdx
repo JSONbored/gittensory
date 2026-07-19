@@ -1,0 +1,96 @@
+---
+title: Capacity and throughput
+description: Real throughput and concurrency numbers for AMS's iterate-loop and the review-gate's PR-processing queue, so an operator can plan for load instead of guessing.
+---
+
+Real throughput and concurrency numbers for AMS's iterate-loop and the review-gate's PR-processing
+queue — the counterpart to [Resource sizing](/docs/ams-sizing) (CPU/RAM/disk), scoped strictly to
+throughput/concurrency and where each number comes from.
+
+## AMS: iterate-loop orchestration throughput
+
+From the committed load-test harness (`packages/loopover-engine/docs/iterate-loop-load-test.md`,
+built for #4913/#5224), measuring `runIterateLoop`'s own orchestration overhead under concurrent,
+multi-tenant-like load with a 15ms simulated per-iteration driver latency:
+
+<FeatureRow
+  items={[
+    { title: "Concurrency 1", description: "63 attempts/sec" },
+    { title: "Concurrency 8", description: "422 attempts/sec" },
+    { title: "Concurrency 32", description: "982 attempts/sec" },
+    { title: "Concurrency 128", description: "1,577 attempts/sec" },
+  ]}
+/>
+
+<Callout variant="note">
+  Absolute numbers are host-dependent — treat these as a rough sense of scale and of how throughput
+  scales with concurrency, not a hard target. Reproduce them on your own hardware with:
+</Callout>
+
+<CodeBlock lang="bash" code={`npm run loadtest:iterate-loop`} />
+
+## Review-gate: PR-processing concurrency caps
+
+Fixed, hardcoded caps from `src/settings/agent-sweep.ts`, sized against a single GitHub App
+installation's shared ~5,000-request/hour REST rate-limit bucket (each PR touched costs roughly 9
+REST GETs):
+
+<FeatureRow
+  items={[
+    {
+      title: "SWEEP_MAX_PRS = 3",
+      description: "The recurring sweep's per-tick cap — sized for a sweep that re-runs every ~2 minutes, so a low steady-state budget compounds safely across ticks.",
+    },
+    {
+      title: "ISSUE_WAKE_MAX_PRS = 25",
+      description: "One-shot budget for an issue-linked wake event — a rarer trigger than a merge, so a larger one-time budget doesn't risk compounding across repeated events in one rate-limit window.",
+    },
+    {
+      title: "MERGE_WAKE_MAX_PRS = 15",
+      description: "One-shot budget for a merge-triggered wake — sized lower than the issue-wake budget because merges are a far more common trigger; a repeated-merge burst inside one rate-limit window must not compound the way the rarer issue-wake trigger safely can.",
+    },
+  ]}
+/>
+
+## Review-gate: Cloudflare Queue consumer bounds
+
+From `wrangler.jsonc`'s `loopover-jobs` queue consumer — Cloudflare Queues consumer-binding
+attributes, read at `wrangler deploy` time (not runtime-configurable via `env.SOMETHING`):
+
+<FeatureRow
+  items={[
+    {
+      title: "max_batch_size = 5",
+      description: "The most jobs one batch can bundle at once — bounds how many heavy sweep/backfill jobs land in a single delivery.",
+    },
+    {
+      title: "max_concurrency = 3",
+      description: "Bounded fan-out, sized to drain one heavy installation's worst sweep within the 2-minute cron interval without flooding that installation's own GitHub rate-limit bucket.",
+    },
+  ]}
+/>
+
+<Callout variant="note" title="Re-tuning these for real multi-tenant volume">
+  `max_batch_size × max_concurrency` bounds the most jobs that can be in flight — each making
+  GitHub calls — at any one instant, kept comfortably under an installation's rate-limit headroom.
+  A genuinely multi-tenant volume model needs real production job-volume data (job rate, distinct-
+  installation count, GitHub rate-limit headroom actually observed) to re-derive against — re-tune
+  from a live dashboard/`audit_events` query when that data exists, not by guessing a bigger
+  number.
+</Callout>
+
+**Takeaways:**
+
+- Iterate-loop's own orchestration overhead scales roughly linearly with concurrency — the
+  bottleneck at real scale is each attempt's actual coding-agent driver latency, not the loop's
+  scheduling/bookkeeping around it.
+- The review-gate's PR-processing caps are deliberately asymmetric across trigger type
+  (`SWEEP_MAX_PRS` \< `MERGE_WAKE_MAX_PRS` \< `ISSUE_WAKE_MAX_PRS`) because each trigger recurs at a
+  different rate — a budget sized for a rare trigger would compound dangerously if applied to a
+  frequent one.
+- Every number above was measured or verified directly against the source it's read from (the
+  committed load-test harness, or the literal constant/config value) — none are estimates.
+
+See [Resource sizing](/docs/ams-sizing) for CPU/RAM/disk numbers, and the [AMS Cloud Readiness
+milestone](https://github.com/JSONbored/loopover/milestone/28) for the per-tenant scheduling and
+queue-fairness design work these numbers feed into.
