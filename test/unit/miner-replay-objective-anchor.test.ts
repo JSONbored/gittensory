@@ -168,6 +168,12 @@ describe("loopover-miner replay objective-anchor scoring (#3012)", () => {
       expect(result.replayOnlyModules).toEqual([]); // replay modules coerced to []
       expect(result.revealedOnlyModules).toEqual(["src/a"]);
     });
+
+    it("coerces a non-array revealed changeKinds (missing or wrong type) to an empty set", () => {
+      const result = scoreObjectiveAnchor({ modules: ["src/a"], changeKind: "feature" }, { modules: ["src/a"] });
+      expect(result.revealedChangeKinds).toEqual([]);
+      expect(result.changeKindMatch).toBe(0);
+    });
   });
 
   describe("computeObjectiveAnchor", () => {

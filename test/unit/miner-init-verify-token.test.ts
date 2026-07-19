@@ -152,6 +152,93 @@ describe("verifyGithubToken", () => {
     expect(result.detail).toContain("ECONNRESET");
   });
 
+  it("defaults a missing githubToken to blank, still omitting the Authorization header", async () => {
+    const requests: Array<{ headers: Record<string, string> }> = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      requests.push({ headers: Object.fromEntries(new Headers(init?.headers).entries()) });
+      return mockJsonResponse({ login: "octocat" }, { headers: { "x-oauth-scopes": "repo" } });
+    };
+
+    const result = await verifyGithubToken({ fetchImpl });
+
+    expect(result.ok).toBe(true);
+    expect(requests[0]?.headers.authorization).toBeUndefined();
+  });
+
+  it("falls back to the default API base when a slashes-only apiBaseUrl strips to empty", async () => {
+    const requests: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      requests.push(String(input));
+      return mockJsonResponse({ login: "octocat" }, { headers: { "x-oauth-scopes": "repo" } });
+    };
+
+    await verifyGithubToken({ githubToken: "token-value", apiBaseUrl: "///", fetchImpl });
+
+    expect(requests).toEqual(["https://api.github.com/user"]);
+  });
+
+  it("surfaces a non-Error network rejection as a validation failure (request failed)", async () => {
+    const fetchImpl: typeof fetch = async () => {
+      throw "connection reset";
+    };
+
+    const result = await verifyGithubToken({ githubToken: "token-value", fetchImpl });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("request failed");
+  });
+
+  it("treats an unparsable JSON body as a null payload rather than throwing", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response("not json", { status: 200, headers: { "x-oauth-scopes": "repo" } });
+
+    const result = await verifyGithubToken({ githubToken: "token-value", fetchImpl });
+
+    expect(result.ok).toBe(true);
+    expect(result.login).toBeNull();
+  });
+
+  it("reports a null login (rather than an empty string) when the success payload omits it", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      mockJsonResponse({}, { headers: { "x-oauth-scopes": "repo" } }),
+    );
+
+    const result = await verifyGithubToken({ githubToken: "token-value" });
+
+    expect(result.ok).toBe(true);
+    expect(result.login).toBeNull();
+    expect(result.detail).toContain("unknown user");
+  });
+
+  it("reports a null login when the success payload omits it and GitHub reports no scopes at all", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({}));
+
+    const result = await verifyGithubToken({ githubToken: "token-value" });
+
+    expect(result.ok).toBe(true);
+    expect(result.login).toBeNull();
+    expect(result.detail).toContain("unknown user");
+    expect(result.detail).toContain("did not report classic OAuth scopes");
+  });
+
+  it("reports a null login on the empty-scopes-header failure when the payload omits it", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({}, { headers: { "x-oauth-scopes": "" } }));
+
+    const result = await verifyGithubToken({ githubToken: "token-value" });
+
+    expect(result.ok).toBe(false);
+    expect(result.login).toBeNull();
+  });
+
+  it("reports a null login on the non-repo-scopes failure when the payload omits it", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({}, { headers: { "x-oauth-scopes": "read:org" } }));
+
+    const result = await verifyGithubToken({ githubToken: "token-value" });
+
+    expect(result.ok).toBe(false);
+    expect(result.login).toBeNull();
+  });
+
   it("times out when the GitHub request never settles", async () => {
     const fetchImpl: typeof fetch = async (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
