@@ -57,9 +57,10 @@ comment:
   require_changes: false
 
 # Coverage is collected by vitest (v8) over src/**, packages/loopover-engine/src/**,
-# packages/loopover-miner/lib/**, and packages/discovery-index/src/** (plus review-enrichment/src/** via
-# the standalone `rees` flag, c8 over its built dist remapped through source maps); mirror vitest's
-# exclusions here so the Codecov total matches the local report.
+# packages/loopover-miner/{lib,bin}/**, packages/loopover-mcp/{lib,bin}/**, and
+# packages/discovery-index/src/** (plus review-enrichment/src/** via the standalone `rees` flag, c8 over
+# its built dist remapped through source maps); mirror vitest's exclusions here so the Codecov total
+# matches the local report.
 ignore:
   - "src/env.d.ts"
   - "apps/**"
@@ -77,3 +78,12 @@ ignore:
   # discovery-index's process entrypoint (#7164) -- same "Docker build+boot, not unit-coverable" reasoning
   # as src/server.ts above; app.ts (everything it wires together) is what tests actually import.
   - "packages/discovery-index/src/server.ts"
+  # CLI process entrypoints: plain top-level dispatchers (no exports, terminate via process.exit()), only
+  # ever exercised as a REAL subprocess (execFileSync/spawnSync/StdioClientTransport spawning "node <bin>
+  # ...args") by test/unit/{miner,mcp}-cli-*.test.ts et al -- v8 coverage can't instrument a separate Node
+  # process, same "not unit-coverable" reasoning as src/server.ts above. Each package's OTHER bin/lib
+  # modules that export real functions and get imported in-process (bin/loopover-miner-mcp.ts's
+  # createMinerMcpServer; packages/loopover-mcp/lib/*.js) are NOT ignored -- only the plain dispatchers are.
+  - "packages/loopover-miner/bin/loopover-miner.ts"
+  - "packages/loopover-mcp/bin/loopover-mcp.js"
+  - "packages/loopover-mcp/bin/loopover-mcp.ts"

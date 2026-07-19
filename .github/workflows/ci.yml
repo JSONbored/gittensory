@@ -38,6 +38,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       mcpCliHarness: ${{ steps.filter.outputs.mcpCliHarness }}
       engine: ${{ steps.filter.outputs.engine }}
+      discoveryIndex: ${{ steps.filter.outputs.discoveryIndex }}
       miner: ${{ steps.filter.outputs.miner }}
       minerTestHarness: ${{ steps.filter.outputs.minerTestHarness }}
       rees: ${{ steps.filter.outputs.rees }}
@@ -107,6 +108,13 @@ jobs:
               - 'packages/loopover-miner/**'
               - 'scripts/check-miner-package.mjs'
               - 'package-lock.json'
+            # No dedicated build/pack script (unlike mcp/engine/miner above) -- discovery-index is a normal
+            # vitest-covered workspace package (packages/discovery-index/src/**/*.ts is in vitest.config.ts's
+            # coverage.include), so this filter only needs to feed validate-code's overall gate + validate-tests
+            # below, not a standalone job.
+            discoveryIndex:
+              - 'packages/discovery-index/**'
+              - 'package-lock.json'
             # 6 of the 7 MCP CLI-cluster test files, and ONLY these 6, are truly self-contained w.r.t. root
             # src/**: verified by direct-import inspection that test/unit/mcp-cli-*.test.ts (5 files) and
             # their shared test/unit/support/mcp-cli-harness.ts import nothing but node:* builtins + vitest,
@@ -174,7 +182,7 @@ jobs:
     needs: changes
     # draft != true also gates push runs correctly: github.event.pull_request is unset there, so the
     # property access evaluates to null, and null != true is true.
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.observability == 'true')) }}
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.discoveryIndex == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.observability == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -544,13 +552,18 @@ jobs:
   validate-tests:
     name: validate-tests
     needs: changes
-    # Also runs on REES-only changes: Codecov holds codecov/patch until `after_n_builds` (6) coverage uploads
-    # land (codecov.yml), and REES-only PRs don't otherwise touch `backend`, so without the shards a REES PR
-    # would upload only its single `rees` report and the patch status would never post -- the same vacuous
-    # check this issue fixes. Running the shards guarantees the 6 uploads so Codecov posts a real patch verdict
-    # that now includes the review-enrichment/** diff (covered by the `rees` flag from validate-code).
-    # Draft PRs still skip the whole fan-out (#6448), so the REES trigger only applies to ready PRs.
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true')) }}
+    # Also runs on REES/mcp/engine/miner/discoveryIndex-only changes: Codecov holds codecov/patch until
+    # `after_n_builds` (6) coverage uploads land (codecov.yml), and a PR scoped to just one of those
+    # self-contained packages doesn't otherwise touch `backend`, so without the shards it would upload no
+    # coverage report at all and codecov/patch would never post -- not even a vacuous pass, no check at
+    # all, and the required `validate` aggregate treats a skipped job as success (#7318-#7321: 3
+    # packages/loopover-miner/lib-only PRs merged this way with validate-tests never running). Running the
+    # shards guarantees the 6 uploads so Codecov posts a real patch verdict covering whichever package
+    # actually changed (review-enrichment/** via the `rees` flag from validate-code; packages/loopover-mcp,
+    # packages/loopover-engine, packages/loopover-miner, and packages/discovery-index via their entries in
+    # vitest.config.ts's coverage.include, exercised by the root test/** suite these shards already run).
+    # Draft PRs still skip the whole fan-out (#6448), so these triggers only apply to ready PRs.
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.discoveryIndex == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -731,8 +744,9 @@ jobs:
   validate-tests-merge:
     name: validate-tests-merge
     needs: [changes, validate-tests]
-    # Same REES trigger as validate-tests: when shards ran for a REES-only PR, merge their reports too.
-    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true')) }}
+    # Same trigger as validate-tests: whenever shards ran (REES/mcp/engine/miner/discoveryIndex-only PRs
+    # included), merge their reports too.
+    if: ${{ github.event_name == 'push' || (github.event.pull_request.draft != true && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.rees == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.discoveryIndex == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
