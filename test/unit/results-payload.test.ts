@@ -55,4 +55,22 @@ describe("buildResultsPayload — packages a completed loop iteration (#4801)", 
     expect(p.totals.files).toBe(MAX_DIFF_PREVIEW_FILES + 3);
     expect(p.summary).toContain(`${MAX_DIFF_PREVIEW_FILES + 3} files changed`); // plural
   });
+
+  it("redacts a secret-shaped title before splicing it into the public-safe summary (#7249)", () => {
+    const p = buildResultsPayload({
+      repoFullName: "acme/widgets",
+      prNumber: 7,
+      title: "Rotate leaked key sk-ABCDEFGHIJKLMNOP123456 in config",
+      changedFiles: [{ path: "src/config.ts", additions: 1, deletions: 1 }],
+      status: "open",
+    });
+    expect(p.summary).not.toContain("sk-ABCDEFGHIJKLMNOP123456");
+    expect(p.summary).toBe("Opened PR #7 in acme/widgets: Rotate leaked key [redacted] in config. 1 file changed (+1 / -1). Status: open.");
+  });
+
+  it("leaves a benign title byte-for-byte unchanged (no regression for the common case, #7249)", () => {
+    const title = "Uploads should retry on 5xx";
+    const p = buildResultsPayload({ repoFullName: "acme/widgets", prNumber: 12, title, changedFiles: [] });
+    expect(p.summary).toBe(`Opened PR #12 in acme/widgets: ${title}. no file changes. Status: open.`);
+  });
 });
