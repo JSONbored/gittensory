@@ -281,4 +281,32 @@ describe("rankCandidateIssues (#2302 follow-up)", () => {
     expect(ranked[0]?.freshness).toBeGreaterThan(0);
     vi.useRealTimers();
   });
+
+  it("drops slugs with extra path segments and normalizes malformed optional metadata", () => {
+    const summary = rankCandidateIssuesWithSummary(
+      [
+        rawIssue({ repoFullName: "acme/widgets/extra" }),
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 7,
+          title: "Sparse metadata",
+          commentsCount: "lots",
+          aiPolicyAllowed: true,
+          aiPolicySource: "somethingelse",
+        } as unknown as ReturnType<typeof rawIssue>,
+      ],
+      { nowMs: NOW },
+    );
+
+    // The three-segment slug is rejected the same as any other malformed repo.
+    expect(summary.skippedInvalid).toBe(1);
+    const issue = summary.issues[0];
+    expect(issue?.issueNumber).toBe(7);
+    // Absent labels, non-finite commentsCount, missing timestamps and an unrecognized ai-policy source all fall back cleanly.
+    expect(issue?.labels).toEqual([]);
+    expect(issue?.commentsCount).toBe(0);
+    expect(issue?.createdAt).toBeNull();
+    expect(issue?.updatedAt).toBeNull();
+    expect(issue?.aiPolicySource).toBe("none");
+  });
 });

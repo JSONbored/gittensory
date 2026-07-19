@@ -70,4 +70,15 @@ describe("miner store-db-adapter seam (#7175 part 1)", () => {
     const db = new DatabaseSync(":memory:");
     expect(await createD1Adapter(nodeSqliteDriver(db)).dump()).toBeInstanceOf(ArrayBuffer);
   });
+
+  it("first(colName) returns the named column, and null when that column's value is null", async () => {
+    const db = new DatabaseSync(":memory:");
+    const d1 = createD1Adapter(nodeSqliteDriver(db));
+    await d1.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+    await d1.prepare("INSERT INTO t (name) VALUES (?)").bind("a").run();
+    await d1.prepare("INSERT INTO t (name) VALUES (NULL)").run();
+    expect(await d1.prepare("SELECT name FROM t WHERE id = ?").bind(1).first<string>("name")).toBe("a");
+    // A present row whose selected column is SQL NULL still resolves to null, not undefined.
+    expect(await d1.prepare("SELECT name FROM t WHERE id = ?").bind(2).first<string>("name")).toBeNull();
+  });
 });

@@ -198,4 +198,30 @@ describe("initPortfolioQueueManager().claimNextBatch() (#4285)", () => {
 
     expect(claimed.map((entry) => entry.identifier)).toEqual(["two"]);
   });
+
+  it("skips entries with a non-string repoFullName/identifier and tolerates non-array input", () => {
+    expect(entriesToPortfolioQueue(undefined as never).buckets).toEqual([]);
+    const buckets = entriesToPortfolioQueue([
+      { repoFullName: 123, identifier: "x", priority: 0, status: "queued", enqueuedAt: "t1" },
+      { repoFullName: "acme/alpha", identifier: 456, priority: 0, status: "queued", enqueuedAt: "t2" },
+      { repoFullName: "acme/alpha", identifier: "ok", priority: 0, status: "queued", enqueuedAt: "t3" },
+    ] as unknown as QueueEntry[]).buckets;
+    expect(buckets.map((bucket) => bucket.repoFullName)).toEqual(["acme/alpha"]);
+    expect(buckets[0]?.items.map((item) => item.id)).toHaveLength(1);
+  });
+
+  it("opens its own store and applies default caps/lease when only a dbPath is supplied", () => {
+    const manager = initPortfolioQueueManager({ dbPath: ":memory:", staleLeaseMs: 1000 });
+    try {
+      // caps omitted -> the manager's own default of one global / one per-repo slot.
+      expect(manager.caps).toEqual({ globalWipCap: 1, perRepoWipCap: 1 });
+      expect(manager.dbPath).toBe(":memory:");
+      manager.enqueue({ repoFullName: "acme/alpha", identifier: "x" });
+      // reclaimStuckItems is a no-op on a fresh lease, both with an explicit and the default lease bound.
+      expect(manager.reclaimStuckItems(1000)).toEqual([]);
+      expect(manager.reclaimStuckItems()).toEqual([]);
+    } finally {
+      manager.close();
+    }
+  });
 });

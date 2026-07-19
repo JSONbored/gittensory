@@ -192,6 +192,68 @@ describe("PR disposition poller (#5135)", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(3000);
     timeoutSpy.mockRestore();
   });
+
+  it("treats a blank apiBaseUrl as the default GitHub API base URL", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("https://api.github.com/repos/acme/widgets/pulls/22");
+      return prResponse({ state: "closed", merged: true });
+    });
+
+    await expect(
+      pollPrDisposition("acme/widgets", 22, { apiBaseUrl: "   ", fetchFn }),
+    ).resolves.toMatchObject({ merged: true });
+  });
+
+  it("rejects a repoFullName that carries extra path segments or is not a string", async () => {
+    const fetchFn = vi.fn();
+    await expect(
+      pollPrDisposition("acme/widgets/extra", 1, { apiBaseUrl: API, fetchFn }),
+    ).rejects.toThrow("invalid_repo_full_name");
+    await expect(
+      pollPrDisposition(42 as never, 1, { apiBaseUrl: API, fetchFn }),
+    ).rejects.toThrow("invalid_repo_full_name");
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a GitHub error response with no message body as the bare status code", async () => {
+    const fetchFn = vi.fn().mockResolvedValueOnce(jsonResponse({}, { status: 404 }));
+    await expect(pollPrDisposition("acme/widgets", 23, { apiBaseUrl: API, fetchFn })).rejects.toThrow(
+      /^github_404$/,
+    );
+  });
+
+  it("falls back to the global fetch when no fetchFn is injected", async () => {
+    const globalFetch = vi.fn(async () =>
+      prResponse({ state: "closed", merged: true, closed_at: "2026-07-12T00:00:00Z" }),
+    );
+    vi.stubGlobal("fetch", globalFetch);
+    try {
+      const result = await pollPrDisposition("acme/widgets", 21, { apiBaseUrl: API, sleepFn: async () => {} });
+      expect(result).toMatchObject({ state: "closed", merged: true });
+      expect(globalFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses the built-in setTimeout backoff when no sleepFn is injected", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(prResponse({ state: "open" }))
+      .mockResolvedValueOnce(prResponse({ state: "closed", merged: true, closed_at: "2026-07-12T00:00:00Z" }));
+
+    // No sleepFn -> the default `setTimeout`-backed sleep runs; a 1ms interval keeps the real timer instant.
+    const result = await pollPrDisposition("acme/widgets", 20, {
+      apiBaseUrl: API,
+      fetchFn,
+      maxAttempts: 2,
+      minIntervalMs: 1,
+      maxIntervalMs: 1,
+    });
+
+    expect(result).toMatchObject({ state: "closed", merged: true, attempts: 2 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("classifyPrDisposition (#5135)", () => {
