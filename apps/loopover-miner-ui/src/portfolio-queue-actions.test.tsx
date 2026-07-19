@@ -24,7 +24,14 @@ import {
 const fixtureSummary = {
   total: 2,
   byStatus: { queued: 0, in_progress: 1, done: 1 },
-  repos: [{ repoFullName: "acme/widgets", byStatus: { queued: 0, in_progress: 1, done: 1 }, total: 2 }],
+  repos: [
+    {
+      repoFullName: "acme/widgets",
+      apiBaseUrl: "https://api.github.com",
+      byStatus: { queued: 0, in_progress: 1, done: 1 },
+      total: 2,
+    },
+  ],
   oldestQueuedAgeMs: null,
 };
 

@@ -23,8 +23,18 @@ const fixtureSummary: PortfolioQueueSummary = {
   total: 4,
   byStatus: { queued: 2, in_progress: 1, done: 1 },
   repos: [
-    { repoFullName: "acme/another-repo", byStatus: { queued: 1, in_progress: 0, done: 1 }, total: 2 },
-    { repoFullName: "acme/secret-repo", byStatus: { queued: 1, in_progress: 1, done: 0 }, total: 2 },
+    {
+      repoFullName: "acme/another-repo",
+      apiBaseUrl: "https://api.github.com",
+      byStatus: { queued: 1, in_progress: 0, done: 1 },
+      total: 2,
+    },
+    {
+      repoFullName: "acme/secret-repo",
+      apiBaseUrl: "https://api.github.com",
+      byStatus: { queued: 1, in_progress: 1, done: 0 },
+      total: 2,
+    },
   ],
   oldestQueuedAgeMs: 5_400_000,
 };
@@ -75,6 +85,7 @@ function manyRepos(count: number): PortfolioRepoSummary[] {
   // Descending totals so the default sort (total desc) puts repo-00 first — mirrors ledgers' manyEventTypes.
   return Array.from({ length: count }, (_, index) => ({
     repoFullName: `acme/repo-${String(index).padStart(2, "0")}`,
+    apiBaseUrl: "https://api.github.com",
     byStatus: { queued: count - index, in_progress: 0, done: 0 },
     total: count - index,
   }));
@@ -145,8 +156,18 @@ describe("PortfolioQueueView (#4306, per-repo detail added by #4846)", () => {
       total: 4,
       byStatus: { queued: 4, in_progress: 0, done: 0 },
       repos: [
-        { repoFullName: "acme/zeta", byStatus: { queued: 2, in_progress: 0, done: 0 }, total: 2 },
-        { repoFullName: "acme/alpha", byStatus: { queued: 2, in_progress: 0, done: 0 }, total: 2 },
+        {
+          repoFullName: "acme/zeta",
+          apiBaseUrl: "https://api.github.com",
+          byStatus: { queued: 2, in_progress: 0, done: 0 },
+          total: 2,
+        },
+        {
+          repoFullName: "acme/alpha",
+          apiBaseUrl: "https://api.github.com",
+          byStatus: { queued: 2, in_progress: 0, done: 0 },
+          total: 2,
+        },
       ],
       oldestQueuedAgeMs: null,
     };
@@ -306,7 +327,10 @@ function fakeCollectPortfolioDashboard(
   options: { nowMs: number },
 ): PortfolioQueueSummary {
   const byStatus = { queued: 0, in_progress: 0, done: 0 };
-  const perRepo = new Map<string, { repoFullName: string; byStatus: typeof byStatus; total: number }>();
+  const perRepo = new Map<
+    string,
+    { repoFullName: string; apiBaseUrl: string; byStatus: typeof byStatus; total: number }
+  >();
   let total = 0;
   let oldestQueuedMs: number | null = null;
   for (const entry of sources.portfolioQueue.listQueue()) {
@@ -315,7 +339,15 @@ function fakeCollectPortfolioDashboard(
     byStatus[status] += 1;
     let repo = perRepo.get(entry.repoFullName);
     if (!repo) {
-      repo = { repoFullName: entry.repoFullName, byStatus: { queued: 0, in_progress: 0, done: 0 }, total: 0 };
+      // Fixed default apiBaseUrl: this fixture only exercises single-host WIRING (see the comment above), never
+      // host-scoped grouping -- that is the real portfolio-dashboard.js's own concern, covered by
+      // test/unit/miner-portfolio-dashboard.test.ts.
+      repo = {
+        repoFullName: entry.repoFullName,
+        apiBaseUrl: "https://api.github.com",
+        byStatus: { queued: 0, in_progress: 0, done: 0 },
+        total: 0,
+      };
       perRepo.set(entry.repoFullName, repo);
     }
     repo.byStatus[status] += 1;
@@ -361,11 +393,13 @@ describe("handlePortfolioQueueRequest (#4306, reunified with the CLI's queue das
       repos: [
         {
           repoFullName: "private-org/another-repo",
+          apiBaseUrl: "https://api.github.com",
           byStatus: { queued: 1, in_progress: 0, done: 1 },
           total: 2,
         },
         {
           repoFullName: "private-org/secret-repo",
+          apiBaseUrl: "https://api.github.com",
           byStatus: { queued: 1, in_progress: 1, done: 0 },
           total: 2,
         },

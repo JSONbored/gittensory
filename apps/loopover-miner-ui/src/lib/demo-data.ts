@@ -69,10 +69,30 @@ export const DEMO_PORTFOLIO_QUEUE_SUMMARY: PortfolioQueueSummary = {
   total: 27,
   byStatus: { queued: 9, in_progress: 3, done: 15 },
   repos: [
-    { repoFullName: "acme/widgets", byStatus: { queued: 4, in_progress: 1, done: 6 }, total: 11 },
-    { repoFullName: "acme/api-gateway", byStatus: { queued: 2, in_progress: 1, done: 4 }, total: 7 },
-    { repoFullName: "acme/docs-site", byStatus: { queued: 1, in_progress: 0, done: 3 }, total: 4 },
-    { repoFullName: "northwind/inventory", byStatus: { queued: 2, in_progress: 1, done: 2 }, total: 5 },
+    {
+      repoFullName: "acme/widgets",
+      apiBaseUrl: "https://forge.example.com",
+      byStatus: { queued: 4, in_progress: 1, done: 6 },
+      total: 11,
+    },
+    {
+      repoFullName: "acme/api-gateway",
+      apiBaseUrl: "https://forge.example.com",
+      byStatus: { queued: 2, in_progress: 1, done: 4 },
+      total: 7,
+    },
+    {
+      repoFullName: "acme/docs-site",
+      apiBaseUrl: "https://forge.example.com",
+      byStatus: { queued: 1, in_progress: 0, done: 3 },
+      total: 4,
+    },
+    {
+      repoFullName: "northwind/inventory",
+      apiBaseUrl: "https://forge.example.com",
+      byStatus: { queued: 2, in_progress: 1, done: 2 },
+      total: 5,
+    },
   ],
   oldestQueuedAgeMs: 6 * 60 * 60 * 1000, // 6h
 };

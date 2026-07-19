@@ -16,6 +16,7 @@ export type QueueStatusCounts = Record<QueueStatus, number>;
 
 export type PortfolioRepoSummary = {
   repoFullName: string;
+  apiBaseUrl: string;
   byStatus: QueueStatusCounts;
   total: number;
 };
@@ -38,7 +39,12 @@ function isQueueStatusCounts(value: unknown): value is QueueStatusCounts {
 function isPortfolioRepoSummary(value: unknown): value is PortfolioRepoSummary {
   if (typeof value !== "object" || value === null) return false;
   const repo = value as Record<string, unknown>;
-  return typeof repo.repoFullName === "string" && isQueueStatusCounts(repo.byStatus) && typeof repo.total === "number";
+  return (
+    typeof repo.repoFullName === "string" &&
+    typeof repo.apiBaseUrl === "string" &&
+    isQueueStatusCounts(repo.byStatus) &&
+    typeof repo.total === "number"
+  );
 }
 
 function isPortfolioQueueSummary(value: unknown): value is PortfolioQueueSummary {
