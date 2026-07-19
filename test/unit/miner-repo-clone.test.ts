@@ -42,8 +42,31 @@ describe("resolveRepoCloneBaseDir / resolveRepoCloneDir (#5132)", () => {
     expect(resolveRepoCloneDir("acme/widgets", { LOOPOVER_MINER_CONFIG_DIR: "/cfg" })).toBe("/cfg/repos/acme/widgets");
   });
 
+  it("covers env fallbacks: omitted env, blank/non-string overrides, and XDG home", () => {
+    // Omitted env reads process.env (undefined-arm of `env === undefined ? process.env : env`).
+    expect(typeof resolveRepoCloneBaseDir()).toBe("string");
+    // Blank / non-string config-dir and clone-dir fall through; blank XDG falls to ~/.config.
+    expect(resolveRepoCloneBaseDir({ LOOPOVER_MINER_REPO_CLONE_DIR: "  " , LOOPOVER_MINER_CONFIG_DIR: "  " })).toMatch(
+      /loopover-miner[/\\]repos$/,
+    );
+    expect(
+      resolveRepoCloneBaseDir({
+        LOOPOVER_MINER_REPO_CLONE_DIR: undefined,
+        LOOPOVER_MINER_CONFIG_DIR: undefined,
+        XDG_CONFIG_HOME: "/xdg-home",
+      }),
+    ).toBe("/xdg-home/loopover-miner/repos");
+    expect(
+      resolveRepoCloneBaseDir({
+        XDG_CONFIG_HOME: "   ",
+      }),
+    ).toMatch(/loopover-miner[/\\]repos$/);
+  });
+
   it("rejects a malformed repoFullName", () => {
     expect(() => resolveRepoCloneDir("not-a-repo")).toThrow("invalid_repo_full_name");
+    expect(() => resolveRepoCloneDir(null as never)).toThrow("invalid_repo_full_name");
+    expect(() => resolveRepoCloneDir(42 as never)).toThrow("invalid_repo_full_name");
   });
 
   it("REGRESSION: rejects '.'/'..' path-traversal segments in owner or repo, in either position", () => {

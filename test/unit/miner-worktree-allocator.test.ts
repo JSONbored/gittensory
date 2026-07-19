@@ -2,10 +2,13 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import {
+  acquireWorktree,
   closeDefaultWorktreeAllocator,
   isProcessAlive,
   openWorktreeAllocator,
+  releaseWorktree,
   resolveWorktreeAllocatorDbPath,
   resolveWorktreeBaseDir,
 } from "../../packages/loopover-miner/lib/worktree-allocator.js";
@@ -59,6 +62,8 @@ describe("loopover-miner worktree allocator scaffolding (#4298)", () => {
       "/cfg/worktree-allocator.sqlite3",
     );
     expect(resolveWorktreeBaseDir({ LOOPOVER_MINER_CONFIG_DIR: "/cfg" })).toBe("/cfg/worktrees");
+    expect(resolveWorktreeBaseDir({ XDG_CONFIG_HOME: "/xdg-home" })).toBe("/xdg-home/loopover-miner/worktrees");
+    expect(resolveWorktreeBaseDir({ XDG_CONFIG_HOME: "  " })).toMatch(/loopover-miner[/\\]worktrees$/);
   });
 
   it("creates a permissioned SQLite store and allocates distinct worktree paths", () => {
@@ -80,7 +85,9 @@ describe("loopover-miner worktree allocator scaffolding (#4298)", () => {
     const second = allocator.acquire("attempt-b", "acme/widgets");
     expect(second.worktreePath).toBe(first.worktreePath);
     expect(() => allocator.acquire("", "acme/widgets")).toThrow("invalid_attempt_id");
+    expect(() => allocator.acquire(null as never, "acme/widgets")).toThrow("invalid_attempt_id");
     expect(() => allocator.acquire("attempt-c", "bad")).toThrow("invalid_repo_full_name");
+    expect(() => allocator.acquire("attempt-c", null as never)).toThrow("invalid_repo_full_name");
     expect(allocator.release("missing")).toBeNull();
   });
 
@@ -104,6 +111,38 @@ describe("loopover-miner worktree allocator scaffolding (#4298)", () => {
     expect(() => openWorktreeAllocator({ maxConcurrency: 0 })).toThrow("invalid_max_concurrency");
     expect(() => openWorktreeAllocator({ dbPath: "  " })).toThrow("invalid_worktree_allocator_db_path");
     expect(() => openWorktreeAllocator({ worktreeBaseDir: "  " })).toThrow("invalid_worktree_base_dir");
+  });
+
+  it("defaults maxConcurrency when omitted and rejects a store with no free slots left", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-worktree-allocator-noslot-"));
+    roots.push(root);
+    const dbPath = join(root, "worktree-allocator.sqlite3");
+    const worktreeBaseDir = join(root, "worktrees");
+    // Omit maxConcurrency so normalizeMaxConcurrency's nullish arm runs.
+    const allocator = openWorktreeAllocator({ dbPath, worktreeBaseDir });
+    allocators.push(allocator);
+    expect(allocator.maxConcurrency).toBeGreaterThanOrEqual(1);
+
+    // Empty the slot table so activeCount stays under the cap but selectFreeSlot returns nothing.
+    const db = new DatabaseSync(dbPath);
+    db.exec("DELETE FROM worktree_slots");
+    db.close();
+    expect(() => allocator.acquire("attempt-empty", "acme/widgets")).toThrow("worktree_capacity_exceeded");
+  });
+
+  it("routes the default singleton acquire/release/close helpers", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-worktree-allocator-default-"));
+    roots.push(root);
+    vi.stubEnv("LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB", join(root, "default.sqlite3"));
+    vi.stubEnv("LOOPOVER_MINER_WORKTREE_DIR", join(root, "worktrees"));
+    closeDefaultWorktreeAllocator();
+    const first = acquireWorktree("attempt-default", "acme/widgets");
+    expect(first.status).toBe("active");
+    expect(releaseWorktree("attempt-default")?.worktreePath).toBe(first.worktreePath);
+    closeDefaultWorktreeAllocator();
+    // Second close is a no-op once the singleton is already cleared.
+    closeDefaultWorktreeAllocator();
+    vi.unstubAllEnvs();
   });
 
   it("returns the same allocation for repeated acquire on one attempt id", () => {

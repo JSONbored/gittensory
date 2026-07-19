@@ -317,6 +317,10 @@ export function openWorktreeAllocator(options: {
       db.exec("BEGIN IMMEDIATE");
       try {
         const raced = getByAttempt.get(normalizedAttempt) as WorktreeSlotRow | undefined;
+        // In-transaction re-check: only reachable when another process activates the same attempt_id
+        // between the pre-BEGIN read and this transaction (covered by miner-worktree-allocator-collisions
+        // via child processes; those runs cannot attribute coverage back into this process).
+        /* v8 ignore next 4 -- multi-process race; see miner-worktree-allocator-collisions.test.ts */
         if (raced?.status === "active") {
           db.exec("COMMIT");
           return rowToAllocation(raced);
