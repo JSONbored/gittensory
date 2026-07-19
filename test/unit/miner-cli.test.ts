@@ -192,6 +192,67 @@ describe("loopover-miner startup update check (#2331)", () => {
     expect(compareSemver("0.1.0-9007199254740992", "0.1.0-9007199254740992")).toBe(0);
   });
 
+  it("returns null for an unparseable version string on either side", () => {
+    expect(compareSemver("not-a-version", "0.1.0")).toBeNull();
+    expect(compareSemver("0.1.0", "not-a-version")).toBeNull();
+    expect(compareSemver("also-not-a-version", "not-a-version")).toBeNull();
+  });
+
+  it("compares prerelease identifier lists of different lengths (the shorter list sorts lower)", () => {
+    expect(compareSemver("0.1.0-alpha", "0.1.0-alpha.1")).toBe(-1);
+    expect(compareSemver("0.1.0-alpha.1", "0.1.0-alpha")).toBe(1);
+  });
+
+  it("ranks a numeric prerelease identifier below a non-numeric one at the same position", () => {
+    expect(compareSemver("0.1.0-1", "0.1.0-alpha")).toBe(-1);
+    expect(compareSemver("0.1.0-alpha", "0.1.0-1")).toBe(1);
+  });
+
+  it("compares two differing non-numeric prerelease identifiers lexicographically", () => {
+    expect(compareSemver("0.1.0-alpha", "0.1.0-beta")).toBe(-1);
+    expect(compareSemver("0.1.0-beta", "0.1.0-alpha")).toBe(1);
+  });
+
+  it("compares differing-length numeric prerelease identifiers by length, not value", () => {
+    expect(compareSemver("0.1.0-2", "0.1.0-10")).toBe(-1);
+    expect(compareSemver("0.1.0-10", "0.1.0-2")).toBe(1);
+  });
+
+  it("compares same-length numeric prerelease identifiers lexicographically in both directions", () => {
+    expect(compareSemver("0.1.0-2", "0.1.0-3")).toBe(-1);
+    expect(compareSemver("0.1.0-3", "0.1.0-2")).toBe(1);
+  });
+
+  it("continues past an equal leading numeric identifier to decide on a later one", () => {
+    expect(compareSemver("0.1.0-5.2", "0.1.0-5.3")).toBe(-1);
+    expect(compareSemver("0.1.0-5.3", "0.1.0-5.2")).toBe(1);
+  });
+
+  it("ranks a version with a prerelease below the same version with none, on either side", () => {
+    expect(compareSemver("0.5.0-rc.1", "0.5.0")).toBe(-1);
+    expect(compareSemver("0.5.0", "0.5.0-rc.1")).toBe(1);
+  });
+
+  it("resolveNpmRegistryUrl trims a non-root pathname's trailing slashes", () => {
+    expect(
+      resolveNpmRegistryUrl({
+        LOOPOVER_NPM_REGISTRY_URL: "https://registry.example.com/npm-proxy/",
+      }),
+    ).toBe("https://registry.example.com/npm-proxy");
+  });
+
+  it("fetchLatestPackageVersion builds an unscoped registry path (no %2F encoding)", async () => {
+    const registryUrl = await startRegistryFixture({ latestVersion: "9.9.9" });
+    await expect(
+      fetchLatestPackageVersion({ packageName: "some-unscoped-package", npmRegistryUrl: registryUrl }),
+    ).rejects.toThrow("npm_latest_version_unavailable");
+  });
+
+  it("awaitOpportunisticUpdateCheck swallows a rejecting update check instead of throwing", async () => {
+    const rejecting = Promise.reject(new Error("registry blew up"));
+    await expect(awaitOpportunisticUpdateCheck(rejecting, 50)).resolves.toBeUndefined();
+  });
+
   it("prints a one-line upgrade nudge when npm latest is newer", async () => {
     const registryUrl = await startRegistryFixture({ latestVersion: "9.9.9" });
     const stderr = vi

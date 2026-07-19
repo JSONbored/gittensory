@@ -15,6 +15,7 @@ import {
   latestClosedAt,
   openOrbExportStore,
   resolveAmsCollectorUrl,
+  resolveOrbExportDbPath,
   sendAmsExportBatch,
 } from "../../packages/loopover-miner/lib/orb-export.js";
 import type { OrbExportOutcome, OrbExportRow } from "../../packages/loopover-miner/lib/orb-export.js";
@@ -42,6 +43,10 @@ afterEach(() => {
 describe("orb-export store (#4277)", () => {
   it("defaults to opt-OUT (export disabled unless explicitly enabled)", () => {
     expect(ORB_EXPORT_ENABLED_BY_DEFAULT).toBe(false);
+  });
+
+  it("rejects a blank/whitespace-only db path", () => {
+    expect(() => openOrbExportStore("   ")).toThrow("invalid_orb_export_db_path");
   });
 
   it("generates a stable 256-bit per-instance anon key and persists it across reopens", () => {
@@ -117,6 +122,17 @@ describe("buildAnonymizedOrbBatch", () => {
     );
     expect(batch).toEqual([]);
   });
+
+  it("accepts a plain iterable with no .values() method (a generator), not just an array or Map", () => {
+    // A generator's returned iterator has [Symbol.iterator] but no .values() -- unlike arrays and Maps, both
+    // of which have .values() too, so this is the only realistic way to exercise the non-Map iterable path.
+    function* outcomes(): Generator<OrbExportOutcome> {
+      yield { repoFullName: "owner/repo", prNumber: 3, decision: "merged", closedAt: "2026-01-03T00:00:00Z", reason: null };
+    }
+    const batch = buildAnonymizedOrbBatch(outcomes(), anonKey);
+    expect(batch).toHaveLength(1);
+    expect(batch[0]?.decision).toBe("merged");
+  });
 });
 
 describe("collectOrbExportBatch", () => {
@@ -187,6 +203,17 @@ describe("resolveAmsCollectorUrl (#5681)", () => {
     expect(resolveAmsCollectorUrl({})).toBe(DEFAULT_AMS_COLLECTOR_URL);
     expect(resolveAmsCollectorUrl({ LOOPOVER_MINER_AMS_COLLECTOR_URL: "  " })).toBe(DEFAULT_AMS_COLLECTOR_URL);
     expect(resolveAmsCollectorUrl({ LOOPOVER_MINER_AMS_COLLECTOR_URL: "https://example.test/ingest" })).toBe("https://example.test/ingest");
+  });
+});
+
+describe("resolveOrbExportDbPath (#4277)", () => {
+  it("resolves the DB path from env override, miner config dir, XDG config, then the home default", () => {
+    expect(resolveOrbExportDbPath({ LOOPOVER_MINER_ORB_EXPORT_DB: "/custom/d.sqlite3" })).toBe("/custom/d.sqlite3");
+    expect(resolveOrbExportDbPath({ LOOPOVER_MINER_CONFIG_DIR: "/custom/config" })).toBe(
+      "/custom/config/orb-export.sqlite3",
+    );
+    expect(resolveOrbExportDbPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/loopover-miner/orb-export.sqlite3");
+    expect(resolveOrbExportDbPath({})).toMatch(/\/\.config\/loopover-miner\/orb-export\.sqlite3$/);
   });
 });
 

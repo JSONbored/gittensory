@@ -112,6 +112,29 @@ describe("resolveEffectiveDenyRules() (#4522)", () => {
 });
 
 describe("initDenyHookSynthesisStore() (#4522)", () => {
+  it("rejects a blank/whitespace-only db path", () => {
+    expect(() => initDenyHookSynthesisStore("   ")).toThrow("invalid_deny_hook_synthesis_db_path");
+  });
+
+  it("skips the forge-scope migration on a second open of an already-migrated file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "miner-deny-hook-synthesis-remigrate-"));
+    tempDirs.push(dir);
+    const dbPath = join(dir, "d.sqlite3");
+
+    const first = initDenyHookSynthesisStore(dbPath);
+    first.refreshProposals("acme/widgets", [
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+    ]);
+    first.close();
+
+    // Reopening the same file exercises the "api_base_url column already present" skip -- the second store still
+    // reads back exactly what the first one wrote.
+    const second = initDenyHookSynthesisStore(dbPath);
+    stores.push(second);
+    expect(second.listProposals("acme/widgets", "https://api.github.com")).toHaveLength(1);
+  });
+
   it("refreshes proposals, preserves approval, and resolves effective rules from the store", () => {
     const store = tempStore();
     const history = [
@@ -181,6 +204,12 @@ describe("initDenyHookSynthesisStore() (#4522)", () => {
       expect(() => store.listProposals("acme/widgets", "  ")).toThrow("invalid_api_base_url");
       expect(() => store.refreshProposals("acme/widgets", [], {}, 42 as never)).toThrow("invalid_api_base_url");
       expect(() => store.setProposalStatus("acme/widgets", "x", "approved", "  ")).toThrow("invalid_api_base_url");
+    });
+
+    it("rejects a blank proposal id or an unrecognized status", () => {
+      const store = tempStore();
+      expect(() => store.setProposalStatus("acme/widgets", "   ", "approved")).toThrow("invalid_proposal_id");
+      expect(() => store.setProposalStatus("acme/widgets", "path:abc", "bogus")).toThrow("invalid_proposal_status");
     });
 
     it("migrates an existing pre-#5563 file, backfilling api_base_url and preserving every row", () => {

@@ -328,4 +328,125 @@ describe("loopover-miner manage poll (#2323/#2325)", () => {
       error: "github_404: not found",
     });
   });
+
+  it("parseManagePollArgs rejects an invalid owner/repo argument", () => {
+    expect(parseManagePollArgs(["acme", "42"])).toEqual({
+      error: "Repository must be in owner/repo form.",
+    });
+    expect(parseManagePollArgs(["acme/widgets/extra", "42"])).toEqual({
+      error: "Repository must be in owner/repo form.",
+    });
+  });
+
+  it("parseManagePollArgs rejects a malformed --branch flag", () => {
+    expect(parseManagePollArgs(["acme/widgets", "42", "--branch"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner manage poll"),
+    });
+    expect(parseManagePollArgs(["acme/widgets", "42", "--branch", "--json"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner manage poll"),
+    });
+  });
+
+  it("parseManagePollArgs rejects an unrecognized option", () => {
+    expect(parseManagePollArgs(["acme/widgets", "42", "--bogus"])).toEqual({
+      error: "Unknown option: --bogus",
+    });
+  });
+
+  it("buildManagePollEventPayload rejects an invalid PR number or poll result", () => {
+    expect(() => buildManagePollEventPayload(0, pollResult("success"))).toThrow("invalid_pr_number");
+    expect(() => buildManagePollEventPayload(7, null as never)).toThrow("invalid_poll_result");
+  });
+
+  it("recordManagePollSnapshot validates its own input shape independent of the CLI parser", async () => {
+    const { eventLedger } = tempStores();
+    await expect(
+      recordManagePollSnapshot(null as never, { eventLedger, pollCheckRuns: vi.fn() }),
+    ).rejects.toThrow("invalid_manage_poll_input");
+
+    await expect(
+      recordManagePollSnapshot(
+        { repoFullName: undefined as never, prNumber: 1 },
+        { eventLedger, pollCheckRuns: vi.fn() },
+      ),
+    ).rejects.toThrow("invalid_repo_full_name");
+
+    await expect(
+      recordManagePollSnapshot(
+        { repoFullName: "acme/widgets", prNumber: 0 },
+        { eventLedger, pollCheckRuns: vi.fn() },
+      ),
+    ).rejects.toThrow("invalid_pr_number");
+
+    await expect(
+      recordManagePollSnapshot(
+        { repoFullName: "acme/widgets", prNumber: 1 },
+        {
+          eventLedger,
+          portfolioQueue: {} as never,
+          pollCheckRuns: vi.fn().mockResolvedValue(pollResult("success")),
+        },
+      ),
+    ).rejects.toThrow("invalid_portfolio_queue");
+  });
+
+  it("recordManagePollSnapshot defaults githubToken to an empty string when none is provided", async () => {
+    const { eventLedger, portfolioQueue } = tempStores();
+    const pollCheckRuns = vi.fn().mockResolvedValue(pollResult("success"));
+
+    await recordManagePollSnapshot(
+      { repoFullName: "acme/widgets", prNumber: 1 },
+      { eventLedger, portfolioQueue, pollCheckRuns },
+    );
+
+    expect(pollCheckRuns).toHaveBeenCalledWith("acme/widgets", 1, expect.objectContaining({ githubToken: "" }));
+  });
+
+  it("recordManagePollSnapshot falls back to the real ci-poller pollCheckRuns when none is injected", async () => {
+    const { eventLedger, portfolioQueue } = tempStores();
+    const fetchFn = vi.fn(async () => Response.json({ message: "Not Found" }, { status: 404 }));
+
+    await expect(
+      recordManagePollSnapshot(
+        { repoFullName: "acme/widgets", prNumber: 1 },
+        { eventLedger, portfolioQueue, fetchFn, githubToken: "token" },
+      ),
+    ).rejects.toThrow("github_404");
+    expect(fetchFn).toHaveBeenCalled();
+  });
+
+  it("runManagePoll opens and closes the default on-disk event ledger and portfolio queue when no override is supplied", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-manage-poll-default-"));
+    roots.push(root);
+    const eventLedgerDbPath = join(root, "event-ledger.sqlite3");
+    const portfolioQueueDbPath = join(root, "portfolio-queue.sqlite3");
+    const previousEventLedgerDbPath = process.env.LOOPOVER_MINER_EVENT_LEDGER_DB;
+    const previousPortfolioQueueDbPath = process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB;
+    process.env.LOOPOVER_MINER_EVENT_LEDGER_DB = eventLedgerDbPath;
+    process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB = portfolioQueueDbPath;
+    try {
+      const pollCheckRuns = vi.fn().mockResolvedValue(pollResult("success"));
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      expect(await runManagePoll(["acme/widgets", "4"], { pollCheckRuns })).toBe(0);
+
+      // runManagePoll owned and closed both stores itself (no init* overrides passed); reopening the same
+      // files confirms the writes were actually persisted through the default code path.
+      const reopenedEventLedger = initEventLedger(eventLedgerDbPath);
+      stores.push(reopenedEventLedger);
+      expect(reopenedEventLedger.readEvents()).toEqual([
+        expect.objectContaining({ type: MANAGE_PR_UPDATE_EVENT, repoFullName: "acme/widgets" }),
+      ]);
+      const reopenedPortfolioQueue = initPortfolioQueueStore(portfolioQueueDbPath);
+      stores.push(reopenedPortfolioQueue);
+      expect(reopenedPortfolioQueue.listQueue("acme/widgets")).toEqual([
+        expect.objectContaining({ identifier: "pr:4" }),
+      ]);
+    } finally {
+      if (previousEventLedgerDbPath === undefined) delete process.env.LOOPOVER_MINER_EVENT_LEDGER_DB;
+      else process.env.LOOPOVER_MINER_EVENT_LEDGER_DB = previousEventLedgerDbPath;
+      if (previousPortfolioQueueDbPath === undefined) delete process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB;
+      else process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB = previousPortfolioQueueDbPath;
+    }
+  });
 });
