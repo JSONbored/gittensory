@@ -15,7 +15,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 /** Records every `new DatabaseSync(path, options)` the module under test performs, so a test can assert the
  *  OPTIONS it opens with (#6765) -- checkLaptopStateSqlite never exposes its own handle. The subclass just
  *  records and delegates, so every other test's behavior is unchanged. */
-const { databaseSyncOptions } = vi.hoisted(() => ({ databaseSyncOptions: [] as Array<Record<string, unknown> | undefined> }));
+const { databaseSyncOptions, throwNonErrorOnOpen } = vi.hoisted(() => ({
+  databaseSyncOptions: [] as Array<Record<string, unknown> | undefined>,
+  throwNonErrorOnOpen: { value: false },
+}));
 
 vi.mock("node:sqlite", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:sqlite")>();
@@ -24,6 +27,13 @@ vi.mock("node:sqlite", async (importOriginal) => {
     // every existing `new DatabaseSync(path)` caller must reach super with its original arity.
     constructor(...args: ConstructorParameters<typeof actual.DatabaseSync>) {
       databaseSyncOptions.push(args[1] as Record<string, unknown> | undefined);
+      // Test-only escape hatch (#6765 follow-up): checkLaptopStateSqlite's catch branch must degrade a
+      // non-Error throw to "not readable" too, not just a real sqlite Error -- node:sqlite itself only ever
+      // throws real Errors, so this is the only way to reach that defensive branch without weakening it.
+      if (throwNonErrorOnOpen.value) {
+        throwNonErrorOnOpen.value = false;
+        throw "not a real Error instance";
+      }
       super(...args);
     }
   }
@@ -33,6 +43,7 @@ import {
   checkDockerPresent,
   checkLaptopStateSqlite,
   initLaptopState,
+  resolveCodexAuthPath,
   resolveLaptopStateDbPath,
   runInit,
 } from "../../packages/loopover-miner/lib/laptop-init.js";
@@ -57,6 +68,19 @@ describe("loopover-miner laptop init (#2329)", () => {
       .toBe("/custom/state/laptop-state.sqlite3");
     expect(resolveLaptopStateDbPath({ XDG_CONFIG_HOME: "/xdg" }))
       .toBe("/xdg/loopover-miner/laptop-state.sqlite3");
+  });
+
+  it("falls all the way back to ~/.config/loopover-miner when neither override is set", () => {
+    const path = resolveLaptopStateDbPath({});
+    expect(path.replaceAll("\\", "/")).toMatch(/\/\.config\/loopover-miner\/laptop-state\.sqlite3$/);
+  });
+
+  it("resolveCodexAuthPath: CODEX_HOME wins, then $HOME/.codex, then the real homedir", () => {
+    expect(resolveCodexAuthPath({ CODEX_HOME: "/custom/codex" }).replaceAll("\\", "/"))
+      .toBe("/custom/codex/auth.json");
+    expect(resolveCodexAuthPath({ HOME: "/home/miner" }).replaceAll("\\", "/"))
+      .toBe("/home/miner/.codex/auth.json");
+    expect(resolveCodexAuthPath({}).replaceAll("\\", "/")).toMatch(/\/\.codex\/auth\.json$/);
   });
 
   it("fresh init creates the state dir and SQLite file", () => {
@@ -135,6 +159,18 @@ describe("loopover-miner laptop init (#2329)", () => {
     const check = checkLaptopStateSqlite(env);
     expect(check.ok).toBe(false);
     expect(check.detail).toContain(dbPath);
+  });
+
+  it("doctor sqlite check degrades a non-Error throw to 'not readable' too", () => {
+    const root = tempRoot();
+    const env = { LOOPOVER_MINER_CONFIG_DIR: join(root, "state") };
+    initLaptopState(env);
+    throwNonErrorOnOpen.value = true;
+
+    const check = checkLaptopStateSqlite(env);
+
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain("not readable");
   });
 
   it("doctor reports absent Docker gracefully (informational, always ok)", () => {

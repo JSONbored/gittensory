@@ -8,7 +8,7 @@ vi.mock("@loopover/engine", async () => {
 });
 
 import { checkMinerKillSwitch, recordMinerKillSwitchTransition } from "../../packages/loopover-miner/lib/governor-kill-switch.js";
-import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { closeDefaultGovernorLedger, initGovernorLedger, readGovernorEvents } from "../../packages/loopover-miner/lib/governor-ledger.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
@@ -87,6 +87,25 @@ describe("recordMinerKillSwitchTransition (#2341)", () => {
     const rows = ledger.readGovernorEvents({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.repoFullName).toBeNull();
+  });
+
+  it("defaults to the real appendGovernorEvent (the default ledger) when no append option is given", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-kill-switch-default-append-"));
+    roots.push(root);
+    vi.stubEnv("LOOPOVER_MINER_GOVERNOR_LEDGER_DB", join(root, "governor-ledger.sqlite3"));
+    try {
+      const tripped = recordMinerKillSwitchTransition({
+        repoFullName: "acme/widgets",
+        actionClass: "open_pr",
+        previousScope: "none",
+        scope: "repo",
+      });
+      expect(tripped?.eventType).toBe("kill_switch");
+      expect(readGovernorEvents({ repoFullName: "acme/widgets" })).toHaveLength(1);
+    } finally {
+      closeDefaultGovernorLedger();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("is a no-op and appends nothing when the scope has not changed", () => {

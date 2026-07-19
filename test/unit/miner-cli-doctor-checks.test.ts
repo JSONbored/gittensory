@@ -57,6 +57,20 @@ describe("loopover-miner doctor — coding-agent CLI checks (#4304)", () => {
     expect(check.detail).toMatch(/^not installed \(optional/);
   });
 
+  it("claude: defaults to process.env when the env option is omitted", () => {
+    const check = checkClaudeCliPresent({ resolveClaudePath: () => null });
+    expect(check.ok).toBe(true);
+    expect(check.detail).toMatch(/^not installed \(optional/);
+  });
+
+  it("codex: defaults to process.env when the env option is omitted, and to the real resolveCodexAuthPath when that option is omitted too", () => {
+    const check = checkCodexCliPresent({ resolveCodexPath: () => "/usr/bin/codex" });
+    expect(check.ok).toBe(true);
+    // The real, non-injected resolveCodexAuthPath resolves under $HOME/.codex or $CODEX_HOME by default --
+    // on a machine with no such auth.json present this reports the unauthenticated advisory, not a throw.
+    expect(check.detail).toMatch(/^found at \/usr\/bin\/codex/);
+  });
+
   it("runDoctorChecks includes both coding-agent CLI checks", () => {
     const names = runDoctorChecks({ LOOPOVER_MINER_CONFIG_DIR: tempRoot() }).map((check) => check.name);
     expect(names).toContain("claude-cli-present");

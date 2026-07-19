@@ -51,6 +51,46 @@ describe("loopover-miner leakage-safe replay task generation (#3011)", () => {
       const { scrubbable } = detectForwardReferences("build 12345678 shipped", { knownCommitShas: [] });
       expect(scrubbable).toEqual([]);
     });
+
+    it("keeps a pre-T github issue/pull deep-link untouched", () => {
+      const { scrubbable } = detectForwardReferences("see https://github.com/o/r/issues/42 for context", CONTEXT);
+      expect(scrubbable).toEqual([]);
+    });
+
+    it("scrubs a commit deep-link whose SHA is unknown, and keeps one whose SHA is pre-T", () => {
+      const unknown = detectForwardReferences("fixed in https://github.com/o/r/commit/c0ffee123456", CONTEXT);
+      expect(unknown.scrubbable.map((ref) => ref.value)).toContain("https://github.com/o/r/commit/c0ffee123456");
+
+      const known = detectForwardReferences("fixed in https://github.com/o/r/commit/abc1234def", CONTEXT);
+      expect(known.scrubbable).toEqual([]);
+    });
+
+    it("leaves a bare integer that does NOT name a revealed post-T issue in place, not as residual", () => {
+      const { scrubbable, unscrubbable } = detectForwardReferences("random count 55 appears here", CONTEXT);
+      expect(scrubbable).toEqual([]);
+      expect(unscrubbable).toEqual([]);
+    });
+
+    it("normalizes a non-array or invalid-entry knownCommitShas to the empty set", () => {
+      // No knownCommitShas key at all → toShaSet's Array.isArray guard takes its false branch.
+      const missing = detectForwardReferences("see https://github.com/o/r/commit/abc1234def", { knownIssueMax: 100 });
+      expect(missing.scrubbable.map((ref) => ref.value)).toContain("https://github.com/o/r/commit/abc1234def");
+
+      // A mix of valid and invalid entries → the per-entry type/shape guard takes both branches.
+      const mixed = detectForwardReferences("see https://github.com/o/r/commit/abc1234def", {
+        knownIssueMax: 100,
+        knownCommitShas: ["abc1234def", 42, "not-a-sha!"] as unknown as string[],
+      });
+      expect(mixed.scrubbable).toEqual([]); // abc1234def survived the mixed-validity filter and is still known
+    });
+
+    it("normalizes a non-integer or non-positive revealedIssueNumbers entry to the empty set", () => {
+      const { unscrubbable } = detectForwardReferences("the count reached 300 last week", {
+        knownIssueMax: 100,
+        revealedIssueNumbers: [300, "abc", -5, 12.5] as unknown as number[],
+      });
+      expect(unscrubbable).toEqual([{ kind: "bare-issue-number", value: 300 }]);
+    });
   });
 
   describe("scrubForwardReferences", () => {
@@ -95,6 +135,14 @@ describe("loopover-miner leakage-safe replay task generation (#3011)", () => {
       expect(lint.ok).toBe(false);
       expect(lint.residual).toEqual([{ kind: "bare-issue-number", value: 250 }]);
     });
+
+    it("treats nullish texts as an empty list and wraps a single non-array text", () => {
+      expect(lintFrozenContext(null, CONTEXT)).toEqual({ ok: true, residual: [] });
+      expect(lintFrozenContext(undefined, CONTEXT)).toEqual({ ok: true, residual: [] });
+      const single = lintFrozenContext("leaks 250 in prose", CONTEXT);
+      expect(single.ok).toBe(false);
+      expect(single.residual).toEqual([{ kind: "bare-issue-number", value: 250 }]);
+    });
   });
 
   describe("selectFreezePoint", () => {
@@ -110,6 +158,14 @@ describe("loopover-miner leakage-safe replay task generation (#3011)", () => {
       const result = selectFreezePoint({}, { minPriorCommits: 10, minRevealedCommits: 5 });
       expect(result.eligible).toBe(false);
       expect(result.reasons).toEqual(["insufficient_prior_history", "insufficient_revealed_history"]);
+    });
+
+    it("defaults missing/non-integer thresholds to 0, so any non-negative count clears them", () => {
+      const noThresholds = selectFreezePoint({ priorCommitCount: 1, revealedCommitCount: 1 }, undefined);
+      expect(noThresholds).toEqual({ eligible: true, reasons: [], priorCommitCount: 1, revealedCommitCount: 1 });
+
+      const emptyThresholds = selectFreezePoint({ priorCommitCount: 0, revealedCommitCount: 0 }, {});
+      expect(emptyThresholds.eligible).toBe(true);
     });
   });
 
@@ -243,6 +299,22 @@ describe("loopover-miner leakage-safe replay task generation (#3011)", () => {
         commitCount: 10,
         groundTruth: { merged: true, approach: "refactor" },
       });
+    });
+
+    it("defaults frozenContextTexts/repo/commitT when the candidate omits them", () => {
+      const task = generateReplayTask(
+        { priorCommitCount: 50, revealedCommitCount: 10 },
+        CONTEXT,
+        options,
+      );
+      if (!task.eligible) throw new Error(`expected eligible task, got ${JSON.stringify(task)}`);
+      expect(task.frozen).toEqual({ repo: null, commitT: null, contextTexts: [] });
+    });
+
+    it("defaults a missing revealedGroundTruth to null in the scoring key", () => {
+      const scoringKey = generateReplayScoringKey({ priorCommitCount: 50, revealedCommitCount: 10 }, options);
+      if (!scoringKey.eligible) throw new Error(`expected eligible scoring key, got ${JSON.stringify(scoringKey)}`);
+      expect(scoringKey.groundTruth).toBeNull();
     });
   });
 });

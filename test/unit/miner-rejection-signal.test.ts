@@ -221,6 +221,13 @@ describe("resolveRejectionSignaled (#5132)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("returns false for a non-string repoFullName, without calling fetch", async () => {
+    const fetchImpl = vi.fn();
+    const result = await resolveRejectionSignaled(42 as unknown as string, { fetchImpl });
+    expect(result).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("uses a custom rawContentBaseUrl when provided", async () => {
     const calledUrls: string[] = [];
     const fetchImpl = async (url: string) => {

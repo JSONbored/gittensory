@@ -8,7 +8,7 @@ vi.mock("@loopover/engine", async () => {
 });
 
 import { evaluateGovernorChokepointGate } from "../../packages/loopover-miner/lib/governor-chokepoint.js";
-import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { closeDefaultGovernorLedger, initGovernorLedger, readGovernorEvents } from "../../packages/loopover-miner/lib/governor-ledger.js";
 
 const roots: string[] = [];
 const ledgers: Array<{ close(): void }> = [];
@@ -69,6 +69,20 @@ describe("evaluateGovernorChokepointGate (#2340)", () => {
     expect(result.recorded.eventType).toBe("allowed");
     expect(result.rateLimitBuckets.global.open_pr?.count).toBe(1);
     expect(ledger.readGovernorEvents({ repoFullName: "acme/widgets" })).toHaveLength(1);
+  });
+
+  it("defaults to the real appendGovernorEvent (the default ledger) when no append option is given", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-governor-chokepoint-default-append-"));
+    roots.push(root);
+    vi.stubEnv("LOOPOVER_MINER_GOVERNOR_LEDGER_DB", join(root, "governor-ledger.sqlite3"));
+    try {
+      const result = evaluateGovernorChokepointGate(baseInput());
+      expect(result.decision.allowed).toBe(true);
+      expect(readGovernorEvents({ repoFullName: "acme/widgets" })).toHaveLength(1);
+    } finally {
+      closeDefaultGovernorLedger();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("a kill-switch denial records to the ledger and leaves rate-limit bucket state untouched", () => {
