@@ -32,7 +32,7 @@ describe("gittensor-impact-card.mjs (#7231)", () => {
     await fetchJson("https://api.gittensor.io/repos/x/impact", fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [, init] = fetchImpl.mock.calls[0];
+    const [, init] = fetchImpl.mock.calls[0]!;
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
