@@ -57,6 +57,7 @@ import { Route as DocsHowReviewsWorkRouteImport } from './routes/docs.how-review
 import { Route as DocsGithubAppRouteImport } from './routes/docs.github-app'
 import { Route as DocsFumadocsSpikeApiReferenceRouteImport } from './routes/docs.fumadocs-spike-api-reference'
 import { Route as DocsFederatedFleetIntelligenceRouteImport } from './routes/docs.federated-fleet-intelligence'
+import { Route as DocsCapacityRouteImport } from './routes/docs.capacity'
 import { Route as DocsBranchAnalysisRouteImport } from './routes/docs.branch-analysis'
 import { Route as DocsBetaOnboardingRouteImport } from './routes/docs.beta-onboarding'
 import { Route as DocsAmsUnattendedSchedulingRouteImport } from './routes/docs.ams-unattended-scheduling'
@@ -341,6 +342,11 @@ const DocsFederatedFleetIntelligenceRoute =
     path: '/federated-fleet-intelligence',
     getParentRoute: () => DocsRoute,
   } as any)
+const DocsCapacityRoute = DocsCapacityRouteImport.update({
+  id: '/capacity',
+  path: '/capacity',
+  getParentRoute: () => DocsRoute,
+} as any)
 const DocsBranchAnalysisRoute = DocsBranchAnalysisRouteImport.update({
   id: '/branch-analysis',
   path: '/branch-analysis',
@@ -523,6 +529,7 @@ export interface FileRoutesByFullPath {
   '/docs/ams-unattended-scheduling': typeof DocsAmsUnattendedSchedulingRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
+  '/docs/capacity': typeof DocsCapacityRoute
   '/docs/federated-fleet-intelligence': typeof DocsFederatedFleetIntelligenceRoute
   '/docs/fumadocs-spike-api-reference': typeof DocsFumadocsSpikeApiReferenceRoute
   '/docs/github-app': typeof DocsGithubAppRoute
@@ -598,6 +605,7 @@ export interface FileRoutesByTo {
   '/docs/ams-unattended-scheduling': typeof DocsAmsUnattendedSchedulingRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
+  '/docs/capacity': typeof DocsCapacityRoute
   '/docs/federated-fleet-intelligence': typeof DocsFederatedFleetIntelligenceRoute
   '/docs/fumadocs-spike-api-reference': typeof DocsFumadocsSpikeApiReferenceRoute
   '/docs/github-app': typeof DocsGithubAppRoute
@@ -677,6 +685,7 @@ export interface FileRoutesById {
   '/docs/ams-unattended-scheduling': typeof DocsAmsUnattendedSchedulingRoute
   '/docs/beta-onboarding': typeof DocsBetaOnboardingRoute
   '/docs/branch-analysis': typeof DocsBranchAnalysisRoute
+  '/docs/capacity': typeof DocsCapacityRoute
   '/docs/federated-fleet-intelligence': typeof DocsFederatedFleetIntelligenceRoute
   '/docs/fumadocs-spike-api-reference': typeof DocsFumadocsSpikeApiReferenceRoute
   '/docs/github-app': typeof DocsGithubAppRoute
@@ -757,6 +766,7 @@ export interface FileRouteTypes {
     | '/docs/ams-unattended-scheduling'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
+    | '/docs/capacity'
     | '/docs/federated-fleet-intelligence'
     | '/docs/fumadocs-spike-api-reference'
     | '/docs/github-app'
@@ -832,6 +842,7 @@ export interface FileRouteTypes {
     | '/docs/ams-unattended-scheduling'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
+    | '/docs/capacity'
     | '/docs/federated-fleet-intelligence'
     | '/docs/fumadocs-spike-api-reference'
     | '/docs/github-app'
@@ -910,6 +921,7 @@ export interface FileRouteTypes {
     | '/docs/ams-unattended-scheduling'
     | '/docs/beta-onboarding'
     | '/docs/branch-analysis'
+    | '/docs/capacity'
     | '/docs/federated-fleet-intelligence'
     | '/docs/fumadocs-spike-api-reference'
     | '/docs/github-app'
@@ -1303,6 +1315,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsFederatedFleetIntelligenceRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/capacity': {
+      id: '/docs/capacity'
+      path: '/capacity'
+      fullPath: '/docs/capacity'
+      preLoaderRoute: typeof DocsCapacityRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/docs/branch-analysis': {
       id: '/docs/branch-analysis'
       path: '/branch-analysis'
@@ -1564,6 +1583,7 @@ interface DocsRouteChildren {
   DocsAmsUnattendedSchedulingRoute: typeof DocsAmsUnattendedSchedulingRoute
   DocsBetaOnboardingRoute: typeof DocsBetaOnboardingRoute
   DocsBranchAnalysisRoute: typeof DocsBranchAnalysisRoute
+  DocsCapacityRoute: typeof DocsCapacityRoute
   DocsFederatedFleetIntelligenceRoute: typeof DocsFederatedFleetIntelligenceRoute
   DocsFumadocsSpikeApiReferenceRoute: typeof DocsFumadocsSpikeApiReferenceRoute
   DocsGithubAppRoute: typeof DocsGithubAppRoute
@@ -1615,6 +1635,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsAmsUnattendedSchedulingRoute: DocsAmsUnattendedSchedulingRoute,
   DocsBetaOnboardingRoute: DocsBetaOnboardingRoute,
   DocsBranchAnalysisRoute: DocsBranchAnalysisRoute,
+  DocsCapacityRoute: DocsCapacityRoute,
   DocsFederatedFleetIntelligenceRoute: DocsFederatedFleetIntelligenceRoute,
   DocsFumadocsSpikeApiReferenceRoute: DocsFumadocsSpikeApiReferenceRoute,
   DocsGithubAppRoute: DocsGithubAppRoute,

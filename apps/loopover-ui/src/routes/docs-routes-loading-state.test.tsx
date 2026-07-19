@@ -38,14 +38,15 @@ describe("docs route Suspense fallback (#6982)", () => {
     // fumadocs-spike-api-reference.tsx is a standalone Scalar API-reference spike (#6037) that wraps
     // ClientOnly, not Suspense; docs.index.tsx is a static landing page with no MDX content and no
     // Suspense boundary; docs.tsx is the shared parent layout route, not a content page. None were
-    // part of this issue's 46-file scope.
+    // part of this issue's 46-file scope. (docs.capacity.tsx, added by #4914, follows the same
+    // LoadingState-fallback convention and is in scope, bringing the count to 47.)
     const outOfScope = new Set([
       "docs.fumadocs-spike-api-reference.tsx",
       "docs.index.tsx",
       "docs.tsx",
     ]);
     const inScope = docsRouteFiles.filter((name) => !outOfScope.has(name));
-    expect(inScope.length).toBe(46);
+    expect(inScope.length).toBe(47);
 
     for (const file of inScope) {
       const source = readFileSync(join(routesDir, file), "utf8");

@@ -1,0 +1,103 @@
+---
+title: Capacity & throughput
+description: Real, measured throughput/concurrency numbers and the configured PR-processing caps, so an operator can reason about capacity from data instead of guessing.
+---
+
+Real, measured throughput/concurrency numbers and the configured PR-processing caps, so an
+operator can reason about capacity from data instead of guessing. This is the throughput/concurrency
+counterpart to [Resource sizing](/docs/ams-sizing) (which covers CPU/RAM/disk) — it is scoped
+strictly to the numbers, the fixed caps that bound them, and where each comes from.
+
+<Callout variant="note">
+  The throughput numbers below are host-dependent — treat them as a rough sense of scale and of how
+  throughput scales with concurrency, not a hard target. Re-run the exact command below on your own
+  hardware for numbers specific to it. The configured caps, by contrast, are fixed constants in the
+  code and are the same on every deployment.
+</Callout>
+
+## Iterate-loop orchestration throughput
+
+`runIterateLoop` (`packages/loopover-engine/src/miner/iterate-loop.ts`) is the
+create → score → self-review → decide orchestrator AMS runs once per attempt. The committed
+load-test harness measures its own per-attempt orchestration/scheduling overhead under concurrent,
+multi-tenant-like load — a distinct `repoFullName`/`contributorLogin` per attempt, `concurrency`
+attempts in flight at a time — with the coding-agent driver stubbed (no real subprocess, no API
+budget) behind a fixed artificial per-iteration delay, so the numbers isolate the loop's own work
+from network latency.
+
+### Baseline (informational only, machine-dependent)
+
+Captured on a Linux x86_64 dev container, Node.js 22.23.1, 64 attempts per level, 15 ms simulated
+driver latency per iteration:
+
+<CodeBlock
+  lang="text"
+  code={`concurrency=1:    63 attempts/sec   (1023.87 ms wall, 64 attempts)
+concurrency=8:   422 attempts/sec   ( 151.74 ms wall, 64 attempts)
+concurrency=32:  982 attempts/sec   (  65.20 ms wall, 64 attempts)
+concurrency=128: 1577 attempts/sec  (  40.59 ms wall, 64 attempts)`}
+/>
+
+Throughput scales roughly linearly with concurrency up to the point where the batch size matches (or
+exceeds) the attempt count per level — at that point every attempt starts in the same tick and the
+per-attempt overhead is fully parallelized, bounded only by the simulated driver latency plus the
+loop's own synchronous work per attempt. These numbers do not change `runIterateLoop`'s own
+concurrency model; they measure the existing, already-injectable driver seam.
+
+**Reproduce it:**
+
+<CodeBlock
+  lang="bash"
+  code={`npm run loadtest:iterate-loop
+# or, from a workspace checkout, after building the engine:
+npm --workspace @loopover/engine run build
+node packages/loopover-engine/scripts/load-test-iterate-loop.mjs`}
+/>
+
+The harness prints a text report and exits `0`; it is a signal to read, not a hard CI gate (wall-clock
+timing on shared runners is too noisy to threshold on). Full methodology lives in
+`packages/loopover-engine/docs/iterate-loop-load-test.md`.
+
+## PR-processing concurrency caps
+
+Unlike the throughput baseline above, these are **fixed constants** in
+`src/settings/agent-sweep.ts` — identical on every deployment — that bound how many pull requests a
+single trigger processes, sized to stay within GitHub's REST rate-limit budget (a single GitHub App
+installation shares one ~5,000-request/hour bucket across all its repos).
+
+<FeatureRow
+  items={[
+    {
+      title: "Recurring sweep",
+      description:
+        "SWEEP_MAX_PRS = 3 PRs per sweep, re-arming every ~2 minutes (≈30 ticks/hour). Each per-PR re-review costs ~9 REST GETs, so the worst-case HOURLY cost is SWEEP_MAX_PRS × repos × 9 × 30 — a cap of 3 over 3 repos bounds that to ≈2,400/hour, well inside the shared bucket (the old cap of 25 cost ~200k/hour).",
+    },
+    {
+      title: "Issue-triggered wake",
+      description:
+        "ISSUE_WAKE_MAX_PRS = 25 PRs as a one-shot budget per issue label/assignment event (a rare trigger) — worst case ~25 × 9 ≈ 225 REST calls, staggered by the caller's delay window.",
+    },
+    {
+      title: "Merge-triggered wake",
+      description:
+        "MERGE_WAKE_MAX_PRS = 15 PRs as a one-shot budget per merge — worst case ~15 × 9 ≈ 135 REST calls. Lower than the issue budget because merges are far more common, so repeated merges inside one rate-limit window can't compound the way a 25-PR burst would.",
+    },
+  ]}
+/>
+
+**Takeaways:**
+
+- Iterate-loop orchestration is cheap relative to the coding-agent work it schedules: even at
+  concurrency 1 the loop sustains ~63 attempts/sec of its own overhead, and scales past 1,500/sec
+  as concurrency rises — real per-attempt throughput is dominated by the operator's chosen
+  coding-agent CLI, not by this orchestrator.
+- The PR-processing caps, not orchestration throughput, are the practical ceiling in production:
+  they exist to keep a single installation inside its shared ~5,000-request/hour GitHub REST bucket,
+  which is why the recurring sweep cap (3) is far below the one-shot wake budgets (15/25).
+- Adding repositories to one installation multiplies the sweep's worst-case hourly request cost
+  linearly (`× repos` in the formula above) against that fixed shared bucket — the constraint that
+  sizes the caps in the first place.
+
+See [Resource sizing](/docs/ams-sizing) for CPU/RAM/disk numbers, and the
+[AMS operations runbook](/docs/ams-operations-runbook) for operational scenarios beyond capacity
+planning.
