@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
   waitForSelector: vi.fn(),
   hover: vi.fn(async () => undefined),
   click: vi.fn(async () => undefined),
+  boundingBox: vi.fn(async (): Promise<{ x: number; y: number; width: number; height: number } | null> => ({ x: 0, y: 0, width: 100, height: 40 })),
+  mouseMove: vi.fn(async () => undefined),
+  mouseDown: vi.fn(async () => undefined),
+  mouseUp: vi.fn(async () => undefined),
   // captureScrollFrames' FIRST page.evaluate() call queries scrollHeight; every later call (scrollTo, the
   // settle delay) discards its return value — so only the first call's resolved value matters to the code
   // under test, regardless of exactly how many scroll/settle evaluate() calls happen after it. captureShot's
@@ -599,7 +603,8 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
     vi.clearAllMocks();
     mocks.finalUrl = "https://preview.pages.dev/page";
     mocks.evaluateCallCount = 0;
-    mocks.waitForSelector.mockResolvedValue({ hover: mocks.hover, click: mocks.click });
+    mocks.waitForSelector.mockResolvedValue({ hover: mocks.hover, click: mocks.click, boundingBox: mocks.boundingBox });
+    mocks.boundingBox.mockResolvedValue({ x: 0, y: 0, width: 100, height: 40 });
     mocks.evaluate.mockImplementation(async (fn: (...fnArgs: unknown[]) => unknown, ...fnArgs: unknown[]) => {
       mocks.evaluateCallCount++;
       try {
@@ -628,6 +633,7 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
           screenshot: mocks.screenshot,
           evaluate: mocks.evaluate,
           waitForSelector: mocks.waitForSelector,
+          mouse: { move: mocks.mouseMove, down: mocks.mouseDown, up: mocks.mouseUp },
         }),
         close: mocks.close,
       };
@@ -706,6 +712,50 @@ describe("captureInteractionFrames (#interaction-gif-capture)", () => {
     const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".x", "hover", { width: 1440, height: 900 });
     expect(result).toEqual({ frames: [], authWalled: false });
     expect(mocks.close).toHaveBeenCalled();
+  });
+
+  describe("drag action (#interaction-gif-capture drag support)", () => {
+    it("drags the source onto the destination via mouse down/interpolated-move/up, using each element's bounding-box center", async () => {
+      mocks.boundingBox.mockResolvedValueOnce({ x: 0, y: 0, width: 100, height: 40 }).mockResolvedValueOnce({ x: 400, y: 200, width: 60, height: 60 });
+      const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
+      expect(result.authWalled).toBe(false);
+      expect(result.frames).toHaveLength(4);
+      expect(mocks.waitForSelector).toHaveBeenCalledWith(".card", { timeout: 3_000 });
+      expect(mocks.waitForSelector).toHaveBeenCalledWith(".done-column", { timeout: 3_000 });
+      // source center (50, 20) -> destination center (430, 230): down at the source, up at the destination,
+      // with 8 interpolated positions in between (DRAG_MOVE_STEPS).
+      expect(mocks.mouseMove).toHaveBeenCalledWith(50, 20);
+      expect(mocks.mouseDown).toHaveBeenCalledTimes(1);
+      expect(mocks.mouseMove).toHaveBeenLastCalledWith(430, 230);
+      expect(mocks.mouseUp).toHaveBeenCalledTimes(1);
+      // 1 initial move to the source + 8 interpolation steps = 9 total move() calls.
+      expect(mocks.mouseMove).toHaveBeenCalledTimes(9);
+    });
+
+    it("returns no frames (fails open) when drag_to is not provided for a drag action", async () => {
+      const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 });
+      expect(result).toEqual({ frames: [], authWalled: false });
+      expect(mocks.mouseDown).not.toHaveBeenCalled();
+    });
+
+    it("returns no frames (fails open) when the drag destination selector matches nothing on the page", async () => {
+      mocks.waitForSelector.mockImplementation(async (selector: string) =>
+        selector === ".done-column" ? null : { hover: mocks.hover, click: mocks.click, boundingBox: mocks.boundingBox },
+      );
+      const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
+      expect(result).toEqual({ frames: [], authWalled: false });
+      expect(mocks.mouseDown).not.toHaveBeenCalled();
+    });
+
+    it("no-ops the drag (never throws) when either element has no bounding box (display:none / zero-size)", async () => {
+      mocks.boundingBox.mockResolvedValue(null);
+      const result = await captureInteractionFrames(env(), "https://preview.pages.dev/page", ".card", "drag", { width: 1440, height: 900 }, {}, ".done-column");
+      // Frame capture still proceeds (the drag itself is a no-op, not a capture failure) — one at-rest frame
+      // plus the post-interaction settle frames, same shape as a successful hover/click.
+      expect(result.frames).toHaveLength(4);
+      expect(mocks.mouseDown).not.toHaveBeenCalled();
+      expect(mocks.mouseUp).not.toHaveBeenCalled();
+    });
   });
 });
 

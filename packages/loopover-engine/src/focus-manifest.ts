@@ -1014,22 +1014,26 @@ export type VisualConfig = {
 export type VisualTheme = "light" | "dark";
 
 /** The interaction to perform on `selector` before capturing the "after" frames of a `VisualInteraction` —
- *  a hover-triggered popover or CSS transition (`hover`), or a click-triggered state change (`click`). Drag
- *  interactions are deliberately not supported yet — see `src/review/visual/shot.ts`'s
- *  `captureInteractionFrames` doc comment for why. */
-export type VisualInteractionAction = "hover" | "click";
+ *  a hover-triggered popover or CSS transition (`hover`), a click-triggered state change (`click`), or a
+ *  drag from `selector` onto `dragTo` (`drag`, e.g. a reorderable list/kanban card or a slider handle). */
+export type VisualInteractionAction = "hover" | "click" | "drag";
 
 /** One `review.visual.interactions[]` entry — a specific element to interact with and capture as animated
  *  evidence, for behavior a static screenshot can't show: a hover-triggered popover, a CSS transition, a
- *  click-triggered state change. Rendered as its own "Interaction preview" row (one per entry, not
+ *  click-triggered state change, or a drag. Rendered as its own "Interaction preview" row (one per entry, not
  *  multiplied by viewport/theme — mirrors the contributor-facing animated-evidence contract documented in
  *  e.g. metagraphed's SKILL.md), alongside (never replacing) the static before/after table. */
 export type VisualInteraction = {
-  /** CSS selector for the element to interact with. A selector that matches nothing on the captured page
-   *  yields no frames for that entry — fails open, never blocks capture of the rest of the PR. */
+  /** CSS selector for the element to interact with — the drag SOURCE when `action` is `drag`. A selector
+   *  that matches nothing on the captured page yields no frames for that entry — fails open, never blocks
+   *  capture of the rest of the PR. */
   selector: string;
-  /** The interaction to perform: `hover` (mouse over `selector`) or `click`. */
+  /** The interaction to perform: `hover` (mouse over `selector`), `click`, or `drag` (requires `dragTo`). */
   action: VisualInteractionAction;
+  /** The drag DESTINATION selector — required when `action` is `drag` (an entry missing it is dropped at
+   *  parse time), ignored otherwise. Like `selector`, a selector matching nothing fails open (no frames for
+   *  that entry) rather than blocking capture of the rest of the PR. */
+  dragTo: string | null;
   /** The route path this interaction lives on. null (default) ⇒ "/" (the site root). */
   path: string | null;
   /** Human-readable name for the PR-comment row (e.g. "Blocks table row hover"). null (default) ⇒ the
@@ -3295,13 +3299,13 @@ function parseVisualConfig(value: JsonValue | undefined, warnings: string[]): Vi
   return { productionUrl, preview: { urlTemplate }, routes: { paths, maxRoutes }, themes, gif, enabled, themeStorageKey, actionsFallback, bugAnalysis, interactions };
 }
 
-const VISUAL_INTERACTION_ACTION_VALUES: readonly VisualInteractionAction[] = ["hover", "click"];
+const VISUAL_INTERACTION_ACTION_VALUES: readonly VisualInteractionAction[] = ["hover", "click", "drag"];
 // A hard cap so a hostile/huge manifest can't turn interaction capture into unbounded browser-render spend —
 // each entry is at least as expensive as a scroll-GIF capture (a full page render plus a settle wait).
 const MAX_VISUAL_INTERACTIONS = 5;
 
 /** Parse `review.visual.interactions` — specific elements to interact with and capture as animated evidence
- *  (hover/click), mirroring `parseReviewPreMergeChecks`'s "array of mappings" shape. A malformed/incomplete
+ *  (hover/click/drag), mirroring `parseReviewPreMergeChecks`'s "array of mappings" shape. A malformed/incomplete
  *  entry is dropped with a warning rather than failing the whole list, same as every other manifest array
  *  here — one bad entry never sinks the rest of a maintainer's config. */
 function parseVisualInteractions(value: JsonValue | undefined, warnings: string[]): VisualInteraction[] {
@@ -3328,12 +3332,17 @@ function parseVisualInteractions(value: JsonValue | undefined, warnings: string[
     }
     const rawAction = typeof e.action === "string" ? (e.action.trim().toLowerCase() as VisualInteractionAction) : undefined;
     if (!rawAction || !VISUAL_INTERACTION_ACTION_VALUES.includes(rawAction)) {
-      warnings.push(`Manifest "review.visual.interactions[${index}].action" must be "hover" or "click"; ignoring the entry.`);
+      warnings.push(`Manifest "review.visual.interactions[${index}].action" must be "hover", "click", or "drag"; ignoring the entry.`);
+      continue;
+    }
+    const dragTo = parsePublicSafeText(e.drag_to, `review.visual.interactions[${index}].drag_to`, warnings);
+    if (rawAction === "drag" && dragTo === null) {
+      warnings.push(`Manifest "review.visual.interactions[${index}].drag_to" is required when action is "drag"; ignoring the entry.`);
       continue;
     }
     const path = parsePublicSafeText(e.path, `review.visual.interactions[${index}].path`, warnings);
     const label = parsePublicSafeText(e.label, `review.visual.interactions[${index}].label`, warnings);
-    out.push({ selector, action: rawAction, path, label });
+    out.push({ selector, action: rawAction, dragTo, path, label });
   }
   return out;
 }

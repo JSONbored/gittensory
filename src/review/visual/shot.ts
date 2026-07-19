@@ -448,27 +448,57 @@ export async function captureScrollFrames(env: Env, url: string, viewport: Viewp
 const MAX_INTERACTION_STEPS = 4;
 const INTERACTION_SETTLE_MS = 350;
 const INTERACTION_ELEMENT_TIMEOUT_MS = 3_000;
+// A drag needs enough intermediate mouse-move events for a drag-and-drop library's own dragover/mousemove
+// listeners to register motion (a single instant jump from source to destination often fails to trigger a
+// library's drop-target highlighting) — 8 steps is a cheap, smooth-enough interpolation without materially
+// adding to this capture mode's already-heaviest-in-class cost (mirrors MAX_SCROLL_STEPS's reasoning: enough
+// to be convincing evidence, not a frame-perfect recording).
+const DRAG_MOVE_STEPS = 8;
 
-export type InteractionAction = "hover" | "click";
+export type InteractionAction = "hover" | "click" | "drag";
 
 async function waitForInteractionSettle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, INTERACTION_SETTLE_MS));
 }
 
+/** Drag `source` onto `destination` via a real mouse-down → interpolated-move → mouse-up sequence, using each
+ *  element's own bounding-box CENTER as the drag/drop point. A `null` bounding box (a display:none or
+ *  zero-size element) means there is nothing visibly draggable to animate — a no-op, not an error, matching
+ *  this whole capture mode's fail-open contract. Interpolating {@link DRAG_MOVE_STEPS} intermediate positions
+ *  (rather than one instant jump) mirrors how a real user drags and is what most drag-and-drop libraries'
+ *  own dragover/mousemove listeners need to actually register motion and highlight a drop target. */
+async function performDrag(
+  page: { mouse: { move: (x: number, y: number) => Promise<void>; down: () => Promise<void>; up: () => Promise<void> } },
+  source: { boundingBox: () => Promise<{ x: number; y: number; width: number; height: number } | null> },
+  destination: { boundingBox: () => Promise<{ x: number; y: number; width: number; height: number } | null> },
+): Promise<void> {
+  const [sourceBox, destinationBox] = await Promise.all([source.boundingBox(), destination.boundingBox()]);
+  if (!sourceBox || !destinationBox) return;
+  const sourceX = sourceBox.x + sourceBox.width / 2;
+  const sourceY = sourceBox.y + sourceBox.height / 2;
+  const destinationX = destinationBox.x + destinationBox.width / 2;
+  const destinationY = destinationBox.y + destinationBox.height / 2;
+  await page.mouse.move(sourceX, sourceY);
+  await page.mouse.down();
+  for (let step = 1; step <= DRAG_MOVE_STEPS; step++) {
+    const t = step / DRAG_MOVE_STEPS;
+    await page.mouse.move(sourceX + (destinationX - sourceX) * t, sourceY + (destinationY - sourceY) * t);
+  }
+  await page.mouse.up();
+}
+
 /**
  * Capture a short sequence of frames around a specific interaction: one frame at rest, then trigger `action`
- * on `selector`, then a few more frames at intervals to catch a CSS transition or JS-driven state change
- * mid-flight and settled — evidence for a hover-triggered popover, a click-triggered state change, or
- * similar behavior a single static screenshot can't show. Deliberately narrow, mirroring
- * `captureScrollFrames`'s own scope note: `hover`/`click` only — a `drag` interaction needs a coordinate-
- * based mouse-down/move/up sequence with no reliable way to infer a drop target from a CSS selector alone,
- * so it's out of scope here rather than shipped half-working.
+ * on `selector` (a drag onto `dragTo` when `action` is `"drag"`), then a few more frames at intervals to
+ * catch a CSS transition or JS-driven state change mid-flight and settled — evidence for a hover-triggered
+ * popover, a click-triggered state change, a drag-and-drop reorder, or similar behavior a single static
+ * screenshot can't show.
  *
  * Mirrors `captureScrollFrames`'s SSRF guard, sub-request interception, and auth-wall detection exactly
- * (duplicated rather than shared — see that function's own doc comment for why). `selector` matching nothing
- * on the page is NOT an error — it's a normal "this interaction doesn't apply to this side" outcome (e.g. an
- * element only present after the PR's change adds it): returns empty frames, the same fail-open contract as
- * every other capture failure here.
+ * (duplicated rather than shared — see that function's own doc comment for why). `selector`/`dragTo` matching
+ * nothing on the page is NOT an error — it's a normal "this interaction doesn't apply to this side" outcome
+ * (e.g. an element only present after the PR's change adds it): returns empty frames, the same fail-open
+ * contract as every other capture failure here.
  */
 export async function captureInteractionFrames(
   env: Env,
@@ -477,6 +507,7 @@ export async function captureInteractionFrames(
   action: InteractionAction,
   viewport: Viewport = VIEWPORT,
   opts: CaptureShotOptions = {},
+  dragTo?: string | undefined,
 ): Promise<{ frames: Uint8Array[]; authWalled: boolean }> {
   if (!url || !isSafeHttpUrl(url) || (opts.isAllowedUrl && !opts.isAllowedUrl(url))) {
     console.log(JSON.stringify({ event: "render_interaction_frames_blocked", url: String(url).slice(0, 120) }));
@@ -531,13 +562,27 @@ export async function captureInteractionFrames(
       console.log(JSON.stringify({ event: "render_interaction_frames_selector_not_found", url, selector: selector.slice(0, 120) }));
       return { frames: [], authWalled: false };
     }
+    let dragToElement: typeof element | null = null;
+    if (action === "drag") {
+      if (!dragTo) {
+        console.log(JSON.stringify({ event: "render_interaction_frames_missing_drag_target", url, selector: selector.slice(0, 120) }));
+        return { frames: [], authWalled: false };
+      }
+      dragToElement = await page.waitForSelector(dragTo, { timeout: INTERACTION_ELEMENT_TIMEOUT_MS }).catch(() => null);
+      if (!dragToElement) {
+        console.log(JSON.stringify({ event: "render_interaction_frames_drag_target_not_found", url, dragTo: dragTo.slice(0, 120) }));
+        return { frames: [], authWalled: false };
+      }
+    }
     const frames: Uint8Array[] = [];
     // Frame 0: the at-rest state, before the interaction fires — the "before" half of the animated evidence.
     frames.push((await page.screenshot({ type: "png", fullPage: false })) as Uint8Array);
     if (action === "hover") {
       await element.hover();
-    } else {
+    } else if (action === "click") {
       await element.click();
+    } else {
+      await performDrag(page, element, dragToElement!);
     }
     for (let step = 1; step < MAX_INTERACTION_STEPS; step++) {
       await waitForInteractionSettle();

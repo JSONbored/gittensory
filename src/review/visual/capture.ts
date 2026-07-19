@@ -500,6 +500,8 @@ async function captureScrollGif(
 export type VisualInteractionInput = {
   selector: string;
   action: InteractionAction;
+  /** The drag destination selector — required when `action` is `"drag"`, ignored otherwise. */
+  dragTo?: string | null | undefined;
   path?: string | null | undefined;
   label?: string | null | undefined;
 };
@@ -522,7 +524,7 @@ async function captureInteractionGif(
   if (!page) return undefined;
   if (!env.REVIEW_AUDIT || (!env.PUBLIC_API_ORIGIN && !env.REVIEW_AUDIT_S3_PUBLIC_URL)) return undefined;
   const fingerprint = await sha256Hex(
-    `${target.headSha ?? target.prNumber}:interactiongif:${slot}:${interaction.selector}:${interaction.action}:${page}${theme ? `:${theme}` : ""}${theme && themeStorageKey ? `:${themeStorageKey}` : ""}`,
+    `${target.headSha ?? target.prNumber}:interactiongif:${slot}:${interaction.selector}:${interaction.action}${interaction.action === "drag" && interaction.dragTo ? `:${interaction.dragTo}` : ""}:${page}${theme ? `:${theme}` : ""}${theme && themeStorageKey ? `:${themeStorageKey}` : ""}`,
   );
   const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.gif`;
   const url = resolveShotUrl(env, key);
@@ -535,6 +537,7 @@ async function captureInteractionGif(
     interaction.action,
     DESKTOP_VIEWPORT,
     theme ? { theme, ...(themeStorageKey ? { themeStorageKey } : {}) } : {},
+    interaction.dragTo ?? undefined,
   ).catch(() => ({ frames: [] as Uint8Array[], authWalled: false }));
   if (authWalled || frames.length === 0) return undefined;
   const gifBytes = await encodeScrollGif(

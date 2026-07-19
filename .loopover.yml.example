@@ -688,19 +688,23 @@ review:
 #     # SELF-HOST ONLY (no effect on the hosted service) and the heaviest capture mode here — up to 6 extra
 #     # renders per side, ~4s wall-clock per side measured in practice. Bool. Default: false (no scroll capture).
 #     gif: false
-#     # Specific elements to interact with (hover/click) and capture as animated evidence — for behavior a
-#     # static screenshot AND a scroll-through GIF can't show: a hover-triggered popover, a click-triggered
-#     # state change, a CSS transition. Rendered as its own "Interaction preview" section, one row per entry
-#     # (never multiplied by viewport/theme, unlike the static matrix above — an interaction is rarely
-#     # breakpoint- or theme-dependent). Empty/default ⇒ byte-identical to today, no interaction capture.
-#     # SELF-HOST ONLY (same gate as `gif` above) and capped at 5 configured / 3 actually captured per PR.
-#     # `drag` is deliberately not supported — see src/review/visual/shot.ts's captureInteractionFrames doc
-#     # comment for why.
+#     # Specific elements to interact with (hover/click/drag) and capture as animated evidence — for
+#     # behavior a static screenshot AND a scroll-through GIF can't show: a hover-triggered popover, a
+#     # click-triggered state change, a drag-and-drop reorder, a CSS transition. Rendered as its own
+#     # "Interaction preview" section, one row per entry (never multiplied by viewport/theme, unlike the
+#     # static matrix above — an interaction is rarely breakpoint- or theme-dependent). Empty/default ⇒
+#     # byte-identical to today, no interaction capture. SELF-HOST ONLY (same gate as `gif` above) and
+#     # capped at 5 configured / 3 actually captured per PR.
 #     interactions:
-#       - selector: ".blocks-table-row"  # CSS selector for the element to interact with. Required.
-#         action: hover                  # "hover" or "click". Required.
+#       - selector: ".blocks-table-row"  # CSS selector for the element to interact with (drag SOURCE for "drag"). Required.
+#         action: hover                  # "hover", "click", or "drag". Required.
 #         path: "/blocks"                # Route this interaction lives on. String or null. Default: "/".
 #         label: "Blocks table row hover" # PR-comment row caption. String or null. Default: the selector itself.
+#       - selector: ".kanban-card"       # A second entry showing the "drag" shape:
+#         action: drag
+#         drag_to: ".done-column"        # Drag DESTINATION selector. Required when action is "drag"; an entry
+#                                         #   missing it is dropped at parse time. Ignored for hover/click.
+#         label: "Reorder card into Done"
 #     # Config-as-code enable/disable for this repo, layered ON TOP OF (never a replacement for) the
 #     # LOOPOVER_REVIEW_SCREENSHOTS + per-repo cutover-allowlist env-var gate above (#4083). Bool or null.
 #     # Default: null (unset) ⇒ defers entirely to that env-var gate's own decision -- byte-identical to today.
