@@ -268,11 +268,22 @@ export async function buildRepoMap(
     }
     const languageName = resolveRepoMapLanguage(file.path);
     const sourceBytes = Buffer.byteLength(file.sourceText, "utf8");
+    // A file exceeding the per-file cap is skipped without being parsed, so it must NOT consume the
+    // aggregate parsed-work budget. Counting it before this check let one oversized file (a vendored/
+    // minified asset or generated bundle) exhaust maxTotalSourceBytes and force every subsequent small,
+    // legitimate file to skip too — a silent, order-dependent near-empty map (#7247). Only files that pass
+    // the per-file cap accrue against the aggregate, exactly as before for in-cap files.
+    if (sourceBytes > maxSourceBytes) {
+      entries.push({
+        path: file.path,
+        language: languageName,
+        symbols: [],
+        skipped: "resource_limit",
+      });
+      continue;
+    }
     totalSourceBytes += sourceBytes;
-    if (
-      sourceBytes > maxSourceBytes ||
-      totalSourceBytes > maxTotalSourceBytes
-    ) {
+    if (totalSourceBytes > maxTotalSourceBytes) {
       entries.push({
         path: file.path,
         language: languageName,

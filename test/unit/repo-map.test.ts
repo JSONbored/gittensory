@@ -229,6 +229,28 @@ describe("buildRepoMap + extractRepoMapSymbols (#4280)", () => {
     });
   });
 
+  it("does not charge a file skipped for the per-file cap against the aggregate budget (#7247)", async () => {
+    // "function reallyLongName() {}" (28 bytes) exceeds the per-file cap and is skipped WITHOUT being
+    // parsed; pre-#7247 its bytes were still charged to the aggregate budget, exhausting it and skipping
+    // the small, legitimate file after it. The aggregate must only account for files actually parsed.
+    const entries = await buildRepoMap(
+      [
+        { path: "src/huge.ts", sourceText: "function reallyLongName() {}" },
+        { path: "src/small.ts", sourceText: "function s() {}" },
+      ],
+      { maxSourceBytes: 20, maxTotalSourceBytes: 20 },
+    );
+    expect(entries[0]).toEqual({
+      path: "src/huge.ts",
+      language: "typescript",
+      symbols: [],
+      skipped: "resource_limit",
+    });
+    // The small file after the skipped-oversized one is still parsed, not starved of aggregate budget.
+    expect(entries[1]!.skipped).toBeUndefined();
+    expect(entries[1]!.symbols.map((symbol) => symbol.name)).toEqual(["s"]);
+  });
+
   it("keeps one entry per input file but resource-limits files beyond the file-count budget", async () => {
     const entries = await buildRepoMap(
       [
