@@ -187,6 +187,57 @@ describe("MCP server telemetry", () => {
     );
   });
 
+  it("defers tool-call telemetry via executionCtx.waitUntil instead of firing it synchronously and forgetting it (#7233)", async () => {
+    vi.resetModules();
+    vi.doMock("agents/mcp", () => ({
+      createMcpHandler: () => () => Response.json({ ok: true }),
+    }));
+    let flushRecordMcpToolCall: (() => void) | undefined;
+    const recordMcpToolCallStarted = new Promise<void>((resolve) => {
+      flushRecordMcpToolCall = resolve;
+    });
+    const recordMcpToolCall = vi.fn(async () => {
+      flushRecordMcpToolCall?.();
+    });
+    vi.doMock("../../src/mcp/telemetry", () => ({ recordMcpToolCall }));
+    const { handleMcpRequest } = await import("../../src/mcp/server");
+    const env = createTestEnv({ PRODUCT_USAGE_HASH_SALT: "mcp-wait-until-telemetry-salt" });
+    const request = new Request("https://api.test/mcp", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.LOOPOVER_MCP_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "tool-call", method: "tools/call", params: { name: "loopover_local_status" } }),
+    });
+
+    const waitUntilTasks: Promise<unknown>[] = [];
+    await expect(
+      handleMcpRequest({
+        env,
+        executionCtx: {
+          waitUntil(task: Promise<unknown>) {
+            waitUntilTasks.push(task);
+          },
+          passThroughOnException() {},
+        },
+        req: {
+          method: "POST",
+          raw: request,
+          header: (name: string) => request.headers.get(name) ?? undefined,
+        },
+        json: (body: unknown, status?: number) => Response.json(body, status === undefined ? undefined : { status }),
+      } as never),
+    ).resolves.toMatchObject({ status: 200 });
+
+    // The telemetry promise was handed to waitUntil (not just fired-and-forgotten inline) before the response
+    // returned, and awaiting it resolves cleanly once the deferred recordMcpToolCall actually runs.
+    expect(waitUntilTasks).toHaveLength(1);
+    await recordMcpToolCallStarted;
+    await expect(waitUntilTasks[0]).resolves.toBeUndefined();
+    expect(recordMcpToolCall).toHaveBeenCalledTimes(1);
+  });
+
   it("does not let a throwing recordMcpToolCall affect the tool response (#6237)", async () => {
     vi.resetModules();
     vi.doMock("agents/mcp", () => ({

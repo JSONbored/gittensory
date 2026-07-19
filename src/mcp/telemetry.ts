@@ -49,8 +49,15 @@ export interface McpToolCallEvent {
 export type McpTelemetryEnv = Pick<Env, "POSTHOG_API_KEY" | "POSTHOG_HOST">;
 
 /** Record a single MCP tool call to PostHog. Safe no-op when telemetry is unconfigured (no POSTHOG_API_KEY),
- *  and never throws — a PostHog init/capture failure degrades to recording nothing (#6235). */
-export function recordMcpToolCall(env: McpTelemetryEnv, event: McpToolCallEvent): void {
+ *  and never throws — a PostHog init/capture failure degrades to recording nothing (#6235).
+ *
+ *  Returns a promise that resolves once the event has actually been flushed to PostHog (#7233) — the
+ *  `flushAt: 1, flushInterval: 0` config makes `capture()` queue the network request immediately, but
+ *  `capture()` itself is fire-and-forget and returns before that request lands. Awaiting `client.flush()`
+ *  gives the caller (src/mcp/server.ts's `recordMcpToolTelemetry`, deferred via Cloudflare's `waitUntil`)
+ *  real async work to hold the execution context open for, so the event isn't silently dropped if the
+ *  Workers runtime tears the request down before an un-awaited background fetch completes. */
+export async function recordMcpToolCall(env: McpTelemetryEnv, event: McpToolCallEvent): Promise<void> {
   const apiKey = trimmedOrUndefined(env.POSTHOG_API_KEY);
   // Unconfigured ⇒ record nothing, byte-identical to before this module existed.
   if (!apiKey) return;
@@ -71,9 +78,10 @@ export function recordMcpToolCall(env: McpTelemetryEnv, event: McpToolCallEvent)
       // No IP-based geo enrichment: the event is anonymous fleet telemetry, not a user location.
       disableGeoip: true,
     });
+    await client.flush();
   } catch {
-    // Telemetry is best-effort and MUST NOT throw into the MCP tool caller (#6235): a PostHog init/capture
-    // failure degrades to recording nothing, identical to the unconfigured path above.
+    // Telemetry is best-effort and MUST NOT throw into the MCP tool caller (#6235): a PostHog init/capture/
+    // flush failure degrades to recording nothing, identical to the unconfigured path above.
   }
 }
 

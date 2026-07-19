@@ -1654,10 +1654,11 @@ export async function handleMcpRequest(c: AppContext): Promise<Response> {
   const usageMetadata = await describeMcpUsageRequest(c.req.raw, telemetry.metadata);
   const startedAt = Date.now();
   const server = new LoopoverMcp(c.env, identity).createServer();
+  const executionCtx = getExecutionContext(c);
   try {
-    const response = await createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, getExecutionContext(c));
+    const response = await createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, executionCtx);
     if (typeof usageMetadata.toolName === "string") {
-      recordMcpToolTelemetry(c.env, usageMetadata.toolName, response.status < 400, Date.now() - startedAt);
+      executionCtx.waitUntil(recordMcpToolTelemetry(c.env, usageMetadata.toolName, response.status < 400, Date.now() - startedAt));
     }
     await recordProductUsageEvent(c.env, {
       surface: "mcp",
@@ -1675,7 +1676,7 @@ export async function handleMcpRequest(c: AppContext): Promise<Response> {
     return response;
   } catch (error) {
     if (typeof usageMetadata.toolName === "string") {
-      recordMcpToolTelemetry(c.env, usageMetadata.toolName, false, Date.now() - startedAt);
+      executionCtx.waitUntil(recordMcpToolTelemetry(c.env, usageMetadata.toolName, false, Date.now() - startedAt));
     }
     await recordProductUsageEvent(c.env, {
       surface: "mcp",
@@ -1697,10 +1698,12 @@ export async function handleMcpRequest(c: AppContext): Promise<Response> {
 // Single chokepoint for the #6228 PostHog tool-call telemetry (#6237): every `tools/call` request that
 // reaches handleMcpRequest routes through here exactly once, whether it succeeds or throws. Pure
 // observability -- never lets a telemetry failure reach the caller, matching recordMcpToolCall's own
-// no-op guarantee (#6235) with a second, defensive layer at the actual call site.
-function recordMcpToolTelemetry(env: Env, tool: string, ok: boolean, durationMs: number): void {
+// no-op guarantee (#6235) with a second, defensive layer at the actual call site. Called sites pass the
+// returned promise to `waitUntil` (#7233) rather than awaiting it inline, so a slow PostHog flush can't
+// delay the MCP tool response.
+async function recordMcpToolTelemetry(env: Env, tool: string, ok: boolean, durationMs: number): Promise<void> {
   try {
-    recordMcpToolCall(env, { tool, callerType: "remote", ok, durationMs });
+    await recordMcpToolCall(env, { tool, callerType: "remote", ok, durationMs });
   } catch {
     // Telemetry must never affect the tool response (#6237).
   }
