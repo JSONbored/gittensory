@@ -148,6 +148,19 @@ describe("buildVisualBugAnalysisUserPrompt", () => {
     expect(prompt).not.toContain("x".repeat(2001));
   });
 
+  it("also defensively truncates an overlong title to 2000 chars, same as the description", () => {
+    const longTitle = "y".repeat(3000);
+    const prompt = buildVisualBugAnalysisUserPrompt([{ path: "/" }], { title: longTitle, body: null });
+    expect(prompt).toContain(`Title: ${"y".repeat(2000)}`);
+    expect(prompt).not.toContain("y".repeat(2001));
+  });
+
+  it("composes buildVisualVisionUserPrompt's own route-listing text rather than duplicating it", () => {
+    const routes = [{ path: "/pricing" }, { path: "/about" }];
+    const withoutContext = buildVisualBugAnalysisUserPrompt(routes, {});
+    expect(withoutContext).toBe(buildVisualVisionUserPrompt(routes));
+  });
+
   it("omits the title line when only a body is set, and vice versa", () => {
     const bodyOnly = buildVisualBugAnalysisUserPrompt([{ path: "/" }], { body: "Just a description." });
     expect(bodyOnly).not.toContain("Title:");

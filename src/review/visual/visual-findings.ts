@@ -152,14 +152,17 @@ export const VISUAL_BUG_ANALYSIS_SYSTEM_PROMPT = [
  *  a valid prompt (the model falls back to judging purely from what it sees) — this is a best-effort context
  *  addition, not a hard requirement. */
 export function buildVisualBugAnalysisUserPrompt(routes: readonly { path: string }[], pr: { title?: string | null | undefined; body?: string | null | undefined }): string {
-  const paths = routes.map((route) => `- ${route.path}`).join("\n");
-  const title = pr.title?.trim();
-  const body = pr.body?.trim();
+  // title has no server-side length guarantee this codebase controls the way GitHub's own PR-title field
+  // does in practice -- capped defensively, mirroring body's existing .slice(0, 2000), even though the
+  // downstream JSON-schema-constrained response + public-safe filtering already bounds the blast radius of
+  // an oversized/hostile value reaching this prompt.
+  const title = pr.title?.trim().slice(0, 2000);
+  const body = pr.body?.trim().slice(0, 2000);
   const prContext =
-    title || body
-      ? `Pull request's stated change:\n${title ? `Title: ${title}\n` : ""}${body ? `Description: ${body.slice(0, 2000)}\n` : ""}\n`
-      : "";
-  return `${prContext}Route(s) under review:\n${paths}\n\nEach route's images are attached in before, after order.`;
+    title || body ? `Pull request's stated change:\n${title ? `Title: ${title}\n` : ""}${body ? `Description: ${body}\n` : ""}\n` : "";
+  // Composes buildVisualVisionUserPrompt's own route-listing text rather than recomputing it, so the two
+  // prompts' "Route(s) under review" section can never silently drift apart.
+  return `${prContext}${buildVisualVisionUserPrompt(routes)}`;
 }
 
 /** Parse the model's structured vision response into public-safe findings, dropping anything unparseable, a

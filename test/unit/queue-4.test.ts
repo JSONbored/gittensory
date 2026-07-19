@@ -64,6 +64,7 @@ import type { PullRequestRecord } from "../../src/types";
 import { aiReviewCacheInputFingerprint } from "../../src/review/ai-review-cache-input";
 import { fingerprint as reviewMemoryFingerprint } from "../../src/review/review-memory-match";
 import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import * as pixelDiffModule from "../../src/review/visual/pixel-diff";
 import * as focusManifestLoaderModule from "../../src/signals/focus-manifest-loader";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
@@ -3502,6 +3503,199 @@ describe("queue processors", () => {
       expect(postedBody).not.toContain("Visual preview");
     } finally {
       liveCiSpy.mockRestore();
+    }
+  });
+
+  // review.visual.bugAnalysis (config-as-code): threads all the way from the real .loopover.yml raw-fetch
+  // through resolveVisualCaptureConfig -> the `let bugAnalysisEnabled = false` declared OUTSIDE the capture
+  // try/catch -> the real runVisualVisionForAdvisory call below it. Unlike the sibling wiring tests (visual-
+  // config-wiring.test.ts asserts resolveVisualCaptureConfig alone; visual-vision-wiring.test.ts calls
+  // runVisualVisionForAdvisory directly with bugAnalysisEnabled passed as a literal) this is the ONLY test
+  // that proves the actual assignment/threading between those two halves is correct via the real webhook
+  // path -- a copy-paste field-name bug or an early-return before the assignment would slip through every
+  // other existing test untouched. Forces a real pixel-diff "changed" route (isVisualDiffAvailable is
+  // Worker-safe-false by default, so no route would otherwise carry a diffUrl to unblock
+  // evaluateVisualVisionGate) and a BYOK vision provider, then asserts the captured request body sent to the
+  // provider contains the PR's own title -- which only happens when bugAnalysisEnabled actually reached true.
+  it("threads review.visual.bug_analysis: true from the real .loopover.yml into the live vision-provider call", async () => {
+    // A minimal in-memory R2 stub for REVIEW_AUDIT -- uploadDiffImage (capture.ts) requires REVIEW_AUDIT plus
+    // PUBLIC_API_ORIGIN/REVIEW_AUDIT_S3_PUBLIC_URL to persist a diffUrl at all; without it, no route would ever
+    // carry a diffUrl regardless of the pixel-diff spy below, and evaluateVisualVisionGate would never unblock.
+    const diffStore = new Map<string, Uint8Array>();
+    const reviewAudit = {
+      async get(key: string) {
+        const bytes = diffStore.get(key);
+        return bytes ? ({ body: new Response(bytes).body } as unknown as R2ObjectBody) : null;
+      },
+      async put(key: string, value: unknown) {
+        const bytes = new Uint8Array(await new Response(value as BodyInit).arrayBuffer());
+        diffStore.set(key, bytes);
+        return { key } as unknown as R2Object;
+      },
+    } as unknown as R2Bucket;
+    const env = createTestEnv({
+      GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      LOOPOVER_REVIEW_SCREENSHOTS: "true",
+      TOKEN_ENCRYPTION_SECRET: "bug-analysis-wiring-test-encryption-secret",
+      PUBLIC_API_ORIGIN: "https://worker.example",
+      REVIEW_AUDIT: reviewAudit,
+    });
+    await persistRegistrySnapshot(
+      asCloudEnv(env),
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      autoLabelEnabled: false,
+      reviewCheckMode: "required",
+      autonomy: { update_branch: "auto" },
+      aiReviewByok: true,
+    });
+    await upsertRepositoryAiKey(env, { repoFullName: "JSONbored/gittensory", provider: "anthropic", key: "sk-ant-bug-analysis-wiring-key", model: null });
+    const isVisualDiffAvailableSpy = vi.spyOn(pixelDiffModule, "isVisualDiffAvailable").mockReturnValue(true);
+    const compareScreenshotsSpy = vi.spyOn(pixelDiffModule, "compareCapturedScreenshots").mockResolvedValue({
+      status: "changed",
+      changedPixelPercent: 12,
+      diffImagePng: new Uint8Array([1, 2, 3]),
+    });
+    let postedBody = "";
+    let visionProviderRequestBody = "";
+    const liveCiSpy = vi.spyOn(backfillModule, "fetchLiveCiAggregatePreferGraphQl").mockResolvedValue({
+      ciState: "passed",
+      hasPending: false,
+      hasVisiblePending: false,
+      hasMissingRequiredContext: false,
+      failingDetails: [],
+      nonRequiredFailingDetails: [],
+      advisoryHoldDetails: [],
+      ciCompletenessWarning: null,
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
+        return new Response(
+          "settings:\n  commentMode: detected_contributors_only\n  publicAudienceMode: gittensor_only\n  publicSignalLevel: standard\n  publicSurface: comment_and_label\n  checkRunMode: \"off\"\n  checkRunDetailLevel: minimal\n  backfillEnabled: true\ngate:\n  aiReview:\n    byok: true\nreview:\n  visual:\n    bug_analysis: true\n",
+        );
+      }
+      if (url === "https://api.anthropic.com/v1/messages") {
+        visionProviderRequestBody = String(init?.body ?? "");
+        return Response.json({ content: [{ type: "text", text: '{"findings": []}' }] });
+      }
+      // Every /loopover/shot URL (the on-demand ?url= before-render, the cached ?key= diff image, and the
+      // placeholder=loading after-cell) -- runVisualVisionForAdvisory's fetchShotContentBlock needs a real
+      // 2xx image response for BOTH before and after to build any images[] at all, or it bails before ever
+      // reaching the provider call.
+      if (url.includes("/loopover/shot")) {
+        return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), { status: 200, headers: { "content-type": "image/png" } });
+      }
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          {
+            uid: 7,
+            githubUsername: "oktofeesh1",
+            githubId: "123",
+            totalPrs: 4,
+            totalMergedPrs: 3,
+            totalOpenPrs: 1,
+            totalClosedPrs: 0,
+            totalOpenIssues: 0,
+            totalClosedIssues: 0,
+            totalSolvedIssues: 0,
+            totalValidSolvedIssues: 0,
+            isEligible: true,
+            credibility: 1,
+            eligibleRepoCount: 1,
+            hotkey: "must-not-leak",
+          },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({
+          repositories: [
+            {
+              repositoryFullName: "JSONbored/gittensory",
+              totalPrs: "4",
+              totalMergedPrs: "3",
+              totalOpenPrs: "1",
+              totalClosedPrs: "0",
+              totalOpenIssues: "0",
+              totalClosedIssues: "0",
+              isEligible: true,
+              credibility: "1.000000",
+            },
+          ],
+        });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/oktofeesh1")) return Response.json({ login: "oktofeesh1", public_repos: 2, followers: 1 });
+      if (url.includes("/users/oktofeesh1/repos")) return Response.json([{ language: "TypeScript" }]);
+      if (url.includes("/access_tokens")) {
+        return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+      }
+      if (url.includes("/pulls/3/files")) {
+        return Response.json([{ filename: "apps/loopover-ui/src/routes/app.index.tsx", additions: 5, deletions: 1, status: "modified" }]);
+      }
+      if (/\/pulls\/3(?:\?|$)/.test(url)) return Response.json({ number: 3, mergeable_state: "clean" });
+      if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 901 }, { status: 201 });
+      if (url.includes("/check-runs/901") && method === "PATCH") return Response.json({ id: 901 });
+      if (url.includes("/issues/3/comments") && method === "GET") return Response.json([]);
+      if (url.includes("/issues/3/comments") && method === "POST") {
+        postedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 1, html_url: "https://github.com/comment/1" }, { status: 201 });
+      }
+      // Preview discovery + shot fetches: no real deploy configured for this fixture, so buildCapture falls
+      // back to placeholders for the "after" shot, and shot-content fetches for the vision call 404 -- wrapped
+      // in its own try/catch, degrading gracefully rather than failing the review.
+      return new Response("not found", { status: 404 });
+    });
+
+    try {
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: "pr-bug-analysis-wiring",
+        eventName: "pull_request",
+        payload: {
+          action: "synchronize",
+          installation: {
+            id: 123,
+            account: { login: "JSONbored", id: 1, type: "User" },
+            repository_selection: "selected",
+            permissions: { metadata: "read", pull_requests: "read", issues: "write", checks: "write" },
+            events: ["issues", "issue_comment", "pull_request", "repository", "installation_repositories"],
+          },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: {
+            number: 3,
+            title: "Distinctive bug-analysis-wiring PR title",
+            state: "open",
+            user: { login: "oktofeesh1" },
+            head: { sha: "buganalysiswiring123" },
+            labels: [{ name: "bug" }],
+            body: "Fixes #1\n\nValidation: npm test",
+          },
+        },
+      });
+
+      // The real webhook path resolved bug_analysis: true from the fetched .loopover.yml and threaded it all
+      // the way into the live vision-provider call -- only reachable if the enhanced, PR-context-aware prompt
+      // was selected (the default prompt never sends the PR title at all).
+      expect(visionProviderRequestBody).toContain("Distinctive bug-analysis-wiring PR title");
+      // Confirms the ENHANCED (bug-analysis) prompt was selected, not the default -- the default prompt never
+      // mentions the PR's stated change or asks for a category at all.
+      expect(visionProviderRequestBody).toContain("Pull request's stated change");
+      expect(visionProviderRequestBody).toContain("category");
+      expect(postedBody).toContain("Visual preview");
+    } finally {
+      liveCiSpy.mockRestore();
+      isVisualDiffAvailableSpy.mockRestore();
+      compareScreenshotsSpy.mockRestore();
     }
   });
 
