@@ -69,10 +69,12 @@ export function FairnessReportPage() {
     staleTime: 30_000,
   });
 
+  // `fleetAccuracy` is optional-chained: until the backend carrying it is deployed, an older /v1/public/stats
+  // response simply won't have the field yet, and this must degrade to the own-ledger number rather than throw.
   const fleetEligible =
-    !!data && data.fleetAccuracy.instanceCount > 0 && data.fleetAccuracy.accuracyPct != null;
+    (data?.fleetAccuracy?.instanceCount ?? 0) > 0 && data?.fleetAccuracy?.accuracyPct != null;
   const headlineAccuracyPct = fleetEligible
-    ? data!.fleetAccuracy.accuracyPct
+    ? data!.fleetAccuracy!.accuracyPct
     : (data?.totals.accuracyPct ?? null);
 
   return (
@@ -120,7 +122,7 @@ export function FairnessReportPage() {
               <Card className="p-5">
                 <div className="text-token-xs text-muted-foreground">Anti-gaming flags caught</div>
                 <div className="mt-2 text-token-xl font-medium">
-                  {intFmt.format(data.fleetAccuracy.gamingFlagsCaught)}
+                  {data.fleetAccuracy ? intFmt.format(data.fleetAccuracy.gamingFlagsCaught) : "—"}
                 </div>
                 <p className="mt-2 text-token-sm text-muted-foreground">
                   self-hosted instances flagged for mass-submitting easy PRs to inflate their own

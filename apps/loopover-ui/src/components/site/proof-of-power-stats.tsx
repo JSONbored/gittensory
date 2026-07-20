@@ -110,9 +110,11 @@ export function ProofOfPowerStats({ className }: { className?: string }) {
   // be meaningful -- it reflects how ORB treats today's contributors, unlike totals.accuracyPct, which is a
   // frozen own-ledger snapshot as of the self-host cutover (see public-stats.ts). The own accuracyTrend sparkline
   // has no fleet-accuracy equivalent yet, so it's only shown alongside the own-ledger fallback number.
+  // `fleetAccuracy` is optional-chained: until the backend carrying it is deployed, an older /v1/public/stats
+  // response simply won't have the field yet, and this must degrade to the own-ledger number rather than throw.
   const fleetEligible =
-    data.fleetAccuracy.instanceCount > 0 && data.fleetAccuracy.accuracyPct != null;
-  const displayedAccuracyPct = fleetEligible ? data.fleetAccuracy.accuracyPct : totals.accuracyPct;
+    (data.fleetAccuracy?.instanceCount ?? 0) > 0 && data.fleetAccuracy?.accuracyPct != null;
+  const displayedAccuracyPct = fleetEligible ? data.fleetAccuracy!.accuracyPct : totals.accuracyPct;
   const latestReuseRatePct =
     data.reuseRateTrend.length > 0
       ? data.reuseRateTrend[data.reuseRateTrend.length - 1]!.reuseRatePct

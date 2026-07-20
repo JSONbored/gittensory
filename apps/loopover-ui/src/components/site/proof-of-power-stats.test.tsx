@@ -177,6 +177,19 @@ describe("ProofOfPowerStats", () => {
     expect(screen.getByText("avoided redoing prior AI work")).toBeTruthy();
   });
 
+  it("REGRESSION: does not crash when the API response predates the fleetAccuracy field (old backend/new frontend deployment skew)", async () => {
+    const { fleetAccuracy: _omitted, ...payloadWithoutFleetAccuracy } = PAYLOAD;
+    apiFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      durationMs: 1,
+      data: payloadWithoutFleetAccuracy,
+    });
+    renderWithClient(<ProofOfPowerStats />);
+    expect(await screen.findByText("Decision accuracy")).toBeTruthy();
+    expect(screen.getByText("98.4%")).toBeTruthy(); // falls back to the own-ledger number
+  });
+
   it("renders a sparkline beside all four trend-backed tiles, each labeled by its own week count", async () => {
     apiFetch.mockResolvedValue({ ok: true, status: 200, durationMs: 1, data: PAYLOAD });
     renderWithClient(<ProofOfPowerStats />);

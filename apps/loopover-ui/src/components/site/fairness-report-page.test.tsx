@@ -133,4 +133,23 @@ describe("FairnessReportPage (#fairness-analytics)", () => {
     expect(accuracyCard.textContent).toContain("97.8%");
     expect(screen.getByText("2 human-reversed, lifetime")).toBeTruthy();
   });
+
+  it("REGRESSION: does not crash when the API response predates the fleetAccuracy field (old backend/new frontend deployment skew)", async () => {
+    const { fleetAccuracy: _omitted, ...payloadWithoutFleetAccuracy } = FIXTURE;
+    apiFetch.mockResolvedValue({
+      ok: true,
+      data: payloadWithoutFleetAccuracy,
+      status: 200,
+      durationMs: 10,
+    });
+    renderWithClient(<FairnessReportPage />);
+
+    await waitFor(() => expect(screen.getByText("Decision accuracy")).toBeTruthy());
+    const accuracyCard = screen.getByText("Decision accuracy").closest("div")!.parentElement!;
+    expect(accuracyCard.textContent).toContain("97.8%"); // falls back to the own-ledger number
+    expect(
+      screen.getByText("Anti-gaming flags caught").closest("div")!.parentElement!.textContent,
+    ).toContain("—");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
