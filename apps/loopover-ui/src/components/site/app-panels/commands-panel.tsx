@@ -228,7 +228,13 @@ function Comment({ author, body, muted }: { author: string; body: string; muted?
   );
 }
 
-function BotReply({ boundary, body }: { boundary: CommandSample["boundary"]; body: string }) {
+export function BotReply({
+  boundary,
+  body,
+}: {
+  boundary: CommandSample["boundary"];
+  body: string;
+}) {
   const isPrivate = boundary !== "public";
   return (
     <div
@@ -268,7 +274,11 @@ function BotReply({ boundary, body }: { boundary: CommandSample["boundary"]; bod
 }
 
 function renderInline(line: string) {
-  const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`|_[^_]+_)/g).filter(Boolean);
+  // The `_..._` italics alternative is anchored to word boundaries (`(?<!\w)`/`(?!\w)`) so it only emphasizes a
+  // genuine `_word_` span and never an underscore run inside an identifier (#7531) — command/config vocabulary
+  // like `LOOPOVER_ENABLE_PAGERDUTY` or `repo_full_name` must render verbatim, not with fragments italicized and
+  // the underscores stripped. Matches CommonMark's intraword-underscore rule. `**bold**`/`` `code` `` unchanged.
+  const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`|(?<!\w)_[^_]+_(?!\w))/g).filter(Boolean);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**"))
       return <strong key={index}>{part.slice(2, -2)}</strong>;
