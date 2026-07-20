@@ -24,16 +24,13 @@
 // a few attempts with exponential backoff (following http-retry.js's convention), returning as soon as a
 // competing claim is observed, and otherwise giving a late-propagating competitor time to surface before
 // this miner is declared the winner. The write-authorization boundary (#4833) is unchanged.
-
 import { adjudicateSoftClaim } from "./claim-adjudication.js";
 import { buildClosePrSpec } from "@loopover/engine";
 import { defaultRetryBackoffMs } from "./http-retry.js";
-
 // Bounded retry for the post-submission live-state check (#6058): a few attempts give a competing PR that
 // hasn't propagated through GitHub's search/GraphQL index yet time to surface, without an unbounded loop.
 const DEFAULT_SNAPSHOT_MAX_ATTEMPTS = 3;
 const defaultSnapshotSleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs));
-
 /**
  * Assemble the real competing-claims set from a fetched LiveIssueSnapshot: every OTHER open PR referencing
  * the issue, excluding `selfPrNumber` and any PR authored by `minerLogin` itself (case-insensitive, mirrors
@@ -50,14 +47,13 @@ const defaultSnapshotSleep = (delayMs) => new Promise((resolve) => setTimeout(re
  * @returns {import("./claim-adjudication.js").ObservedClaim[]}
  */
 export function assembleCompetingClaims(snapshot, selfPrNumber, minerLogin) {
-  const minerLoginKey = minerLogin.trim().toLowerCase();
-  const referencingPrs = Array.isArray(snapshot?.referencingPrs) ? snapshot.referencingPrs : [];
-  return referencingPrs
-    .filter((pr) => pr.state === "open" && pr.number !== selfPrNumber)
-    .filter((pr) => typeof pr.authorLogin !== "string" || pr.authorLogin.trim().toLowerCase() !== minerLoginKey)
-    .map((pr) => ({ number: pr.number, claimedAt: pr.createdAt ?? null }));
+    const minerLoginKey = minerLogin.trim().toLowerCase();
+    const referencingPrs = Array.isArray(snapshot?.referencingPrs) ? snapshot.referencingPrs : [];
+    return referencingPrs
+        .filter((pr) => pr.state === "open" && pr.number !== selfPrNumber)
+        .filter((pr) => typeof pr.authorLogin !== "string" || pr.authorLogin.trim().toLowerCase() !== minerLoginKey)
+        .map((pr) => ({ number: pr.number, claimedAt: pr.createdAt ?? null }));
 }
-
 /**
  * Resolve a real claim conflict for an already-submitted PR. Fails OPEN (never closes anything) when the live
  * snapshot can't be fetched -- an unavailable check is not evidence of a lost claim.
@@ -81,50 +77,50 @@ export function assembleCompetingClaims(snapshot, selfPrNumber, minerLogin) {
  * }>}
  */
 export async function resolveClaimConflict(input, deps, options = {}) {
-  const maxAttempts =
-    Number.isFinite(options.maxAttempts) && options.maxAttempts >= 1 ? Math.floor(options.maxAttempts) : DEFAULT_SNAPSHOT_MAX_ATTEMPTS;
-  const sleepFn = typeof options.sleepFn === "function" ? options.sleepFn : defaultSnapshotSleep;
-  const backoffMs = typeof options.backoffMs === "function" ? options.backoffMs : defaultRetryBackoffMs;
-
-  let snapshot = null;
-  let competing = [];
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let current;
-    try {
-      current = await deps.fetchLiveIssueSnapshot(input.repoFullName, input.issueNumber);
-    } catch {
-      current = null;
+    const maxAttempts = Number.isFinite(options.maxAttempts) && options.maxAttempts >= 1
+        ? Math.floor(options.maxAttempts)
+        : DEFAULT_SNAPSHOT_MAX_ATTEMPTS;
+    const sleepFn = typeof options.sleepFn === "function" ? options.sleepFn : defaultSnapshotSleep;
+    const backoffMs = typeof options.backoffMs === "function" ? options.backoffMs : defaultRetryBackoffMs;
+    let snapshot = null;
+    let competing = [];
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        let current;
+        try {
+            current = await deps.fetchLiveIssueSnapshot(input.repoFullName, input.issueNumber);
+        }
+        catch {
+            current = null;
+        }
+        if (current && typeof current === "object") {
+            snapshot = current;
+            competing = assembleCompetingClaims(current, input.selfPrNumber, input.minerLogin);
+            // A competing claim observed = GitHub's index has propagated it; stop retrying and act on it now.
+            if (competing.length > 0)
+                break;
+        }
+        // Back off before the next attempt (index-propagation lag / a transient fetch failure); never after the last.
+        if (attempt < maxAttempts)
+            await sleepFn(backoffMs(attempt));
     }
-    if (current && typeof current === "object") {
-      snapshot = current;
-      competing = assembleCompetingClaims(current, input.selfPrNumber, input.minerLogin);
-      // A competing claim observed = GitHub's index has propagated it; stop retrying and act on it now.
-      if (competing.length > 0) break;
+    if (!snapshot) {
+        return { checked: false, reason: "live_state_unavailable" };
     }
-    // Back off before the next attempt (index-propagation lag / a transient fetch failure); never after the last.
-    if (attempt < maxAttempts) await sleepFn(backoffMs(attempt));
-  }
-  if (!snapshot) {
-    return { checked: false, reason: "live_state_unavailable" };
-  }
-
-  const adjudication = adjudicateSoftClaim({ number: input.selfPrNumber, claimedAt: input.selfClaimedAt }, competing);
-
-  if (adjudication.isWinner) {
-    return { checked: true, isWinner: true, winnerNumber: adjudication.winnerNumber, competingCount: competing.length };
-  }
-
-  const comment = adjudication.winnerNumber
-    ? `Closing this PR: pull request #${adjudication.winnerNumber} claimed this issue first. This is an automated soft-claim conflict resolution -- no action needed from you.`
-    : `Closing this PR: another open pull request already claims this issue. This is an automated soft-claim conflict resolution -- no action needed from you.`;
-  const spec = buildClosePrSpec({ repoFullName: input.repoFullName, number: input.selfPrNumber, comment });
-  const closeResult = await deps.executeLocalWrite(spec);
-
-  return {
-    checked: true,
-    isWinner: false,
-    winnerNumber: adjudication.winnerNumber,
-    competingCount: competing.length,
-    closeResult,
-  };
+    const adjudication = adjudicateSoftClaim({ number: input.selfPrNumber, claimedAt: input.selfClaimedAt }, competing);
+    if (adjudication.isWinner) {
+        return { checked: true, isWinner: true, winnerNumber: adjudication.winnerNumber, competingCount: competing.length };
+    }
+    const comment = adjudication.winnerNumber
+        ? `Closing this PR: pull request #${adjudication.winnerNumber} claimed this issue first. This is an automated soft-claim conflict resolution -- no action needed from you.`
+        : `Closing this PR: another open pull request already claims this issue. This is an automated soft-claim conflict resolution -- no action needed from you.`;
+    const spec = buildClosePrSpec({ repoFullName: input.repoFullName, number: input.selfPrNumber, comment });
+    const closeResult = await deps.executeLocalWrite(spec);
+    return {
+        checked: true,
+        isWinner: false,
+        winnerNumber: adjudication.winnerNumber,
+        competingCount: competing.length,
+        closeResult,
+    };
 }
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiY2xhaW0tY29uZmxpY3QtcmVzb2x2ZXIuanMiLCJzb3VyY2VSb290IjoiIiwic291cmNlcyI6WyJjbGFpbS1jb25mbGljdC1yZXNvbHZlci50cyJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFBQSwwR0FBMEc7QUFDMUcsOEdBQThHO0FBQzlHLDZHQUE2RztBQUM3Ryw2R0FBNkc7QUFDN0csMkdBQTJHO0FBQzNHLDRHQUE0RztBQUM1Ryx5R0FBeUc7QUFDekcsOEdBQThHO0FBQzlHLDhHQUE4RztBQUM5RywrR0FBK0c7QUFDL0csaUNBQWlDO0FBQ2pDLEVBQUU7QUFDRixzR0FBc0c7QUFDdEcsK0dBQStHO0FBQy9HLDJHQUEyRztBQUMzRyw2R0FBNkc7QUFDN0csNEdBQTRHO0FBQzVHLDJHQUEyRztBQUMzRyx1REFBdUQ7QUFDdkQsRUFBRTtBQUNGLHlHQUF5RztBQUN6Ryw2R0FBNkc7QUFDN0csMEdBQTBHO0FBQzFHLHlHQUF5RztBQUN6Ryx5R0FBeUc7QUFDekcsNEZBQTRGO0FBRTVGLE9BQU8sRUFBRSxtQkFBbUIsRUFBRSxNQUFNLHlCQUF5QixDQUFDO0FBQzlELE9BQU8sRUFBRSxnQkFBZ0IsRUFBRSxNQUFNLGtCQUFrQixDQUFDO0FBQ3BELE9BQU8sRUFBRSxxQkFBcUIsRUFBRSxNQUFNLGlCQUFpQixDQUFDO0FBS3hELDBHQUEwRztBQUMxRywwR0FBMEc7QUFDMUcsTUFBTSw2QkFBNkIsR0FBRyxDQUFDLENBQUM7QUFDeEMsTUFBTSxvQkFBb0IsR0FBRyxDQUFDLE9BQWUsRUFBaUIsRUFBRSxDQUFDLElBQUksT0FBTyxDQUFDLENBQUMsT0FBTyxFQUFFLEVBQUUsQ0FBQyxVQUFVLENBQUMsT0FBTyxFQUFFLE9BQU8sQ0FBQyxDQUFDLENBQUM7QUFFeEg7Ozs7Ozs7Ozs7Ozs7O0dBY0c7QUFDSCxNQUFNLFVBQVUsdUJBQXVCLENBQ3JDLFFBQThDLEVBQzlDLFlBQW9CLEVBQ3BCLFVBQWtCO0lBRWxCLE1BQU0sYUFBYSxHQUFHLFVBQVUsQ0FBQyxJQUFJLEVBQUUsQ0FBQyxXQUFXLEVBQUUsQ0FBQztJQUN0RCxNQUFNLGNBQWMsR0FBRyxLQUFLLENBQUMsT0FBTyxDQUFDLFFBQVEsRUFBRSxjQUFjLENBQUMsQ0FBQyxDQUFDLENBQUMsUUFBUSxDQUFDLGNBQWMsQ0FBQyxDQUFDLENBQUMsRUFBRSxDQUFDO0lBQzlGLE9BQU8sY0FBYztTQUNsQixNQUFNLENBQUMsQ0FBQyxFQUFFLEVBQUUsRUFBRSxDQUFDLEVBQUUsQ0FBQyxLQUFLLEtBQUssTUFBTSxJQUFJLEVBQUUsQ0FBQyxNQUFNLEtBQUssWUFBWSxDQUFDO1NBQ2pFLE1BQU0sQ0FBQyxDQUFDLEVBQUUsRUFBRSxFQUFFLENBQUMsT0FBTyxFQUFFLENBQUMsV0FBVyxLQUFLLFFBQVEsSUFBSSxFQUFFLENBQUMsV0FBVyxDQUFDLElBQUksRUFBRSxDQUFDLFdBQVcsRUFBRSxLQUFLLGFBQWEsQ0FBQztTQUMzRyxHQUFHLENBQUMsQ0FBQyxFQUFFLEVBQUUsRUFBRSxDQUFDLENBQUMsRUFBRSxNQUFNLEVBQUUsRUFBRSxDQUFDLE1BQU0sRUFBRSxTQUFTLEVBQUUsRUFBRSxDQUFDLFNBQVMsSUFBSSxJQUFJLEVBQUUsQ0FBQyxDQUFDLENBQUM7QUFDM0UsQ0FBQztBQTBCRDs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7O0dBcUJHO0FBQ0gsTUFBTSxDQUFDLEtBQUssVUFBVSxvQkFBb0IsQ0FDeEMsS0FBeUIsRUFDekIsSUFBdUIsRUFDdkIsVUFBcUMsRUFBRTtJQUV2QyxNQUFNLFdBQVcsR0FDZixNQUFNLENBQUMsUUFBUSxDQUFDLE9BQU8sQ0FBQyxXQUFXLENBQUMsSUFBSyxPQUFPLENBQUMsV0FBc0IsSUFBSSxDQUFDO1FBQzFFLENBQUMsQ0FBQyxJQUFJLENBQUMsS0FBSyxDQUFDLE9BQU8sQ0FBQyxXQUFxQixDQUFDO1FBQzNDLENBQUMsQ0FBQyw2QkFBNkIsQ0FBQztJQUNwQyxNQUFNLE9BQU8sR0FBRyxPQUFPLE9BQU8sQ0FBQyxPQUFPLEtBQUssVUFBVSxDQUFDLENBQUMsQ0FBQyxPQUFPLENBQUMsT0FBTyxDQUFDLENBQUMsQ0FBQyxvQkFBb0IsQ0FBQztJQUMvRixNQUFNLFNBQVMsR0FBRyxPQUFPLE9BQU8sQ0FBQyxTQUFTLEtBQUssVUFBVSxDQUFDLENBQUMsQ0FBQyxPQUFPLENBQUMsU0FBUyxDQUFDLENBQUMsQ0FBQyxxQkFBcUIsQ0FBQztJQUV0RyxJQUFJLFFBQVEsR0FBNkIsSUFBSSxDQUFDO0lBQzlDLElBQUksU0FBUyxHQUFvQixFQUFFLENBQUM7SUFDcEMsS0FBSyxJQUFJLE9BQU8sR0FBRyxDQUFDLEVBQUUsT0FBTyxJQUFJLFdBQVcsRUFBRSxPQUFPLElBQUksQ0FBQyxFQUFFLENBQUM7UUFDM0QsSUFBSSxPQUFpQyxDQUFDO1FBQ3RDLElBQUksQ0FBQztZQUNILE9BQU8sR0FBRyxNQUFNLElBQUksQ0FBQyxzQkFBc0IsQ0FBQyxLQUFLLENBQUMsWUFBWSxFQUFFLEtBQUssQ0FBQyxXQUFXLENBQUMsQ0FBQztRQUNyRixDQUFDO1FBQUMsTUFBTSxDQUFDO1lBQ1AsT0FBTyxHQUFHLElBQUksQ0FBQztRQUNqQixDQUFDO1FBQ0QsSUFBSSxPQUFPLElBQUksT0FBTyxPQUFPLEtBQUssUUFBUSxFQUFFLENBQUM7WUFDM0MsUUFBUSxHQUFHLE9BQU8sQ0FBQztZQUNuQixTQUFTLEdBQUcsdUJBQXVCLENBQUMsT0FBTyxFQUFFLEtBQUssQ0FBQyxZQUFZLEVBQUUsS0FBSyxDQUFDLFVBQVUsQ0FBQyxDQUFDO1lBQ25GLGtHQUFrRztZQUNsRyxJQUFJLFNBQVMsQ0FBQyxNQUFNLEdBQUcsQ0FBQztnQkFBRSxNQUFNO1FBQ2xDLENBQUM7UUFDRCw4R0FBOEc7UUFDOUcsSUFBSSxPQUFPLEdBQUcsV0FBVztZQUFFLE1BQU0sT0FBTyxDQUFDLFNBQVMsQ0FBQyxPQUFPLENBQUMsQ0FBQyxDQUFDO0lBQy9ELENBQUM7SUFDRCxJQUFJLENBQUMsUUFBUSxFQUFFLENBQUM7UUFDZCxPQUFPLEVBQUUsT0FBTyxFQUFFLEtBQUssRUFBRSxNQUFNLEVBQUUsd0JBQXdCLEVBQUUsQ0FBQztJQUM5RCxDQUFDO0lBRUQsTUFBTSxZQUFZLEdBQUcsbUJBQW1CLENBQUMsRUFBRSxNQUFNLEVBQUUsS0FBSyxDQUFDLFlBQVksRUFBRSxTQUFTLEVBQUUsS0FBSyxDQUFDLGFBQWEsRUFBRSxFQUFFLFNBQVMsQ0FBQyxDQUFDO0lBRXBILElBQUksWUFBWSxDQUFDLFFBQVEsRUFBRSxDQUFDO1FBQzFCLE9BQU8sRUFBRSxPQUFPLEVBQUUsSUFBSSxFQUFFLFFBQVEsRUFBRSxJQUFJLEVBQUUsWUFBWSxFQUFFLFlBQVksQ0FBQyxZQUFZLEVBQUUsY0FBYyxFQUFFLFNBQVMsQ0FBQyxNQUFNLEVBQUUsQ0FBQztJQUN0SCxDQUFDO0lBRUQsTUFBTSxPQUFPLEdBQUcsWUFBWSxDQUFDLFlBQVk7UUFDdkMsQ0FBQyxDQUFDLGtDQUFrQyxZQUFZLENBQUMsWUFBWSw4R0FBOEc7UUFDM0ssQ0FBQyxDQUFDLHlKQUF5SixDQUFDO0lBQzlKLE1BQU0sSUFBSSxHQUFHLGdCQUFnQixDQUFDLEVBQUUsWUFBWSxFQUFFLEtBQUssQ0FBQyxZQUFZLEVBQUUsTUFBTSxFQUFFLEtBQUssQ0FBQyxZQUFZLEVBQUUsT0FBTyxFQUFFLENBQUMsQ0FBQztJQUN6RyxNQUFNLFdBQVcsR0FBRyxNQUFNLElBQUksQ0FBQyxpQkFBaUIsQ0FBQyxJQUFJLENBQUMsQ0FBQztJQUV2RCxPQUFPO1FBQ0wsT0FBTyxFQUFFLElBQUk7UUFDYixRQUFRLEVBQUUsS0FBSztRQUNmLFlBQVksRUFBRSxZQUFZLENBQUMsWUFBWTtRQUN2QyxjQUFjLEVBQUUsU0FBUyxDQUFDLE1BQU07UUFDaEMsV0FBVztLQUNaLENBQUM7QUFDSixDQUFDIn0=

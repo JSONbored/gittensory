@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  closeDefaultPortfolioQueueManager,
   entriesToPortfolioQueue,
   initPortfolioQueueManager,
   normalizePortfolioCaps,
@@ -96,6 +97,20 @@ describe("entriesToPortfolioQueue() / selectEligibleBatch() (#4285)", () => {
       repoFullName: "acme/alpha",
       identifier: "x",
     });
+  });
+
+  it("entriesToPortfolioQueue tolerates a non-array input, omits done rows, and skips rows with a blank repo/identifier", () => {
+    expect(entriesToPortfolioQueue(undefined as never)).toEqual({ buckets: [] });
+    const buckets = entriesToPortfolioQueue([
+      { apiBaseUrl: "https://api.github.com", repoFullName: "acme/a", identifier: "keep", priority: 1, status: "queued", enqueuedAt: "t1" },
+      { apiBaseUrl: "https://api.github.com", repoFullName: "acme/a", identifier: "done-row", priority: 1, status: "done", enqueuedAt: "t2" },
+      { apiBaseUrl: "https://api.github.com", repoFullName: 42 as never, identifier: "bad-repo", priority: 1, status: "queued", enqueuedAt: "t3" },
+      { apiBaseUrl: "https://api.github.com", repoFullName: "acme/a", identifier: "   ", priority: 1, status: "queued", enqueuedAt: "t4" },
+      { apiBaseUrl: "https://api.github.com", repoFullName: "acme/a", identifier: 99 as never, priority: 1, status: "queued", enqueuedAt: "t5" },
+    ] as QueueEntry[]).buckets;
+    const items = buckets.flatMap((bucket) => bucket.items);
+    expect(items).toHaveLength(1);
+    expect(parseQueueItemId(items[0]!.id).identifier).toBe("keep");
   });
 
   it("returns nothing when either cap is zero", () => {
@@ -197,5 +212,30 @@ describe("initPortfolioQueueManager().claimNextBatch() (#4285)", () => {
     });
 
     expect(claimed.map((entry) => entry.identifier)).toEqual(["two"]);
+  });
+
+  it("applies default caps when none are given, honors a custom staleLeaseMs, and close() closes the store", () => {
+    const store = initPortfolioQueueStore(":memory:");
+    // caps omitted -> the default { globalWipCap: 1, perRepoWipCap: 1 }; staleLeaseMs supplied -> its finite branch.
+    const manager = initPortfolioQueueManager({ store, staleLeaseMs: 1000 });
+    manager.enqueue({ repoFullName: "acme/a", identifier: "1", priority: 2 });
+    manager.enqueue({ repoFullName: "acme/a", identifier: "2", priority: 1 });
+    // Default perRepoWipCap of 1 means exactly one item is claimed from the same repo per batch.
+    expect(manager.claimNextBatch()).toHaveLength(1);
+    // The manager owns its store's lifecycle; close() delegates to store.close(). Deliberately NOT pushed to the
+    // shared `stores` cleanup list, so afterEach never double-closes it (node:sqlite throws on a second close).
+    expect(() => manager.close()).not.toThrow();
+  });
+
+  it("opens its own store from options.dbPath when no store is injected", () => {
+    // options.store omitted -> the `?? initPortfolioQueueStore(options.dbPath)` fallback opens an in-memory store.
+    const manager = initPortfolioQueueManager({ dbPath: ":memory:" });
+    manager.enqueue({ repoFullName: "acme/a", identifier: "1", priority: 1 });
+    expect(manager.claimNextBatch().map((target) => target.identifier)).toEqual(["1"]);
+    manager.close();
+  });
+
+  it("closeDefaultPortfolioQueueManager is a no-op today (symmetry with the other miner stores)", () => {
+    expect(() => closeDefaultPortfolioQueueManager()).not.toThrow();
   });
 });

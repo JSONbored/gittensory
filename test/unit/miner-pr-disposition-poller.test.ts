@@ -110,6 +110,53 @@ describe("PR disposition poller (#5135)", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it("treats a blank apiBaseUrl as the default GitHub base, and rejects a non-string repoFullName", async () => {
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL) =>
+      prResponse({ state: "closed", merged: true, closed_at: "2026-07-12T00:00:00Z" }),
+    );
+    const result = await pollPrDisposition("acme/widgets", 5, { apiBaseUrl: "   ", fetchFn });
+    expect(String(fetchFn.mock.calls[0]![0])).toBe("https://api.github.com/repos/acme/widgets/pulls/5");
+    expect(result.merged).toBe(true);
+    await expect(pollPrDisposition(123 as never, 5, { fetchFn })).rejects.toThrow("invalid_repo_full_name");
+  });
+
+  it("falls back to the global fetch when fetchFn is omitted", async () => {
+    const stub = vi.fn(async () => prResponse({ state: "closed", merged: false, closed_at: "2026-07-12T00:00:00Z" }));
+    vi.stubGlobal("fetch", stub);
+    try {
+      const result = await pollPrDisposition("acme/widgets", 6, { apiBaseUrl: API });
+      expect(result).toMatchObject({ state: "closed", merged: false, attempts: 1 });
+      expect(stub).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("surfaces a GitHub error with its message, and one without a message, as deterministic errors", async () => {
+    const withMessage = vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 }));
+    await expect(
+      pollPrDisposition("acme/widgets", 7, { apiBaseUrl: API, fetchFn: withMessage, sleepFn: async () => {} }),
+    ).rejects.toThrow("github_404: Not Found");
+    // A 5xx with no usable message body surfaces as the bare status code (after fetchWithRetry's own retries).
+    const noMessage = vi.fn(async () => jsonResponse({}, { status: 500 }));
+    await expect(
+      pollPrDisposition("acme/widgets", 8, { apiBaseUrl: API, fetchFn: noMessage, sleepFn: async () => {} }),
+    ).rejects.toThrow(/^github_500$/);
+  });
+
+  it("treats an unparseable PR response body as an empty (still-open) disposition", async () => {
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("bad json");
+      },
+    }));
+    // response.json() rejects -> the `.catch(() => null)` yields a null payload -> normalized as still-open.
+    const result = await pollPrDisposition("acme/widgets", 13, { apiBaseUrl: API, fetchFn: fetchFn as never });
+    expect(result).toMatchObject({ state: "open", merged: false, attempts: 1 });
+  });
+
   it("backs off between polls while the PR stays open, until it reaches a terminal disposition", async () => {
     const sleeps: number[] = [];
     const fetchFn = vi
@@ -132,6 +179,25 @@ describe("PR disposition poller (#5135)", () => {
     expect(result).toEqual({ state: "closed", merged: true, closedAt: "2026-07-12T01:00:00Z", attempts: 3 });
     expect(sleeps).toEqual([100, 150]);
     expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses the built-in setTimeout backoff when sleepFn is omitted", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(prResponse({ state: "open" }))
+      .mockResolvedValueOnce(prResponse({ state: "closed", merged: false, closed_at: "2026-07-12T01:00:00Z" }));
+
+    // No sleepFn -> the real setTimeout-based default runs; minIntervalMs/maxIntervalMs pin the backoff to 1ms.
+    const result = await pollPrDisposition("acme/widgets", 12, {
+      apiBaseUrl: API,
+      fetchFn,
+      maxAttempts: 2,
+      minIntervalMs: 1,
+      maxIntervalMs: 1,
+    });
+
+    expect(result).toMatchObject({ state: "closed", merged: false, attempts: 2 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it("returns the last-observed open disposition once maxAttempts is exhausted, without throwing", async () => {

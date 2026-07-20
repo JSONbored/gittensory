@@ -210,6 +210,20 @@ describe("rankCandidateIssues (#2302 follow-up)", () => {
     expect(rankCandidateIssues(undefined as never, { nowMs: NOW })).toEqual([]);
   });
 
+  it("normalizes malformed candidate fields to safe fallbacks (non-array labels, non-finite comments, unknown ai-policy source)", () => {
+    const ranked = rankCandidateIssues(
+      [rawIssue({ labels: "not-an-array", commentsCount: Number.NaN, aiPolicySource: "README.md" })],
+      { nowMs: NOW },
+    );
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]).toMatchObject({ labels: [], commentsCount: 0, aiPolicySource: "none" });
+  });
+
+  it("keeps only non-empty string labels and trims them, dropping non-string / blank entries", () => {
+    const ranked = rankCandidateIssues([rawIssue({ labels: ["  keep  ", "", 42, null] })], { nowMs: NOW });
+    expect(ranked[0]?.labels).toEqual(["keep"]);
+  });
+
   it("accepts pre-parsed goal specs and normalizes ai policy metadata", () => {
     const ranked = rankCandidateIssues(
       [

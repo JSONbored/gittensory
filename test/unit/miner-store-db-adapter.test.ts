@@ -38,6 +38,17 @@ describe("miner store-db-adapter seam (#7175 part 1)", () => {
     expect(await d1.prepare("SELECT id, name FROM t").raw()).toEqual([[1, "a"]]);
   });
 
+  it("first(colName) plucks a single column value and coalesces a SQL NULL to null", async () => {
+    const db = new DatabaseSync(":memory:");
+    const d1 = createD1Adapter(nodeSqliteDriver(db));
+    await d1.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, note TEXT)");
+    await d1.prepare("INSERT INTO t (name, note) VALUES (?, ?)").bind("a", null).run();
+    // With a column name, first() returns just that column's value rather than the whole row...
+    expect(await d1.prepare("SELECT name FROM t WHERE id = 1").first<string>("name")).toBe("a");
+    // ...and a SQL NULL column coalesces to null (the `?? null` arm), never undefined.
+    expect(await d1.prepare("SELECT note FROM t WHERE id = 1").first<string>("note")).toBeNull();
+  });
+
   it("batch is atomic and rolls back on error", async () => {
     const db = new DatabaseSync(":memory:");
     const d1 = createD1Adapter(nodeSqliteDriver(db));
