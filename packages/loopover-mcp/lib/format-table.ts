@@ -80,8 +80,8 @@ export function formatTable(input: FormatTableInput, opts: FormatTableOptions = 
   const widths = headers.map((header, column) =>
     Math.max(header.label.length, ...bodyCells.map((cells) => cells[column]?.length ?? 0), 0),
   );
+  // Trim trailing padding so a left-aligned final column never emits dangling spaces.
   const renderRow = (cells: string[]) =>
-    // Trim trailing padding so a left-aligned final column never emits dangling spaces.
     cells
       .map((text, column) => (aligns[column] === "right" ? text.padStart(widths[column] ?? 0) : text.padEnd(widths[column] ?? 0)))
       .join(gap)
