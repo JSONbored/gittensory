@@ -36,13 +36,18 @@ const MAX_SLUG_LENGTH = 64;
 
 /** Deterministically slugify an attempt id into a filesystem- and git-ref-safe token (same id → same slug). */
 function slugifyAttemptId(attemptId: string): string {
+  // Trim leading/trailing `-`/`.` both before and after truncation (#7528): `.` is allowed mid-slug, so a
+  // pre-trim-only pass misses the case where slice(0, MAX) lands on a literal `.`/`-` and leaves a
+  // git-ref-invalid trailing separator (git check-ref-format rejects refs ending in `.`).
   const slug = attemptId
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, MAX_SLUG_LENGTH)
     .replace(/^[-.]+|[-.]+$/g, "");
   if (!slug) throw new Error("invalid_attempt_id");
-  return slug.slice(0, MAX_SLUG_LENGTH);
+  return slug;
 }
 
 /**

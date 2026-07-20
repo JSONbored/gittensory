@@ -38,8 +38,32 @@ describe("planWorktree (#4269)", () => {
     expect(long.branchName).toBe(`${WORKTREE_BRANCH_PREFIX}${"x".repeat(64)}`);
   });
 
+  it("strips a trailing '.' produced by truncating at a mid-slug dot (#7528)", () => {
+    // 63 safe chars + '.' + more content past the cap → pre-trim keeps the dot (not at the edge),
+    // slice(0, 64) ends in '.', and the post-truncation trim must remove it for git ref-format.
+    const attemptId = `${"a".repeat(63)}.${"b".repeat(10)}`;
+    const plan = planWorktree({ repoPath: "/repo", attemptId });
+    expect(plan.branchName).toBe(`${WORKTREE_BRANCH_PREFIX}${"a".repeat(63)}`);
+    expect(plan.branchName.endsWith(".")).toBe(false);
+    expect(plan.branchName.endsWith("-")).toBe(false);
+  });
+
+  it("strips a trailing '-' produced by truncating at a mid-slug hyphen (#7528)", () => {
+    const attemptId = `${"a".repeat(63)}-${"b".repeat(10)}`;
+    const plan = planWorktree({ repoPath: "/repo", attemptId });
+    expect(plan.branchName).toBe(`${WORKTREE_BRANCH_PREFIX}${"a".repeat(63)}`);
+    expect(plan.branchName.endsWith("-")).toBe(false);
+  });
+
+  it("leaves a clean truncation boundary untouched when the 64th char is not a separator (#7528)", () => {
+    const attemptId = `${"a".repeat(64)}${"b".repeat(10)}`;
+    const plan = planWorktree({ repoPath: "/repo", attemptId });
+    expect(plan.branchName).toBe(`${WORKTREE_BRANCH_PREFIX}${"a".repeat(64)}`);
+  });
+
   it("rejects an attempt id that sanitizes to nothing", () => {
     expect(() => planWorktree({ repoPath: "/repo", attemptId: "  ---  " })).toThrow(/invalid_attempt_id/);
+    expect(() => planWorktree({ repoPath: "/repo", attemptId: "..." })).toThrow(/invalid_attempt_id/);
   });
 });
 
