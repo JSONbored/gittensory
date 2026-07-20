@@ -412,7 +412,6 @@ export const ContributorOpenPrNextStepPacketSchema = z
     classification: z.enum([
       "approved",
       "blocked",
-      "stale",
       "needs_author",
       "failing_checks",
       "missing_tests",
