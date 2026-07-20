@@ -4,11 +4,12 @@
 
 export const MCP_PACKAGE_ALLOWED_FILE_PATTERNS = [
   /^bin\/loopover-mcp\.js$/,
-  /^lib\/cli-error\.js$/,
-  /^lib\/local-branch\.js$/,
-  /^lib\/format-table\.js$/,
-  /^lib\/redact-local-path\.js$/,
-  /^lib\/telemetry\.js$/,
+  // Compiled in-place TypeScript emit ships sibling .d.ts next to each converted lib/*.js (#7328 / #7329).
+  /^lib\/cli-error\.(js|d\.ts)$/,
+  /^lib\/local-branch\.(js|d\.ts)$/,
+  /^lib\/format-table\.(js|d\.ts)$/,
+  /^lib\/redact-local-path\.(js|d\.ts)$/,
+  /^lib\/telemetry\.(js|d\.ts)$/,
   /^scripts\/gittensor-score-preview\.(mjs|py)$/,
   /^package\.json$/,
   /^README\.md$/,

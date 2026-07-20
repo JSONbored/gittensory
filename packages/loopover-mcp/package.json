@@ -32,16 +32,27 @@
     "bin",
     "lib",
     "scripts",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "!bin/**/*.ts",
+    "!lib/**/*.ts",
+    "!scripts/check-syntax.mjs",
+    "bin/**/*.d.ts",
+    "lib/**/*.d.ts"
   ],
   "scripts": {
-    "build": "node --check bin/loopover-mcp.js && node --check lib/cli-error.js && node --check lib/local-branch.js && node --check lib/format-table.js && node --check lib/redact-local-path.js && node --check lib/telemetry.js && node --check scripts/gittensor-score-preview.mjs"
+    "build": "npm run build:tsc && npm run build:verify",
+    "build:tsc": "tsc -p tsconfig.json",
+    "build:verify": "node scripts/check-syntax.mjs"
   },
   "dependencies": {
     "@loopover/engine": "^3.4.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "posthog-node": "^5.44.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=22.0.0"

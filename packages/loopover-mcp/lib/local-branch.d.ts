@@ -1,0 +1,158 @@
+import { isCodeFile, isTestPath as isTestFile } from "@loopover/engine/signals/test-evidence";
+import { redactLocalPath } from "./redact-local-path.js";
+export { isCodeFile, isTestFile };
+export { redactLocalPath };
+type NormalizedWorkspaceRoot = {
+    path: string;
+};
+type ChangedFile = {
+    path: string;
+    previousPath?: string | undefined;
+    additions: number;
+    deletions: number;
+    status: string;
+    binary?: boolean;
+};
+type BranchInput = {
+    cwd?: unknown;
+    baseRef?: string;
+    login?: string;
+    workspaceRoots?: unknown;
+    repoFullName?: string;
+    branchName?: string;
+    headRef?: string;
+    pendingCommitCount?: number;
+    ciStatusHints?: string[];
+    commitMessages?: string[];
+    title?: string;
+    body?: string;
+    linkedIssues?: number[];
+    labels?: unknown;
+    validation?: unknown;
+    pendingMergedPrCount?: unknown;
+    pendingClosedPrCount?: unknown;
+    approvedPrCount?: unknown;
+    expectedOpenPrCount?: unknown;
+    expectedOpenPrCountAfterMerge?: unknown;
+    projectedCredibility?: unknown;
+    scenarioNotes?: unknown;
+    branchEligibility?: unknown;
+    scorePreviewCommand?: unknown;
+};
+type BranchMetadata = {
+    login?: string | undefined;
+    repoFullName: string;
+    baseRef: string;
+    headRef: string;
+    branchName: string;
+    baseSha?: string | undefined;
+    headSha?: string | undefined;
+    mergeBaseSha?: string | undefined;
+    remoteTrackingSha?: string | undefined;
+    commitMessages: string[];
+    changedFiles: ChangedFile[];
+    validation?: unknown;
+    linkedIssues: number[];
+    labels?: unknown;
+    title?: string | undefined;
+    body?: string | undefined;
+    pendingMergedPrCount?: unknown;
+    pendingClosedPrCount?: unknown;
+    approvedPrCount?: unknown;
+    expectedOpenPrCountAfterMerge?: unknown;
+    projectedCredibility?: unknown;
+    scenarioNotes?: unknown;
+    pendingCommitCount: number;
+    ciStatusHints: string[];
+    branchEligibility?: unknown;
+    repoRoot?: string;
+    cwd?: string;
+};
+type ScorePreviewMetadata = Record<string, unknown> & {
+    repoRoot?: string;
+    cwd?: string;
+};
+type ScorerStatus = {
+    ok?: boolean;
+    payload?: ScorerPayload;
+    code?: string;
+    reason?: string;
+    stderr?: string;
+    scorerCommand?: string;
+    exitCode?: number;
+    [key: string]: unknown;
+};
+type ScorerPayload = Record<string, unknown> & {
+    source?: {
+        tokenScore?: unknown;
+        lines?: unknown;
+    };
+    total?: {
+        tokenScore?: unknown;
+    };
+    tests?: {
+        tokenScore?: unknown;
+    };
+    nonCode?: {
+        tokenScore?: unknown;
+    };
+};
+export declare function parseGitRemote(remoteUrl: unknown): string | undefined;
+export declare function collectLocalDiff(cwd: string, baseRef: string, workspaceRoots: unknown): {
+    title: string;
+    commitMessage: string;
+    changedFiles: string[];
+    changedLineCount: number;
+    testFiles: string[];
+    codeFiles: string[];
+};
+export declare function collectLocalBranchMetadata(input: BranchInput): BranchMetadata;
+export declare function collectPendingCommitCount(cwd: string, baseRef: string): number;
+export declare function collectCiStatusHints(cwd: string, baseRef: string, changedFiles?: ChangedFile[]): string[];
+export declare function buildBranchAnalysisPayload(input: BranchInput): {
+    localScorer: ScorerPayload;
+    localScorerStatus: ScorerStatus;
+    login?: string | undefined;
+    repoFullName: string;
+    baseRef: string;
+    headRef: string;
+    branchName: string;
+    baseSha?: string | undefined;
+    headSha?: string | undefined;
+    mergeBaseSha?: string | undefined;
+    remoteTrackingSha?: string | undefined;
+    commitMessages: string[];
+    changedFiles: ChangedFile[];
+    validation?: unknown;
+    linkedIssues: number[];
+    labels?: unknown;
+    title?: string | undefined;
+    body?: string | undefined;
+    pendingMergedPrCount?: unknown;
+    pendingClosedPrCount?: unknown;
+    approvedPrCount?: unknown;
+    expectedOpenPrCountAfterMerge?: unknown;
+    projectedCredibility?: unknown;
+    scenarioNotes?: unknown;
+    pendingCommitCount: number;
+    ciStatusHints: string[];
+    branchEligibility?: unknown;
+    repoRoot?: string;
+    cwd?: string;
+};
+export declare function resolveWorkspaceCwd(input?: Pick<BranchInput, "cwd" | "workspaceRoots">): {
+    cwd: string;
+    rootsAvailable: boolean;
+    rootCount: number;
+};
+export declare function normalizeMcpWorkspaceRoots(roots: unknown): NormalizedWorkspaceRoot[];
+export declare function resolveScorePreviewCommand(input?: Pick<BranchInput, "scorePreviewCommand">): string | undefined;
+export declare function referenceScorePreviewExample(kind?: "metadata" | "gittensor"): string;
+export declare function redactScorerCommand(command: unknown): string;
+export declare function sanitizeLocalScorerStatus(status: ScorerStatus): ScorerStatus;
+export declare function sanitizeLocalScorerStatus(status: unknown): unknown;
+export declare function runExternalScorePreview(metadata: ScorePreviewMetadata, scorerCommand: string | undefined): ScorerStatus;
+export declare function setupGuidanceForLocalScorer(status: ScorerStatus): string[];
+export declare function probeLocalScorer(scorerCommand?: string | undefined): ScorerStatus;
+export declare function gitLines(cwd: string, args: string[]): string[];
+export declare function extractLinkedIssues(text: unknown): number[];
