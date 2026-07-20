@@ -240,6 +240,46 @@ describe("rag: per-file chunking", () => {
     expect(chunks.every((c) => c.text.length > 0)).toBe(true);
   });
 
+  it("REGRESSION (#7447): does NOT hang when newline snap + near-budget overlap would stall `end - overlap <= start`", () => {
+    // Exact repro from the issue: early qualifying newline (~index 60 > chunkChars/2) shrinks `end`, and
+    // chunkOverlap=99 (allowed by the old clamp of chunkChars-1) makes `end - overlap` land at/before the
+    // previous start. Without the start+1 floor this never returns.
+    const text = `${"x".repeat(60)}\n${"y".repeat(5000)}`;
+    const chunks = chunkFile("f.py", text, "", { chunkChars: 100, chunkOverlap: 99 });
+    expect(chunks.length).toBeGreaterThan(1);
+    // Worst case every iteration advances exactly 1 char → at most text.length chunks.
+    expect(chunks.length).toBeLessThanOrEqual(text.length);
+    expect(chunks.every((c) => c.text.length > 0)).toBe(true);
+  });
+
+  it.each([
+    { chunkChars: 100, chunkOverlap: 99 },
+    { chunkChars: 100, chunkOverlap: 50 },
+    { chunkChars: 50, chunkOverlap: 49 },
+    { chunkChars: 20, chunkOverlap: 19 },
+    { chunkChars: 1, chunkOverlap: 0 },
+    { chunkChars: 1, chunkOverlap: 999 }, // clamped to 0
+  ])(
+    "REGRESSION (#7447): chunkFile returns finitely for chunkChars=$chunkChars chunkOverlap=$chunkOverlap (forward progress)",
+    ({ chunkChars, chunkOverlap }) => {
+      const text = `${"x".repeat(60)}\n${"y".repeat(5000)}`;
+      const chunks = chunkFile("f.py", text, "", { chunkChars, chunkOverlap });
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks.length).toBeLessThanOrEqual(text.length);
+    },
+  );
+
+  it("REGRESSION (#7447): chunkJsTs oversized-unit fallback through newlineChunks also cannot stall on high overlap", () => {
+    // Two logical units so chunkJsTs runs; the first exceeds chunkChars and falls back to newlineChunks with
+    // the caller-supplied (near-budget) overlap — the other production path that must stay hang-free.
+    const huge = `export function big() {\n${"x".repeat(60)}\n${"y".repeat(5000)}\n}\n`;
+    const small = "export function small() { return 1; }\n";
+    const text = huge + small;
+    const chunks = chunkFile("src/huge.ts", text, "", { chunkChars: 100, chunkOverlap: 99 });
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.length).toBeLessThanOrEqual(text.length);
+  });
+
   it("PACKS a small multi-function JS file into one chunk (free-tier vector budget unaffected) (#282)", () => {
     const chunks = chunkFile("src/small.ts", "export function a(){return 1;}\nexport function b(){return 2;}\nexport function c(){return 3;}\n");
     expect(chunks).toHaveLength(1);

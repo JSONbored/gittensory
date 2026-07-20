@@ -195,9 +195,9 @@ export function chunkFile(path: string, text: string, namespace = "", opts?: Chu
   // file re-failed the whole upsert batch (up to 49 otherwise-good chunks rolled back with it) on every
   // push and cron retry (GITTENSORY-D).
   text = text.replace(/(?![\t\n\r])\p{Cc}/gu, " ");
-  // Clamp to safe ranges: chunkChars must be >= 1 (a 0/negative budget makes newlineChunks loop forever on an
-  // oversized file — a misconfig DOS) and overlap must be < chunkChars (else `end - overlap` can't advance).
-  // (#rag-verify infinite-loop guard)
+  // Clamp to safe ranges: chunkChars must be >= 1 (a 0/negative budget never advances the window) and
+  // overlap must be < chunkChars. Overlap alone is NOT enough to prevent stalls — newline snap can shrink
+  // `end` so `end - overlap <= start`; newlineChunks floors the next start at `start + 1` (#7447 / #rag-verify).
   const chunkChars = Math.max(1, Math.floor(opts?.chunkChars ?? CHUNK_CHARS));
   const chunkOverlap = Math.min(Math.max(0, Math.floor(opts?.chunkOverlap ?? CHUNK_OVERLAP)), chunkChars - 1);
   // JS/TS: cut on LOGICAL boundaries (function/class/export) instead of arbitrary newlines, so a retrieved
@@ -291,7 +291,10 @@ function newlineChunks(path: string, text: string, kind: RagKind, namespace: str
     chunks.push({ id: chunkId(namespace, path, idx), path, chunkIndex: idx, kind, text: text.slice(start, end), boundary: "file" });
     idx += 1;
     if (end >= text.length) break;
-    start = Math.max(0, end - chunkOverlap);
+    // #7447: newline snap can shrink `end` well below `start + chunkChars`, so `end - chunkOverlap` may not
+    // advance past the previous `start` even when overlap < chunkChars. Floor at start + 1 so every
+    // iteration makes forward progress (Math.max(0, …) is redundant once start >= 0, which the loop maintains).
+    start = Math.max(start + 1, end - chunkOverlap);
   }
   return chunks;
 }
