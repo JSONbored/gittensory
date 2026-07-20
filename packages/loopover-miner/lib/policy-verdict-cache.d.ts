@@ -25,5 +25,9 @@ export declare function resolvePolicyVerdictCacheDbPath(env?: Record<string, str
 /**
  * Opens the 100% local/client-side miner policy-verdict cache. The database only lives on this machine; this
  * module never uploads, syncs, or phones home with its contents. (#4843)
+ *
+ * Opened through the #7175 SqliteDriver seam (`openLocalStoreAdapter`): CRUD goes through `driver.query`,
+ * while schema creation/migrations and the repo-scoped purge still use the underlying DatabaseSync until those
+ * helpers are migrated. Public API stays synchronous so callers need no async cascade in this part-1 slice.
  */
 export declare function initPolicyVerdictCacheStore(dbPath?: string): PolicyVerdictCacheStore;
