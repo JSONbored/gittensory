@@ -33,6 +33,7 @@
     "lib",
     "scripts",
     "CHANGELOG.md",
+    "!bin/**/*.ts",
     "!lib/**/*.ts",
     "!scripts/check-syntax.mjs"
   ],
