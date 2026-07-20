@@ -1,5 +1,5 @@
 import { Loader2, Inbox, AlertTriangle, RefreshCw, WifiOff } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { cn } from "../utils";
@@ -264,9 +264,16 @@ export function StateBoundary({
       ? undefined
       : "The data source did not respond. Retry the request, or check back once the service has recovered.");
 
-  // When this boundary flips into the error state, surface a toast with Retry.
+  // When this boundary flips into the error state, surface a toast with Retry. Tracked via a ref
+  // (mirroring the `wasError` pattern in apps/loopover-ui/src/components/site/mcp-version-badge.tsx)
+  // so this only fires on the false->true edge, not on every re-render while isError stays true --
+  // onRetry/onFailureNotify are ordinary function props that get new identities on unrelated
+  // re-renders, and without edge detection those identity changes alone would re-run this effect.
+  const wasErrorRef = useRef(false);
   useEffect(() => {
-    if (isError && errorLabel) {
+    const enteredError = isError && !wasErrorRef.current;
+    wasErrorRef.current = Boolean(isError);
+    if (enteredError && errorLabel) {
       onFailureNotify?.({
         label: errorLabel,
         kind: errorKind ?? "network",

@@ -138,3 +138,52 @@ describe("StateBoundary retry/refresh actions (#793 regression guard)", () => {
     expect(screen.getByText("content")).toBeTruthy();
   });
 });
+
+describe("StateBoundary onFailureNotify edge-triggered dedupe (#7436 regression)", () => {
+  it("fires onFailureNotify exactly once across re-renders while isError stays true, even as onRetry's identity changes", () => {
+    notifyApiFailure.mockClear();
+    // Each render passes a brand-new onRetry closure -- this mirrors the real app wrapper, which
+    // also constructs a fresh onFailureNotify arrow function on every render (#6506) -- so an
+    // unrelated re-render while the boundary is still in the error state must not re-notify.
+    const { rerender } = render(
+      <StateBoundary isError errorLabel="Widgets" onRetry={() => {}}>
+        <div>content</div>
+      </StateBoundary>,
+    );
+    expect(notifyApiFailure).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 3; i++) {
+      rerender(
+        <StateBoundary isError errorLabel="Widgets" onRetry={() => {}}>
+          <div>content</div>
+        </StateBoundary>,
+      );
+    }
+
+    expect(notifyApiFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires again exactly once on a fresh false->true transition after leaving the error state", () => {
+    notifyApiFailure.mockClear();
+    const { rerender } = render(
+      <StateBoundary isError errorLabel="Widgets" onRetry={() => {}}>
+        <div>content</div>
+      </StateBoundary>,
+    );
+    expect(notifyApiFailure).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <StateBoundary isError={false} errorLabel="Widgets" onRetry={() => {}}>
+        <div>content</div>
+      </StateBoundary>,
+    );
+    expect(notifyApiFailure).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <StateBoundary isError errorLabel="Widgets" onRetry={() => {}}>
+        <div>content</div>
+      </StateBoundary>,
+    );
+    expect(notifyApiFailure).toHaveBeenCalledTimes(2);
+  });
+});
