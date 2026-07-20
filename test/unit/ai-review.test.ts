@@ -3077,6 +3077,18 @@ describe("pure helpers", () => {
   it("isStructuralProviderConfigError matches only codex's own structural-config error messages, not other Errors or non-Error throws (GITTENSORY-K/8)", () => {
     expect(isStructuralProviderConfigError(new Error("codex_auth_not_configured: ~/.codex/auth.json not found"))).toBe(true);
     expect(isStructuralProviderConfigError(new Error("codex_no_auth: auth.json missing or expired"))).toBe(true);
+    // The fail-closed credential-isolation guard is equally deterministic, thrown either bare (never opted in) or
+    // with a `: rename …` detail suffix (legacy flag name still set) -- both must earn the structural cooldown (#7466).
+    expect(isStructuralProviderConfigError(new Error("codex_credential_isolation_required"))).toBe(true);
+    expect(
+      isStructuralProviderConfigError(
+        new Error(
+          "codex_credential_isolation_required: GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER is set but was retired in #5652; rename it to LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER",
+        ),
+      ),
+    ).toBe(true);
+    // Prefix-anchored, but must not match a longer look-alike token that merely starts with the same characters.
+    expect(isStructuralProviderConfigError(new Error("codex_no_auth_pending"))).toBe(false);
     expect(isStructuralProviderConfigError(new Error("connection reset"))).toBe(false);
     // Anchored ("^codex_...") -- a wrapped/rethrown message doesn't match, only the exact provider-level throw does.
     expect(isStructuralProviderConfigError(new Error("wrapped: codex_auth_not_configured: nested"))).toBe(false);

@@ -25,7 +25,7 @@
   "src/review/repo-doc-render.ts": 2,
   "src/review/repo-skill-render.ts": 2,
   "src/review/selftune-wire.ts": 1,
-  "src/selfhost/ai.ts": 6,
+  "src/selfhost/ai.ts": 9,
   "src/selfhost/health.ts": 3,
   "src/selfhost/monitored-work.ts": 1,
   "src/selfhost/orb-collector.ts": 1,

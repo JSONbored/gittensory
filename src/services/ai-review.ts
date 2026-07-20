@@ -1022,15 +1022,19 @@ export function isRateLimitError(error: unknown): boolean {
 }
 
 /** True for a provider's own STRUCTURAL misconfiguration signal (`src/selfhost/ai.ts`'s
- *  `codex_auth_not_configured` / `codex_no_auth` — a missing or expired credential file). Unlike a transient
- *  timeout or rate limit, this will fail identically on every future attempt until an operator re-runs
- *  `codex auth` -- confirmed live (GITTENSORY-K/8: 2094 + 544 events over 16 days from one unfixed
- *  misconfiguration, the credential file was never present the whole time). Mirrors
- *  {@link isSubscriptionCliTimeout}/{@link isRateLimitError}'s identical non-transient-error short-circuit.
- *  Exported so `src/selfhost/ai.ts`'s circuit breaker can give this failure class a much longer cooldown
- *  than a genuinely transient one. */
+ *  `codex_auth_not_configured` / `codex_no_auth` — a missing or expired credential file — or
+ *  `codex_credential_isolation_required` — the fail-closed opt-in guard, thrown either bare or with a
+ *  `: rename …` detail suffix). Unlike a transient timeout or rate limit, these fail identically on every future
+ *  attempt until an operator re-runs `codex auth` / fixes the opt-in flag -- confirmed live (GITTENSORY-K/8:
+ *  2094 + 544 events over 16 days from one unfixed misconfiguration, the credential file was never present the
+ *  whole time). Mirrors {@link isSubscriptionCliTimeout}/{@link isRateLimitError}'s identical non-transient-error
+ *  short-circuit. Exported so `src/selfhost/ai.ts`'s circuit breaker can give this failure class a much longer
+ *  cooldown than a genuinely transient one. */
 export function isStructuralProviderConfigError(error: unknown): boolean {
-  return error instanceof Error && /^codex_(?:auth_not_configured|no_auth):/.test(error.message);
+  return (
+    error instanceof Error &&
+    /^codex_(?:auth_not_configured|no_auth|credential_isolation_required)(?::|$)/.test(error.message)
+  );
 }
 
 /** Cap on the diagnostic prefix logged for an unparseable model response (#observability-unparseable) -- long

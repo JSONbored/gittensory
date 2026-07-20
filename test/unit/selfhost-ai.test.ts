@@ -1945,6 +1945,52 @@ describe("subscription CLI helpers + fail-safe", () => {
     ).rejects.toThrow(/codex_credential_isolation_required/);
   });
 
+  it("credential isolation: an operator still on the retired GITTENSORY_ flag name gets an actionable rename error, not the generic one (#7466)", async () => {
+    const shouldNotSpawn: StubSpawn = async () => {
+      throw new Error("spawned");
+    };
+    // Legacy flag set (and the current LOOPOVER_ one absent) — the operator opted in under the pre-rebrand name and
+    // silently reverted to disabled. The error must name both the retired var and its replacement so it is fixable
+    // without reading the source, and must still carry the codex_credential_isolation_required prefix.
+    await expect(
+      createCodexAi(
+        { GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" },
+        shouldNotSpawn,
+      ).run("gpt-5", { prompt: "x" }),
+    ).rejects.toThrow(
+      /codex_credential_isolation_required: GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER is set but was retired in #5652; rename it to LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER/,
+    );
+  });
+
+  it("credential isolation: never-configured still throws the plain generic error, distinct from the legacy-rename one (#7466)", async () => {
+    const shouldNotSpawn: StubSpawn = async () => {
+      throw new Error("spawned");
+    };
+    // Neither the current nor the retired flag is set — this must stay the bare generic message so it is
+    // distinguishable from the legacy-rename case above.
+    await expect(createCodexAi({}, shouldNotSpawn).run("gpt-5", { prompt: "x" })).rejects.toThrow(
+      /^codex_credential_isolation_required$/,
+    );
+  });
+
+  it("credential isolation: a set CODEX_HOME with a valid opt-in is not mislabeled a legacy-rename problem even when the legacy flag is also present (#7466)", async () => {
+    const shouldNotSpawn: StubSpawn = async () => {
+      throw new Error("spawned");
+    };
+    // CODEX_HOME is mounted (a distinct failure) while the current opt-in is correctly "1" — the rename branch must
+    // not fire; the operator sees the generic isolation error, not a spurious "rename your flag" instruction.
+    await expect(
+      createCodexAi(
+        {
+          CODEX_HOME: "/home/node/.codex",
+          LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER: "1",
+          GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1",
+        },
+        shouldNotSpawn,
+      ).run("gpt-5", { prompt: "x" }),
+    ).rejects.toThrow(/^codex_credential_isolation_required$/);
+  });
+
   it("resolveCodexAuthPath: CODEX_HOME wins, else HOME/.codex, else ~/.codex", () => {
     expect(resolveCodexAuthPath({ CODEX_HOME: "/data/codex", HOME: "/home/node" })).toBe(
       "/data/codex/auth.json",

@@ -473,12 +473,29 @@ export function subscriptionCliEnv(
   return child;
 }
 
+// The pre-rebrand name of the unsafe-reviewer opt-in flag. #5652 retired dual-read of GITTENSORY_-prefixed vars
+// repo-wide, so an operator whose .env still uses this name silently reverts to fully-disabled. We deliberately do
+// NOT honor it (the rebrand is intentional), but we still recognize it here purely to emit an actionable "rename it"
+// error instead of the same generic message an operator who never configured anything at all would get. Accessed
+// via this constant (not `env.GITTENSORY_...`) so the retired name stays out of the generated self-host env
+// reference — it is not a var operators should configure, only one we detect to redirect them.
+const LEGACY_UNSAFE_CODEX_REVIEWER_FLAG = "GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER";
+
 function assertCodexCredentialIsolation(env: Record<string, string | undefined>): void {
   // `codex exec` receives attacker-controlled PR title/body/diff text. Its read-only sandbox prevents writes, but not
   // reads, so a self-hosted OAuth home mounted into the same filesystem can be prompt-injected into public output.
   // Fail closed until Codex exposes a brokered credential mode that does not put auth.json in the review sandbox.
   // Strict "1"-only, matching health.ts's codexAuthReadinessProbe and this flag's narrow opt-in convention.
   if (env.CODEX_HOME || env.LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER !== "1") {
+    // An operator still on the retired flag name gets a specific, actionable signal to rename it — but only when the
+    // current flag isn't already correctly set (a mounted CODEX_HOME with a valid opt-in is a different failure and
+    // must not be mislabeled a rename problem). Keep the `codex_credential_isolation_required` prefix so the
+    // structural circuit breaker in ai-review.ts still recognizes this deterministic failure and backs off.
+    if (env.LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER !== "1" && env[LEGACY_UNSAFE_CODEX_REVIEWER_FLAG] === "1") {
+      throw new Error(
+        `codex_credential_isolation_required: ${LEGACY_UNSAFE_CODEX_REVIEWER_FLAG} is set but was retired in #5652; rename it to LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER`,
+      );
+    }
     throw new Error("codex_credential_isolation_required");
   }
 }
