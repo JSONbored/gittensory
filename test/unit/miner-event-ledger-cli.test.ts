@@ -7,8 +7,11 @@ import {
   initEventLedger,
 } from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
+  collectEventLedgerAuditFeed,
   filterLedgerEvents,
+  normalizeAuditFeedMcpFilter,
   parseLedgerListArgs,
+  projectLedgerEventToAuditFeedEntry,
   renderEventLedgerMetrics,
   renderLedgerTable,
   runLedgerCli,
@@ -66,6 +69,22 @@ describe("loopover-miner event ledger CLI (#2290)", () => {
     });
   });
 
+  it("parseLedgerListArgs rejects missing flag values, unknown flags, and stray positionals", () => {
+    expect(parseLedgerListArgs(["--repo"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner ledger list"),
+    });
+    expect(parseLedgerListArgs(["--since"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner ledger list"),
+    });
+    expect(parseLedgerListArgs(["--type"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner ledger list"),
+    });
+    expect(parseLedgerListArgs(["--bogus"])).toEqual({ error: "Unknown option: --bogus" });
+    expect(parseLedgerListArgs(["extra"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner ledger list"),
+    });
+  });
+
   // #5831: --repo's own parser must reject the same class of malformed/unsafe identifier repo-clone.js
   // already rejects, not just "missing slash" -- for both the owner and repo segment independently.
   it("rejects an unsafe --repo value", () => {
@@ -99,9 +118,13 @@ describe("loopover-miner event ledger CLI (#2290)", () => {
     ];
     expect(filterLedgerEvents(events, { type: "discovered_issue" })).toEqual([]);
     expect(filterLedgerEvents(events, { type: "manage_pr_update" })).toEqual(events);
+    expect(filterLedgerEvents(undefined as never)).toEqual([]);
     expect(renderLedgerTable([])).toBe("no event ledger entries");
     expect(renderLedgerTable(events)).toContain("manage_pr_update");
     expect(renderLedgerTable(events)).toContain("   4");
+    expect(
+      renderLedgerTable([{ ...events[0]!, repoFullName: null, createdAt: null as unknown as string }]),
+    ).toContain("-");
   });
 
   it("runLedgerList prints table and JSON output with repo, since, and type filters", () => {
@@ -139,6 +162,21 @@ describe("loopover-miner event ledger CLI (#2290)", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(runLedgerCli("tail", [])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown ledger subcommand");
+    error.mockClear();
+    expect(runLedgerCli(undefined, [])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Unknown ledger subcommand: .");
+  });
+
+  it("runLedgerList reports a failure raised by the event ledger", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(
+      runLedgerList([], {
+        initEventLedger: () => {
+          throw new Error("event_ledger_broken");
+        },
+      }),
+    ).toBe(2);
+    expect(error).toHaveBeenCalledWith("event_ledger_broken");
   });
 
   it("surfaces invalid since cursors from argv parsing and the ledger store", () => {
@@ -286,5 +324,125 @@ describe("loopover-miner ledger metrics CLI (#4841)", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runLedgerCli("metrics", [], { initEventLedger: () => eventLedger })).toBe(0);
     expect(String(log.mock.calls[0]?.[0])).toContain('loopover_miner_events_total{type="plan_built"} 1');
+  });
+});
+
+describe("loopover-miner event ledger MCP audit feed (#5158)", () => {
+  it("projectLedgerEventToAuditFeedEntry projects the metadata-only shape and never leaks payload_json", () => {
+    const full = projectLedgerEventToAuditFeedEntry({
+      id: 1,
+      seq: 1,
+      type: "manage_pr_update",
+      repoFullName: "acme/widgets",
+      payload: { outcome: " merged ", actor: " bot ", detail: " ok ", secret: "should-not-leak" },
+      createdAt: "2026-07-04T12:00:00.000Z",
+    });
+    expect(full).toEqual({
+      eventType: "manage_pr_update",
+      repoFullName: "acme/widgets",
+      outcome: "merged",
+      actor: "bot",
+      detail: "ok",
+      createdAt: "2026-07-04T12:00:00.000Z",
+    });
+    expect(full).not.toHaveProperty("secret");
+    expect(full).not.toHaveProperty("payload_json");
+
+    // A non-object, array, or missing payload all fall back to {} -- every metadata field is null.
+    const noPayload = projectLedgerEventToAuditFeedEntry({
+      id: 2,
+      seq: 2,
+      type: "discovered_issue",
+      repoFullName: null,
+      payload: undefined as unknown as Record<string, unknown>,
+      createdAt: "2026-07-04T12:00:00.000Z",
+    });
+    expect(noPayload).toEqual({
+      eventType: "discovered_issue",
+      repoFullName: null,
+      outcome: null,
+      actor: null,
+      detail: null,
+      createdAt: "2026-07-04T12:00:00.000Z",
+    });
+
+    const arrayPayload = projectLedgerEventToAuditFeedEntry({
+      id: 3,
+      seq: 3,
+      type: "plan_built",
+      repoFullName: null,
+      payload: [1, 2, 3] as unknown as Record<string, unknown>,
+      createdAt: "2026-07-04T12:00:00.000Z",
+    });
+    expect(arrayPayload.outcome).toBeNull();
+
+    // Non-string / blank-after-trim metadata fields also fall back to null.
+    const blankMetadata = projectLedgerEventToAuditFeedEntry({
+      id: 4,
+      seq: 4,
+      type: "plan_built",
+      repoFullName: null,
+      payload: { outcome: 42, actor: "   ", detail: null },
+      createdAt: "2026-07-04T12:00:00.000Z",
+    });
+    expect(blankMetadata.outcome).toBeNull();
+    expect(blankMetadata.actor).toBeNull();
+    expect(blankMetadata.detail).toBeNull();
+  });
+
+  it("normalizeAuditFeedMcpFilter normalizes, defaults, and validates MCP filter input", () => {
+    expect(normalizeAuditFeedMcpFilter()).toEqual({ repoFullName: null, since: null, type: null });
+    expect(normalizeAuditFeedMcpFilter({ repoFullName: null, since: null, type: null })).toEqual({
+      repoFullName: null,
+      since: null,
+      type: null,
+    });
+    expect(normalizeAuditFeedMcpFilter({ repoFullName: "acme/widgets", since: 3, type: " manage_pr_update " })).toEqual({
+      repoFullName: "acme/widgets",
+      since: 3,
+      type: "manage_pr_update",
+    });
+    expect(() => normalizeAuditFeedMcpFilter({ repoFullName: "bad" })).toThrow(
+      "Repository must be in owner/repo form.",
+    );
+    expect(() => normalizeAuditFeedMcpFilter({ repoFullName: "" })).toThrow(
+      "repoFullName must be in owner/repo form.",
+    );
+    expect(() => normalizeAuditFeedMcpFilter({ since: -1 })).toThrow(
+      "since must be a non-negative integer seq cursor.",
+    );
+    expect(() => normalizeAuditFeedMcpFilter({ type: "   " })).toThrow("type must be a non-empty string.");
+    expect(() => normalizeAuditFeedMcpFilter(null as never)).toThrow("filter must be an object");
+    expect(() => normalizeAuditFeedMcpFilter([] as never)).toThrow("filter must be an object");
+  });
+
+  it("collectEventLedgerAuditFeed returns a metadata-only, optionally repo-scoped feed", () => {
+    const eventLedger = tempLedger();
+    eventLedger.appendEvent({
+      type: "manage_pr_update",
+      repoFullName: "acme/widgets",
+      payload: { outcome: "merged", actor: "bot" },
+    });
+    eventLedger.appendEvent({
+      type: "discovered_issue",
+      repoFullName: "acme/other",
+      payload: {},
+    });
+
+    const scoped = collectEventLedgerAuditFeed(eventLedger, { repoFullName: "acme/widgets" });
+    expect(scoped.repoFullName).toBe("acme/widgets");
+    expect(scoped.events).toEqual([
+      expect.objectContaining({ eventType: "manage_pr_update", outcome: "merged", actor: "bot" }),
+    ]);
+
+    const unscoped = collectEventLedgerAuditFeed(eventLedger);
+    expect(unscoped).not.toHaveProperty("repoFullName");
+    expect(unscoped.events).toHaveLength(2);
+
+    const typed = collectEventLedgerAuditFeed(eventLedger, { type: "discovered_issue" });
+    expect(typed.events).toEqual([expect.objectContaining({ eventType: "discovered_issue" })]);
+
+    const sinced = collectEventLedgerAuditFeed(eventLedger, { since: 0 });
+    expect(sinced.events).toHaveLength(2);
   });
 });

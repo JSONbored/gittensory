@@ -154,6 +154,8 @@ describe("loopover-miner plan store CLI (#2318)", () => {
   it("rejects unknown plan subcommands and options", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(runPlanCli("save", [])).toBe(2);
+    expect(runPlanCli(undefined, [])).toBe(2);
+    expect(String(error.mock.calls[1]?.[0])).toContain("Unknown plan subcommand: .");
     expect(runPlanList(["--verbose"])).toBe(2);
     expect(String(error.mock.calls[0]?.[0])).toContain("Unknown plan subcommand");
     error.mockClear();
@@ -163,5 +165,66 @@ describe("loopover-miner plan store CLI (#2318)", () => {
       ok: false,
       error: expect.stringContaining("Unknown plan subcommand"),
     });
+  });
+
+  it("parsePlanListArgs and parsePlanShowArgs reject unknown flags and stray positionals", () => {
+    expect(parsePlanListArgs(["--status"])).toEqual({ error: expect.stringContaining("Usage") });
+    expect(parsePlanListArgs(["extra-positional"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner plan list"),
+    });
+    expect(parsePlanListArgs(["--bogus"])).toEqual({ error: "Unknown option: --bogus" });
+    expect(parsePlanShowArgs(["plan-a", "--bogus"])).toEqual({ error: "Unknown option: --bogus" });
+    expect(parsePlanShowArgs(["   "])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner plan show"),
+    });
+  });
+
+  it("renderPlanTable displays a dash for a plan with no updatedAt", () => {
+    const plans: PlanRecord[] = [
+      { planId: "no-updated", status: "pending", updatedAt: undefined as unknown as string, plan: PLAN },
+    ];
+    expect(renderPlanTable(plans)).toContain("-");
+  });
+
+  it("runPlanShow reports a parse-argument error", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runPlanShow([])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Usage: loopover-miner plan show");
+  });
+
+  it("runPlanList and runPlanShow report a failure raised by the plan store", () => {
+    const failingStore = {
+      listPlans: () => {
+        throw new Error("store_read_failed");
+      },
+      loadPlan: () => {
+        throw new Error("store_read_failed");
+      },
+      savePlan: () => {
+        throw new Error("unused");
+      },
+      close: () => undefined,
+    };
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runPlanList([], { openPlanStore: () => failingStore as never })).toBe(2);
+    expect(error).toHaveBeenCalledWith("store_read_failed");
+    error.mockClear();
+    expect(runPlanShow(["plan-a"], { openPlanStore: () => failingStore as never })).toBe(2);
+    expect(error).toHaveBeenCalledWith("store_read_failed");
+  });
+
+  it("withPlanStore opens and closes its own default store when no openPlanStore override is given", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-plan-store-cli-default-"));
+    roots.push(root);
+    const previousDbPath = process.env.LOOPOVER_MINER_PLAN_STORE_DB;
+    process.env.LOOPOVER_MINER_PLAN_STORE_DB = join(root, "plan-store.sqlite3");
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(runPlanList([])).toBe(0);
+      expect(log).toHaveBeenCalledWith("no saved plans");
+    } finally {
+      if (previousDbPath === undefined) delete process.env.LOOPOVER_MINER_PLAN_STORE_DB;
+      else process.env.LOOPOVER_MINER_PLAN_STORE_DB = previousDbPath;
+    }
   });
 });

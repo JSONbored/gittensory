@@ -14,6 +14,7 @@ const {
   parseStateSetArgs,
   runStateGet,
   runStateSet,
+  runStateCli,
 } = await import("../../packages/loopover-miner/lib/run-state-cli.js");
 
 afterEach(() => {
@@ -145,5 +146,56 @@ describe("loopover-miner state CLI", () => {
       ok: false,
       error: "invalid_repo_full_name",
     });
+  });
+
+  it("runStateSet returns exit code 2 when the store write fails", () => {
+    setRunState.mockImplementation(() => {
+      throw new Error("invalid_state");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runStateSet(["acme/widgets", "idle"])).toBe(2);
+    expect(error).toHaveBeenCalledWith("invalid_state");
+  });
+
+  it("parseStateGetArgs and parseStateSetArgs reject an empty repo positional and unknown flags", () => {
+    expect(parseStateGetArgs(["", "--api-base-url", "https://ghe.example.com/api/v3"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner state get"),
+    });
+    expect(parseStateGetArgs(["acme/widgets", "--bogus"])).toEqual({
+      error: "Unknown option: --bogus",
+    });
+    expect(parseStateSetArgs(["acme/widgets", "planning", "--bogus"])).toEqual({
+      error: "Unknown option: --bogus",
+    });
+    expect(parseStateSetArgs(["acme/widgets"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner state set"),
+    });
+  });
+
+  it("runStateGet returns exit code 2 for malformed repositories", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runStateGet(["not-a-repo"])).toBe(2);
+    expect(error).toHaveBeenCalledWith("Repository must be in owner/repo form.");
+    expect(getRunState).not.toHaveBeenCalled();
+  });
+
+  it("runStateCli dispatches get/set and rejects unknown subcommands", () => {
+    getRunState.mockReturnValue("idle");
+    setRunState.mockReturnValue({
+      repoFullName: "acme/widgets",
+      state: "idle",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(runStateCli("get", ["acme/widgets"])).toBe(0);
+    expect(runStateCli("set", ["acme/widgets", "idle"])).toBe(0);
+    expect(log).toHaveBeenCalled();
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runStateCli("bogus", [])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Unknown state subcommand");
+    error.mockClear();
+    expect(runStateCli(undefined, [])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Unknown state subcommand: .");
   });
 });

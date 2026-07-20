@@ -403,4 +403,52 @@ describe("loopover-miner claim ledger CLI (#4290)", () => {
     ).toBe(2);
     expect(error).toHaveBeenCalledWith("list_broken");
   });
+
+  it("parseClaimClaimArgs and parseClaimReleaseArgs reject an empty repo/issue positional", () => {
+    expect(parseClaimClaimArgs(["", "42"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner claim claim"),
+    });
+    expect(parseClaimClaimArgs(["acme/widgets", ""])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner claim claim"),
+    });
+    expect(parseClaimReleaseArgs(["acme/widgets", "abc"])).toEqual({
+      error: "issue number must be a positive integer.",
+    });
+    expect(parseClaimReleaseArgs(["bad", "7"])).toEqual({
+      error: "Repository must be in owner/repo form.",
+    });
+  });
+
+  it("parseClaimListArgs reports an invalid --repo and a missing --status value", () => {
+    expect(parseClaimListArgs(["--repo", "bad"])).toEqual({
+      error: "Repository must be in owner/repo form.",
+    });
+    expect(parseClaimListArgs(["--status"])).toEqual({
+      error: expect.stringContaining("Usage: loopover-miner claim list"),
+    });
+  });
+
+  it("runClaimRelease and runClaimList report a parse-argument error", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(runClaimRelease(["acme/widgets"])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Usage: loopover-miner claim release");
+    error.mockClear();
+    expect(runClaimList(["--bogus"])).toBe(2);
+    expect(String(error.mock.calls[0]?.[0])).toContain("Unknown option: --bogus");
+  });
+
+  it("withClaimLedger opens and closes its own default ledger when no openClaimLedger override is given", () => {
+    const root = mkdtempSync(join(tmpdir(), "loopover-miner-claim-ledger-cli-default-"));
+    roots.push(root);
+    const previousDbPath = process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB;
+    process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB = join(root, "claim-ledger.sqlite3");
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      expect(runClaimList([])).toBe(0);
+      expect(log).toHaveBeenCalledWith("no claim ledger entries");
+    } finally {
+      if (previousDbPath === undefined) delete process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB;
+      else process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB = previousDbPath;
+    }
+  });
 });
