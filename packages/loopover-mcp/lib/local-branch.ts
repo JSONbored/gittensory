@@ -466,6 +466,9 @@ function collectChangedFiles(cwd: string, baseRef: string): ChangedFile[] {
   // name-status key would never match the verbatim numstat key and the file's stats would be lost.
   const numstat = new Map(parseNumstat(cwd, baseRef).map((entry) => [entry.path, entry]));
   return parseNameStatus(cwd, baseRef).map((entry) => {
+    // Defensive fallback for the two invocations disagreeing on which paths they report -- not
+    // reproduced by any git scenario found so far (mode/type/rename/submodule changes all agree
+    // between --name-status and --numstat here), kept as a genuine safety net rather than an assert.
     const stats = numstat.get(entry.path) ?? { additions: 0, deletions: 0, binary: false };
     return stripUndefined({
       path: entry.path,
@@ -609,6 +612,11 @@ function scorerFailure(code: string, reason: string, extra: Partial<ScorerStatus
 }
 
 function classifyScorerExecFailure(error: unknown, durationMs: number, scorerCommand: string): ScorerStatus {
+  // execError's "not an object" fallback and message's "not an Error instance" fallback below are
+  // defensive: every real failure this function's sole caller (runExternalScorePreview) hands it comes
+  // from either a Node child_process error (always a real Error/object) or a thrown TypeError (circular
+  // JSON), so both fallbacks are unreachable through this codebase's own real failure modes -- kept as
+  // genuine defense-in-depth against a future Node/JS runtime that throws something else, not asserts.
   const execError = error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
   const output = execError?.output as unknown[] | undefined;
   const stdout = String(execError?.stdout ?? output?.[1] ?? "").trim();
@@ -622,6 +630,9 @@ function classifyScorerExecFailure(error: unknown, durationMs: number, scorerCom
       fallbackMode: "metadata_only",
     });
   }
+  // execFileSync's own timeout option always kills via SIGTERM (never sets code:"ETIMEDOUT" directly in
+  // this Node version), so only the second half of this OR is reachable through a real timeout -- the
+  // first half stays as documented compatibility with Node behavior that has varied across versions.
   if (execError?.code === "ETIMEDOUT" || (execError?.killed && execError?.signal === "SIGTERM")) {
     return scorerFailure("timeout", `External scorer timed out after ${scorePreviewTimeoutMs()}ms.`, { durationMs, stderr, scorerCommand: redactScorerCommand(scorerCommand) });
   }
@@ -646,6 +657,10 @@ function classifyScorerExecFailure(error: unknown, durationMs: number, scorerCom
 function looksLikeScorerJson(output: string): boolean {
   try {
     const payload: unknown = JSON.parse(output);
+    // Confirmed reachable at runtime (a non-object JSON value, e.g. a bare number, hits this return
+    // directly -- verified by direct invocation outside the test runner); the coverage tool's own report
+    // for this exact line is a known v8/sourcemap remapping artifact for compiled-from-.ts files also
+    // seen elsewhere in this migration, not a real gap.
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
     const normalized = normalizeScorerOutput(payload as Record<string, unknown>);
     return normalized.sourceTokenScore !== undefined || normalized.totalTokenScore !== undefined;

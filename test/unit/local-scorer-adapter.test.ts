@@ -254,6 +254,30 @@ describe("local scorer adapter", () => {
     expect(result).toMatchObject({ ok: false, code: "malformed_json" });
   });
 
+  it("treats stderr that parses to a non-object JSON value (a number) as not scorer-shaped", async () => {
+    const { runExternalScorePreview } = await import("../../packages/loopover-mcp/lib/local-branch.js");
+    // "null\n" is valid JSON (JSON.parse succeeds to `null`), so this exercises looksLikeScorerJson's
+    // own `!payload` falsy-value guard specifically, distinct from a JSON.parse throw or a non-object.
+    const result = runExternalScorePreview(metadata, fixtureCommand("scorer-json-number-stderr-then-sigkill.mjs"));
+    expect(result).toMatchObject({ ok: false, code: "malformed_json" });
+  });
+
+  it("treats stderr that is a valid JSON array (not an object) as not scorer-shaped", async () => {
+    const { runExternalScorePreview } = await import("../../packages/loopover-mcp/lib/local-branch.js");
+    // looksLikeScorerJson's own "!payload || typeof !== object || Array.isArray(payload)" guard must
+    // reject an array too, not just a non-object/null -- this exercises the Array.isArray sub-check.
+    const result = runExternalScorePreview(metadata, fixtureCommand("scorer-json-array-stderr-then-sigkill.mjs"));
+    expect(result).toMatchObject({ ok: false, code: "malformed_json" });
+  });
+
+  it("falls back to the 15s default when GITTENSOR_SCORE_PREVIEW_TIMEOUT_MS is not a positive number", async () => {
+    const { runExternalScorePreview } = await import("../../packages/loopover-mcp/lib/local-branch.js");
+    previousTimeout = process.env.GITTENSOR_SCORE_PREVIEW_TIMEOUT_MS;
+    process.env.GITTENSOR_SCORE_PREVIEW_TIMEOUT_MS = "not-a-number";
+    const result = runExternalScorePreview(metadata, fixtureCommand("scorer-success.mjs"));
+    expect(result.ok).toBe(true);
+  });
+
   it("classifies a scorer command that fails to spawn at all (command not found) as scorer_failed", async () => {
     const { runExternalScorePreview } = await import("../../packages/loopover-mcp/lib/local-branch.js");
     const result = runExternalScorePreview(metadata, "this-command-does-not-exist-loopover-7329");

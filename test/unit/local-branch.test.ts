@@ -1959,12 +1959,14 @@ describe("local MCP git metadata collection", () => {
     writeFileSync(join(tempDir, "test/cache.test.ts"), "expect(1).toBe(1);\n");
     git(tempDir, "add", "src/cache.ts", "test/cache.test.ts");
 
-    const metadata = collectLocalBranchMetadata({ cwd: tempDir, baseRef: "HEAD", login: "oktofeesh1", body: "Fixes #7" });
+    // Two out-of-order issue numbers so the linkedIssues .sort() comparator actually runs (a single-element
+    // array never invokes it).
+    const metadata = collectLocalBranchMetadata({ cwd: tempDir, baseRef: "HEAD", login: "oktofeesh1", body: "Fixes #7, closes #3" });
     expect(metadata).toMatchObject({
       login: "oktofeesh1",
       repoFullName: "entrius/allways-ui",
       branchName: "fix-cache-7",
-      linkedIssues: [7],
+      linkedIssues: [3, 7],
     });
     expect(metadata.changedFiles).toEqual(
       expect.arrayContaining([
