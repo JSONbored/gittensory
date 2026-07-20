@@ -1,0 +1,34 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    // No pre-existing hand-written .d.ts files to replace here (unlike loopover-miner's migration) --
+    // this phase proves the build pipeline without also introducing a new published artifact type, so
+    // the compiled output stays exactly the same .js file set the package has always shipped.
+    "declaration": false,
+    // Inline (not a separate .js.map) so the compiled output stays exactly the same file set the
+    // package has always shipped -- no new file type to teach the npm-pack allowlist about. Vitest's
+    // v8 coverage provider still remaps through it fine, attributing coverage to the .ts source.
+    "inlineSourceMap": true,
+    "noEmit": false,
+    // Overrides the root config's "dist" so each converted file compiles in place next to its .ts
+    // source (e.g. lib/foo.ts -> lib/foo.js) -- the package's published bin/lib layout never changes
+    // as more files convert, so no consumer (in this repo or published) ever needs a different import
+    // path depending on a given file's migration status.
+    "rootDir": ".",
+    "outDir": ".",
+    // Without this, the inherited root value ("./.tsbuildinfo") resolves relative to the ROOT config's
+    // location, not this one -- both packages would then read/write the exact same cache file at the
+    // repo root and corrupt each other's incremental state.
+    "tsBuildInfoFile": "./.tsbuildinfo"
+  },
+  // Only files already converted to real TypeScript are included -- everything else in bin/lib stays
+  // plain, hand-maintained .js until its own migration phase lands (#7291). No edits needed here as
+  // later phases convert more files: the glob picks them up automatically.
+  "include": ["bin/**/*.ts", "lib/**/*.ts"],
+  // Without this, tsc's default exclude list (which always adds outDir) resolves to "." -- the whole
+  // package root -- and silently excludes every include match, since outDir is "." for in-place emit.
+  "exclude": []
+}

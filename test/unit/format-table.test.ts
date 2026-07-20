@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 // The helper ships in the MCP package's lib/ (the bin auto-runs on import, so it cannot be imported);
 // mirror the local-branch.test.ts pattern of dynamically importing the packaged .js module.
 async function loadFormatTable() {
-  // @ts-expect-error package helper is plain JS because the local wrapper ships as a Node bin package.
   return (await import("../../packages/loopover-mcp/lib/format-table.js")).formatTable;
 }
 
@@ -57,5 +56,37 @@ describe("formatTable", () => {
     const formatTable = await loadFormatTable();
     expect(formatTable([])).toBe("");
     expect(formatTable({ headers: [], rows: [{ a: 1 }] })).toBe("");
+  });
+
+  it("returns an empty string for an omitted or nullish input, without throwing", async () => {
+    const formatTable = await loadFormatTable();
+    expect(formatTable()).toBe("");
+    expect(formatTable(null)).toBe("");
+  });
+
+  it("tolerates a nullish row in an array-of-row-objects input", async () => {
+    const formatTable = await loadFormatTable();
+    const table = formatTable([{ a: "one" }, null, { a: "two" }]);
+    expect(table.split("\n")).toEqual(["a", "one", "", "two"]);
+  });
+
+  it("falls back to the key as the label for an object header with no explicit label", async () => {
+    const formatTable = await loadFormatTable();
+    const table = formatTable({ headers: [{ key: "score" }], rows: [{ score: 5 }] });
+    expect(table.split("\n")).toEqual(["score", "5"]);
+  });
+
+  it("resolves alignment from opts.align by key, falling back to label when the key misses", async () => {
+    const formatTable = await loadFormatTable();
+    const table = formatTable(
+      {
+        headers: [{ key: "n", label: "Name" }, { key: "c", label: "Count" }],
+        rows: [{ n: "a", c: 1 }],
+      },
+      { align: { n: "right", Count: "right" } },
+    );
+    // Both columns align right: "n" resolves via opts.align's key entry, "c" only matches by its
+    // label ("Count") since opts.align has no "c" key entry -- exercising the key-miss/label-hit fallback.
+    expect(table.split("\n")).toEqual(["Name  Count", "   a      1"]);
   });
 });
