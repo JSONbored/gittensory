@@ -366,6 +366,14 @@ A cluster of contributor-abuse guardrails, all config-as-code only, all off/unse
 - **Exemptions and account age** — `autoCloseExemptLogins` is a shared, repo-scoped list of logins never throttled or closed by these deterministic mechanisms, on top of the standing owner/admin/bot exemption. `accountAgeThresholdDays` (default `null`, off) applies `newAccountLabel` (default `new-account`) to a PR from a below-threshold-age account — friction/visibility only, never an automatic close on account age alone, and never for the owner, admins, or bots.
 - **Command rate limit** — `commandRateLimitPolicy` (`off`/`hold`, default `off`) generalizes the review-nag pattern to every `@loopover` command, not just review-request pings. `commandRateLimitMaxPerWindow` (default `20`) bounds cheap, cache-only commands; `commandRateLimitAiMaxPerWindow` (default `5`) is the tighter limit for AI-cost-bearing commands (ask/blockers/preflight/etc.); `commandRateLimitWindowHours` (default `24`) is the rolling window both limits count against.
 
+### settings.issuePlan*
+
+Config for `loopover_plan_repo_issues`, the AI issue-planning MCP tool: given a maintainer-supplied free-form goal, it proposes a small set of GitHub issue drafts (dry-run by default) and, on explicit request, creates them via the same installation-token/Orb-broker path every other GitHub write in this repo uses — never a flat PAT, so it only works on a repo the App/Orb is actually installed on.
+
+- `issuePlanEnabled` — per-repo opt-out. The tool is already gated behind MCP maintainer access and the fleet-wide `AI_SUMMARIES_ENABLED`/`AI_PUBLIC_COMMENTS_ENABLED` switches; this is an additional layer for a repo that wants those switches on generally but this specific capability off. Default `true`.
+- `issuePlanExtraLabels` — additional label names suggested to the model alongside the repo's real GitHub labels (and, on a gittensor-enrolled repo, its type-label taxonomy) — useful for a project-specific category not yet created as a real label. Purely additive; never removes or replaces the repo's own labels. Default `[]`.
+- `issuePlanMilestoneReuse` — whether the tool reuses an existing open milestone by exact normalized-title match before creating a new one, when the caller asks it to target a milestone. Set `false` for a repo that always wants a fresh milestone per planning session (e.g. date-stamped titles). Default `true`.
+
 ### contentLane
 
 Lets a self-hosted maintainer point LoopOver at their own structured registry (a subnet/plugin/package catalog, for example) without a LoopOver code change — reviewing additions to a data file the same way it reviews code. Unconfigured by default; uncomment and set at least `entryFileGlob` and `collectionField` (both required — the whole block is ignored with a warning if either is missing).

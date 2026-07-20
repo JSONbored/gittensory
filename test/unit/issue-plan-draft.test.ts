@@ -322,7 +322,7 @@ describe("generateIssuePlanDrafts (#7426)", () => {
     vi.spyOn(repositories, "listOpenIssues").mockResolvedValue([]);
     const result = await generateIssuePlanDrafts(env, "acme/widgets", "goal", { milestone: { title: "Wave 5" } });
     expect(result.milestoneNumber).toBeUndefined();
-    expect(calls).toHaveLength(0);
+    expect(calls.some((call) => call.includes("/milestones"))).toBe(false);
   });
 
   it("creates a new milestone and assigns it to every created issue when no matching open milestone exists (#7427)", async () => {
@@ -436,7 +436,7 @@ describe("generateIssuePlanDrafts (#7426)", () => {
     const env = baseEnv({ AI: { run } as unknown as Ai });
     const result = await generateIssuePlanDrafts(env, "acme/widgets", "goal", { create: true, dryRun: false, milestone: { title: "Wave 5" } });
     expect(result.milestoneNumber).toBeUndefined();
-    expect(calls).toHaveLength(0);
+    expect(calls.some((call) => call.includes("/milestones"))).toBe(false);
     expect(result.skippedCreateFailed).toBe(1);
   });
 
@@ -463,6 +463,60 @@ function capturedUserMessage(run: ReturnType<typeof vi.fn>): string {
   return opts?.messages?.find((message) => message.role === "user")?.content ?? "";
 }
 
+describe("config-as-code settings (#7429)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    clearInstallationTokenCacheForTest();
+  });
+
+  it("returns disabled when issuePlanEnabled is explicitly false", async () => {
+    const run = vi.fn(async () => issuesResponse([{ title: "T", body: "B" }]));
+    const env = baseEnv({ AI: { run } as unknown as Ai });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { issuePlanEnabled: false } });
+    vi.spyOn(repositories, "listOpenIssues").mockResolvedValue([]);
+    const result = await generateIssuePlanDrafts(env, "acme/widgets", "goal");
+    expect(result.status).toBe("disabled");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("merges issuePlanExtraLabels into the prompt alongside the repo's real labels", async () => {
+    const run = vi.fn(async () => issuesResponse([{ title: "T", body: "B" }]));
+    const env = baseEnv({ AI: { run } as unknown as Ai });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { issuePlanExtraLabels: ["needs-triage", "area:docs"] } });
+    vi.spyOn(repositories, "listOpenIssues").mockResolvedValue([]);
+    await generateIssuePlanDrafts(env, "acme/widgets", "goal");
+    const userMessage = capturedUserMessage(run);
+    expect(userMessage).toContain("needs-triage");
+    expect(userMessage).toContain("area:docs");
+  });
+
+  it("skips the milestone reuse lookup and always creates fresh when issuePlanMilestoneReuse is false", async () => {
+    const run = vi.fn(async () => issuesResponse([{ title: "Add retry to the sync job", body: "Retries transient failures." }]));
+    let listCalled = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/milestones") && method === "GET") {
+        listCalled = true;
+        return Response.json([{ number: 7, title: "Wave 5" }]); // a matching open milestone exists
+      }
+      if (url.includes("/milestones") && method === "POST") return Response.json({ number: 88, title: "Wave 5" });
+      if (url.includes("/issues") && method === "POST") return Response.json({ number: 904, html_url: "https://github.com/acme/widgets/issues/904" });
+      return new Response("unexpected", { status: 599 });
+    });
+    const env = baseEnv({ AI: { run } as unknown as Ai, GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem() });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { issuePlanMilestoneReuse: false } });
+    vi.spyOn(repositories, "getRepository").mockResolvedValue(installedRepo("acme/widgets"));
+    vi.spyOn(repositories, "listOpenIssues").mockResolvedValue([]);
+
+    const result = await generateIssuePlanDrafts(env, "acme/widgets", "goal", { create: true, dryRun: false, milestone: { title: "Wave 5" } });
+    expect(result.milestoneNumber).toBe(88); // the freshly-created one, not the matching existing 7
+    expect(listCalled).toBe(false);
+  });
+});
+
 describe("gittensor label-taxonomy enrichment (#7428)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -470,15 +524,16 @@ describe("gittensor label-taxonomy enrichment (#7428)", () => {
     clearInstallationTokenCacheForTest();
   });
 
-  it("makes zero additional reads and enriches nothing when the plugin is off fleet-wide (default), even if the repo's own manifest opts in", async () => {
+  it("enriches nothing when the plugin is off fleet-wide (default), even if the repo's own manifest opts in", async () => {
     const run = vi.fn(async () => issuesResponse([{ title: "T", body: "B" }]));
     const env = baseEnv({ AI: { run } as unknown as Ai }); // LOOPOVER_EXPERIMENTAL_GITTENSOR unset
-    const manifestSpy = vi.spyOn(repositories, "getRepositorySettings");
     await upsertRepoFocusManifest(env, "acme/widgets", { experimental: { gittensor: true } });
     vi.spyOn(repositories, "listOpenIssues").mockResolvedValue([]);
     await generateIssuePlanDrafts(env, "acme/widgets", "goal");
     expect(capturedUserMessage(run)).not.toContain("gittensor:bug");
-    expect(manifestSpy).not.toHaveBeenCalled(); // short-circuits before even reading repository settings
+    // Note: resolveGittensorLabelEnrichment's own "zero footprint" contract is about not making the
+    // GITTENSOR-SPECIFIC manifest fetch when the plugin is off -- it no longer implies zero settings reads
+    // overall, since #7429's issuePlanEnabled/issuePlanExtraLabels need resolveRepositorySettings unconditionally.
   });
 
   it("does not enrich when the global flag is on but the repo's own manifest does not opt in", async () => {

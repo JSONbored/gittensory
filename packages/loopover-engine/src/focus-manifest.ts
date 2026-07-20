@@ -542,6 +542,9 @@ export type FocusManifestSettings = Partial<
     | "plannerMode"
     | "autoLabelEnabled"
     | "typeLabelsEnabled"
+    | "issuePlanEnabled"
+    | "issuePlanExtraLabels"
+    | "issuePlanMilestoneReuse"
     | "badgeEnabled"
     | "publicQualityMetrics"
     | "gittensorLabel"
@@ -2402,7 +2405,7 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   }
   const publicSurface = normalizeOptionalEnum(r.publicSurface, "settings.publicSurface", ["off", "comment_and_label", "comment_only", "label_only"] as const, warnings);
   if (publicSurface !== null) out.publicSurface = publicSurface;
-  for (const key of ["aiReviewByok", "aiReviewAllAuthors", "aiReviewConfirmedContributorsOnly", "closeOwnerAuthors", "autoLabelEnabled", "typeLabelsEnabled", "badgeEnabled", "publicQualityMetrics", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "agentPaused", "agentDryRun", "hardGuardrailGlobsOverridesInvariants"] as const) {
+  for (const key of ["aiReviewByok", "aiReviewAllAuthors", "aiReviewConfirmedContributorsOnly", "closeOwnerAuthors", "autoLabelEnabled", "typeLabelsEnabled", "issuePlanEnabled", "issuePlanMilestoneReuse", "badgeEnabled", "publicQualityMetrics", "createMissingLabel", "includeMaintainerAuthors", "requireLinkedIssue", "backfillEnabled", "agentPaused", "agentDryRun", "hardGuardrailGlobsOverridesInvariants"] as const) {
     const flag = normalizeOptionalBoolean(r[key], `settings.${key}`, warnings);
     if (flag !== null) out[key] = flag;
   }
@@ -2657,6 +2660,19 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
     }
   } else if (r.hardGuardrailGlobs !== undefined) {
     warnings.push(`Manifest "settings.hardGuardrailGlobs" must be an array of path globs; ignoring it and keeping any existing guardrails.`);
+  }
+  // Additional label names loopover_plan_repo_issues (#7429) suggests to the model, purely additive to the
+  // repo's real GitHub labels -- same array-replace shape as hardGuardrailGlobs above (explicit [] or a
+  // non-empty valid list replaces; malformed/omitted is ignored, never clears an existing DB value).
+  if (Array.isArray(r.issuePlanExtraLabels)) {
+    const issuePlanExtraLabels = normalizeStringList(r.issuePlanExtraLabels, "settings.issuePlanExtraLabels", warnings);
+    if (r.issuePlanExtraLabels.length === 0 || issuePlanExtraLabels.length > 0) {
+      out.issuePlanExtraLabels = issuePlanExtraLabels;
+    } else {
+      warnings.push(`Manifest "settings.issuePlanExtraLabels" did not contain any valid label names; ignoring it and keeping any existing value.`);
+    }
+  } else if (r.issuePlanExtraLabels !== undefined) {
+    warnings.push(`Manifest "settings.issuePlanExtraLabels" must be an array of label names; ignoring it and keeping any existing value.`);
   }
   // Manual-review label is deliberately separate from review_state_label so operators can use one hold label
   // without enabling the old ready/changes disposition labels. Null disables only the label, not the hold.

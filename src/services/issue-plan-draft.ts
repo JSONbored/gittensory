@@ -41,7 +41,7 @@ import { resolveRepositorySettings } from "../settings/repository-settings";
 import { isFocusManifestPublicSafe } from "../signals/focus-manifest";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { normalizeIssueTitleKey } from "./contributor-issue-draft";
-import type { IssueRecord } from "../types";
+import type { IssueRecord, RepositorySettings } from "../types";
 import { sha256Hex } from "../utils/crypto";
 import { errorMessage, nowIso } from "../utils/json";
 
@@ -237,19 +237,16 @@ function buildIssuePlanUserPrompt(goal: string, existingLabelNames: string[]): s
  * to choose from. Label NAMES only, never any scoring weight/multiplier -- those never leave the private
  * scoring pipeline.
  *
- * ZERO FOOTPRINT when the plugin is off (the fleet-wide default, matching gittensor-wire.ts's own contract): the
- * global flag check short-circuits before this ever loads a manifest or repository settings, so a plain
- * self-host instance with no gittensor affiliation makes no additional reads for this at all.
- *
- * Uses resolveRepositorySettings (DB overlaid with `.loopover.yml`), NOT the raw DB-only getRepositorySettings:
- * typeLabels/typeLabelsEnabled are config-as-code only now (no DB column backs them, #6443) -- reading the raw
- * DB row would silently ignore a repo's actual configured taxonomy and always see the built-in default.
+ * ZERO FOOTPRINT when the plugin is off (the fleet-wide default, matching gittensor-wire.ts's own contract):
+ * the global flag check short-circuits before this ever loads a manifest, so a plain self-host instance with
+ * no gittensor affiliation makes no additional reads for the gittensor-specific check itself -- `settings` is
+ * passed in already resolved (#7429 needs it unconditionally for issuePlanEnabled/issuePlanExtraLabels, so
+ * fetching it again here just for the gittensor path would be redundant work, not a footprint reduction).
  */
-async function resolveGittensorLabelEnrichment(env: Env, repoFullName: string): Promise<string[]> {
+async function resolveGittensorLabelEnrichment(env: Env, repoFullName: string, settings: RepositorySettings): Promise<string[]> {
   if (!isGittensorPluginEnabled(env)) return [];
   const manifest = await loadRepoFocusManifest(env, repoFullName);
   if (!shouldEnableGittensorForRepo(env, manifest.experimental.gittensor)) return [];
-  const settings = await resolveRepositorySettings(env, repoFullName);
   if (settings.typeLabelsEnabled !== true) return [];
   return Object.values(settings.typeLabels ?? DEFAULT_TYPE_LABELS);
 }
@@ -300,15 +297,20 @@ export type IssuePlanMilestoneTarget = { title: string; description?: string | u
  * the maintainer still gets their issues, just ungrouped, which is preferable to filing nothing at all over a
  * milestone-specific glitch. Titles/descriptions/due dates are the CALLER's own input, never model-generated
  * (see the epic's #7427 boundary: milestone metadata is maintainer-authored/approved, not invented by the AI).
+ *
+ * `attemptReuse` (#7429, RepositorySettings.issuePlanMilestoneReuse, default true) skips the reuse lookup
+ * entirely when false -- for a repo that always wants a fresh milestone per planning session (e.g. date-
+ * stamped titles) -- going straight to create.
  */
 async function resolveOrCreateIssuePlanMilestone(
   env: Env,
   installationId: number,
   repoFullName: string,
   target: IssuePlanMilestoneTarget,
+  attemptReuse: boolean,
 ): Promise<number | undefined> {
   try {
-    const titleKey = normalizeIssueTitleKey(target.title);
+    const titleKey = attemptReuse ? normalizeIssueTitleKey(target.title) : "";
     if (titleKey) {
       const existing = await listOpenInstallationMilestones(env, installationId, repoFullName);
       const match = existing.find((milestone) => normalizeIssueTitleKey(milestone.title) === titleKey);
@@ -371,13 +373,11 @@ function emptyIssuePlanResult(
  * GitHub, via the installation-token/Orb-broker path only (#7425) -- there is no flat-PAT fallback, so a repo
  * with no installation degrades every draft to skipped_create_failed rather than failing this call outright.
  *
- * Unlike review/planner.ts's generateIssuePlan (which relies purely on its OWN dedicated isPlannerEnabled/
- * settings.plannerMode gate, checked by its webhook-triggered caller), this function has no per-repo enable
- * flag of its own -- it is opt-in simply by a maintainer calling the MCP tool that wraps it. It still checks the
- * SAME fleet-wide AI_SUMMARIES_ENABLED/AI_PUBLIC_COMMENTS_ENABLED kill switches runLoopOverAiReview uses, so an
- * operator who has globally disabled AI-generated public content is never surprised by this tool posting any --
- * a reasonable substitute for a dedicated flag given this capability's primary safety layer is the MCP access
- * check (requireRepoManageAccess), not fleet-wide default-off config-as-code.
+ * Also checks the SAME fleet-wide AI_SUMMARIES_ENABLED/AI_PUBLIC_COMMENTS_ENABLED kill switches
+ * runLoopOverAiReview uses, so an operator who has globally disabled AI-generated public content is never
+ * surprised by this tool posting any -- this capability's primary safety layer is the MCP access check
+ * (requireRepoManageAccess), not fleet-wide default-off config-as-code. `RepositorySettings.issuePlanEnabled`
+ * (#7429, config-as-code only, default true) is an ADDITIONAL per-repo opt-out layered on top of both.
  */
 export async function generateIssuePlanDrafts(env: Env, repoFullName: string, goal: string, options: IssuePlanDraftOptions = {}): Promise<IssuePlanGenerationResult> {
   const generatedAt = nowIso();
@@ -392,16 +392,21 @@ export async function generateIssuePlanDrafts(env: Env, repoFullName: string, go
   const trimmedGoal = goal.trim().slice(0, MAX_GOAL_CHARS);
   if (!trimmedGoal) return empty("no_output");
 
-  const [repo, openIssues, declinedIssues, labels, gittensorTypeLabels] = await Promise.all([
+  const [repo, openIssues, declinedIssues, labels, settings] = await Promise.all([
     getRepository(env, repoFullName),
     listOpenIssues(env, repoFullName),
     listClosedContributorDraftIssues(env, repoFullName, `<!-- ${ISSUE_PLAN_DRAFT_MARKER_PREFIX}`),
     listRepoLabels(env, repoFullName),
-    resolveGittensorLabelEnrichment(env, repoFullName),
+    resolveRepositorySettings(env, repoFullName),
   ]);
+  // Per-repo opt-out (#7429) -- an ADDITIONAL layer beyond MCP access control and the fleet-wide
+  // AI_SUMMARIES_ENABLED/AI_PUBLIC_COMMENTS_ENABLED switches checked above. Default true (unset/absent is
+  // enabled), so only an EXPLICIT `false` disables it.
+  if (settings.issuePlanEnabled === false) return empty("disabled");
 
+  const gittensorTypeLabels = await resolveGittensorLabelEnrichment(env, repoFullName, settings);
   const system = ISSUE_PLAN_SYSTEM_PROMPT;
-  const promptLabelNames = [...new Set([...labels.map((label) => label.name), ...gittensorTypeLabels])];
+  const promptLabelNames = [...new Set([...labels.map((label) => label.name), ...gittensorTypeLabels, ...(settings.issuePlanExtraLabels ?? [])])];
   const user = buildIssuePlanUserPrompt(trimmedGoal, promptLabelNames);
   const estimatedNeurons = estimateNeurons(system.length + user.length, ISSUE_PLAN_MAX_TOKENS, ISSUE_PLAN_MODEL_COUNT);
   const remainingBudget = Math.max(0, issuePlanDailyBudget(env) - (await sumAiEstimatedNeuronsSince(env, utcDayStartIso())));
@@ -423,7 +428,7 @@ export async function generateIssuePlanDrafts(env: Env, repoFullName: string, go
 
   const milestoneNumber =
     !dryRun && createRequested && options.milestone && repo?.installationId
-      ? await resolveOrCreateIssuePlanMilestone(env, repo.installationId, repoFullName, options.milestone)
+      ? await resolveOrCreateIssuePlanMilestone(env, repo.installationId, repoFullName, options.milestone, settings.issuePlanMilestoneReuse !== false)
       : undefined;
 
   const drafts: IssuePlanDraft[] = [];

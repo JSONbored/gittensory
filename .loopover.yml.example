@@ -849,6 +849,27 @@ settings:
   #   dependency: area:dependency
   #   custom: maintainer:custom
 
+  # Per-repo opt-out for `loopover_plan_repo_issues` (#7429), the selfhoster-facing AI issue-planning MCP
+  # tool -- when false, the tool returns a `disabled` status without ever calling the model. The tool is
+  # already gated behind MCP maintainer access and the fleet-wide AI_SUMMARIES_ENABLED/
+  # AI_PUBLIC_COMMENTS_ENABLED switches, so this is an additional per-repo layer, not the primary gate.
+  # Bool. Default: true.
+  issuePlanEnabled: true
+
+  # Additional label names `loopover_plan_repo_issues` suggests to the model alongside the repo's real
+  # GitHub labels and (when gittensor-enrolled) its type-label taxonomy -- e.g. a project-specific
+  # category not yet created as a real label. Purely additive; never removes or replaces the repo's own
+  # labels. Array of strings. Default: [].
+  # issuePlanExtraLabels:
+  #   - area:docs
+  #   - needs-triage
+
+  # Whether `loopover_plan_repo_issues` attempts to reuse an existing OPEN milestone by exact
+  # normalized-title match before creating a new one. A repo that always wants a fresh milestone per
+  # planning session (e.g. date-stamped titles) can set this false to skip the reuse lookup entirely.
+  # Bool. Default: true.
+  issuePlanMilestoneReuse: true
+
   # Linked-issue label propagation (#priority-linked-issue-gate): the ONLY mechanism that can select a
   # label like `gittensor:priority` -- it is NEVER inferred from a PR's title, changed files, AI
   # output, or existing PR labels, only ever copied from a linked/closing issue ("Fixes #123") that

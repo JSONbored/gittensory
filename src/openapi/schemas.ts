@@ -768,6 +768,11 @@ export const RepositorySettingsSchema = z
     // Open `category -> label name` record (#label-modularity): bug/feature/priority are the built-in
     // categories, but a self-hoster may register any number of additional ones (e.g. `security`).
     typeLabels: z.record(z.string(), z.string()).optional(),
+    // loopover_plan_repo_issues config-as-code surface (#7429) -- see the field's own doc comment on
+    // RepositorySettings (src/types.ts) for the full contract.
+    issuePlanEnabled: z.boolean().optional(),
+    issuePlanExtraLabels: z.array(z.string()).optional(),
+    issuePlanMilestoneReuse: z.boolean().optional(),
     linkedIssueLabelPropagation: z
       .object({
         enabled: z.boolean(),

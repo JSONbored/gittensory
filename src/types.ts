@@ -1016,6 +1016,24 @@ export type RepositorySettings = {
    *  built-in three (e.g. `security: "area:security"`) for its own taxonomy. Always populated by the DB
    *  layer; optional so existing settings fixtures/callers need not be touched. */
   typeLabels?: PrTypeLabelSet | undefined;
+  /** Per-repo opt-out for `loopover_plan_repo_issues` (#7429, the selfhoster-facing AI issue-planning MCP
+   *  tool, `src/services/issue-plan-draft.ts`, #7426): when explicitly `false`, the tool returns a `disabled`
+   *  status without ever calling the model. Default TRUE — the tool is already gated behind MCP
+   *  `requireRepoManageAccess` and the fleet-wide `AI_SUMMARIES_ENABLED`/`AI_PUBLIC_COMMENTS_ENABLED`
+   *  switches, so this is an ADDITIONAL per-repo layer, not the primary gate. Config-as-code only (no DB
+   *  column, matching the Batch A/B/C pattern, #6442-#6444) — settable via `.loopover.yml settings:` only. */
+  issuePlanEnabled?: boolean | undefined;
+  /** Additional label names `loopover_plan_repo_issues` (#7429) suggests to the model alongside the repo's
+   *  real GitHub labels and (when gittensor-enrolled) its type-label taxonomy — e.g. a project-specific
+   *  category not yet created as a real label. Purely additive; never removes or replaces the repo's own
+   *  labels. Default empty. Config-as-code only (no DB column) — settable via `.loopover.yml settings:` only. */
+  issuePlanExtraLabels?: string[] | undefined;
+  /** Whether `loopover_plan_repo_issues` (#7429) attempts to reuse an existing OPEN milestone by exact
+   *  normalized-title match before creating a new one (`resolveOrCreateIssuePlanMilestone`,
+   *  `src/services/issue-plan-draft.ts`). Default TRUE. A repo that always wants a fresh milestone per
+   *  planning session (e.g. date-stamped titles) can set this `false` to skip the reuse lookup entirely.
+   *  Config-as-code only (no DB column) — settable via `.loopover.yml settings:` only. */
+  issuePlanMilestoneReuse?: boolean | undefined;
   /** Linked-issue label propagation (#priority-linked-issue-gate): the ONLY mechanism that can ever
    *  select the configured priority label (or any other configured mapping's PR label) — never
    *  inferred from a PR's title, changed files, AI output, or existing PR labels. Default disabled
