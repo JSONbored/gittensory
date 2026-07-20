@@ -479,6 +479,17 @@ function assertCodexCredentialIsolation(env: Record<string, string | undefined>)
   // Fail closed until Codex exposes a brokered credential mode that does not put auth.json in the review sandbox.
   // Strict "1"-only, matching health.ts's codexAuthReadinessProbe and this flag's narrow opt-in convention.
   if (env.CODEX_HOME || env.LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER !== "1") {
+    // #7466: GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER was the only name for this opt-in until the LOOPOVER_
+    // rebrand (#5652) retired dual-read support repo-wide. An operator whose .env still uses the old name
+    // silently reverts to fully-disabled with no distinguishing signal -- surface that specific, actionable
+    // case instead of the generic message so an upgrading self-hoster knows to rename the var rather than
+    // assuming Codex was never configured at all. CODEX_HOME being the actual cause takes priority: renaming
+    // the flag can't fix that one.
+    if (!env.CODEX_HOME && env.GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER === "1") {
+      throw new Error(
+        "codex_credential_isolation_required: GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER is set but no longer read -- rename it to LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER",
+      );
+    }
     throw new Error("codex_credential_isolation_required");
   }
 }

@@ -3084,6 +3084,21 @@ describe("pure helpers", () => {
     expect(isStructuralProviderConfigError(undefined)).toBe(false);
   });
 
+  it("isStructuralProviderConfigError matches codex_credential_isolation_required, bare or with a detail suffix (#7466)", () => {
+    // The generic throw (assertCodexCredentialIsolation's no-CODEX_HOME, non-legacy-var case): no colon, no suffix.
+    expect(isStructuralProviderConfigError(new Error("codex_credential_isolation_required"))).toBe(true);
+    // The specific legacy-env-var rename hint: same prefix, colon-separated detail.
+    expect(
+      isStructuralProviderConfigError(
+        new Error(
+          "codex_credential_isolation_required: GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER is set but no longer read -- rename it to LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER",
+        ),
+      ),
+    ).toBe(true);
+    // Not a bare match or a colon-suffixed one -- some other, unrelated code string sharing only the prefix.
+    expect(isStructuralProviderConfigError(new Error("codex_credential_isolation_requiredXYZ"))).toBe(false);
+  });
+
   it("runWorkersOpinion still retries a genuinely transient (non-timeout, non-429) error up to the full budget", async () => {
     let attempts = 0;
     const run = vi.fn(async () => {

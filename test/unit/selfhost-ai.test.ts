@@ -1945,6 +1945,32 @@ describe("subscription CLI helpers + fail-safe", () => {
     ).rejects.toThrow(/codex_credential_isolation_required/);
   });
 
+  it("credential isolation surfaces a specific rename hint when only the legacy GITTENSORY_ var is set (#7466)", async () => {
+    const shouldNotSpawn: StubSpawn = async () => {
+      throw new Error("spawned");
+    };
+    await expect(
+      createCodexAi(
+        { GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" },
+        shouldNotSpawn,
+      ).run("gpt-5", { prompt: "x" }),
+    ).rejects.toThrow(
+      /^codex_credential_isolation_required: GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER is set but no longer read -- rename it to LOOPOVER_ENABLE_UNSAFE_CODEX_REVIEWER$/,
+    );
+  });
+
+  it("credential isolation: CODEX_HOME being the actual blocker still wins over the legacy-var rename hint", async () => {
+    const shouldNotSpawn: StubSpawn = async () => {
+      throw new Error("spawned");
+    };
+    await expect(
+      createCodexAi(
+        { CODEX_HOME: "/home/node/.codex", GITTENSORY_ENABLE_UNSAFE_CODEX_REVIEWER: "1" },
+        shouldNotSpawn,
+      ).run("gpt-5", { prompt: "x" }),
+    ).rejects.toThrow(/^codex_credential_isolation_required$/);
+  });
+
   it("resolveCodexAuthPath: CODEX_HOME wins, else HOME/.codex, else ~/.codex", () => {
     expect(resolveCodexAuthPath({ CODEX_HOME: "/data/codex", HOME: "/home/node" })).toBe(
       "/data/codex/auth.json",
