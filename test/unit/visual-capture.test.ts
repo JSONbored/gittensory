@@ -338,7 +338,7 @@ describe("visual capture preview discovery", () => {
     await expect(previewPollAttemptCount(env, "budget-head-2")).resolves.toBe(MAX_PREVIEW_POLL_ATTEMPTS);
   });
 
-  it("leaves the capture non-pending when no matching preview check run exists at all (buildState 'absent')", async () => {
+  it("eternal-loading-placeholder fix: marks the capture pending (not silently ignored) when no matching preview check run exists at all (buildState 'absent') and no actions_fallback is configured", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.includes("/deployments?")) return Response.json([]);
@@ -355,7 +355,86 @@ describe("visual capture preview discovery", () => {
       ["apps/loopover-ui/src/routes/app.index.tsx"],
     );
 
+    // Pre-fix, this silently stayed non-pending forever with no terminal state either -- the "Rendering
+    // preview…" spinner in the comment table never resolved. Now it's fed into the SAME poll-budget
+    // mechanism as a 'building' state, so it eventually gives up honestly (see the MAX_PREVIEW_POLL_ATTEMPTS
+    // test below) instead of spinning forever.
+    expect(result.previewPending).toBe(true);
+    expect(result.routes[0]?.afterUrl).toContain("placeholder=loading");
+  });
+
+  it("eternal-loading-placeholder fix: a buildState 'absent' (no actions_fallback) records ONE preview-poll attempt for this head SHA, same budget as 'building'", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) return Response.json({ check_runs: [] });
+      if (url.includes("/comments")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "", REVIEW_AUDIT: memoryReviewAudit() });
+
+    const result = await buildCapture(
+      env,
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 16, headSha: "absent-budget-head-1", previewFromChecks: true },
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
+    );
+
+    expect(result.previewPending).toBe(true);
+    await expect(previewPollAttemptCount(env, "absent-budget-head-1")).resolves.toBe(1);
+  });
+
+  it("eternal-loading-placeholder fix: past MAX_PREVIEW_POLL_ATTEMPTS for a buildState 'absent' head SHA, gives up honestly instead of spinning forever", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) return Response.json({ check_runs: [] });
+      if (url.includes("/comments")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "", REVIEW_AUDIT: memoryReviewAudit() });
+    for (let i = 0; i < MAX_PREVIEW_POLL_ATTEMPTS; i += 1) {
+      await recordPreviewPollAttempt(env, "absent-budget-head-2");
+    }
+
+    const result = await buildCapture(
+      env,
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 17, headSha: "absent-budget-head-2", previewFromChecks: true },
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
+    );
+
     expect(result.previewPending).toBe(false);
+    expect(result.routes[0]?.afterUrl).toContain("placeholder=failed");
+    await expect(previewPollAttemptCount(env, "absent-budget-head-2")).resolves.toBe(MAX_PREVIEW_POLL_ATTEMPTS);
+  });
+
+  it("does NOT apply the buildState 'absent' poll-budget treatment when actions_fallback is enabled -- that feature's own dispatch already owns the 'found nothing' case and needs the previewPending gate free", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/dispatches")) return new Response(null, { status: 204 });
+      if (url.includes("/deployments?")) return Response.json([]);
+      if (url.includes("/status")) return Response.json({ statuses: [] });
+      if (url.includes("/check-runs")) return Response.json({ check_runs: [] });
+      if (url.includes("/comments")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+    const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "", REVIEW_AUDIT: memoryReviewAudit() });
+
+    await buildCapture(
+      env,
+      "installation-token",
+      { repoFullName: "owner/repo", prNumber: 18, headSha: "absent-with-fallback-head", previewFromChecks: true, defaultBranchRef: "main" },
+      ["apps/loopover-ui/src/routes/app.index.tsx"],
+      undefined,
+      { actionsFallback: true },
+    );
+
+    // The buildState-absent branch itself never ran (it's gated on !actionsFallbackEnabled) -- the dispatch
+    // path below is what marks pending, and it never records a poll-budget attempt.
+    await expect(previewPollAttemptCount(env, "absent-with-fallback-head")).resolves.toBe(0);
   });
 
   it("an explicit routes.paths list replaces file-based route inference end to end", async () => {
@@ -814,21 +893,27 @@ describe("buildCapture display-thumbnail wiring (#6324)", () => {
     }
   });
 
-  it("never generates a thumbnail for the mobile viewport, even when downscaling is available — 390px is already close to the table's 360px display width", async () => {
+  it("also generates a thumbnail for the mobile viewport when downscaling is available (bug fix — a full-page mobile capture is height-unbounded even though 390px width is already narrow)", async () => {
     const availableSpy = vi.spyOn(imageDownscaleModule, "isDisplayDownscaleAvailable").mockReturnValue(true);
     const downscaleSpy = vi.spyOn(imageDownscaleModule, "downscaleForDisplay").mockResolvedValue(new Uint8Array([1]));
     const captureShotSpy = vi.spyOn(shotModule, "captureShot").mockResolvedValue({ png: new Uint8Array([9, 9, 9]), authWalled: false });
     try {
+      const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() });
       const result = await buildCapture(
-        createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() }),
+        env,
         "installation-token",
         { repoFullName: "owner/repo", prNumber: 42, previewUrl: "https://preview.example.com" },
         ["apps/loopover-ui/src/routes/app.index.tsx"],
       );
-      // downscaleForDisplay was called for the desktop slots only -- CaptureRoute has no mobile thumb field
-      // at all (by design), so there's nothing to assert false on the route itself; the real assertion is
-      // that the call count matches "desktop before + desktop after" (2), not 4 (every slot).
-      expect(downscaleSpy).toHaveBeenCalledTimes(2);
+      // downscaleForDisplay is now called for every slot (desktop before/after + mobile before/after) — 4,
+      // not just the desktop 2 from before this fix.
+      expect(downscaleSpy).toHaveBeenCalledTimes(4);
+      expect(result.routes[0]?.beforeThumbUrlMobile).toContain("-thumb.png");
+      expect(result.routes[0]?.afterThumbUrlMobile).toContain("-thumb.png");
+      // The full-resolution mobile URL is UNCHANGED -- still what "click to open full-size" resolves to.
+      expect(result.routes[0]?.beforeUrlMobile).not.toContain("-thumb.png");
+      const storedMobileThumb = await env.REVIEW_AUDIT!.get(await thumbKey(42, "before", "mobile", "https://prod.example.com/app"));
+      expect(storedMobileThumb).not.toBeNull();
     } finally {
       availableSpy.mockRestore();
       downscaleSpy.mockRestore();
@@ -2647,7 +2732,7 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
     expect(result.previewPending).toBe(false);
   });
 
-  it("never dispatches when actions_fallback is not configured (byte-identical to pre-#4112)", async () => {
+  it("never dispatches when actions_fallback is not configured (dispatch behavior unchanged; previewPending now true — see the eternal-loading-placeholder fix's own tests above)", async () => {
     let dispatchCalled = false;
     vi.stubGlobal(
       "fetch",
@@ -2665,7 +2750,9 @@ describe("review.visual.actions_fallback (#4112 GitHub-Actions build-and-serve f
     );
 
     expect(dispatchCalled).toBe(false);
-    expect(result.previewPending).toBe(false);
+    // Not false anymore: buildState 'absent' + no actions_fallback now goes through the same poll-budget
+    // give-up logic as 'building', instead of silently staying non-pending forever.
+    expect(result.previewPending).toBe(true);
   });
 
   it("never dispatches without a headSha to pin the build to", async () => {

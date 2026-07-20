@@ -63,13 +63,17 @@ export interface CaptureRoute {
   beforeUrlMobile?: string | undefined;
   afterUrl?: string | undefined;
   afterUrlMobile?: string | undefined;
-  // #6324: a separate, downscaled DISPLAY copy of the desktop shot -- self-host only, desktop-only (see
-  // capturePage's own doc comment for why). beforeUrl/afterUrl above are UNCHANGED in meaning (still the
-  // full-resolution original, still what "click to open full-size" resolves to); these are additive fields
-  // the comment table prefers for the embedded <img> when present, falling back to beforeUrl/afterUrl when
-  // absent (hosted mode, or a resize that didn't actually shrink anything).
+  // #6324: a separate, downscaled DISPLAY copy of each shot -- self-host only (see capturePage's own doc
+  // comment for why). beforeUrl/afterUrl above are UNCHANGED in meaning (still the full-resolution original,
+  // still what "click to open full-size" resolves to); these are additive fields the comment table prefers
+  // for the embedded <img> when present, falling back to beforeUrl/afterUrl when absent (hosted mode, or a
+  // resize that didn't actually shrink anything). desktop/mobile get independent thumb fields, mirroring
+  // beforeUrl/beforeUrlMobile's own split -- both viewports need a bounded thumbnail (see the mobile fix's
+  // own doc comment on capturePage's thumbKey below), not just desktop.
   beforeThumbUrl?: string | undefined;
   afterThumbUrl?: string | undefined;
+  beforeThumbUrlMobile?: string | undefined;
+  afterThumbUrlMobile?: string | undefined;
   diffUrl?: string | undefined;
   diffUrlMobile?: string | undefined;
   beforeGifUrl?: string | undefined;
@@ -367,12 +371,17 @@ async function capturePage(
     );
     const key = `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}.png`;
     const url = resolveShotUrl(env, key) || onDemand;
-    // #6324: a downscaled DISPLAY copy, stored at a SIBLING key so the original at `key` never changes --
-    // diffing (compareCapturedScreenshots, via includeBytes below) always reads the true original on both a
-    // fresh render AND a cache hit, and "click to open full-size" keeps resolving to it unchanged. Self-host
-    // only (isDisplayDownscaleAvailable) and desktop-only: shot.ts's mobile viewport (390px) is already
-    // close enough to the table's own 360px display width that a third resized copy would save little.
-    const thumbKey = viewportName === "desktop" && isDisplayDownscaleAvailable() ? `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}-thumb.png` : undefined;
+    // #6324 / mobile-thumb-fix: a downscaled DISPLAY copy, stored at a SIBLING key so the original at `key`
+    // never changes -- diffing (compareCapturedScreenshots, via includeBytes below) always reads the true
+    // original on both a fresh render AND a cache hit, and "click to open full-size" keeps resolving to it
+    // unchanged. Self-host only (isDisplayDownscaleAvailable). Generated for BOTH viewports, not desktop-only
+    // as originally shipped: that desktop-only gate assumed the mobile viewport's 390px WIDTH being already
+    // close to the table's 360px display width meant a resize would "save little" -- true for width, but
+    // shot.ts captures `fullPage: true`, so a mobile screenshot's HEIGHT is just as unbounded as desktop's,
+    // and a narrow-but-very-tall capture rendered at native size in the comment table (the reported bug).
+    // downscaleForDisplay now bounds height too (see its own doc comment), so a mobile thumb is worth
+    // generating exactly like a desktop one.
+    const thumbKey = isDisplayDownscaleAvailable() ? `${NAMESPACE}/shots/${fingerprint.slice(0, 40)}-thumb.png` : undefined;
     const cached = await env.REVIEW_AUDIT.get(key).catch(() => null);
     if (cached) {
       // Verified via a real read, not assumed from the original's own existence -- the sibling write below
@@ -653,6 +662,10 @@ export async function buildCapture(
   let previewBase = "";
   let previewFailed = target.previewFailed === true;
   let previewPending = false;
+  // Hoisted above the discovery block below (was previously computed after it) so the eternal-"loading"-
+  // placeholder fix's `buildState === "absent"` branch can consult it -- seeing this whole file top to
+  // bottom, its own later use (guarding the actions_fallback dispatch) is unchanged.
+  const actionsFallbackEnabled = visualConfig?.actionsFallback === true;
   const urlTemplate = visualConfig?.preview?.urlTemplate;
   if (urlTemplate) {
     previewBase = resolvePreviewUrlTemplate(urlTemplate, { number: target.prNumber, headSha: target.headSha });
@@ -687,6 +700,25 @@ export async function buildCapture(
               await recordPreviewPollAttempt(env, target.headSha);
               previewPending = true;
             }
+          } else if (buildState === "absent" && !actionsFallbackEnabled) {
+            // Eternal-"loading"-placeholder fix: 'absent' means no Workers-Builds-named check-run was found
+            // AT ALL, not "still building" -- previously this fell through as a silent no-op, leaving
+            // previewPending/previewFailed both false, so the caller's afterPlaceholder always resolved to
+            // the animated "Rendering preview…" spinner and NOTHING ever re-evaluated it to a terminal
+            // state (this state was never fed into the recapture-poll mechanism at all). Confirmed live on a
+            // repo whose UI has no preview-deploy CI configured: every PR's "after" cell spun forever. 'absent'
+            // is genuinely ambiguous on its own (the check-run may just not have started yet), so apply the
+            // SAME poll-budget-then-give-up treatment as 'building' above rather than assuming either
+            // extreme. Skipped when actions_fallback is enabled for this repo: that feature's OWN dispatch
+            // below already treats "found nothing" as its trigger condition, and marking previewPending here
+            // first would starve it of the `!previewPending` gate it needs to ever fire.
+            const attempts = await previewPollAttemptCount(env, target.headSha);
+            if (attempts >= MAX_PREVIEW_POLL_ATTEMPTS) {
+              previewFailed = true;
+            } else {
+              await recordPreviewPollAttempt(env, target.headSha);
+              previewPending = true;
+            }
           }
         }
       }
@@ -694,13 +726,13 @@ export async function buildCapture(
   }
 
   // Fallback (#4112): the discovery chain above found NOTHING at all for this repo (no preview URL, not
-  // failed, and no real build already in flight) -- if review.visual.actions_fallback is enabled, dispatch
-  // .github/workflows/visual-capture-fallback.yml against the repo's own default branch and mark
-  // previewPending so the EXISTING recapture-poll mechanism (processors.ts) retries this same buildCapture
-  // call later, by which point the workflow_run webhook handler (running independently) has stored the
-  // fallback's captured PNGs in R2 for resolveFallbackAfterShot below to find. Requires headSha + a resolved
-  // default branch to pin the dispatch to a trusted ref; either missing ⇒ no dispatch (fail-safe).
-  const actionsFallbackEnabled = visualConfig?.actionsFallback === true;
+  // failed, and no real build already in flight) -- if review.visual.actions_fallback is enabled
+  // (actionsFallbackEnabled, hoisted above), dispatch .github/workflows/visual-capture-fallback.yml against
+  // the repo's own default branch and mark previewPending so the EXISTING recapture-poll mechanism
+  // (processors.ts) retries this same buildCapture call later, by which point the workflow_run webhook
+  // handler (running independently) has stored the fallback's captured PNGs in R2 for
+  // resolveFallbackAfterShot below to find. Requires headSha + a resolved default branch to pin the dispatch
+  // to a trusted ref; either missing ⇒ no dispatch (fail-safe).
   const routes = resolveVisualRoutes(visualFiles, visualConfig?.routes);
   if (!previewBase && !previewFailed && !previewPending && actionsFallbackEnabled && target.headSha && target.defaultBranchRef) {
     // Never re-dispatch onto an already in-flight run (#4112 review fix): the workflow's own `concurrency:
@@ -796,6 +828,8 @@ export async function buildCapture(
         afterUrlMobile: afterMobileShot.url,
         ...(beforeShot.thumbUrl ? { beforeThumbUrl: beforeShot.thumbUrl } : {}),
         ...(afterShot.thumbUrl ? { afterThumbUrl: afterShot.thumbUrl } : {}),
+        ...(beforeMobileShot.thumbUrl ? { beforeThumbUrlMobile: beforeMobileShot.thumbUrl } : {}),
+        ...(afterMobileShot.thumbUrl ? { afterThumbUrlMobile: afterMobileShot.thumbUrl } : {}),
         ...(diffUrl ? { diffUrl } : {}),
         ...(diffUrlMobile ? { diffUrlMobile } : {}),
         ...(beforeGifUrl ? { beforeGifUrl } : {}),

@@ -64,12 +64,24 @@ describe("selfhost image-downscale stub, display copy (#6324)", () => {
     expect(result.byteLength).toBeLessThan(desktopShot.byteLength);
   });
 
-  it("leaves an already-narrow image's dimensions unchanged (withoutEnlargement) -- e.g. a mobile-width capture", async () => {
+  it("leaves an already-narrow, normal-height image's dimensions unchanged (withoutEnlargement) -- e.g. a mobile-viewport capture that isn't full-page", async () => {
     const mobileShot = await solidPng(390, 844);
     const result = await downscaleForDisplay(mobileShot);
     const { width, height } = await dimensionsOf(result);
     expect(width).toBe(390);
     expect(height).toBe(844);
+  });
+
+  it("bug fix: downscales a NARROW but very TALL image (a mobile full-page capture) so height is capped too, not just width", async () => {
+    // The real shape that shipped huge, un-downscaled screenshots in a PR comment table: shot.ts's mobile
+    // viewport is 390px wide (already under DISPLAY_MAX_WIDTH_PX), but `fullPage: true` means height is
+    // unbounded by the viewport -- a width-only resize (the original bug) left this completely untouched.
+    const tallMobileShot = await solidPng(390, 5000);
+    const result = await downscaleForDisplay(tallMobileShot);
+    const { width, height } = await dimensionsOf(result);
+    expect(height).toBe(1280);
+    expect(width).toBe(100); // round(390/5000 * 1280) = round(99.84) = 100
+    expect(result.byteLength).toBeLessThan(tallMobileShot.byteLength);
   });
 
   it("degrades to the ORIGINAL bytes (never drops the image) when the input isn't a valid image", async () => {

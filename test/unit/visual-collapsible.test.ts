@@ -81,11 +81,28 @@ describe("buildBeforeAfterCollapsible", () => {
     expect(c?.body).not.toContain('src="https://api.example.dev/loopover/shot?key=loopover/shots/full-after.png"');
   });
 
-  it("#6324: falls back to the full-resolution URL for the img src when no thumb URL is present (hosted mode, or mobile rows, which never get one)", () => {
+  it("#6324: falls back to the full-resolution URL for the img src when no thumb URL is present (hosted mode, or self-host with a route that has none)", () => {
     const c = buildBeforeAfterCollapsible(routes);
     // routes (the shared fixture below) has no beforeThumbUrl/afterThumbUrl -- src and href must be identical.
     expect(c?.body).toContain('<img width="360" alt="before /app/analytics" src="https://api.example.dev/loopover/shot?key=loopover/shots/abc.png">');
     expect(c?.body).toContain('<img width="360" alt="after /app/analytics" src="https://api.example.dev/loopover/shot?key=loopover/shots/def.png">');
+  });
+
+  it("mobile-thumbnail fix: the mobile row's <img src> ALSO prefers beforeThumbUrlMobile/afterThumbUrlMobile over the full-resolution beforeUrlMobile/afterUrlMobile, with <a href> still pointing at the full-resolution original", () => {
+    const c = buildBeforeAfterCollapsible([
+      {
+        path: "/app/analytics",
+        beforeUrlMobile: "https://api.example.dev/loopover/shot?key=loopover/shots/full-before-m.png",
+        beforeThumbUrlMobile: "https://api.example.dev/loopover/shot?key=loopover/shots/thumb-before-m.png",
+        afterUrlMobile: "https://api.example.dev/loopover/shot?key=loopover/shots/full-after-m.png",
+        afterThumbUrlMobile: "https://api.example.dev/loopover/shot?key=loopover/shots/thumb-after-m.png",
+      },
+    ]);
+    expect(c?.body).toContain("| `/app/analytics` | mobile |");
+    expect(c?.body).toContain('<a href="https://api.example.dev/loopover/shot?key=loopover/shots/full-before-m.png" target="_blank" rel="noopener"><img width="360" alt="before /app/analytics (mobile)" src="https://api.example.dev/loopover/shot?key=loopover/shots/thumb-before-m.png">');
+    expect(c?.body).toContain('<a href="https://api.example.dev/loopover/shot?key=loopover/shots/full-after-m.png" target="_blank" rel="noopener"><img width="360" alt="after /app/analytics (mobile)" src="https://api.example.dev/loopover/shot?key=loopover/shots/thumb-after-m.png">');
+    expect(c?.body).not.toContain('src="https://api.example.dev/loopover/shot?key=loopover/shots/full-before-m.png"');
+    expect(c?.body).not.toContain('src="https://api.example.dev/loopover/shot?key=loopover/shots/full-after-m.png"');
   });
 
   it("returns null when no route has any shot URL (no empty table)", () => {

@@ -44,16 +44,26 @@ export function isDisplayDownscaleAvailable(): boolean {
  *  much larger one for a tall full-page capture, since height scales down proportionally too). */
 const DISPLAY_MAX_WIDTH_PX = 720;
 
-/** Downscale `png` so its width is at most {@link DISPLAY_MAX_WIDTH_PX}, preserving aspect ratio and never
- *  enlarging an already-narrow image (a mobile-viewport capture, already close to display width, passes
- *  through unchanged rather than being upscaled). Any decode/resize failure degrades to the ORIGINAL bytes,
- *  matching downscaleForVision's own "a full-size image beats no image" contract -- capturePage's caller
- *  falls back to the original URL entirely when this genuinely can't produce a smaller copy, so a failure
- *  here is never user-visible as a broken image, only as a missed optimization. */
+/** Height cap for the DISPLAY thumbnail, alongside {@link DISPLAY_MAX_WIDTH_PX} -- fixes a real bug (observed
+ *  live on a mobile capture table cell): shot.ts's `fullPage: true` capture means HEIGHT is unbounded by the
+ *  viewport, and a NARROW capture (shot.ts's MOBILE_VIEWPORT is 390px, already under DISPLAY_MAX_WIDTH_PX)
+ *  passed straight through a width-only resize untouched via `withoutEnlargement` -- a several-thousand-pixel-
+ *  tall full-page mobile screenshot rendered at its native size in the comment table instead of a bounded
+ *  thumbnail. Same value as VISION_MAX_DIMENSION_PX -- both are "a reasonable bounded preview", no reason for
+ *  the two budgets to diverge. */
+const DISPLAY_MAX_HEIGHT_PX = 1280;
+
+/** Downscale `png` so its width is at most {@link DISPLAY_MAX_WIDTH_PX} AND its height is at most
+ *  {@link DISPLAY_MAX_HEIGHT_PX} (`fit: "inside"` -- whichever bound is hit first wins, aspect ratio
+ *  preserved), never enlarging an already-small image (a mobile-viewport capture short enough to clear both
+ *  caps passes through unchanged rather than being upscaled). Any decode/resize failure degrades to the
+ *  ORIGINAL bytes, matching downscaleForVision's own "a full-size image beats no image" contract --
+ *  capturePage's caller falls back to the original URL entirely when this genuinely can't produce a smaller
+ *  copy, so a failure here is never user-visible as a broken image, only as a missed optimization. */
 export async function downscaleForDisplay(png: Uint8Array): Promise<Uint8Array> {
   try {
     const resized = await sharp(png)
-      .resize({ width: DISPLAY_MAX_WIDTH_PX, withoutEnlargement: true })
+      .resize({ width: DISPLAY_MAX_WIDTH_PX, height: DISPLAY_MAX_HEIGHT_PX, fit: "inside", withoutEnlargement: true })
       .png()
       .toBuffer();
     return new Uint8Array(resized);

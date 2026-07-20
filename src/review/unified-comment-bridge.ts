@@ -470,7 +470,8 @@ export function buildBeforeAfterCollapsible(routes: CaptureRoute[]): UnifiedColl
   // the same de-emphasized styling this table already uses for its own footer legend line below.
   // `imgUrl` (defaults to `url`) is what the <img src> loads; `url` is ALWAYS what the <a href> points at, so
   // "click to open full-size" keeps resolving to the true original even when a smaller downscaled copy
-  // (route.beforeThumbUrl/afterThumbUrl, self-host only) is embedded inline instead.
+  // (route.before/afterThumbUrl[Mobile], self-host only) is embedded inline instead -- both viewports pass
+  // their own thumb field below, not just desktop.
   const cell = (url: string | undefined, label: string, imgUrl: string = url ?? ""): string =>
     url ? `<a href="${attr(url)}" target="_blank" rel="noopener"><img width="360" alt="${attr(label)}" src="${attr(imgUrl)}"></a><br><sub>${attr(label)}</sub>` : "—";
   const rows: string[] = [];
@@ -484,7 +485,7 @@ export function buildBeforeAfterCollapsible(routes: CaptureRoute[]): UnifiedColl
     }
     if (route.beforeUrlMobile || route.afterUrlMobile) {
       if (route.diffUrlMobile) hasAnyDiff = true;
-      rows.push(`| ${path} | mobile${themeSuffix} | ${cell(route.beforeUrlMobile, `before ${route.path} (mobile)${themeSuffix}`)} | ${cell(route.afterUrlMobile, `after ${route.path} (mobile)${themeSuffix}`)} | ${cell(route.diffUrlMobile, `diff ${route.path} (mobile)${themeSuffix}`)} |`);
+      rows.push(`| ${path} | mobile${themeSuffix} | ${cell(route.beforeUrlMobile, `before ${route.path} (mobile)${themeSuffix}`, route.beforeThumbUrlMobile)} | ${cell(route.afterUrlMobile, `after ${route.path} (mobile)${themeSuffix}`, route.afterThumbUrlMobile)} | ${cell(route.diffUrlMobile, `diff ${route.path} (mobile)${themeSuffix}`)} |`);
     }
   }
   if (rows.length === 0) return null;
