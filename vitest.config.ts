@@ -49,12 +49,9 @@ export default defineConfig({
         "packages/loopover-miner/bin/**/*.js",
         "packages/loopover-miner/bin/**/*.ts",
         "packages/discovery-index/src/**/*.ts",
-        // packages/loopover-mcp/lib/*.js are plain JS today; issue #7291 migrates them to real TypeScript,
-        // keeping the same .js/.ts/.d.ts triplet shape packages/loopover-miner/lib/** already has (so
-        // coverage is wired BEFORE that PR lands, not as a follow-up fix). 4 of the 5 files
-        // (format-table/local-branch/redact-local-path/telemetry) are already imported in-process by
-        // test/unit/*.test.ts; lib/cli-error.js currently has no in-process test at all, so it will need
-        // one before a PR touching it can pass codecov/patch -- that's intended enforcement, not a bug.
+        // packages/loopover-mcp/lib/* migrate to real TypeScript under #7291; coverage is remapped via
+        // inline sourcemaps from the compiled .js back to .ts. cli-error gained an in-process unit test
+        // in test/unit/mcp-cli-error.test.ts so codecov/patch can grade its Phase-1 conversion.
         "packages/loopover-mcp/lib/**/*.js",
         "packages/loopover-mcp/lib/**/*.ts",
         // packages/loopover-mcp/bin/loopover-mcp.js (~6,600 of ~7,400 lines in the package) is tested

@@ -159,9 +159,18 @@
     "@loopover/miner-extension#build": {
       "cache": false
     },
-    "@loopover/mcp#build": {
+    "@loopover/mcp#build:tsc": {
       "dependsOn": ["^build"],
+      "cache": false
+    },
+    "@loopover/mcp#build:verify": {
+      "dependsOn": ["@loopover/mcp#build:tsc"],
+      "inputs": ["bin/**/*.js", "lib/**/*.js"],
       "outputs": []
+    },
+    "@loopover/mcp#build": {
+      "dependsOn": ["@loopover/mcp#build:tsc", "@loopover/mcp#build:verify"],
+      "cache": false
     },
     "@loopover/miner#build:tsc": {
       "dependsOn": ["^build"],
