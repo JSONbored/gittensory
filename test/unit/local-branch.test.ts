@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -2472,19 +2472,23 @@ describe("local MCP git metadata collection (#7329 coverage)", () => {
     const root = join(tempDir, "root");
     mkdirSync(join(root, "nested"), { recursive: true });
     const roots = [{ uri: pathToFileURL(root).href }];
+    // resolveWorkspaceCwd resolves symlinks via realpathSync (safeResolvedPath), so the expected path must
+    // too -- on macOS, os.tmpdir() lives under /var/folders/..., itself a symlink to /private/var/folders/....
+    const expectedNested = realpathSync(join(root, "nested"));
 
     const relative = resolveWorkspaceCwd({ cwd: "nested", workspaceRoots: roots });
-    expect(relative).toMatchObject({ cwd: join(root, "nested"), rootsAvailable: true });
+    expect(relative).toMatchObject({ cwd: expectedNested, rootsAvailable: true });
 
     const absolute = resolveWorkspaceCwd({ cwd: join(root, "nested"), workspaceRoots: roots });
-    expect(absolute).toMatchObject({ cwd: join(root, "nested"), rootsAvailable: true });
+    expect(absolute).toMatchObject({ cwd: expectedNested, rootsAvailable: true });
   });
 
   it("normalizeMcpWorkspaceRoots ignores a root with a non-string uri and dedupes repeated paths", async () => {
     const { normalizeMcpWorkspaceRoots } = await import("../../packages/loopover-mcp/lib/local-branch.js");
     tempDir = mkdtempSync(join(tmpdir(), "loopover-local-"));
     const uri = pathToFileURL(tempDir).href;
-    expect(normalizeMcpWorkspaceRoots([{ uri: 42 as unknown as string }, { uri }, { uri }])).toEqual([{ path: tempDir }]);
+    // normalizeMcpWorkspaceRoots resolves symlinks via realpathSync (safeResolvedPath) -- see the note above.
+    expect(normalizeMcpWorkspaceRoots([{ uri: 42 as unknown as string }, { uri }, { uri }])).toEqual([{ path: realpathSync(tempDir) }]);
     expect(normalizeMcpWorkspaceRoots(undefined)).toEqual([]);
   });
 
