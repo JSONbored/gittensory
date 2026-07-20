@@ -8,6 +8,7 @@
 // (#4256).
 import type { ScorePreviewResult } from "./scoring/preview.js";
 import { buildScorePreview } from "./scoring/preview.js";
+import { computeOpportunityCompetition } from "./opportunity-competition.js";
 import { isSuspiciousConfiguredLabel } from "./scoring/label-match.js";
 import { isFailingCheckSummary } from "./signals/check-summary.js";
 import { nowIso } from "./utils/json.js";
@@ -897,7 +898,14 @@ function buildEligibilityGap(analyses: RepoRewardRisk[]): EligibilityGapEntry[] 
 }
 
 function opportunityCompetitionFactor(highRiskDuplicateClusters: number, openPullRequests: number): number {
-  return round(clamp(highRiskDuplicateClusters / Math.max(1, openPullRequests), 0, 1));
+  // Delegates to the pure mirror rather than repeating its arithmetic (#7529). The inline version this
+  // replaced fed both arguments straight into the expression, so a non-finite `openPullRequests` made
+  // `Math.max(1, NaN)` NaN, which `clamp`'s own Math.min/Math.max then propagated -- yielding a NaN
+  // competition factor instead of a bounded score. `computeOpportunityCompetition` already guards both
+  // inputs (clusters fail CLOSED to maximal pressure, open PRs fail open to 0) and is arithmetically
+  // identical for finite inputs: its `round4`/`clamp` are byte-for-byte this module's `round`/`clamp`.
+  // Delegating -- rather than duplicating the guards -- is what stops the two drifting apart again.
+  return computeOpportunityCompetition(highRiskDuplicateClusters, openPullRequests);
 }
 
 function opportunityFreshnessFactor(issues: IssueRecord[]): number {
@@ -985,5 +993,9 @@ export const rewardRiskFreshnessInternals = {
   pickIssueTimestamp,
   issueAgeDays,
   bestFitLabels,
+};
+
+export const rewardRiskCompetitionInternals = {
+  opportunityCompetitionFactor,
 };
 /* v8 ignore stop */

@@ -37,7 +37,10 @@ export type {
   RewardRiskActionKind,
   RewardRiskActionSeverity,
 } from "../../packages/loopover-engine/src/reward-risk.js";
-export { rewardRiskFreshnessInternals } from "../../packages/loopover-engine/src/reward-risk.js";
+export {
+  rewardRiskCompetitionInternals,
+  rewardRiskFreshnessInternals,
+} from "../../packages/loopover-engine/src/reward-risk.js";
 
 // The real `src`-side builders, bound once and injected into the engine implementations. Their argument
 // records are wider than (assignable to) the engine's subset mirrors and their return types are covariantly
