@@ -191,6 +191,32 @@ describe("operator dashboard payload", () => {
     expect(payload.metrics).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Fleet gaming-pattern flags", value: "1", delta: "farmer" })]));
   });
 
+  it("surfaces a contributor fairness flag (#fairness-analytics) as a count-only dashboard tile, never a login", async () => {
+    const env = createTestEnv();
+    const seedDecision = async (login: string, pr: number, decided: "merged" | "closed"): Promise<void> => {
+      const targetId = `owner/repo#${pr}`;
+      await env.DB.prepare(`INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, created_at) VALUES (?, ?, 'gittensory-native', 'owner/repo', ?, 'merge', ?)`)
+        .bind(`cgh-${pr}`, login, targetId, new Date().toISOString())
+        .run();
+      await env.DB.prepare(`INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES (?, 'owner/repo', ?, 'pr_outcome', ?, 'github', ?)`)
+        .bind(`po-${pr}`, targetId, decided, new Date().toISOString())
+        .run();
+    };
+    // Two peers with a 5/5 merge precision (weightedAccuracy 1.0).
+    for (const login of ["peer1", "peer2"]) {
+      for (let i = 0; i < 5; i++) await seedDecision(login, i + (login === "peer1" ? 0 : 100), "merged");
+    }
+    // One outlier: 5 predicted-merge decisions, all closed instead (weightedAccuracy 0.0) -- 1.0 below the median.
+    for (let i = 0; i < 5; i++) await seedDecision("flagged-login", i + 200, "closed");
+
+    const payload = await buildOperatorDashboardPayload(env);
+    expect(payload.metrics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: "Contributor fairness flags", value: "1", delta: "3 contributor(s) evaluated" })]),
+    );
+    // Count-only -- the flagged login itself never appears anywhere in the dashboard payload.
+    expect(JSON.stringify(payload)).not.toContain("flagged-login");
+  });
+
   it("wires computeFindingAcceptance into the dashboard's acceptance card shape (#1967/#5213)", async () => {
     const env = createTestEnv();
     await env.DB.prepare(

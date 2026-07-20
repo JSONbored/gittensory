@@ -644,6 +644,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       moderationRules: undefined,
       moderationWarningLabel: undefined,
       moderationBannedLabel: undefined,
+      fairnessAnalyticsMode: "inherit",
       skipAutomationBotAuthors: "inherit",
       reviewEvasionProtection: "close", // #4011/#6443: default-ON, always -- a repo protects itself from self-close/draft-dodge gaming unless it explicitly opts out via .loopover.yml
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
@@ -745,6 +746,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     moderationRules: undefined,
     moderationWarningLabel: undefined,
     moderationBannedLabel: undefined,
+    fairnessAnalyticsMode: "inherit",
     skipAutomationBotAuthors: normalizeSkipAutomationBotAuthors(row.skipAutomationBotAuthors),
     reviewEvasionProtection: "close", // #4011/#6443: default-ON, always -- a repo protects itself from self-close/draft-dodge gaming unless it explicitly opts out via .loopover.yml
     reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
@@ -882,6 +884,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     moderationRules: undefined,
     moderationWarningLabel: undefined,
     moderationBannedLabel: undefined,
+    fairnessAnalyticsMode: "inherit" as const,
     skipAutomationBotAuthors: normalizeSkipAutomationBotAuthors(settings.skipAutomationBotAuthors),
     reviewEvasionProtection: "close" as const,
     reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
@@ -2986,6 +2989,43 @@ export async function countModerationViolationsForActor(env: Env, actor: string,
   /* v8 ignore next -- count(*) always returns exactly one row; the empty-array guard only satisfies the destructure type. */
   if (!row) return 0;
   return row.count;
+}
+
+export interface ModerationViolationRow {
+  eventType: string;
+  /** Extracted from metadata_json.repoFullName (recordModerationViolation always sets it) -- "" when the
+   *  metadata is malformed or the field is missing, rather than throwing. */
+  repoFullName: string;
+  targetKey: string | null;
+  detail: string | null;
+  createdAt: string;
+}
+
+/** Moderation-rules engine (#fairness-analytics): EVERY violation row for `actor`, newest first -- unlike
+ *  countModerationViolationsForActor above (a single lifetime/decayed total), this returns enough to break
+ *  violations down PER REPO and compute rate/frequency from real timestamps. `audit_events` has no repo column
+ *  (see countModerationViolationsForActor's own doc comment), so repoFullName is recovered from metadata_json
+ *  here, not queried by it -- filtering by repo would need an unindexed json_extract; this reads once and lets
+ *  the caller group in memory instead. */
+export async function listModerationViolationsForActor(env: Env, actor: string, eventTypes: string[], sinceIso?: string): Promise<ModerationViolationRow[]> {
+  const db = getDb(env.DB);
+  const conditions = [eq(auditEvents.actor, actor), inArray(auditEvents.eventType, eventTypes)];
+  if (sinceIso !== undefined) conditions.push(gte(auditEvents.createdAt, sinceIso));
+  const rows = await db
+    .select({ eventType: auditEvents.eventType, targetKey: auditEvents.targetKey, detail: auditEvents.detail, metadataJson: auditEvents.metadataJson, createdAt: auditEvents.createdAt })
+    .from(auditEvents)
+    .where(and(...conditions))
+    .orderBy(desc(auditEvents.createdAt));
+  return rows.map((r): ModerationViolationRow => {
+    let repoFullName = "";
+    try {
+      const parsed = JSON.parse(r.metadataJson) as { repoFullName?: unknown };
+      if (typeof parsed.repoFullName === "string") repoFullName = parsed.repoFullName;
+    } catch {
+      // malformed metadata_json -- repoFullName stays "", never thrown
+    }
+    return { eventType: r.eventType, repoFullName, targetKey: r.targetKey, detail: r.detail, createdAt: r.createdAt };
+  });
 }
 
 /** Moderation-rules engine: whether a violation has ALREADY been recorded for this EXACT (actor, eventType,

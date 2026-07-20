@@ -904,6 +904,12 @@ export const RepositorySettingsSchema = z
     moderationRules: z.array(z.enum(["contributor_cap", "blacklist", "review_nag", "review_evasion"])).optional(),
     moderationWarningLabel: z.string().optional(),
     moderationBannedLabel: z.string().optional(),
+    fairnessAnalyticsMode: z
+      .enum(["inherit", "off", "enabled"])
+      .optional()
+      .describe(
+        "Per-repo participation in cross-repo contributor fairness/accuracy analytics -- 'off' excludes this repo's gate decisions and moderation history from every aggregation, independent of whether the internal fairness-analytics routes are enabled fleet-wide.",
+      ),
     skipAutomationBotAuthors: z.enum(["inherit", "off", "enabled"]).optional(),
     duplicateWinnerMode: z.enum(["inherit", "off", "enabled"]).optional(),
     openPrFileCollisionMode: z.enum(["inherit", "off", "enabled"]).optional(),

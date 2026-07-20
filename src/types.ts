@@ -1243,6 +1243,13 @@ export type RepositorySettings = {
   /** Moderation-rules engine: per-repo override of the label applied at >= the ban threshold. `undefined` ⇒
    *  the global config's `bannedLabel` (itself defaulting to `"mod:banned"`). */
   moderationBannedLabel?: string | undefined;
+  /** Contributor trust profiles (#fairness-analytics): whether THIS repo's gate decisions and moderation
+   *  history participate when computing cross-repo contributor fairness/accuracy analytics -- independent of
+   *  LOOPOVER_FAIRNESS_ANALYTICS/`fairnessAnalytics:`, which gates whether the internal routes exist at all.
+   *  `"inherit"` (the default) participates; `"off"` excludes this repo's rows from every aggregation;
+   *  `"enabled"` is equivalent to `"inherit"`, kept for symmetry with moderationGateMode's tri-state shape.
+   *  Always populated by the DB layer; optional so existing settings fixtures/callers need not be touched. */
+  fairnessAnalyticsMode?: "inherit" | "off" | "enabled" | undefined;
   /** Waste elimination for known automation authors (release-please's github-actions[bot], Renovate,
    *  Dependabot -- settings/agent-actions.ts's PROTECTED_AUTOCLOSE_AUTHORS): skip AI review, gate evaluation,
    *  and public-surface publish entirely for a PR/event genuinely triggered by one of these -- not just

@@ -298,6 +298,10 @@ import { computeOpsStats, isOpsEnabled, resolveOpsManifestOverride } from "../re
 import { handleInternalCalibration, handleInternalDecision, type OpsAgentConfig } from "../review/ops";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
 import { computePredictedGateAgreement } from "../review/predicted-gate-agreement";
+import { computeContributorGateEval, contributorFairnessFlags } from "../review/contributor-gate-eval";
+import { getContributorTrustProfile } from "../review/contributor-trust-profile";
+import { backfillContributorGateHistory } from "../review/contributor-gate-history-backfill";
+import { isFairnessAnalyticsEnabled, resolveFairnessAnalyticsManifestOverride } from "../review/contributor-trust-profile-wire";
 import { isRagEnabled } from "../review/rag-wire";
 import { getPublicStats, isPublicStatsEnabled, resolvePublicStatsManifestOverride } from "../review/public-stats";
 import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
@@ -4413,6 +4417,43 @@ export function createApp() {
     return c.json(await computePredictedGateAgreement(c.env, { days: 90, nowMs: Date.now() }));
   });
 
+  // Contributor trust profiles (#fairness-analytics): per-repo submission counts (submitter_stats), moderation
+  // violation history (adverse actions/warnings, audit_events), and gate-decision accuracy
+  // (contributor_gate_history), composed per contributor. Bearer-gated by the `/v1/internal/*` middleware, 404
+  // when LOOPOVER_FAIRNESS_ANALYTICS is off. NEVER exposed publicly -- see contributor-trust-profile.ts's design
+  // note. The fleet-wide fairness flags need every contributor's rows to compute each project's median, so this
+  // computes the full report and filters to :login rather than re-deriving a login-scoped median in isolation.
+  app.get("/v1/internal/fairness/contributors/:login", async (c) => {
+    if (!isFairnessAnalyticsEnabled(c.env, await resolveFairnessAnalyticsManifestOverride(c.env))) return c.json({ error: "not_found" }, 404);
+    const login = c.req.param("login");
+    const nowMs = Date.now();
+    const [profile, evalReport] = await Promise.all([
+      getContributorTrustProfile(c.env, login, { nowMs }),
+      computeContributorGateEval(c.env, { days: 90, nowMs }),
+    ]);
+    const flags = contributorFairnessFlags(evalReport.rows).filter((f) => f.login === login);
+    return c.json({ profile, fairnessFlags: flags });
+  });
+
+  // Fleet-wide fairness summary (#fairness-analytics): counts only, never individual contributor rows -- the
+  // per-login detail lives behind the :login route above. Intended for the operator dashboard tile.
+  app.get("/v1/internal/fairness/contributors", async (c) => {
+    if (!isFairnessAnalyticsEnabled(c.env, await resolveFairnessAnalyticsManifestOverride(c.env))) return c.json({ error: "not_found" }, 404);
+    const evalReport = await computeContributorGateEval(c.env, { days: 90, nowMs: Date.now() });
+    const flags = contributorFairnessFlags(evalReport.rows);
+    return c.json({ contributorsEvaluated: evalReport.rows.length, hasSignal: evalReport.hasSignal, flaggedCount: flags.length });
+  });
+
+  // Backfill (#fairness-analytics): reconstructs historical contributor_gate_history rows predating migration
+  // 0126 -- see contributor-gate-history-backfill.ts's header. Synchronous + idempotent + bounded by `limit`
+  // (default 500); an operator re-POSTs until `hasMore` is false. Bearer-gated, 404 when the flag is off.
+  app.post("/v1/internal/jobs/backfill-contributor-gate-history/run", async (c) => {
+    if (!isFairnessAnalyticsEnabled(c.env, await resolveFairnessAnalyticsManifestOverride(c.env))) return c.json({ error: "not_found" }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const limit = typeof body?.limit === "number" ? body.limit : undefined;
+    return c.json(await backfillContributorGateHistory(c.env, { limit }));
+  });
+
   // Operator decision-trail: the full state + cached terminal decision + audit log for ONE review target, so any
   // gate verdict is explainable on demand (?repo=<owner/repo>&number=<n>[&kind=pull_request|issue]). Bearer-gated
   // by the `/v1/internal/*` middleware (INTERNAL_JOB_TOKEN); handleInternalDecision re-checks that same token and
@@ -5648,6 +5689,8 @@ const CONFIG_AS_CODE_ONLY_FIELDS = [
   "reviewEvasionLabel",
   "reviewEvasionComment",
   "mergeTrainMode",
+  // #fairness-analytics: per-repo participation in contributor trust-profile analytics.
+  "fairnessAnalyticsMode",
   // Batch C (loopover#6444): only reviewCheckMode is read directly in this file (buildGithubAppBehavior) --
   // the other 10 Batch C fields (linkedIssueGateMode, duplicatePrGateMode, qualityGateMode,
   // qualityGateMinScore, selfAuthoredLinkedIssueGateMode, aiReviewMode, aiReviewByok, aiReviewProvider,

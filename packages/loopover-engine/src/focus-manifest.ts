@@ -404,6 +404,19 @@ export type FocusManifestPublicStatsConfig = {
 };
 
 /**
+ * Config-as-code override for the internal, bearer-gated contributor-trust-profile / fairness-analytics
+ * surface (LOOPOVER_FAIRNESS_ANALYTICS, #fairness-analytics), declared under `fairnessAnalytics:`. Same
+ * shape and precedence as `publicStats:`/`ops:` above -- fleet-wide, self-repo-manifest-sourced, no DB-backed
+ * counterpart. Not present ⇒ the caller falls back to the LOOPOVER_FAIRNESS_ANALYTICS env var. This gates
+ * whether the internal routes exist at all; per-repo DATA PARTICIPATION is a separate, per-repo axis --
+ * see `RepositorySettings.fairnessAnalyticsMode` (settings block below), not this fleet-wide switch.
+ */
+export type FocusManifestFairnessAnalyticsConfig = {
+  present: boolean;
+  enabled: boolean;
+};
+
+/**
  * Config-as-code override for the fleet-wide AI-drafted-PR creation capability (#6275), declared under
  * `draftFlow:`. Overrides the LOOPOVER_REVIEW_DRAFT env flag that gates the public OAuth draft-submission
  * flow (src/services/draft.ts) -- like `maintainerRecap:`, this is read from the loopover self-repo's own
@@ -587,6 +600,7 @@ export type FocusManifestSettings = Partial<
     | "moderationRules"
     | "moderationWarningLabel"
     | "moderationBannedLabel"
+    | "fairnessAnalyticsMode"
     | "reviewEvasionProtection"
     | "reviewEvasionLabel"
     | "reviewEvasionComment"
@@ -1149,6 +1163,7 @@ export type FocusManifest = {
   maintainerRecap: FocusManifestMaintainerRecapConfig;
   ops: FocusManifestOpsConfig;
   publicStats: FocusManifestPublicStatsConfig;
+  fairnessAnalytics: FocusManifestFairnessAnalyticsConfig;
   draftFlow: FocusManifestDraftFlowConfig;
   upstreamDriftIssues: FocusManifestUpstreamDriftIssuesConfig;
   sweepWatchdog: FocusManifestSweepWatchdogConfig;
@@ -1305,6 +1320,11 @@ const EMPTY_PUBLIC_STATS_CONFIG: FocusManifestPublicStatsConfig = {
   enabled: false,
 };
 
+const EMPTY_FAIRNESS_ANALYTICS_CONFIG: FocusManifestFairnessAnalyticsConfig = {
+  present: false,
+  enabled: false,
+};
+
 const EMPTY_DRAFT_FLOW_CONFIG: FocusManifestDraftFlowConfig = {
   present: false,
   enabled: false,
@@ -1355,6 +1375,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
   ops: { ...EMPTY_OPS_CONFIG },
   publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
+  fairnessAnalytics: { ...EMPTY_FAIRNESS_ANALYTICS_CONFIG },
   draftFlow: { ...EMPTY_DRAFT_FLOW_CONFIG },
   upstreamDriftIssues: { ...EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG },
   sweepWatchdog: { ...EMPTY_SWEEP_WATCHDOG_CONFIG },
@@ -1394,6 +1415,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
     ops: { ...EMPTY_OPS_CONFIG },
     publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
+    fairnessAnalytics: { ...EMPTY_FAIRNESS_ANALYTICS_CONFIG },
     draftFlow: { ...EMPTY_DRAFT_FLOW_CONFIG },
     upstreamDriftIssues: { ...EMPTY_UPSTREAM_DRIFT_ISSUES_CONFIG },
     sweepWatchdog: { ...EMPTY_SWEEP_WATCHDOG_CONFIG },
@@ -2152,6 +2174,26 @@ export function publicStatsConfigToJson(config: FocusManifestPublicStatsConfig):
   return { enabled: config.enabled };
 }
 
+/** Parse the optional `fairnessAnalytics:` mapping (#fairness-analytics). Mirrors {@link parsePublicStatsConfig}
+ *  exactly -- the only field is `enabled`, no DB layer to overlay onto. */
+function parseFairnessAnalyticsConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestFairnessAnalyticsConfig {
+  if (value === undefined || value === null) return { ...EMPTY_FAIRNESS_ANALYTICS_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "fairnessAnalytics" must be a mapping; ignoring it.');
+    return { ...EMPTY_FAIRNESS_ANALYTICS_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "fairnessAnalytics.enabled", warnings) ?? false;
+  return { present: true, enabled };
+}
+
+/** Serialize a fairnessAnalytics config back into the parse-compatible shape so a cached snapshot round-trips
+ *  through {@link parseFairnessAnalyticsConfig} unchanged. Returns null when nothing is configured. */
+export function fairnessAnalyticsConfigToJson(config: FocusManifestFairnessAnalyticsConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled };
+}
+
 /**
  * Parse the optional `draftFlow:` mapping (#6275). Mirrors {@link parseReviewRecapConfig}'s shape minus the
  * cadence knob -- `enabled` is the only field, defaulting to false (no DB layer to overlay onto), so the
@@ -2762,6 +2804,11 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (moderationWarningLabel !== undefined) out.moderationWarningLabel = moderationWarningLabel;
   const moderationBannedLabel = normalizeModerationLabel(r.moderationBannedLabel);
   if (moderationBannedLabel !== undefined) out.moderationBannedLabel = moderationBannedLabel;
+  // Contributor trust profiles (#fairness-analytics): per-repo opt-out of participating in cross-repo
+  // contributor fairness/accuracy analytics -- "inherit" (default) participates, "off" excludes this repo's
+  // rows, "enabled" is equivalent to "inherit" (kept for symmetry with moderationGateMode's tri-state shape).
+  const fairnessAnalyticsMode = normalizeOptionalEnum(r.fairnessAnalyticsMode, "settings.fairnessAnalyticsMode", ["inherit", "off", "enabled"] as const, warnings);
+  if (fairnessAnalyticsMode !== null) out.fairnessAnalyticsMode = fairnessAnalyticsMode;
   // Review-evasion protection (#review-evasion-protection): a contributor closing/converting-to-draft their
   // own PR while loopover has an active review pass running is dodging the one-shot review.
   const reviewEvasionProtection = normalizeOptionalEnum(r.reviewEvasionProtection, "settings.reviewEvasionProtection", ["off", "close"] as const, warnings);
@@ -3789,6 +3836,7 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     maintainerRecap: parseMaintainerRecapConfig(record.maintainerRecap, warnings),
     ops: parseOpsConfig(record.ops, warnings),
     publicStats: parsePublicStatsConfig(record.publicStats, warnings),
+    fairnessAnalytics: parseFairnessAnalyticsConfig(record.fairnessAnalytics, warnings),
     draftFlow: parseDraftFlowConfig(record.draftFlow, warnings),
     upstreamDriftIssues: parseUpstreamDriftIssuesConfig(record.upstreamDriftIssues, warnings),
     sweepWatchdog: parseSweepWatchdogConfig(record.sweepWatchdog, warnings),

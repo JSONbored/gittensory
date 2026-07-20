@@ -4585,6 +4585,67 @@ describe("api routes", () => {
     expect((await app.request("/v1/internal/jobs/rag-index", { method: "POST", headers: offHeaders, body: "{}" }, offEnv)).status).toBe(404);
   });
 
+  it("GET /v1/internal/fairness/contributors/:login returns a trust profile + fairness flags; 404 when the flag is off (#fairness-analytics)", async () => {
+    const app = createApp();
+    const env = createTestEnv({ LOOPOVER_FAIRNESS_ANALYTICS: "true" });
+    await env.DB.prepare(
+      `INSERT INTO submitter_stats (project, submitter, submissions, merged, closed, manual, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind("owner/repo", "octocat", 5, 3, 2, 0, new Date().toISOString())
+      .run();
+    const headers = { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` };
+
+    const res = await app.request("/v1/internal/fairness/contributors/octocat", { headers }, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { profile: { login: string; repoStats: unknown[] }; fairnessFlags: unknown[] };
+    expect(body.profile.login).toBe("octocat");
+    expect(body.profile.repoStats).toHaveLength(1);
+    expect(Array.isArray(body.fairnessFlags)).toBe(true);
+
+    const offEnv = createTestEnv();
+    const off = await app.request("/v1/internal/fairness/contributors/octocat", { headers }, offEnv);
+    expect(off.status).toBe(404);
+  });
+
+  it("GET /v1/internal/fairness/contributors returns fleet-wide counts only, never per-contributor rows; 404 when off (#fairness-analytics)", async () => {
+    const app = createApp();
+    const env = createTestEnv({ LOOPOVER_FAIRNESS_ANALYTICS: "true" });
+    const headers = { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` };
+
+    const res = await app.request("/v1/internal/fairness/contributors", { headers }, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { contributorsEvaluated: number; hasSignal: boolean; flaggedCount: number };
+    expect(body).toEqual({ contributorsEvaluated: 0, hasSignal: false, flaggedCount: 0 });
+    expect(JSON.stringify(body)).not.toContain("login"); // counts only, never a per-contributor breakdown
+
+    const offEnv = createTestEnv();
+    expect((await app.request("/v1/internal/fairness/contributors", { headers }, offEnv)).status).toBe(404);
+  });
+
+  it("POST /v1/internal/jobs/backfill-contributor-gate-history/run backfills synchronously and honors `limit`; 404 when off (#fairness-analytics)", async () => {
+    const app = createApp();
+    const env = createTestEnv({ LOOPOVER_FAIRNESS_ANALYTICS: "true" });
+    await env.DB.prepare(
+      `INSERT INTO pull_requests (id, repo_full_name, number, title, state, author_login) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind("pr-1", "owner/repo", 1, "pr", "open", "octocat")
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES (?, ?, ?, 'gate_decision', 'merge', 'gittensory-native', ?)`,
+    )
+      .bind("gd-1", "owner/repo", "owner/repo#1", new Date().toISOString())
+      .run();
+    const headers = { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" };
+
+    const res = await app.request("/v1/internal/jobs/backfill-contributor-gate-history/run", { method: "POST", headers, body: JSON.stringify({ limit: 10 }) }, env);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ scanned: 1, inserted: 1, skippedNoAuthor: 0, hasMore: false });
+
+    const offEnv = createTestEnv();
+    const offHeaders = { authorization: `Bearer ${offEnv.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" };
+    expect((await app.request("/v1/internal/jobs/backfill-contributor-gate-history/run", { method: "POST", headers: offHeaders, body: "{}" }, offEnv)).status).toBe(404);
+  });
+
   it("covers live app auth, validation, and internal job queue edge routes", async () => {
     const app = createApp();
     const sent: Array<{ message: unknown; options?: unknown }> = [];

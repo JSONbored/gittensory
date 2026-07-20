@@ -140,6 +140,10 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     // (Partial<Env> alone leaves it optional under exactOptionalPropertyTypes, which Env's required field
     // rejects). Tests exercising the experimental gittensor plugin override it directly.
     LOOPOVER_EXPERIMENTAL_GITTENSOR: "false",
+    // Default OFF, matching wrangler.jsonc, for the same exactOptionalPropertyTypes reason as
+    // LOOPOVER_EXPERIMENTAL_GITTENSOR above. Tests exercising the fairness-analytics internal routes override
+    // it directly.
+    LOOPOVER_FAIRNESS_ANALYTICS: "false",
     ...overrides,
   };
 }

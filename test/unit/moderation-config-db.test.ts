@@ -4,6 +4,7 @@ import {
   getGlobalModerationConfig,
   getRepositorySettings,
   hasModerationViolationForTarget,
+  listModerationViolationsForActor,
   recordModerationViolation,
   upsertGlobalModerationConfig,
   upsertRepositorySettings,
@@ -186,6 +187,62 @@ describe("moderation violation ledger (#selfhost-mod-engine)", () => {
       expect(await hasModerationViolationForTarget(env, "farmer99", MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, "owner/repo#42")).toBe(false);
       await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, actor: "farmer99", targetKey: "owner/repo#42", repoFullName: "owner/repo", ruleReason: "cap" });
       expect(await hasModerationViolationForTarget(env, "farmer99", MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, "owner/repo#42")).toBe(true);
+    });
+  });
+
+  describe("listModerationViolationsForActor (#fairness-analytics)", () => {
+    it("returns every violation row for the actor, newest first, with repoFullName recovered from metadata_json", async () => {
+      const env = createTestEnv();
+      await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, actor: "farmer99", targetKey: "owner/repo#1", repoFullName: "owner/repo", ruleReason: "cap" });
+      await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.blacklist, actor: "farmer99", targetKey: "owner/repo#2", repoFullName: "owner/repo", ruleReason: "blacklist" });
+      await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.review_nag, actor: "someone-else", targetKey: "owner/repo#3", repoFullName: "owner/repo", ruleReason: "nag" });
+
+      const rows = await listModerationViolationsForActor(env, "farmer99", Object.values(MODERATION_VIOLATION_EVENT_TYPE));
+      expect(rows).toHaveLength(2); // only farmer99's rows
+      expect(rows.every((r) => r.repoFullName === "owner/repo")).toBe(true);
+      expect(new Set(rows.map((r) => r.eventType))).toEqual(new Set([MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, MODERATION_VIOLATION_EVENT_TYPE.blacklist]));
+    });
+
+    it("scopes by eventTypes -- omitting a rule type from the list excludes its violations", async () => {
+      const env = createTestEnv();
+      await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.contributor_cap, actor: "farmer99", targetKey: "owner/repo#1", repoFullName: "owner/repo", ruleReason: "cap" });
+      await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.blacklist, actor: "farmer99", targetKey: "owner/repo#2", repoFullName: "owner/repo", ruleReason: "blacklist" });
+
+      const rows = await listModerationViolationsForActor(env, "farmer99", [MODERATION_VIOLATION_EVENT_TYPE.contributor_cap]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.eventType).toBe(MODERATION_VIOLATION_EVENT_TYPE.contributor_cap);
+    });
+
+    it("honors an optional sinceIso lower bound, matching countModerationViolationsForActor's own decay window", async () => {
+      const env = createTestEnv();
+      await recordModerationViolation(env, { eventType: MODERATION_VIOLATION_EVENT_TYPE.blacklist, actor: "farmer99", targetKey: "owner/repo#1", repoFullName: "owner/repo", ruleReason: "old" });
+      const futureIso = new Date(Date.now() + 60_000).toISOString();
+
+      const rows = await listModerationViolationsForActor(env, "farmer99", [MODERATION_VIOLATION_EVENT_TYPE.blacklist], futureIso);
+      expect(rows).toEqual([]);
+    });
+
+    it("returns [] for an actor with no violations", async () => {
+      const env = createTestEnv();
+      expect(await listModerationViolationsForActor(env, "nobody", Object.values(MODERATION_VIOLATION_EVENT_TYPE))).toEqual([]);
+    });
+
+    it("recovers repoFullName as '' (never throws) when metadata_json is malformed", async () => {
+      const env = createTestEnv();
+      await env.DB.prepare(`INSERT INTO audit_events (id, event_type, actor, outcome, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind("malformed-1", MODERATION_VIOLATION_EVENT_TYPE.blacklist, "farmer99", "completed", "not-json", new Date().toISOString())
+        .run();
+      const rows = await listModerationViolationsForActor(env, "farmer99", [MODERATION_VIOLATION_EVENT_TYPE.blacklist]);
+      expect(rows).toEqual([{ eventType: MODERATION_VIOLATION_EVENT_TYPE.blacklist, repoFullName: "", targetKey: null, detail: null, createdAt: expect.any(String) }]);
+    });
+
+    it("recovers repoFullName as '' when metadata_json is valid JSON but repoFullName is missing or non-string", async () => {
+      const env = createTestEnv();
+      await env.DB.prepare(`INSERT INTO audit_events (id, event_type, actor, outcome, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind("no-repo-1", MODERATION_VIOLATION_EVENT_TYPE.blacklist, "farmer99", "completed", JSON.stringify({ repoFullName: 42 }), new Date().toISOString())
+        .run();
+      const rows = await listModerationViolationsForActor(env, "farmer99", [MODERATION_VIOLATION_EVENT_TYPE.blacklist]);
+      expect(rows[0]!.repoFullName).toBe("");
     });
   });
 });

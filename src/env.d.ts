@@ -528,6 +528,13 @@ declare global {
      *  the actual COMPARISON vs reviewbot's authoritative decisions needs reviewbot's rows in the SAME table,
      *  written by the deploy-time dual-run shadow step (out of scope here). See src/review/parity-wire.ts. */
     LOOPOVER_REVIEW_PARITY_AUDIT?: string;
+    /** Contributor trust profiles (#fairness-analytics): when truthy, serves the internal-only, bearer-gated
+     *  per-contributor fairness/accuracy analytics (GET /v1/internal/fairness/contributors[/:login], POST
+     *  .../jobs/backfill-contributor-gate-history/run) -- composes submitter_stats, moderation-violation
+     *  history, and contributor_gate_history (itself populated only when LOOPOVER_REVIEW_PARITY_AUDIT is on or
+     *  the instance is self-hosted). Default OFF — the endpoints 404. NEVER exposed publicly, see
+     *  src/review/contributor-trust-profile.ts's design note. */
+    LOOPOVER_FAIRNESS_ANALYTICS?: string;
     /** Convergence (cutover): comma-separated allowlist of repo full-names ("owner/repo") that may run the
      *  PER-PR converged review features (safety defang + secret-leak, grounding, RAG, reputation AI-skip/record,
      *  unified comment). A feature activates for a repo ONLY IF its existing global flag is ON AND the repo is

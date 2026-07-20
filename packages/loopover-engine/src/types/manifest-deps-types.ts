@@ -589,6 +589,12 @@ export type RepositorySettings = {
   /** Moderation-rules engine: per-repo override of the label applied at >= the ban threshold. `undefined` ⇒
    *  the global config's `bannedLabel` (itself defaulting to `"mod:banned"`). */
   moderationBannedLabel?: string | undefined;
+  /** Contributor trust profiles (#fairness-analytics): whether THIS repo's gate decisions and moderation
+   *  history participate in cross-repo contributor fairness/accuracy analytics. `"inherit"` (the default)
+   *  participates; `"off"` excludes this repo's rows from every aggregation; `"enabled"` is equivalent to
+   *  `"inherit"`, kept for symmetry with moderationGateMode's tri-state shape. Always populated by the DB
+   *  layer; optional so existing settings fixtures/callers need not be touched. */
+  fairnessAnalyticsMode?: "inherit" | "off" | "enabled" | undefined;
   /** Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN
    *  PR to draft while loopover has an ACTIVE review pass running against it is dodging the one-shot
    *  review process. `"off"` (the default) disables detection entirely; `"close"` reopens (if needed) and

@@ -189,6 +189,12 @@
     // Default OFF — flag-OFF records nothing (no D1 write, the review path is byte-identical) and the endpoint
     // 404s. The cross-system comparison vs reviewbot's authoritative rows is a deploy-time dual-run step.
     "LOOPOVER_REVIEW_PARITY_AUDIT": "false",
+    // Contributor trust profiles (#fairness-analytics): internal-only per-contributor fairness/accuracy analytics
+    // (GET /v1/internal/fairness/contributors[/:login], POST .../jobs/backfill-contributor-gate-history/run) --
+    // composes submitter_stats, moderation-violation history, and contributor_gate_history (which itself needs
+    // LOOPOVER_REVIEW_PARITY_AUDIT or self-hosting to be populated). Default OFF — the endpoints 404 and the
+    // deploy is byte-identical. NEVER exposed publicly, see src/review/contributor-trust-profile.ts.
+    "LOOPOVER_FAIRNESS_ANALYTICS": "false",
     // Convergence (cutover): comma-separated allowlist of repo full-names ("owner/repo") that may run the
     // PER-PR converged review features (safety, grounding, RAG, reputation, unified comment). A feature
     // activates for a repo ONLY when its global flag above is ON AND the repo is listed here — so the cutover

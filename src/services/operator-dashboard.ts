@@ -33,6 +33,7 @@ import type {
 import { computeFleetAnalytics, getFleetHealthSummary, type FleetAnalytics, type FleetHealthSummary } from "../orb/analytics";
 import { computeAgentHealth, computeCalibration, type AgentHealth, type Calibration } from "../review/ops";
 import { computeGateEval, type GateEvalReport } from "../review/parity";
+import { computeContributorGateEval, contributorFairnessFlags } from "../review/contributor-gate-eval";
 import { computeCycleTimeAggregate, computeFindingAcceptance, type CycleTimeAggregate } from "../review/stats";
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
@@ -136,6 +137,7 @@ export async function buildOperatorDashboardPayload(
     recommendationQuality,
     fleetMetrics,
     gateEval,
+    contributorGateEval,
     cycleTime,
     calibration,
     agentHealth,
@@ -163,6 +165,8 @@ export async function buildOperatorDashboardPayload(
     computeFleetAnalytics(env, { windowDays: GATE_ANALYTICS_WINDOW_DAYS }),
     // #2191: reuse the existing eval (no new compute); it fails safe to an empty report on any read error.
     computeGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
+    // #fairness-analytics: per-contributor gate accuracy, same window; fails safe to an empty report.
+    computeContributorGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     // #2194: cycle-time percentiles from the stats feed; fails safe to an empty aggregate.
     computeCycleTimeAggregate(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     computeCalibration(env, operatorAgentConfig(env)),
@@ -194,6 +198,8 @@ export async function buildOperatorDashboardPayload(
     activeSessions,
     digestSubscriptions,
   });
+  // #fairness-analytics: pure fold over the already-fetched eval rows, no extra I/O.
+  const contributorFairnessFlagCount = contributorFairnessFlags(contributorGateEval.rows).length;
   const installedRepos = repositories.filter((repo: RepositoryRecord) => repo.isInstalled).length;
   const registeredRepos = repositories.filter((repo: RepositoryRecord) => repo.isRegistered).length;
   // #1967: map FindingAcceptanceAggregate's field names onto the AcceptanceRateCard's expected shape.
@@ -255,6 +261,14 @@ export async function buildOperatorDashboardPayload(
         label: "Fleet gaming-pattern flags",
         value: String(fleetMetrics.gamingPatternFlags.length),
         delta: fleetMetrics.gamingPatternFlags.length > 0 ? `${fleetMetrics.gamingPatternFlags.map((f) => f.instanceId).join(", ")}` : "no gaming pattern detected",
+      },
+      {
+        // #fairness-analytics: count only, same privacy posture as the gaming-pattern-flags tile above but
+        // stricter -- individual logins are never surfaced here, even to the operator; drill into a specific
+        // contributor via GET /v1/internal/fairness/contributors/:login instead.
+        label: "Contributor fairness flags",
+        value: String(contributorFairnessFlagCount),
+        delta: contributorFairnessFlagCount > 0 ? `${contributorGateEval.rows.length} contributor(s) evaluated` : "no outliers detected",
       },
     ],
     noiseReduction: [
