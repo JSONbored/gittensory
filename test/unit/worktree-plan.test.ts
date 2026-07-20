@@ -41,6 +41,24 @@ describe("planWorktree (#4269)", () => {
   it("rejects an attempt id that sanitizes to nothing", () => {
     expect(() => planWorktree({ repoPath: "/repo", attemptId: "  ---  " })).toThrow(/invalid_attempt_id/);
   });
+
+  it("REGRESSION (#7528): re-trims after truncation so a `.` landing on the 64-char boundary is not left trailing", () => {
+    // Slug is 63 'a's + '.' + 10 'b's (all survive the character class). Slicing to 64 keeps 63 'a's + '.',
+    // which would end in '.' -- a ref git rejects (`fatal: invalid reference`) -- unless we re-trim after slicing.
+    const attemptId = `${"a".repeat(63)}.${"b".repeat(10)}`;
+    const plan = planWorktree({ repoPath: "/repo", attemptId });
+    expect(plan.branchName).toBe(`${WORKTREE_BRANCH_PREFIX}${"a".repeat(63)}`);
+    expect(plan.branchName.endsWith(".")).toBe(false);
+    expect(plan.branchName.endsWith("-")).toBe(false);
+  });
+
+  it("REGRESSION (#7528): a trailing `-` landing exactly on the boundary is likewise re-trimmed", () => {
+    // Same boundary case with '-' rather than '.', confirming both separators are handled post-truncation.
+    const attemptId = `${"a".repeat(63)}-${"b".repeat(10)}`;
+    const plan = planWorktree({ repoPath: "/repo", attemptId });
+    expect(plan.branchName).toBe(`${WORKTREE_BRANCH_PREFIX}${"a".repeat(63)}`);
+    expect(plan.branchName.endsWith("-")).toBe(false);
+  });
 });
 
 describe("addWorktree", () => {

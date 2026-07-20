@@ -42,7 +42,12 @@ function slugifyAttemptId(attemptId: string): string {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "");
   if (!slug) throw new Error("invalid_attempt_id");
-  return slug.slice(0, MAX_SLUG_LENGTH);
+  // Re-trim the TRAILING separators AFTER truncation: `.` survives the character-class replace and is a
+  // valid interior char, so slicing to MAX_SLUG_LENGTH can leave a trailing `.`/`-` that the pre-truncation
+  // trim never saw -- git rejects a ref ending in `.` (#7528). Only the trailing edge needs re-trimming: the
+  // pre-truncation trim already removed any leading separators, and slice(0, n) never introduces a new leading
+  // one, so the truncated slug always keeps its non-separator first char (never empties).
+  return slug.slice(0, MAX_SLUG_LENGTH).replace(/[-.]+$/g, "");
 }
 
 /**
