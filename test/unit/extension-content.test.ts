@@ -3,9 +3,17 @@ import { Script, createContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 const contentScript = readFileSync("apps/loopover-extension/content.js", "utf8");
+const manifest = JSON.parse(readFileSync("apps/loopover-extension/manifest.json", "utf8")) as {
+  content_scripts: Array<{ matches: string[] }>;
+};
 
 describe("extension content script", () => {
-  it("detects GitHub pull request and issue routes while only mounting pull overlays", () => {
+  it("declares content-script matches for pull pages only (#7462)", () => {
+    expect(manifest.content_scripts[0]?.matches).toEqual(["https://github.com/*/*/pull/*"]);
+    expect(manifest.content_scripts[0]?.matches.join("\n")).not.toContain("issues");
+  });
+
+  it("detects GitHub pull request routes and treats issue pages as out of scope", () => {
     const internals = loadContentInternals();
 
     expect(internals.matchGitHubPageTarget("/JSONbored/loopover/pull/146")).toEqual({
@@ -14,12 +22,8 @@ describe("extension content script", () => {
       repo: "loopover",
       pullNumber: 146,
     });
-    expect(internals.matchGitHubPageTarget("/JSONbored/loopover/issues/145")).toEqual({
-      kind: "issue",
-      owner: "JSONbored",
-      repo: "loopover",
-      issueNumber: 145,
-    });
+    // Issue pages are out of scope — no kind:"issue" classification, and no match.
+    expect(internals.matchGitHubPageTarget("/JSONbored/loopover/issues/145")).toBeNull();
     expect(internals.matchGitHubPageTarget("/JSONbored/loopover/pulls")).toBeNull();
     expect(internals.matchPullRequestTarget("/JSONbored/loopover/pull/146")).toEqual({
       owner: "JSONbored",
@@ -91,7 +95,7 @@ function loadContentInternals() {
   return vmContext.__loopoverContentInternals as {
     matchGitHubPageTarget: (
       pathname: string,
-    ) => { kind: "pull_request"; owner: string; repo: string; pullNumber: number } | { kind: "issue"; owner: string; repo: string; issueNumber: number } | null;
+    ) => { kind: "pull_request"; owner: string; repo: string; pullNumber: number } | null;
     matchPullRequestTarget: (pathname: string) => { owner: string; repo: string; pullNumber: number } | null;
     renderPullContext: (payload: unknown) => string;
   };

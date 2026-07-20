@@ -1,20 +1,21 @@
 const target = matchGitHubPageTarget(location.pathname);
 
-if (target?.kind === "pull_request") {
+if (target) {
   mountOverlay(target);
 }
 
+// #7462: pull-request pages only — issue classification was dead (manifest matched issues/*
+// but nothing consumed kind:"issue", and there is no issue-context backend route).
 function matchGitHubPageTarget(pathname) {
-  const match = String(pathname ?? "").match(/^\/([^/]+)\/([^/]+)\/(pull|issues)\/(\d+)(?:\/|$)/);
+  const match = String(pathname ?? "").match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/);
   if (!match) return null;
-  const [, owner, repo, surface, number] = match;
-  if (surface === "pull") return { kind: "pull_request", owner, repo, pullNumber: Number(number) };
-  return { kind: "issue", owner, repo, issueNumber: Number(number) };
+  const [, owner, repo, number] = match;
+  return { kind: "pull_request", owner, repo, pullNumber: Number(number) };
 }
 
 function matchPullRequestTarget(pathname) {
   const target = matchGitHubPageTarget(pathname);
-  if (target?.kind !== "pull_request") return null;
+  if (!target) return null;
   return { owner: target.owner, repo: target.repo, pullNumber: target.pullNumber };
 }
 
