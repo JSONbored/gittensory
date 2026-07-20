@@ -9,6 +9,7 @@ import { getApiOrigin } from "@/lib/api/origin";
 import { useApiResource } from "@/lib/api/use-api-resource";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { splitInlineMarkup } from "@/components/site/app-panels/commands-panel-model";
 
 type CommandSample = {
   id: string;
@@ -268,7 +269,8 @@ function BotReply({ boundary, body }: { boundary: CommandSample["boundary"]; bod
 }
 
 function renderInline(line: string) {
-  const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`|_[^_]+_)/g).filter(Boolean);
+  // Tokenizer (incl. the #7531 intraword-underscore fix) lives in commands-panel-model.ts so it's unit-testable.
+  const parts = splitInlineMarkup(line);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**"))
       return <strong key={index}>{part.slice(2, -2)}</strong>;
