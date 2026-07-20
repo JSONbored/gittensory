@@ -1563,7 +1563,7 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
     }
   });
 
-  it("does not attempt an after-GIF when there is no preview URL yet (afterPage is empty)", async () => {
+  it("falls back to the loading placeholder for the after-GIF when there is no preview URL yet (afterPage is empty)", async () => {
     const gifAvailableSpy = vi.spyOn(scrollGifModule, "isScrollGifAvailable").mockReturnValue(true);
     const captureScrollSpy = vi.spyOn(shotModule, "captureScrollFrames").mockResolvedValue({
       frames: [new Uint8Array([1, 2, 3])],
@@ -1582,7 +1582,36 @@ describe("buildCapture scroll-GIF wiring (#3612)", () => {
       );
       expect(captureScrollSpy).toHaveBeenCalledTimes(1); // before only
       expect(result.routes[0]?.beforeGifUrl).toContain("/loopover/shot?key=");
-      expect(result.routes[0]?.afterGifUrl).toBeUndefined();
+      // #fairness-analytics follow-up: mirrors the screenshot slot's own placeholder fallback instead of
+      // leaving this undefined, so buildScrollPreviewCollapsible can distinguish "still building" from
+      // "GIF capture isn't configured for this repo at all".
+      expect(result.routes[0]?.afterGifUrl).toBe("https://worker.example/loopover/shot?placeholder=loading");
+    } finally {
+      gifAvailableSpy.mockRestore();
+      captureScrollSpy.mockRestore();
+      encodeSpy.mockRestore();
+    }
+  });
+
+  it("falls back to the FAILED placeholder for the after-GIF when the preview deploy already failed", async () => {
+    const gifAvailableSpy = vi.spyOn(scrollGifModule, "isScrollGifAvailable").mockReturnValue(true);
+    const captureScrollSpy = vi.spyOn(shotModule, "captureScrollFrames").mockResolvedValue({
+      frames: [new Uint8Array([1, 2, 3])],
+      authWalled: false,
+    });
+    const encodeSpy = vi.spyOn(scrollGifModule, "encodeScrollGif").mockResolvedValue(new Uint8Array([7, 8, 9]));
+    try {
+      const env = createTestEnv({ PUBLIC_API_ORIGIN: "https://worker.example", PUBLIC_SITE_ORIGIN: "https://prod.example.com", REVIEW_AUDIT: memoryReviewAudit() });
+      const result = await buildCapture(
+        env,
+        "installation-token",
+        { repoFullName: "owner/repo", prNumber: 39, previewFailed: true }, // deploy already failed -> afterPage is ""
+        ["apps/loopover-ui/src/routes/app.index.tsx"],
+        undefined,
+        { gif: true },
+      );
+      expect(captureScrollSpy).toHaveBeenCalledTimes(1); // before only
+      expect(result.routes[0]?.afterGifUrl).toBe("https://worker.example/loopover/shot?placeholder=failed");
     } finally {
       gifAvailableSpy.mockRestore();
       captureScrollSpy.mockRestore();

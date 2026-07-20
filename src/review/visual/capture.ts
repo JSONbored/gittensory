@@ -813,10 +813,18 @@ export async function buildCapture(
         uploadDiffImage(env, target, path, "desktop", desktopDiff, theme),
         uploadDiffImage(env, target, path, "mobile", mobileDiff, theme),
       ]);
+      // #fairness-analytics follow-up: when there's no live preview page, fall back to the SAME
+      // loading/failed placeholder the screenshot slot uses (afterPlaceholder) instead of leaving this
+      // undefined -- otherwise buildScrollPreviewCollapsible's cell() renders a bare "—", indistinguishable
+      // from "GIF capture isn't enabled for this repo at all". actions_fallback never produces a GIF (only
+      // static PNGs — see visual-capture-fallback.yml), so there's no cached fallback artifact to look up
+      // here the way resolveFallbackAfterShot does for the screenshot slot.
       const [beforeGifUrl, afterGifUrl] = gifWanted
         ? await Promise.all([
             captureScrollGif(env, target, beforePage, "before", "desktop", DESKTOP_VIEWPORT, theme, themeStorageKey),
-            afterPage ? captureScrollGif(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, theme, themeStorageKey) : Promise.resolve<string | undefined>(undefined),
+            afterPage
+              ? captureScrollGif(env, target, afterPage, "after", "desktop", DESKTOP_VIEWPORT, theme, themeStorageKey)
+              : Promise.resolve<string | undefined>(afterPlaceholder),
           ])
         : [undefined, undefined];
       captureRoutes.push({
