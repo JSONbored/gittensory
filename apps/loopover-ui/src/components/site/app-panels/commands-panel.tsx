@@ -268,7 +268,13 @@ function BotReply({ boundary, body }: { boundary: CommandSample["boundary"]; bod
 }
 
 function renderInline(line: string) {
-  const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`|_[^_]+_)/g).filter(Boolean);
+  // The `_..._` italic alternative is anchored to non-word boundaries on BOTH sides. Without the
+  // lookarounds it matches any span between two underscores anywhere in a line, so an identifier
+  // carrying more than one -- `LOOPOVER_ENABLE_PAGERDUTY`, `repo_full_name`, and the rest of this
+  // product's env-var/snake_case vocabulary -- gets split mid-token and rendered as <em>, silently
+  // eating the underscores. Real italics (`_word_`, delimiters sitting against whitespace or the
+  // line edge) still match.
+  const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`|(?<!\w)_[^_]+_(?!\w))/g).filter(Boolean);
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**"))
       return <strong key={index}>{part.slice(2, -2)}</strong>;
