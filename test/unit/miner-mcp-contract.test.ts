@@ -294,6 +294,11 @@ describe("contract assertions catch violations (canary)", () => {
     expect(() => assertNoSecretShapedValue(withText(JSON.stringify({ token: PLANTED_SECRET })))).toThrow();
   });
 
+  it("assertNoSecretShapedValue also throws on a newly-widened shape (#7433: aws_access_key)", () => {
+    const awsShapedKey = "AKIA" + "ABCDEFGHIJKLMNOP";
+    expect(() => assertNoSecretShapedValue(withText(JSON.stringify({ token: awsShapedKey })))).toThrow();
+  });
+
   it("assertNoExcludedColumn throws when an excluded column is present", () => {
     expect(() => assertNoExcludedColumn(withText(JSON.stringify({ payload_json: "x" })), ["payload_json"])).toThrow();
   });

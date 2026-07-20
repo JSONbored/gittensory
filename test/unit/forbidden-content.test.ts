@@ -81,3 +81,46 @@ describe("FORBIDDEN_CONTENT is the single source of truth (#6290)", () => {
     expect(FORBIDDEN_CONTENT.test(SECRET_SHAPED_PROBE)).toBe(true);
   });
 });
+
+// #7433: FORBIDDEN_CONTENT only matched 4 shapes (private-key block, github_pat_, gh[pousr]_, gts_, and a
+// generic TOKEN/SECRET/PRIVATE_KEY= assignment) even though this same repo already ships a materially larger,
+// individually-verified-precise set of concrete secret-format patterns in src/review/secret-patterns.ts's
+// SECRET_PATTERNS. Each fixture below is assembled from fragments (never a contiguous credential-shaped literal
+// in this file's own source) and uses the same fake bodies the repo's own secrets-scan.test.ts and
+// content-lane-security-scan.test.ts already use for these exact formats.
+describe("FORBIDDEN_CONTENT matches the repo's other known-precise secret formats (#7433)", () => {
+  it.each([
+    ["aws_access_key", "AKIA" + "ABCDEFGHIJKLMNOP"],
+    ["slack_token", "xoxb-" + "123456789012-ABCDEFabcdef"],
+    ["google_api_key", "AIza" + "SyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"],
+    ["gitlab_token", "glpat-" + "aBcDeFgHiJkLmNoPqRsT"],
+    ["npm_token", "npm_" + "a".repeat(36)],
+    ["stripe_secret_key", "sk_live_" + "a".repeat(24)],
+    ["sendgrid_key", "SG." + "a".repeat(22) + "." + "b".repeat(43)],
+    ["huggingface_token", "hf_" + "a".repeat(34)],
+    ["voyage_api_key", "pa-" + "aK9xQ2mZw7Ln4Rv8Pt3B"],
+    ["firecrawl_api_key", "fc-" + "aK9xQ2mZw7Ln4Rv8"],
+    ["openai_api_key", "sk-" + "a".repeat(20) + "T3BlbkFJ" + "b".repeat(20)],
+    ["anthropic_api_key", "sk-ant-api03-" + "a".repeat(93) + "AA"],
+  ])("matches a %s-shaped value", (_kind, fixture) => {
+    expect(FORBIDDEN_CONTENT.test(fixture)).toBe(true);
+  });
+
+  it("still matches the 4 pre-existing formats unchanged", () => {
+    expect(FORBIDDEN_CONTENT.test("-----BEGIN RSA PRIVATE KEY-----")).toBe(true);
+    expect(FORBIDDEN_CONTENT.test("github_pat_" + "a".repeat(20))).toBe(true);
+    expect(FORBIDDEN_CONTENT.test("ghp_" + "a".repeat(20))).toBe(true);
+    expect(FORBIDDEN_CONTENT.test("gts_" + "0123456789abcdef".repeat(4))).toBe(true);
+    expect(FORBIDDEN_CONTENT.test(SECRET_SHAPED_PROBE)).toBe(true);
+  });
+
+  // jwt/seed_or_mnemonic/bittensor_key were deliberately left out of this widening (see the code comment on
+  // FORBIDDEN_CONTENT) -- pinned here so a future edit can't silently reintroduce them without this test
+  // flagging the scope change.
+  it("does NOT match jwt/seed_or_mnemonic/bittensor_key shapes (deliberately out of scope)", () => {
+    const jwtShaped = "eyJ" + "a".repeat(10) + "." + "b".repeat(10) + "." + "c".repeat(10);
+    expect(FORBIDDEN_CONTENT.test(jwtShaped)).toBe(false);
+    expect(FORBIDDEN_CONTENT.test("our seed phrase backup process")).toBe(false);
+    expect(FORBIDDEN_CONTENT.test("hotkey = ss58addresshere")).toBe(false);
+  });
+});
