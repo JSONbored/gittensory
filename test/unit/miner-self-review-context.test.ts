@@ -143,6 +143,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       contributorLogin: "miner-bot",
       linkedIssues: [7],
       fetchImpl: fetchImpl as never,
+      loopoverAuth: null,
     });
 
     expect(result.repo).toEqual({
@@ -225,7 +226,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { linkedIssues: [7], fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { linkedIssues: [7], fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.inDuplicateCluster).toBe(true);
   });
 
@@ -238,7 +239,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.issueQuality?.issues).toHaveLength(1);
     expect(result.issueQuality?.issues[0]).toMatchObject({ number: 7, status: expect.any(String) });
     expect(result.issueQuality?.repoFullName).toBe("acme/widgets");
@@ -260,7 +261,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.issues[0]?.linkedPrs).toEqual([]);
   });
 
@@ -273,7 +274,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.issues[0]?.linkedPrs).toEqual([501]);
   });
   it("returns false for inDuplicateCluster when no linkedIssues are supplied", async () => {
@@ -285,7 +286,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.inDuplicateCluster).toBe(false);
   });
 
@@ -298,7 +299,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.issues.map((issue) => issue.number)).toEqual([7]);
   });
 
@@ -318,7 +319,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, perPage: 2 });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, perPage: 2, loopoverAuth: null });
     expect(result.issues.map((issue) => issue.number)).toEqual([11, 12, 21, 22, 99]);
     expect(issuePage).toBe(3);
   });
@@ -337,7 +338,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, perPage: 1 });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, perPage: 1, loopoverAuth: null });
     expect(result.issues.map((issue) => issue.number)).toEqual([7]);
   });
 
@@ -350,7 +351,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.repo).toBeNull();
   });
 
@@ -368,7 +369,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(requestedPaths).toEqual([
       "https://raw.githubusercontent.com/acme/widgets/HEAD/.loopover.yml",
       "https://raw.githubusercontent.com/acme/widgets/HEAD/.github/loopover.yml",
@@ -392,7 +393,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(manifestRequests).toBe(4);
     expect(result.manifest.present).toBe(false);
     expect(result.manifest.warnings).toEqual([]);
@@ -410,7 +411,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(cancelCount).toBe(4);
     expect(result.manifest.present).toBe(false);
   });
@@ -429,7 +430,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(requestedPaths).toHaveLength(1);
     expect(result.manifest.gate?.duplicates).toBe("advisory");
   });
@@ -448,7 +449,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.confirmedContributor).toBe(false);
     expect(minersCalled).toBe(false);
   });
@@ -461,7 +462,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
       "raw.githubusercontent.com": () => jsonResponse(null, 404),
     });
-    expect((await fetchSelfReviewContext("acme/widgets", { contributorLogin: "Miner-Bot", fetchImpl: miss as never })).confirmedContributor).toBe(false);
+    expect((await fetchSelfReviewContext("acme/widgets", { contributorLogin: "Miner-Bot", fetchImpl: miss as never, loopoverAuth: null })).confirmedContributor).toBe(false);
 
     const notOk = routedFetch({
       "api.gittensor.io/miners": () => jsonResponse(null, 500),
@@ -470,7 +471,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
       "raw.githubusercontent.com": () => jsonResponse(null, 404),
     });
-    expect((await fetchSelfReviewContext("acme/widgets", { contributorLogin: "miner-bot", fetchImpl: notOk as never })).confirmedContributor).toBe(false);
+    expect((await fetchSelfReviewContext("acme/widgets", { contributorLogin: "miner-bot", fetchImpl: notOk as never, loopoverAuth: null })).confirmedContributor).toBe(false);
 
     const throwing = async (url: string) => {
       if (url.includes("api.gittensor.io/miners")) throw new Error("network down");
@@ -480,7 +481,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       if (url.includes("raw.githubusercontent.com")) return jsonResponse(null, 404);
       return jsonResponse(null, 404);
     };
-    expect((await fetchSelfReviewContext("acme/widgets", { contributorLogin: "miner-bot", fetchImpl: throwing as never })).confirmedContributor).toBe(false);
+    expect((await fetchSelfReviewContext("acme/widgets", { contributorLogin: "miner-bot", fetchImpl: throwing as never, loopoverAuth: null })).confirmedContributor).toBe(false);
   });
 
   it("matches a confirmed contributor case-insensitively", async () => {
@@ -491,7 +492,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
       "raw.githubusercontent.com": () => jsonResponse(null, 404),
     });
-    const result = await fetchSelfReviewContext("acme/widgets", { contributorLogin: "miner-bot", fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { contributorLogin: "miner-bot", fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.confirmedContributor).toBe(true);
   });
 
@@ -510,7 +511,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.pullRequests[0]?.linkedIssues).toEqual([7]);
   });
 
@@ -523,7 +524,7 @@ describe("fetchSelfReviewContext (#5145)", () => {
       "api.gittensor.io/miners": () => jsonResponse([]),
     });
 
-    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.pullRequests.find((pr) => pr.number === 51)?.mergeableState).toBe("dirty");
     expect(result.pullRequests.find((pr) => pr.number === 52)?.mergeableState).toBeNull();
   });
@@ -563,7 +564,11 @@ describe("fetchSelfReviewContext (#5145)", () => {
         if (url.includes("api.gittensor.io/miners")) return jsonResponse([]);
         return jsonResponse(null, 404);
       };
-      await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never });
+      // loopoverAuth: null forces the ORB live-gate-thresholds probe off (#6487) -- without it, a real
+      // loopover-mcp session recorded on disk (e.g. from `loopover-mcp login` on a contributor's machine)
+      // would fire an extra concurrent fetch whose "Bearer <session token>" header could race with and
+      // overwrite capturedAuth, since its URL also matches this test's own "/repos/acme/widgets" routing.
+      await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
       expect(capturedAuth).toBe("Bearer env-token");
     } finally {
       if (original === undefined) delete process.env.GITHUB_TOKEN;
@@ -584,7 +589,9 @@ describe("fetchSelfReviewContext (#5145)", () => {
       return jsonResponse(null, 404);
     };
 
-    await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, contributorLogin: "miner-bot" });
+    // loopoverAuth: null keeps this test's call count and 10s-default assertion honest -- see the note on
+    // the "defaults GITHUB_TOKEN" test above for why an unforced probe is a real-environment hazard here too.
+    await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, contributorLogin: "miner-bot", loopoverAuth: null });
 
     // repo + issues + pulls (githubGetJson) + 4 manifest candidates + 1 contributor lookup = 8 calls, every one bounded.
     expect(capturedSignals.length).toBeGreaterThanOrEqual(7);

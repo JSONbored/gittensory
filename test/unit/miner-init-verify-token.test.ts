@@ -9,10 +9,21 @@ const tempDirs = new Set<string>();
 function makeTempEnv() {
   const configDir = mkdtempSync(join(tmpdir(), "loopover-miner-init-"));
   tempDirs.add(configDir);
+  // Isolate from any real loopover-mcp session on disk: runInit's --verify-token path resolves a GitHub
+  // token via resolveGitHubToken (packages/loopover-miner/lib/github-token-resolution.js), which falls back
+  // to a live session-token fetch when ~/.config/loopover/config.json (or an inherited GITHUB_TOKEN) has
+  // real credentials -- a contributor machine with `loopover-mcp login` already run would otherwise make an
+  // extra fetch call and read a real token into these tests instead of the mocked one.
+  const loopoverConfigDir = mkdtempSync(join(tmpdir(), "loopover-miner-init-mcp-config-"));
+  tempDirs.add(loopoverConfigDir);
   return {
     env: {
       ...process.env,
       LOOPOVER_MINER_CONFIG_DIR: configDir,
+      LOOPOVER_CONFIG_DIR: loopoverConfigDir,
+      LOOPOVER_CONFIG_PATH: undefined,
+      XDG_CONFIG_HOME: undefined,
+      GITHUB_TOKEN: undefined,
     },
     configDir,
     dbPath: join(configDir, "laptop-state.sqlite3"),
