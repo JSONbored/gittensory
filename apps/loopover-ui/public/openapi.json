@@ -9727,6 +9727,18 @@
               "enabled"
             ],
             "description": "Per-repo participation in cross-repo contributor fairness/accuracy analytics -- 'off' excludes this repo's gate decisions and moderation history from every aggregation, independent of whether the internal fairness-analytics routes are enabled fleet-wide."
+          },
+          "issuePlanEnabled": {
+            "type": "boolean"
+          },
+          "issuePlanExtraLabels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "issuePlanMilestoneReuse": {
+            "type": "boolean"
           }
         },
         "required": [
