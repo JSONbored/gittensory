@@ -277,6 +277,83 @@ describe("fetchSelfReviewContext (#5145)", () => {
     const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
     expect(result.issues[0]?.linkedPrs).toEqual([501]);
   });
+
+  it("REGRESSION (#7527): a closing keyword separated from #N only by an inline code span is NOT a linked issue", async () => {
+    // The byte-range exclusion must NOT collapse "Fixes `x` #45" into "Fixes  #45" (the old string-replace
+    // bug spuriously linked #45); a code span sitting between the keyword and the reference breaks the link.
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () =>
+        jsonResponse([prPayload({ body: "Fixes `some code` #45 — but the keyword isn't actually adjacent." })]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.pullRequests[0]?.linkedIssues).toEqual([]);
+  });
+
+  it("REGRESSION (#7527): a genuine closing keyword whose #N is itself inside a code span still counts (only the span-internal hit is rejected, adjacency preserved)", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      // Real adjacent close plus a separate span-quoted example that must NOT double-count.
+      "/repos/acme/widgets/pulls": () => jsonResponse([prPayload({ body: "Closes #7. Example: `Fixes #999`." })]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.pullRequests[0]?.linkedIssues).toEqual([7]);
+  });
+
+  it("REGRESSION (#7527): the full-URL closing form links the issue when owner/repo matches this repo", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () =>
+        jsonResponse([
+          prPayload({
+            body: "Resolves https://github.com/acme/widgets/issues/88 and Closes https://www.github.com/acme/widgets/issues/89",
+          }),
+        ]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.pullRequests[0]?.linkedIssues).toEqual([88, 89]);
+  });
+
+  it("REGRESSION (#7527): a full-URL closing form pointing at a DIFFERENT repo does not spoof a same-repo link", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () =>
+        jsonResponse([prPayload({ body: "Closes https://github.com/other/project/issues/12" })]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    expect(result.pullRequests[0]?.linkedIssues).toEqual([]);
+  });
+
+  it("REGRESSION (#7527): bare #N and qualified owner/repo#N forms still link exactly as before", async () => {
+    const fetchImpl = routedFetch({
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () =>
+        jsonResponse([prPayload({ body: "Fixes #3, Closes acme/widgets#4, Resolves other/repo#5" })]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+      "api.gittensor.io/miners": () => jsonResponse([]),
+    });
+
+    const result = await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, loopoverAuth: null });
+    // #3 (bare) + #4 (same-repo qualified) link; #5 (different-repo qualified) does not.
+    expect(result.pullRequests[0]?.linkedIssues).toEqual([3, 4]);
+  });
   it("returns false for inDuplicateCluster when no linkedIssues are supplied", async () => {
     const fetchImpl = routedFetch({
       "/repos/acme/widgets/issues": () => jsonResponse([issuePayload()]),
