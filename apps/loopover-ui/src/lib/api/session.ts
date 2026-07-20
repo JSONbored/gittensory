@@ -128,6 +128,12 @@ export function useSession() {
     });
     if (!result.ok) {
       toast.error("Sign out failed", { description: result.message });
+      // The optimistic setSession(null)/emitSessionChanged above cleared the client session before the server
+      // confirmed the logout. A failed request means the server cookie is still valid, so re-sync from the
+      // server (the definitive source of truth) and re-broadcast — restoring the still-authenticated session
+      // instead of leaving this hook and every other useSession() consumer falsely signed out (#7533).
+      await refresh();
+      emitSessionChanged();
       return;
     }
     toast("Signed out", { description: "The browser session cookie was cleared." });
