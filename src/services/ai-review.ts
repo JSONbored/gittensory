@@ -452,7 +452,7 @@ export type ModelReview = {
 export type AiReviewDiagnostic = {
   model: string;
   attempt: number;
-  status: "parsed" | "empty_output" | "unparseable_output" | "provider_error";
+  status: "parsed" | "empty_output" | "unparseable_output" | "incoherent_diff_bail" | "provider_error";
   responseChars?: number | undefined;
   hasJsonObject?: boolean | undefined;
   error?: string | undefined;
@@ -793,6 +793,29 @@ export function parseModelReview(text: string): ModelReview | null {
   }
 }
 
+/** True when `text` is the model's DELIBERATE incoherent-diff bail — a clean, well-formed response whose
+ *  `assessment` is exactly {@link INCOHERENT_DIFF_ASSESSMENT} (the prompt instructs the model to emit this
+ *  verbatim rather than rubber-stamp a diff it cannot map to the PR head). `parseModelReview` folds it into
+ *  `null`, identical to a genuine parse failure, so a `null` review alone can't tell the two apart. Unlike an
+ *  unparseable/empty response, this is the model's confident, considered answer about THIS diff: a same-model
+ *  retry re-asks the identical question and gets the identical bail, burning the per-model retry budget for
+ *  zero additional chance of success. `runWorkersOpinion` uses it to short-circuit that model's remaining
+ *  retries — same as a CLI timeout / 429 / structural config error — and move straight to the fallback.
+ *  #7518-sentry (LOOPOVER-1P/2B/29). */
+export function isIncoherentDiffBail(text: string): boolean {
+  const jsonText = extractLastJsonObject(text);
+  if (!jsonText) return false;
+  try {
+    const obj = JSON.parse(jsonText) as Record<string, unknown>;
+    return (
+      typeof obj.assessment === "string" &&
+      obj.assessment.trim() === INCOHERENT_DIFF_ASSESSMENT
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Aggregate ceiling across ALL optional context sections combined (#3900). Each section below already
 // enforces its OWN per-section cap (FILE_CONTENT_BUDGET, MAX_CONTEXT_CHARS, MAX_PROMPT_CHARS,
 // MAX_ENRICHMENT_PROMPT_SECTION_CHARS...), but nothing previously bounded the COMBINED total: with every
@@ -1120,6 +1143,25 @@ async function runWorkersOpinion(
           return { review: parsed };
         }
         const hasJsonObject = Boolean(extractLastJsonObject(text));
+        // The model's DELIBERATE incoherent-diff bail (#7518): a clean, well-formed response that `parseModelReview`
+        // folds into `null` just like a genuine parse failure -- but unlike an unparseable response, it is the model's
+        // confident, considered answer about THIS diff. Retrying the same model re-asks the identical question and gets
+        // the identical bail, so it short-circuits that model's remaining retries (the fallback below still gets its own
+        // full budget, since a different model may map the diff fine) -- exactly like the catch block's CLI-timeout / 429
+        // / structural-config short-circuits below. Recorded under its own status so it is distinct from truly-unparseable
+        // noise in the diagnostics/Sentry trail, yet still marks the review inconclusive downstream (like unparseable).
+        if (isIncoherentDiffBail(text)) {
+          diagnostics.push({ model, attempt, status: "incoherent_diff_bail", responseChars: text.length, hasJsonObject, ...usageFields });
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              event: "ai_review_provider_incoherent_diff_bail",
+              model,
+              attempt,
+            }),
+          );
+          break;
+        }
         const trimmedText = text.trim();
         const status = trimmedText ? "unparseable_output" : "empty_output";
         diagnostics.push({ model, attempt, status, responseChars: text.length, hasJsonObject, ...usageFields });
@@ -2348,7 +2390,14 @@ export async function runLoopOverAiReview(
   if (
     reviewsForNotes.length === 0 &&
     (fallbackNotes.length > 0 ||
-      reviewDiagnostics.some((diagnostic) => diagnostic.status === "unparseable_output"))
+      reviewDiagnostics.some(
+        (diagnostic) =>
+          diagnostic.status === "unparseable_output" ||
+          // A deliberate incoherent-diff bail (#7518) is just as inconclusive as an unparseable one -- the model
+          // produced no usable verdict, it merely did so on purpose. Kept equivalent here so short-circuiting its
+          // retries (which relabels the diagnostic) doesn't silently drop the review out of the inconclusive path.
+          diagnostic.status === "incoherent_diff_bail",
+      ))
   )
     inconclusive = true;
   // Observability (#2540): the single canonical point where `inconclusive` reaches its final value for this
@@ -2511,6 +2560,7 @@ async function record(
 
 export const __aiReviewInternals = {
   parseModelReview,
+  isIncoherentDiffBail,
   parseReviewConfidence,
   parseDualAiTieBreakJudgeResponse,
   coerceAiText,

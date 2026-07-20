@@ -21,6 +21,7 @@ import { sanitizePublicComment as sanitizePublicCommentGithubCommands } from "..
 
 const {
   parseModelReview,
+  isIncoherentDiffBail,
   parseReviewConfidence,
   parseDualAiTieBreakJudgeResponse,
   coerceAiText,
@@ -104,6 +105,20 @@ function reviewJson(
         : []),
     nits: over.nits ?? ["Edge case on empty input is untested."],
     suggestions: over.suggestions ?? ["Add a unit test for the new branch."],
+  });
+}
+
+// The exact text the review prompt instructs a model to emit when it cannot map the diff to the PR head
+// (mirrors src/services/ai-review.ts's INCOHERENT_DIFF_ASSESSMENT). #7518.
+const INCOHERENT_DIFF_BAIL =
+  "Cannot review — the diff appears out of sync with the PR head.";
+// A clean, well-formed response carrying only that deliberate bail.
+function incoherentDiffBailJson(): string {
+  return JSON.stringify({
+    assessment: INCOHERENT_DIFF_BAIL,
+    blockers: [],
+    nits: [],
+    suggestions: [],
   });
 }
 
@@ -755,6 +770,24 @@ describe("runLoopOverAiReview block mode (consensus)", () => {
     expect(result.inconclusive).toBe(true); // FAIL-CLOSED: a missing second opinion holds the PR, never passes it
     expect(result.advisoryNotes).not.toBeNull(); // notes still come from the one parseable opinion
     // Observability (#2540): the single canonical increment fires once for this inconclusive review.
+    expect(await renderMetrics()).toContain('loopover_ai_review_inconclusive_total{mode="block"} 1');
+  });
+
+  it("REGRESSION (#7518): both models' deliberate incoherent-diff bail → inconclusive, recorded as incoherent_diff_bail (not unparseable)", async () => {
+    // Every model emits the deliberate bail: no usable review, so the PR must be held inconclusive (fail-closed),
+    // and the bail must keep marking the review inconclusive even though it now carries its own diagnostic status.
+    const env = envWith(async () => ({ response: incoherentDiffBailJson() }));
+    const result = await runLoopOverAiReview(env, {
+      ...baseInput,
+      mode: "block",
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.consensusDefect).toBeNull();
+    expect(result.inconclusive).toBe(true);
+    expect(result.reviewDiagnostics?.every((d) => d.status === "incoherent_diff_bail")).toBe(true);
+    // No diagnostic is mislabelled as unparseable -- the model gave a clean, deliberate answer.
+    expect(result.reviewDiagnostics?.some((d) => d.status === "unparseable_output")).toBe(false);
     expect(await renderMetrics()).toContain('loopover_ai_review_inconclusive_total{mode="block"} 1');
   });
 
@@ -2001,6 +2034,31 @@ describe("pure helpers", () => {
     );
   });
 
+  it("isIncoherentDiffBail detects ONLY the model's deliberate incoherent-diff bail, never other or malformed responses (#7518)", () => {
+    // The deliberate bail: a clean JSON object whose assessment is exactly the sentinel.
+    expect(isIncoherentDiffBail(incoherentDiffBailJson())).toBe(true);
+    // Wrapped in prose / a markdown fence -- extractLastJsonObject still resolves it.
+    expect(
+      isIncoherentDiffBail(
+        "Here is my verdict:\n```json\n" +
+          JSON.stringify({ assessment: INCOHERENT_DIFF_BAIL }) +
+          "\n```",
+      ),
+    ).toBe(true);
+    // Assessment is trimmed before comparison, so a whitespace-padded sentinel still counts.
+    expect(
+      isIncoherentDiffBail(JSON.stringify({ assessment: `  ${INCOHERENT_DIFF_BAIL}  ` })),
+    ).toBe(true);
+    // A normal, parseable review is NOT a bail.
+    expect(isIncoherentDiffBail(reviewJson())).toBe(false);
+    // A non-string assessment can't be the sentinel (guards the typeof check).
+    expect(isIncoherentDiffBail(JSON.stringify({ assessment: 42 }))).toBe(false);
+    // No JSON object at all → false, never throws.
+    expect(isIncoherentDiffBail("not json, just prose")).toBe(false);
+    // A JSON-object-looking-but-malformed payload → false (JSON.parse throws, caught).
+    expect(isIncoherentDiffBail("{ assessment: unquoted }")).toBe(false);
+  });
+
   it("parseModelReview coerces non-string/non-array fields to safe defaults", () => {
     const parsed = parseModelReview(
       '{"assessment":"ok","suggestions":"not-an-array","blockers":7,"nits":null}',
@@ -3094,6 +3152,48 @@ describe("pure helpers", () => {
     expect(isStructuralProviderConfigError(new Error("wrapped: codex_auth_not_configured: nested"))).toBe(false);
     expect(isStructuralProviderConfigError("codex_auth_not_configured: not an Error instance")).toBe(false);
     expect(isStructuralProviderConfigError(undefined)).toBe(false);
+  });
+
+  it("REGRESSION (#7518): runWorkersOpinion stops retrying a model after ONE deliberate incoherent-diff bail, but the fallback still gets its full retry budget", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let primaryAttempts = 0;
+    const run = vi.fn(async (model: string) => {
+      if (model === "fallback") return { response: reviewJson() };
+      primaryAttempts += 1;
+      return { response: incoherentDiffBailJson() };
+    });
+    const env = createTestEnv({ AI: { run } as unknown as Ai });
+    const diagnostics: AiReviewDiagnostic[] = [];
+    const parsed = await runWorkersOpinion(env, "primary", "fallback", "sys", "user", 256, diagnostics);
+    expect(parsed.review?.assessment).toContain("reasonable");
+    expect(primaryAttempts).toBe(1); // NOT 3 -- the model's own deliberate bail won't change on a same-model retry.
+    expect(run).toHaveBeenCalledTimes(2); // 1 primary (bailed) + 1 fallback (succeeded on its first try).
+    // Recorded under its own status (distinct from unparseable noise) and surfaced as a warn, never a provider error.
+    expect(diagnostics.some((d) => d.model === "primary" && d.status === "incoherent_diff_bail")).toBe(true);
+    expect(
+      warnSpy.mock.calls
+        .map((c) => c[0])
+        .some((l) => typeof l === "string" && l.includes("ai_review_provider_incoherent_diff_bail")),
+    ).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it("REGRESSION (#7518): when both models deliberately bail, runWorkersOpinion tries each ONCE and does NOT emit the misleading unparseable-exhausted error", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const run = vi.fn(async () => ({ response: incoherentDiffBailJson() }));
+    const env = createTestEnv({ AI: { run } as unknown as Ai });
+    const diagnostics: AiReviewDiagnostic[] = [];
+    const result = await runWorkersOpinion(env, "primary", "fallback", "sys", "user", 256, diagnostics);
+    expect(result).toEqual({ review: null });
+    expect(run).toHaveBeenCalledTimes(2); // each model tried once -- no wasted same-model retries (was 6 before #7518)
+    expect(diagnostics.map((d) => d.status)).toEqual(["incoherent_diff_bail", "incoherent_diff_bail"]);
+    // The bail is expected behavior, not a provider outage -- neither exhausted-error log fires.
+    const logged = logSpy.mock.calls.map((c) => c[0]);
+    expect(logged.some((l) => typeof l === "string" && l.includes("ai_review_provider_unparseable_exhausted"))).toBe(false);
+    expect(logged.some((l) => typeof l === "string" && l.includes("ai_review_provider_exhausted"))).toBe(false);
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it("runWorkersOpinion still retries a genuinely transient (non-timeout, non-429) error up to the full budget", async () => {
