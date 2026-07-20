@@ -46,7 +46,9 @@ const SAMPLE: {
 
 describe("audit feed helpers", () => {
   it("builds query paths for skipped PR audit filters", () => {
-    expect(buildSkippedPrAuditPath({ limit: 25 })).toBe("/v1/app/skipped-pr-audit?limit=25&offset=0");
+    expect(buildSkippedPrAuditPath({ limit: 25 })).toBe(
+      "/v1/app/skipped-pr-audit?limit=25&offset=0",
+    );
     expect(
       buildSkippedPrAuditPath({
         limit: 50,

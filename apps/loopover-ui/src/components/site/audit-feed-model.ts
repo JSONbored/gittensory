@@ -86,7 +86,8 @@ export function normalizeSkippedPrAuditExport(data: unknown): SkippedPrAuditExpo
   return {
     generatedAt: raw.generatedAt,
     limit: typeof raw.limit === "number" ? raw.limit : items.length,
-    offset: typeof raw.offset === "number" && Number.isFinite(raw.offset) ? Math.max(0, raw.offset) : 0,
+    offset:
+      typeof raw.offset === "number" && Number.isFinite(raw.offset) ? Math.max(0, raw.offset) : 0,
     hasMore: Boolean(raw.hasMore),
     filters: {
       repoFullName:
