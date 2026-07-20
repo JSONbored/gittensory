@@ -879,6 +879,10 @@ export const orbRelayPending = sqliteTable(
     coalesce: index("idx_orb_relay_pending_coalesce")
       .on(table.installationId, table.coalesceKey)
       .where(sql`coalesce_key IS NOT NULL`),
+    // #7430: pruneRelayPending filters by a bare created_at predicate (no installation_id), which the
+    // two installation_id-leading indexes above can't serve — this one keeps that fleet-wide 30s drain
+    // prune a range scan instead of a full table scan.
+    createdAt: index("idx_orb_relay_pending_created_at").on(table.createdAt, table.deliveryId),
   }),
 );
 
