@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as RoadmapRouteImport } from './routes/roadmap'
 import { Route as MinersRouteImport } from './routes/miners'
 import { Route as MaintainersRouteImport } from './routes/maintainers'
@@ -87,6 +88,11 @@ import { Route as AppAnalyticsRouteImport } from './routes/app.analytics'
 import { Route as ApiOpRouteImport } from './routes/api.$op'
 import { Route as ReposOwnerRepoQualityRouteImport } from './routes/repos.$owner.$repo.quality'
 
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RoadmapRoute = RoadmapRouteImport.update({
   id: '/roadmap',
   path: '/roadmap',
@@ -502,6 +508,7 @@ export interface FileRoutesByFullPath {
   '/maintainers': typeof MaintainersRoute
   '/miners': typeof MinersRoute
   '/roadmap': typeof RoadmapRoute
+  '/signup': typeof SignupRoute
   '/api/$op': typeof ApiOpRoute
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/audit': typeof AppAuditRoute
@@ -578,6 +585,7 @@ export interface FileRoutesByTo {
   '/maintainers': typeof MaintainersRoute
   '/miners': typeof MinersRoute
   '/roadmap': typeof RoadmapRoute
+  '/signup': typeof SignupRoute
   '/api/$op': typeof ApiOpRoute
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/audit': typeof AppAuditRoute
@@ -658,6 +666,7 @@ export interface FileRoutesById {
   '/maintainers': typeof MaintainersRoute
   '/miners': typeof MinersRoute
   '/roadmap': typeof RoadmapRoute
+  '/signup': typeof SignupRoute
   '/api/$op': typeof ApiOpRoute
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/audit': typeof AppAuditRoute
@@ -739,6 +748,7 @@ export interface FileRouteTypes {
     | '/maintainers'
     | '/miners'
     | '/roadmap'
+    | '/signup'
     | '/api/$op'
     | '/app/analytics'
     | '/app/audit'
@@ -815,6 +825,7 @@ export interface FileRouteTypes {
     | '/maintainers'
     | '/miners'
     | '/roadmap'
+    | '/signup'
     | '/api/$op'
     | '/app/analytics'
     | '/app/audit'
@@ -894,6 +905,7 @@ export interface FileRouteTypes {
     | '/maintainers'
     | '/miners'
     | '/roadmap'
+    | '/signup'
     | '/api/$op'
     | '/app/analytics'
     | '/app/audit'
@@ -974,11 +986,19 @@ export interface RootRouteChildren {
   MaintainersRoute: typeof MaintainersRoute
   MinersRoute: typeof MinersRoute
   RoadmapRoute: typeof RoadmapRoute
+  SignupRoute: typeof SignupRoute
   ReposOwnerRepoQualityRoute: typeof ReposOwnerRepoQualityRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/roadmap': {
       id: '/roadmap'
       path: '/roadmap'
@@ -1687,6 +1707,7 @@ const rootRouteChildren: RootRouteChildren = {
   MaintainersRoute: MaintainersRoute,
   MinersRoute: MinersRoute,
   RoadmapRoute: RoadmapRoute,
+  SignupRoute: SignupRoute,
   ReposOwnerRepoQualityRoute: ReposOwnerRepoQualityRoute,
 }
 export const routeTree = rootRouteImport
