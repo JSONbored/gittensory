@@ -84,6 +84,7 @@ import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot } 
 import { getRepositoryCollaboratorPermission } from "../github/app";
 import { performRepoDocRefresh } from "../github/repo-doc-refresh-runner";
 import { generateContributorIssueDrafts } from "../services/contributor-issue-draft";
+import { generateIssuePlanDrafts } from "../services/issue-plan-draft";
 import { sanitizePublicComment } from "../github/commands";
 import { fetchPublicContributorProfile } from "../github/public";
 import { listLatestRegistrySnapshots } from "../registry/sync";
@@ -660,6 +661,48 @@ const generateContributorIssueDraftsOutputSchema = {
   skippedUnsafe: z.number(),
   created: z.number(),
   skippedCreateFailed: z.number(),
+};
+
+// #7426: dryRun/create/limit mirror generateContributorIssueDraftsShape's own bounds/defaults (create alone is
+// rejected -- the handler re-applies the explicit_create_requires_dry_run_false guard). `limit` is capped lower
+// (10, not 20): every draft here costs real LLM spend, unlike that tool's zero-cost static signals.
+const planRepoIssuesShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  goal: z.string().min(1).max(2000),
+  dryRun: z.boolean().optional().default(true),
+  create: z.boolean().optional().default(false),
+  limit: z.number().int().min(1).max(10).optional().default(5),
+};
+
+const planRepoIssuesOutputSchema = {
+  repoFullName: z.string(),
+  generatedAt: z.string(),
+  status: z.string(),
+  dryRun: z.boolean(),
+  createRequested: z.boolean(),
+  proposed: z.number(),
+  skippedDuplicate: z.number(),
+  skippedDeclined: z.number(),
+  skippedUnsafe: z.number(),
+  created: z.number(),
+  skippedCreateFailed: z.number(),
+  // Unlike generateContributorIssueDraftsOutputSchema, this INCLUDES each draft's title/body/labels: the content
+  // is generated fresh from the caller's own goal for their own repo (no loopover-internal signal to scrub), and
+  // the whole point of the dry-run-by-default posture is letting a maintainer actually read the proposal before
+  // deciding to create it.
+  drafts: z
+    .array(
+      z.object({
+        title: z.string(),
+        body: z.string(),
+        labels: z.array(z.string()),
+        status: z.string(),
+        issueNumber: z.number().optional(),
+        issueUrl: z.string().optional(),
+      }),
+    )
+    .optional(),
 };
 
 // #784 (MCP slice) — the agent audit feed: executed actions + approval decisions for a repo.
@@ -1810,6 +1853,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_decide_pending_action: "agent",
   loopover_refresh_repo_docs: "maintainer",
   loopover_generate_contributor_issue_drafts: "maintainer",
+  loopover_plan_repo_issues: "maintainer",
   loopover_get_agent_audit_feed: "agent",
   loopover_explain_score_breakdown: "review",
   loopover_explain_review_risk: "review",
@@ -2572,6 +2616,17 @@ export class LoopoverMcp {
         outputSchema: generateContributorIssueDraftsOutputSchema,
       },
       async (input) => this.toolResult(await this.generateContributorIssueDrafts(input)),
+    );
+
+    register(
+      "loopover_plan_repo_issues",
+      {
+        description:
+          "AI-plan a small set of concrete GitHub issues from a maintainer-supplied free-form goal, for ANY repo the caller's App/Orb is installed on -- repo-agnostic and gittensor-optional (#7426). Dry-run BY DEFAULT: only PREVIEWS drafts (full title/body/labels) unless the caller passes BOTH create:true and dryRun:false, so it can never silently open issues. Creates exclusively via the installation-token/Orb-broker path (#7425), never a flat PAT. Makes a real LLM call subject to the shared daily AI budget and the fleet AI_SUMMARIES_ENABLED/AI_PUBLIC_COMMENTS_ENABLED switches. Maintainer access required.",
+        inputSchema: planRepoIssuesShape,
+        outputSchema: planRepoIssuesOutputSchema,
+      },
+      async (input) => this.toolResult(await this.planRepoIssues(input)),
     );
 
     register(
@@ -4236,6 +4291,49 @@ export class LoopoverMcp {
         skippedUnsafe: result.skippedUnsafe,
         created: result.created,
         skippedCreateFailed: result.skippedCreateFailed,
+      },
+    };
+  }
+
+  // #7426: repo-agnostic counterpart to generateContributorIssueDrafts above. requireRepoManageAccess is checked
+  // FIRST, then the SAME explicit_create_requires_dry_run_false guard is re-applied here (the service itself
+  // still overlays the global agent kill-switch on top). Unlike generateContributorIssueDrafts, the response
+  // includes each draft's full title/body/labels -- see planRepoIssuesOutputSchema's doc comment for why that's
+  // safe here (no loopover-internal signal to scrub).
+  private async planRepoIssues(input: z.infer<z.ZodObject<typeof planRepoIssuesShape>>): Promise<ToolPayload> {
+    const fullName = `${input.owner}/${input.repo}`;
+    await this.requireRepoManageAccess(fullName);
+    if (input.create && input.dryRun !== false) {
+      throw new Error("explicit_create_requires_dry_run_false: pass create:true together with dryRun:false to open issues.");
+    }
+    const result = await generateIssuePlanDrafts(this.env, fullName, input.goal, {
+      dryRun: input.dryRun,
+      create: input.create,
+      limit: input.limit,
+      requestedBy: this.identity.kind === "session" ? this.identity.actor : "mcp",
+    });
+    return {
+      summary: `Issue plan for ${fullName} (status=${result.status}, dryRun=${result.dryRun}): ${result.proposed} proposed, ${result.created} created, ${result.skippedDuplicate} duplicate, ${result.skippedDeclined} declined, ${result.skippedUnsafe} unsafe.`,
+      data: {
+        repoFullName: result.repoFullName,
+        generatedAt: result.generatedAt,
+        status: result.status,
+        dryRun: result.dryRun,
+        createRequested: result.createRequested,
+        proposed: result.proposed,
+        skippedDuplicate: result.skippedDuplicate,
+        skippedDeclined: result.skippedDeclined,
+        skippedUnsafe: result.skippedUnsafe,
+        created: result.created,
+        skippedCreateFailed: result.skippedCreateFailed,
+        drafts: result.drafts.map((draft) => ({
+          title: draft.title,
+          body: draft.body,
+          labels: draft.labels,
+          status: draft.status,
+          ...(draft.issue?.number !== undefined ? { issueNumber: draft.issue.number } : {}),
+          ...(draft.issue?.url !== undefined ? { issueUrl: draft.issue.url } : {}),
+        })),
       },
     };
   }
