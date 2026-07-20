@@ -117,6 +117,27 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
     expect(execSpy).not.toHaveBeenCalled();
   });
 
+  it("threads a custom env and an injected runGit through to ensureRepoCloned when cloneBaseDir/remoteUrl are omitted", async () => {
+    // No cloneBaseDir/remoteUrl override here -- exercises the option's own default-resolution path (env ->
+    // LOOPOVER_MINER_REPO_CLONE_DIR, remoteUrl -> the default https://github.com/<repo>.git), with a fully
+    // mocked runGit/exec so nothing ever touches the network or a real git binary.
+    const root = tempRoot("loopover-miner-attempt-worktree-envrungit-");
+    const runGit = vi.fn(async (_args: string[], _cwd: string, _timeoutMs: number) => ({ ok: true, stdout: "", stderr: "" }));
+    const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+
+    const result = await prepareAttemptWorktree("acme/widgets", "attempt-env", {
+      env: { LOOPOVER_MINER_REPO_CLONE_DIR: root },
+      runGit,
+      exec,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runGit).toHaveBeenCalled();
+    const [firstArgs, firstCwd] = runGit.mock.calls[0] ?? [];
+    expect(firstArgs).toEqual(["clone", "https://github.com/acme/widgets.git", join(root, "acme", "widgets")]);
+    expect(firstCwd).toBe(root);
+  });
+
   it("returns ok:false with git's real stderr when git worktree add fails (e.g. an unknown base branch)", async () => {
     // Real git subprocess round trip (origin init + a real clone + a failing `git worktree add`). See the
     // REGRESSION test above for why this needs an explicit timeout.

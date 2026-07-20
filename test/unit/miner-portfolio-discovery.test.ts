@@ -106,18 +106,37 @@ describe("loopover-miner portfolio discovery (#2292)", () => {
     const summary = enqueueRankedDiscovery(
       [
         rankedIssue({ issueNumber: 1, rankScore: 30 }),
+        null,
+        "not-an-object",
         { repoFullName: "bad", issueNumber: 2, title: "x", rankScore: 40 },
+        { repoFullName: 123, issueNumber: 5, title: "x", rankScore: 10 },
         rankedIssue({ issueNumber: 3, title: "", rankScore: 50 }),
+        rankedIssue({ issueNumber: 6, title: 123, rankScore: 10 } as unknown as Partial<EnqueueRankedDiscoveryInput>),
+        rankedIssue({ issueNumber: 4, rankScore: -5 }),
+        rankedIssue({ issueNumber: 7, rankScore: "not-a-number" } as unknown as Partial<EnqueueRankedDiscoveryInput>),
+        rankedIssue({ issueNumber: 8, rankScore: Number.POSITIVE_INFINITY }),
+        rankedIssue({ issueNumber: 1.5, rankScore: 10 }),
+        rankedIssue({ issueNumber: -1, rankScore: 10 }),
       ] as EnqueueRankedDiscoveryInput[],
       { queueStore },
     );
     expect(summary).toEqual({
       enqueued: 1,
       skippedBelowMinRank: 0,
-      skippedInvalid: 2,
+      skippedInvalid: 11,
       eventsAppended: 0,
     });
     expect(queueStore.listQueue()[0]?.identifier).toBe("issue:1");
+  });
+
+  it("defaults a row's labels to [] when the field is absent or not an array", () => {
+    const queueStore = tempQueueStore();
+    const summary = enqueueRankedDiscovery(
+      [{ repoFullName: "acme/widgets", issueNumber: 9, title: "No labels field", rankScore: 5 } as EnqueueRankedDiscoveryInput],
+      { queueStore },
+    );
+    expect(summary.enqueued).toBe(1);
+    expect(queueStore.listQueue()[0]?.identifier).toBe("issue:9");
   });
 
   it("refreshes priority for done items but leaves in_progress rows unchanged", () => {

@@ -15,67 +15,58 @@
 //   • This surfaces the PR's terminal fields from a payload the poller already fetches (ci-poller.js's
 //     `fetchHeadSha` GETs the full `/pulls/{n}` body, :155-163, and discards all but `head.sha`) via a pure
 //     extractor — no second API call, and no behavioral change to the existing fetch.
-
 import { renderRejectionMessage } from "./rejection-templates.js";
-
 /** Per-PR terminal outcome for a rejected (closed-without-merge) PR. A poller adds this to its own outcome
  *  vocabulary alongside ready / needs-work / open. */
 export const DISENGAGED_OUTCOME = "disengaged";
-
 /**
  * Pull the terminal-outcome fields from a `GET /pulls/{n}` payload the poller already has. Pure — no API call.
  * Missing/malformed fields normalize to null/false so a partial payload never throws here.
- * @param {unknown} prPayload
- * @returns {{ state: string | null, merged: boolean, mergedAt: string | null, closedAt: string | null }}
  */
 export function extractPrOutcomeFields(prPayload) {
-  const p = prPayload && typeof prPayload === "object" ? prPayload : {};
-  return {
-    state: typeof p.state === "string" ? p.state : null,
-    merged: p.merged === true,
-    mergedAt: typeof p.merged_at === "string" ? p.merged_at : null,
-    closedAt: typeof p.closed_at === "string" ? p.closed_at : null,
-  };
+    const p = (prPayload && typeof prPayload === "object" ? prPayload : {});
+    return {
+        state: typeof p.state === "string" ? p.state : null,
+        merged: p.merged === true,
+        mergedAt: typeof p.merged_at === "string" ? p.merged_at : null,
+        closedAt: typeof p.closed_at === "string" ? p.closed_at : null,
+    };
 }
-
 /**
  * True when a PR is closed WITHOUT a merge — the rejection this state machine acts on. A merged PR (even though
  * GitHub also marks it `state: "closed"`) is NOT a rejection. Pure.
- * @param {{ state?: string | null, merged?: boolean }} fields
  */
 export function isRejectedPr(fields) {
-  const f = fields && typeof fields === "object" ? fields : {};
-  return f.state === "closed" && f.merged !== true;
+    const f = (fields && typeof fields === "object" ? fields : {});
+    return f.state === "closed" && f.merged !== true;
 }
-
 /**
  * Classify a detected rejection into one of the rejection-reason buckets from the available signal.
  * Precedence: an explicit gate close outranks a duplicate signal (the gate is the more specific, actionable
  * cause). With neither signal, defaults to `maintainer_close_no_reason` (the documented zero-signal fallback).
  * Pure.
- * @param {{ gateClosed?: boolean, supersededByDuplicate?: boolean }} [signal]
- * @returns {"gate_close" | "superseded_by_duplicate" | "maintainer_close_no_reason"}
  */
 export function classifyRejectionReason(signal = {}) {
-  const s = signal && typeof signal === "object" ? signal : {};
-  if (s.gateClosed === true) return "gate_close";
-  if (s.supersededByDuplicate === true) return "superseded_by_duplicate";
-  return "maintainer_close_no_reason";
+    const s = (signal && typeof signal === "object" ? signal : {});
+    if (s.gateClosed === true)
+        return "gate_close";
+    if (s.supersededByDuplicate === true)
+        return "superseded_by_duplicate";
+    return "maintainer_close_no_reason";
 }
-
 /**
  * The full transition. Given a PR payload, an optional gate/duplicate signal, and the render context
  * (`{ repoFullName, prNumber }`), decide whether the PR is a rejection and, if so, produce the disengaged
  * transition: the classified reason and the rendered courtesy note (this is `renderRejectionMessage`'s first
  * real caller). Returns null when the PR is not a rejection (still open, or merged) — nothing to disengage.
  * Pure and deterministic; the caller persists `{ outcome, reason, note }` via its local event ledger.
- * @returns {{ outcome: string, reason: string, note: string,
- *   fields: ReturnType<typeof extractPrOutcomeFields> } | null}
  */
 export function resolveRejection(prPayload, signal, context) {
-  const fields = extractPrOutcomeFields(prPayload);
-  if (!isRejectedPr(fields)) return null;
-  const reason = classifyRejectionReason(signal);
-  const note = renderRejectionMessage(reason, context); // throws on malformed context — a half-note never emits
-  return { outcome: DISENGAGED_OUTCOME, reason, note, fields };
+    const fields = extractPrOutcomeFields(prPayload);
+    if (!isRejectedPr(fields))
+        return null;
+    const reason = classifyRejectionReason(signal);
+    const note = renderRejectionMessage(reason, context); // throws on malformed context — a half-note never emits
+    return { outcome: DISENGAGED_OUTCOME, reason, note, fields };
 }
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoicmVqZWN0aW9uLXN0YXRlLW1hY2hpbmUuanMiLCJzb3VyY2VSb290IjoiIiwic291cmNlcyI6WyJyZWplY3Rpb24tc3RhdGUtbWFjaGluZS50cyJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFBQSwwR0FBMEc7QUFDMUcsMEZBQTBGO0FBQzFGLDJHQUEyRztBQUMzRyw0R0FBNEc7QUFDNUcsRUFBRTtBQUNGLHFEQUFxRDtBQUNyRCw2R0FBNkc7QUFDN0csNEdBQTRHO0FBQzVHLDhHQUE4RztBQUM5Ryw0R0FBNEc7QUFDNUcsa0dBQWtHO0FBQ2xHLGtIQUFrSDtBQUNsSCxnSEFBZ0g7QUFDaEgsY0FBYztBQUNkLHVHQUF1RztBQUN2Ryw0R0FBNEc7QUFDNUcsc0ZBQXNGO0FBRXRGLE9BQU8sRUFBRSxzQkFBc0IsRUFBRSxNQUFNLDBCQUEwQixDQUFDO0FBc0JsRTtzREFDc0Q7QUFDdEQsTUFBTSxDQUFDLE1BQU0sa0JBQWtCLEdBQUcsWUFBWSxDQUFDO0FBRS9DOzs7R0FHRztBQUNILE1BQU0sVUFBVSxzQkFBc0IsQ0FBQyxTQUFrQjtJQUN2RCxNQUFNLENBQUMsR0FBRyxDQUFDLFNBQVMsSUFBSSxPQUFPLFNBQVMsS0FBSyxRQUFRLENBQUMsQ0FBQyxDQUFDLFNBQVMsQ0FBQyxDQUFDLENBQUMsRUFBRSxDQUE0QixDQUFDO0lBQ25HLE9BQU87UUFDTCxLQUFLLEVBQUUsT0FBTyxDQUFDLENBQUMsS0FBSyxLQUFLLFFBQVEsQ0FBQyxDQUFDLENBQUMsQ0FBQyxDQUFDLEtBQUssQ0FBQyxDQUFDLENBQUMsSUFBSTtRQUNuRCxNQUFNLEVBQUUsQ0FBQyxDQUFDLE1BQU0sS0FBSyxJQUFJO1FBQ3pCLFFBQVEsRUFBRSxPQUFPLENBQUMsQ0FBQyxTQUFTLEtBQUssUUFBUSxDQUFDLENBQUMsQ0FBQyxDQUFDLENBQUMsU0FBUyxDQUFDLENBQUMsQ0FBQyxJQUFJO1FBQzlELFFBQVEsRUFBRSxPQUFPLENBQUMsQ0FBQyxTQUFTLEtBQUssUUFBUSxDQUFDLENBQUMsQ0FBQyxDQUFDLENBQUMsU0FBUyxDQUFDLENBQUMsQ0FBQyxJQUFJO0tBQy9ELENBQUM7QUFDSixDQUFDO0FBRUQ7OztHQUdHO0FBQ0gsTUFBTSxVQUFVLFlBQVksQ0FBQyxNQUFzRTtJQUNqRyxNQUFNLENBQUMsR0FBRyxDQUFDLE1BQU0sSUFBSSxPQUFPLE1BQU0sS0FBSyxRQUFRLENBQUMsQ0FBQyxDQUFDLE1BQU0sQ0FBQyxDQUFDLENBQUMsRUFBRSxDQUFnRCxDQUFDO0lBQzlHLE9BQU8sQ0FBQyxDQUFDLEtBQUssS0FBSyxRQUFRLElBQUksQ0FBQyxDQUFDLE1BQU0sS0FBSyxJQUFJLENBQUM7QUFDbkQsQ0FBQztBQUVEOzs7OztHQUtHO0FBQ0gsTUFBTSxVQUFVLHVCQUF1QixDQUFDLFNBQTBCLEVBQUU7SUFDbEUsTUFBTSxDQUFDLEdBQUcsQ0FBQyxNQUFNLElBQUksT0FBTyxNQUFNLEtBQUssUUFBUSxDQUFDLENBQUMsQ0FBQyxNQUFNLENBQUMsQ0FBQyxDQUFDLEVBQUUsQ0FBb0IsQ0FBQztJQUNsRixJQUFJLENBQUMsQ0FBQyxVQUFVLEtBQUssSUFBSTtRQUFFLE9BQU8sWUFBWSxDQUFDO0lBQy9DLElBQUksQ0FBQyxDQUFDLHFCQUFxQixLQUFLLElBQUk7UUFBRSxPQUFPLHlCQUF5QixDQUFDO0lBQ3ZFLE9BQU8sNEJBQTRCLENBQUM7QUFDdEMsQ0FBQztBQUVEOzs7Ozs7R0FNRztBQUNILE1BQU0sVUFBVSxnQkFBZ0IsQ0FDOUIsU0FBa0IsRUFDbEIsTUFBbUMsRUFDbkMsT0FBeUI7SUFFekIsTUFBTSxNQUFNLEdBQUcsc0JBQXNCLENBQUMsU0FBUyxDQUFDLENBQUM7SUFDakQsSUFBSSxDQUFDLFlBQVksQ0FBQyxNQUFNLENBQUM7UUFBRSxPQUFPLElBQUksQ0FBQztJQUN2QyxNQUFNLE1BQU0sR0FBRyx1QkFBdUIsQ0FBQyxNQUFNLENBQUMsQ0FBQztJQUMvQyxNQUFNLElBQUksR0FBRyxzQkFBc0IsQ0FBQyxNQUFNLEVBQUUsT0FBTyxDQUFDLENBQUMsQ0FBQyx3REFBd0Q7SUFDOUcsT0FBTyxFQUFFLE9BQU8sRUFBRSxrQkFBa0IsRUFBRSxNQUFNLEVBQUUsSUFBSSxFQUFFLE1BQU0sRUFBRSxDQUFDO0FBQy9ELENBQUMifQ==

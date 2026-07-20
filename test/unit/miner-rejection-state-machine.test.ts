@@ -30,6 +30,12 @@ describe("loopover-miner rejection state machine (#4278)", () => {
     });
   });
 
+  it("carries a real merged_at string through when the PR was actually merged", () => {
+    expect(
+      extractPrOutcomeFields({ state: "closed", merged: true, merged_at: "2026-07-10T00:00:00Z", closed_at: null }),
+    ).toEqual({ state: "closed", merged: true, mergedAt: "2026-07-10T00:00:00Z", closedAt: null });
+  });
+
   it("detects closed-without-merge as a rejection, but not a merged or open PR", () => {
     expect(isRejectedPr({ state: "closed", merged: false })).toBe(true);
     expect(isRejectedPr({ state: "closed", merged: true })).toBe(false); // merged PRs are also state:closed
@@ -46,6 +52,12 @@ describe("loopover-miner rejection state machine (#4278)", () => {
 
   it("prefers the gate cause when both gate and duplicate signals are present", () => {
     expect(classifyRejectionReason({ gateClosed: true, supersededByDuplicate: true })).toBe("gate_close");
+  });
+
+  it("treats a non-object signal the same as an absent one, defaulting to maintainer_close_no_reason", () => {
+    // A caller outside TS's guarantees (plain JS, or a malformed payload) can hand this a non-object; the
+    // runtime guard must fall back to {} rather than throw on a null/primitive .gateClosed read.
+    expect(classifyRejectionReason(null as unknown as undefined)).toBe("maintainer_close_no_reason");
   });
 
   it("resolveRejection drives the renderer and returns the disengaged transition for each reason", () => {

@@ -8,7 +8,7 @@ vi.mock("@loopover/engine", async () => {
 });
 
 import { evaluateGovernorChokepointGatePersisted } from "../../packages/loopover-miner/lib/governor-chokepoint-persisted.js";
-import { initGovernorLedger } from "../../packages/loopover-miner/lib/governor-ledger.js";
+import { closeDefaultGovernorLedger, initGovernorLedger, readGovernorEvents } from "../../packages/loopover-miner/lib/governor-ledger.js";
 import { openGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
 
 const roots: string[] = [];
@@ -175,6 +175,23 @@ describe("evaluateGovernorChokepointGatePersisted (#5134)", () => {
     // The default store's mutation was persisted to the same on-disk file a reopened handle can see.
     const reopened = reopenGovernorState(root);
     expect(reopened.loadRateLimitState().buckets.global.open_pr?.count).toBe(1);
+  });
+
+  it("REGRESSION: uses the REAL default appendGovernorEvent (not just an injected override) when options.append is omitted", () => {
+    const { root } = tempStore();
+    process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB = join(root, "governor-state.sqlite3");
+    process.env.LOOPOVER_MINER_GOVERNOR_LEDGER_DB = join(root, "governor-ledger-default.sqlite3");
+    try {
+      const result = evaluateGovernorChokepointGatePersisted(baseInput());
+      expect(result.decision.allowed).toBe(true);
+      // The event actually landed in the REAL default ledger (module-singleton appendGovernorEvent), not just
+      // some caller-supplied stub -- proves the `options.append === undefined` branch truly ran the default.
+      expect(readGovernorEvents({ repoFullName: "acme/widgets" })).toHaveLength(1);
+    } finally {
+      closeDefaultGovernorLedger();
+      delete process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB;
+      delete process.env.LOOPOVER_MINER_GOVERNOR_LEDGER_DB;
+    }
   });
 
   it("still saves the mutated rate-limit state even when the gate denies (a denial still consumes a backoff attempt)", () => {
