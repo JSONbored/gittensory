@@ -14,6 +14,13 @@
 // existing CODECOV_TOKEN secret -- that one is an upload-only token and doesn't authenticate this read
 // API. Codecov's docs don't publish a numeric rate limit for this endpoint, so this is deliberately run
 // on a schedule (test-timing-refresh.yml), not per-PR.
+//
+// Uses /test-analytics/, not /test-results/: the latter is now deprecated (confirmed by actually
+// running this script -- Codecov returns a 301 with "This endpoint has been deprecated. Please use
+// /test-analytics/ instead."). Verified via Codecov's live OpenAPI schema (api.codecov.io/api/v2/schema/)
+// that /test-analytics/ returns the identical PaginatedTestrunList wrapper and Testrun field shape
+// (filename, duration_seconds, commit_sha, etc.) -- a URL rename, not a schema change, so nothing else
+// in this file needed to change.
 
 import { writeFileSync } from "node:fs";
 
@@ -47,7 +54,7 @@ async function fetchWithRetry(url, maxAttempts = 4) {
 
 async function fetchAllTestRuns() {
   const rows = [];
-  let url = `https://api.codecov.io/api/v2/gh/${owner}/repos/${repoName}/test-results/?branch=main&page_size=100`;
+  let url = `https://api.codecov.io/api/v2/gh/${owner}/repos/${repoName}/test-analytics/?branch=main&page_size=100`;
   let pages = 0;
   while (url && pages < MAX_PAGES) {
     const body = await fetchWithRetry(url);
