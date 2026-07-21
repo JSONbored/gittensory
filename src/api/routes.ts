@@ -314,6 +314,7 @@ import { buildMaintainerSlopDuplicateTrend, SLOP_DUPLICATE_TREND_SNAPSHOT_LIMIT 
 import { buildFederatedBenchmark } from "../orb/federated-benchmark";
 import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { buildGateOutcomeBreakdown, GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS } from "../services/gate-outcome-breakdown";
+import { sumTenantAiComputeUnitsSince } from "../services/tenant-ai-usage";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, resolveEffectiveSettings } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
@@ -1731,6 +1732,41 @@ export function createApp() {
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
       qualityDashboard: { ...qualityDashboard, gateOutcomeBreakdown },
+    });
+  });
+
+  // #7660: tenant-facing AI usage/spend -- sumAiCostForTenantSince (src/db/repositories.ts, #7176) had
+  // zero real callers outside its own test file; its fleet-wide sibling listAiCostByTenantSince is
+  // operator-only (the operator-dashboard route below), so no hosted tenant could see their own usage
+  // anywhere. Scoped the SAME WAY /v1/app/maintainer-dashboard above scopes its data: an operator session
+  // sees every installation (mirroring that route's own operator bypass), any other session is scoped to
+  // just the installations THEIR login controls, so one tenant can never see another tenant's spend
+  // through this endpoint. Exposes normalized compute-units (src/services/tenant-ai-usage.ts), never the
+  // raw costUsd figure.
+  app.get("/v1/app/tenant-ai-usage", async (c) => {
+    const identity = await authenticateRequestIdentity(c);
+    /* v8 ignore next -- unauthorized requests are rejected by the auth middleware before reaching the handler. */
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const summary = await getRoleSummaryForIdentity(c.env, identity);
+    if (!summary.roles.some((role) => ["maintainer", "owner", "operator"].includes(role))) return c.json({ error: "insufficient_role" }, 403);
+
+    const scope = identity.kind === "session" && !summary.roles.includes("operator") ? await loadControlPanelAccessScope(c.env, identity.actor) : null;
+    const allInstallations = await listInstallations(c.env);
+    const scopedInstallationIds = new Set(scope?.installationIds ?? []);
+    const scopedAccountLogins = new Set(scope?.accountLogins.map((login) => login.toLowerCase()) ?? []);
+    const installations = scope
+      ? allInstallations.filter((installation) => scopedInstallationIds.has(installation.id) || scopedAccountLogins.has(installation.accountLogin.toLowerCase()))
+      : allInstallations;
+
+    const windowDays = clampOperatorDashboardWindowDays(Number(c.req.query("days")));
+    const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+    const computeUnits = await sumTenantAiComputeUnitsSince(c.env, installations.map((installation) => installation.id), sinceIso);
+
+    return c.json({
+      generatedAt: nowIso(),
+      windowDays,
+      since: sinceIso,
+      usage: { computeUnits },
     });
   });
 
