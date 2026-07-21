@@ -13,7 +13,8 @@
     "dev": "node --experimental-strip-types --watch src/server.ts",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
-    "cf:typecheck": "tsc -p tsconfig.worker.json --noEmit"
+    "cf:typecheck": "tsc -p tsconfig.worker.json --noEmit",
+    "cf:typegen": "node scripts/gen-cf-typegen.mjs"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",

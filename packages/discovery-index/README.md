@@ -37,7 +37,9 @@ The production deployment (#7167) is a **Cloudflare Container**, not a bare VPS/
 ```sh
 npx wrangler secret put DISCOVERY_INDEX_SHARED_SECRET   # never commit a real value
 npx wrangler secret put DISCOVERY_INDEX_GITHUB_TOKEN    # never commit a real value
-npx wrangler types                                       # regenerate worker-configuration.d.ts after any wrangler.jsonc change
+npm run cf:typegen                                       # regenerate worker-configuration.d.ts after any wrangler.jsonc change
+                                                          # (wraps `wrangler types` -- raw wrangler output has
+                                                          # trailing whitespace that fails this repo's git diff --check)
 npx wrangler deploy
 ```
 
