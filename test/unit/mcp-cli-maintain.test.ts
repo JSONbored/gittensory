@@ -123,6 +123,38 @@ describe("loopover-mcp CLI — maintain (#784)", () => {
     expect(json).toMatchObject({ dryRun: true, createRequested: false });
   });
 
+  it("plan-issues dry-runs by default, requires a goal, and never forwards create (#7764)", async () => {
+    const bodies: Array<{ goal?: string; dryRun?: boolean; create?: boolean; limit?: number }> = [];
+    const e = await env({ onIssuePlanRequest: (b) => bodies.push(b) });
+    // A missing --goal fails before any request -- the route requires it, and the CLI validates locally first.
+    await expect(runAsync(["maintain", "plan-issues", "--repo", "owner/repo"], e)).rejects.toThrow(/Usage: loopover-mcp maintain plan-issues/);
+    expect(bodies).toHaveLength(0);
+    const out = await runAsync(["maintain", "plan-issues", "--repo", "owner/repo", "--goal", "improve sync reliability"], e);
+    // A bare invocation must send {goal, create:false, dryRun:true} -- the tool can never silently create.
+    expect(bodies[0]).toMatchObject({ goal: "improve sync reliability", create: false, dryRun: true });
+    expect(out).toMatch(/Issue plan for owner\/repo \(status=ok, dry-run\): 1 proposed, 0 created/);
+    // The model-generated draft title carries an ANSI escape; the plain-text path must strip it (#6261).
+    expect(out).toContain("Add retry to the sync job");
+    expect(out).not.toContain("[31m");
+  });
+
+  it("plan-issues --create forwards {create:true, dryRun:false} and reports created issues (#7764)", async () => {
+    const bodies: Array<{ goal?: string; dryRun?: boolean; create?: boolean; limit?: number }> = [];
+    const e = await env({ onIssuePlanRequest: (b) => bodies.push(b) });
+    const out = await runAsync(["maintain", "plan-issues", "--repo", "owner/repo", "--goal", "improve sync reliability", "--create", "--limit", "3"], e);
+    // --create maps to the exact {create:true, dryRun:false} shape the route's create-safety guard demands,
+    // and --limit is forwarded as a number.
+    expect(bodies[0]).toMatchObject({ goal: "improve sync reliability", create: true, dryRun: false, limit: 3 });
+    expect(out).toMatch(/\(status=ok, create\): 0 proposed, 1 created/);
+    expect(out).toMatch(/#42 https:\/\/github\.com\/owner\/repo\/issues\/42/);
+    const json = JSON.parse(await runAsync(["maintain", "plan-issues", "--repo", "owner/repo", "--goal", "improve sync reliability", "--json"], e)) as {
+      status: string;
+      dryRun: boolean;
+      createRequested: boolean;
+    };
+    expect(json).toMatchObject({ status: "ok", dryRun: true, createRequested: false });
+  });
+
   it("outcome-calibration reports slop-band merge rates + recommendation outcomes (plain + json), passing the window through (#6735)", async () => {
     const e = await env();
     const out = await runAsync(["maintain", "outcome-calibration", "--repo", "owner/repo"], e);

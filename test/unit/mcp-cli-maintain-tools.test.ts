@@ -22,7 +22,7 @@ async function connect() {
   const apiUrl = await startFixtureServer({
     onApiRequest: (request) => {
       const url = request.url ?? "";
-      if (/pending-actions|settings|gate-precision/.test(url)) capturedRequests.push({ url, method: request.method ?? "GET" });
+      if (/pending-actions|settings|gate-precision|issue-plan-drafts/.test(url)) capturedRequests.push({ url, method: request.method ?? "GET" });
     },
   });
   transport = new StdioClientTransport({
@@ -135,5 +135,34 @@ describe("loopover-mcp maintain stdio proxies (#6152)", () => {
       expect(result.isError).toBe(true);
     }
     expect(capturedRequests).toEqual([]);
+  });
+
+  // #7764: loopover_plan_repo_issues is registered locally too, proxying to the same issue-plan-drafts route the
+  // `maintain plan-issues` CLI calls. Asserted separately from the #6152 loop because its payload/shape differs.
+  it("plan_repo_issues registers, lists with a description, and proxies goal + dry-run to its REST endpoint", async () => {
+    await connect();
+    const names = (await client!.listTools()).tools.map((tool) => tool.name);
+    expect(names).toContain("loopover_plan_repo_issues");
+    const payload = JSON.parse(run(["tools", "--json"])) as { tools: Array<{ name: string; description: string }> };
+    const entry = payload.tools.find((t) => t.name === "loopover_plan_repo_issues");
+    expect(entry?.description.trim().length).toBeGreaterThan(0);
+
+    const result = await client!.callTool({ name: "loopover_plan_repo_issues", arguments: { ...REPO, goal: "improve sync reliability" } });
+    expect(result.isError).toBeFalsy();
+    // The structured payload proxies straight through (dry-run status + counts), unlike the CLI plain-text path.
+    expect(JSON.stringify(result)).toContain("Issue plan for owner/repo (status=ok, dryRun=true)");
+    expect((result.structuredContent as { status?: string; proposed?: number }).status).toBe("ok");
+    expect(capturedRequests.length).toBeGreaterThan(0);
+    for (const request of capturedRequests) {
+      expect(request.url).toBe("/v1/repos/owner/repo/issue-plan-drafts/generate");
+      expect(request.method).toBe("POST");
+    }
+  });
+
+  it("plan_repo_issues surfaces an API failure as a tool error", async () => {
+    await connect();
+    const result = await client!.callTool({ name: "loopover_plan_repo_issues", arguments: { owner: "nobody", repo: "missing", goal: "improve reliability" } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/404|not_found/);
   });
 });

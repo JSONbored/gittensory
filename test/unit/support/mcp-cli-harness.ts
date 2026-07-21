@@ -174,6 +174,8 @@ export async function startFixtureServer(
     prTextLintStatus?: number;
     onPacketRequest?: (body: unknown) => void;
     onIssueDraftRequest?: (body: { dryRun?: boolean; create?: boolean; limit?: number }) => void;
+    /** #7764: captures the POST body forwarded to /issue-plan-drafts/generate (the plan-issues surface). */
+    onIssuePlanRequest?: (body: { goal?: string; dryRun?: boolean; create?: boolean; limit?: number; milestone?: unknown }) => void;
     onWatchRequest?: (req: { method: string; body: { repoFullName?: string; labels?: string[] } }) => void;
     onApiRequest?: (request: IncomingMessage) => void;
     validateConfigWarnings?: string[];
@@ -684,6 +686,38 @@ export async function startFixtureServer(
             {
               status: "proposed",
               title: "Add [31mcursor[0m pagination",
+              ...(requestBody.create ? { issue: { number: 42, url: "https://github.com/owner/repo/issues/42" } } : {}),
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    // #7764 plan-issues / loopover_plan_repo_issues: reflect the forwarded {goal, dryRun, create, limit} so the CLI
+    // + stdio surfaces can assert the exact body they sent. The draft title carries an ANSI escape to prove the
+    // plain-text path is sanitized (#6261).
+    if (request.url === "/v1/repos/owner/repo/issue-plan-drafts/generate" && request.method === "POST") {
+      const requestBody = (await readJsonRequest(request)) as { goal?: string; dryRun?: boolean; create?: boolean; limit?: number; milestone?: unknown };
+      options.onIssuePlanRequest?.(requestBody);
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          status: "ok",
+          dryRun: requestBody.dryRun ?? true,
+          createRequested: requestBody.create ?? false,
+          proposed: requestBody.create ? 0 : 1,
+          skippedDuplicate: 0,
+          skippedDeclined: 0,
+          skippedUnsafe: 0,
+          created: requestBody.create ? 1 : 0,
+          skippedCreateFailed: 0,
+          drafts: [
+            {
+              status: requestBody.create ? "created" : "proposed",
+              title: "Add \u001b[31mretry\u001b[0m to the sync job",
+              body: "Retries transient failures.",
+              labels: ["enhancement"],
               ...(requestBody.create ? { issue: { number: 42, url: "https://github.com/owner/repo/issues/42" } } : {}),
             },
           ],

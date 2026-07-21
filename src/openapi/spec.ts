@@ -689,6 +689,17 @@ export function buildOpenApiSpec() {
     },
   });
   registry.registerPath({
+    method: "post",
+    path: "/v1/repos/{owner}/{repo}/issue-plan-drafts/generate",
+    summary: "AI-plan maintainer-reviewed issue drafts from a free-form goal",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "AI-plan a small set of GitHub issue drafts from a maintainer-supplied goal (dry-run by default)", content: { "application/json": { schema: z.record(z.string(), z.unknown()) } } },
+      400: { description: "Invalid request or explicit create without dryRun false" },
+      403: { description: "Insufficient role" },
+    },
+  });
+  registry.registerPath({
     method: "get",
     path: "/v1/repos/{owner}/{repo}/settings",
     summary: "Repository automation settings",
