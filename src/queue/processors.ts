@@ -3345,6 +3345,17 @@ export async function reReviewStoredPullRequest(
   // Fire BEFORE any further (throwable) work below -- this is the one instant readiness is confirmed, so a
   // caller learns it even if this call goes on to THROW instead of returning (see the JSDoc above).
   options.onReachedReadiness?.();
+  // #7626: readiness just confirmed true for this exact (repo, PR, headSha) -- if a manual panel retrigger
+  // deferred earlier for this SAME head (prReadyForReview returned false when the user clicked "Re-run
+  // LoopOver review"), consume its pending marker now so THIS pass forces a fresh AI call on the user's
+  // behalf instead of silently reusing/replaying a stale cached review. One-shot: a no-op when no marker
+  // exists (the common case), which is the overwhelming majority of calls into this function.
+  const pendingRetriggerForceReview = await consumePendingPrPanelRetrigger(
+    env,
+    repoFullName,
+    pr.number,
+    pr.headSha,
+  );
   const [cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
     await Promise.all([
       listOtherOpenPullRequests(env, repoFullName, prNumber),
@@ -3409,7 +3420,7 @@ export async function reReviewStoredPullRequest(
           liveFacts,
           ...(previewPollAttempt !== undefined ? { previewPollAttempt } : {}),
           ...(options.skipAiReview || autoreviewPaused ? { skipAiReview: true } : {}),
-          ...(options.force ? { forceAiReview: true } : {}),
+          ...(options.force || pendingRetriggerForceReview ? { forceAiReview: true } : {}),
           hasPendingRefreshSignal: otherRefreshReasons || reviewsCacheStale,
         },
       ),
@@ -3729,6 +3740,81 @@ async function ciStuckRepeatLogCoalesced(
   return false;
 }
 
+async function deleteTransientKey(env: Env, key: string): Promise<void> {
+  if (!env.SELFHOST_TRANSIENT_CACHE?.del) return;
+  try {
+    await env.SELFHOST_TRANSIENT_CACHE.del(key);
+  } catch {
+    // best-effort only -- see getTransientKey/putTransientKey above
+  }
+}
+
+// #7626: a manual "Re-run LoopOver review" click (maybeProcessPrPanelRetrigger) that lands while
+// prReadyForReview defers for pending CI must not lose its forceAiReview intent. The marker below persists
+// that intent so the review pipeline's NEXT natural pass for this exact (repo, PR, headSha) -- whichever of
+// reReviewStoredPullRequest / handlePullRequestWebhookEvent gets there first once prReadyForReview finally
+// returns true -- can consume it and thread forceAiReview: true into its own maybePublishPrPublicSurface
+// call, exactly like the retrigger handler's own immediate-readiness path already does. Keyed identically to
+// CI_STUCK_FINALIZE_GUARD_EVENT_TYPE's guardTargetKey (repoFullName#prNumber#headSha) so a new commit (a
+// different headSha) naturally never matches the old marker -- no extra invalidation logic needed. Reuses
+// this file's existing transient KV cache (getTransientKey/putTransientKey/deleteTransientKey) rather than a
+// second audit-event type + paired-event consumption query: less new surface, and every read/write already
+// fails open the same way the rest of this file's transient-cache helpers do.
+const PENDING_PR_PANEL_RETRIGGER_MARKER = "1";
+const PENDING_PR_PANEL_RETRIGGER_TTL_SECONDS = 24 * 60 * 60;
+
+function pendingPrPanelRetriggerKey(repoFullName: string, prNumber: number, headSha: string): string {
+  return `pr-panel-retrigger-pending:${repoFullName.toLowerCase()}#${prNumber}:${headSha}`;
+}
+
+/** Persists the pending forceAiReview intent for this exact (repo, PR, headSha) -- best-effort: a storage
+ *  hiccup here just means the eventual natural re-evaluation reviews without the forced fresh call, the SAME
+ *  degraded-but-safe outcome as before this marker existed, never a thrown error or a blocked PR. */
+async function markPendingPrPanelRetrigger(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  headSha: string | null | undefined,
+): Promise<void> {
+  /* v8 ignore next -- structurally unreachable: this function's one caller (maybeProcessPrPanelRetrigger's
+   * defer branch) only reaches here after prReadyForReview has already returned false, which requires a
+   * truthy pr.headSha (a falsy headSha makes prReadyForReview return true unconditionally, before it ever
+   * evaluates CI); the guard is belt-and-suspenders against the field's nullable TS type. */
+  if (!headSha) return;
+  await putTransientKey(
+    env,
+    pendingPrPanelRetriggerKey(repoFullName, prNumber, headSha),
+    PENDING_PR_PANEL_RETRIGGER_MARKER,
+    PENDING_PR_PANEL_RETRIGGER_TTL_SECONDS,
+  );
+}
+
+/** True + ONE-SHOT CONSUMED when a pending retrigger marker exists for this exact (repo, PR, headSha) -- the
+ *  caller should thread forceAiReview: true into its own maybePublishPrPublicSurface call this pass.
+ *  Consuming clears the marker: a real delete when the storage adapter supports one (deleteTransientKey
+ *  no-ops when it doesn't), UNCONDITIONALLY followed by overwriting with a "consumed" sentinel value as a
+ *  backstop -- redundant-but-harmless on an adapter that DOES support delete (the key is just briefly
+ *  recreated with a non-matching value instead of staying absent), and the only way to guarantee one-shot
+ *  consumption on an adapter that doesn't. Either way, a LATER, unrelated re-evaluation of the SAME
+ *  still-unchanged head never forces a second fresh AI call it wasn't asked for -- a new commit naturally
+ *  invalidates the key anyway (a different headSha never matches), but an unconsumed marker could otherwise
+ *  still wrongly re-fire before that happens. getTransientKey/putTransientKey/deleteTransientKey are already
+ *  internally fail-safe (never throw), so no outer try/catch here -- a storage hiccup just degrades to "no
+ *  pending marker" (`false`), same as a genuine cache miss. */
+async function consumePendingPrPanelRetrigger(
+  env: Env,
+  repoFullName: string,
+  prNumber: number,
+  headSha: string | null | undefined,
+): Promise<boolean> {
+  if (!headSha) return false;
+  const key = pendingPrPanelRetriggerKey(repoFullName, prNumber, headSha);
+  const value = await getTransientKey(env, key);
+  if (value !== PENDING_PR_PANEL_RETRIGGER_MARKER) return false;
+  await deleteTransientKey(env, key);
+  await putTransientKey(env, key, "consumed", PENDING_PR_PANEL_RETRIGGER_TTL_SECONDS);
+  return true;
+}
 
 /**
  * True when CI for this PR+headSha has been pending past `capMs`. Stamps the first-seen time in a transient
@@ -6050,6 +6136,16 @@ async function handlePullRequestWebhookEvent(
             ),
         )
       ) {
+        // #7626: readiness just confirmed true for this exact (repo, PR, headSha) -- if a manual panel
+        // retrigger deferred earlier for this SAME head, consume its pending marker now so THIS pass forces a
+        // fresh AI call on the user's behalf instead of silently reusing/replaying a stale cached review.
+        // One-shot: a no-op when no marker exists, which is the overwhelming majority of calls here.
+        const pendingRetriggerForceReview = await consumePendingPrPanelRetrigger(
+          env,
+          repoFullName,
+          pr.number,
+          pr.headSha,
+        );
         gate = await withReviewPipelineSpan(
           "selfhost.review.public_surface",
           {
@@ -6075,6 +6171,7 @@ async function handlePullRequestWebhookEvent(
                 eventName,
                 baseSha: payloadPullRequest.base?.sha ?? null,
                 liveFacts,
+                ...(pendingRetriggerForceReview ? { forceAiReview: true } : {}),
               },
             ),
         ).catch((error) => {
@@ -12127,6 +12224,10 @@ async function maybeProcessPrPanelRetrigger(
       liveFacts,
     ))
   ) {
+    // #7626: the explicit forceAiReview intent below is otherwise lost the instant this defers -- persist it
+    // so the next natural re-evaluation of this exact (repo, PR, headSha), whichever entry point reaches it
+    // first once CI settles, can still honor the user's click instead of silently replaying stale content.
+    await markPendingPrPanelRetrigger(env, repoFullName, pr.number, pr.headSha);
     await recordAuditEvent(env, {
       eventType: "github_app.pr_panel_retrigger_deferred",
       actor,
