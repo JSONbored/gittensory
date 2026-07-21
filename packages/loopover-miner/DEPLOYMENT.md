@@ -197,6 +197,7 @@ and `LOOPOVER_MINER_CONFIG_DIR` are covered above under the fleet/state notes; t
 | `LOOPOVER_MINER_AMS_POLICY_PATH` | `lib/ams-policy.js` | Path to the operator's `.loopover-ams.yml` policy spec. |
 | `LOOPOVER_MINER_AMS_COLLECTOR_URL`, `LOOPOVER_MINER_AMS_COLLECTOR_TOKEN` | `lib/orb-export.js` | Endpoint + bearer for pushing fleet state to an AMS/Orb collector. |
 | `LOOPOVER_MINER_CHAT_ACTIONS` | `lib/chat-action-dispatch.js` | Truthy string enables the chat-action-dispatch flag (off by default). |
+| `LOOPOVER_MINER_FULL_EXECUTION_STUB` | `lib/cross-repo-evaluation.js` | Truthy string enables a synthetic one-file handoff for local full-execution demos (off by default; never invents a live coding-agent run or forge PR). |
 | `LOOPOVER_MINER_LEDGER_RETENTION_DAYS`, `LOOPOVER_MINER_LEDGER_RETENTION_MAX_ROWS` | `lib/store-maintenance.js` | Opt-in ledger retention window / row cap. |
 | `LOOPOVER_MINER_LOG_LEVEL` | `lib/logger.js` | Log verbosity override. |
 | `LOOPOVER_MINER_NO_UPDATE_CHECK` | `lib/update-check.js` | Truthy string disables the background update check. |
