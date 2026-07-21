@@ -62,6 +62,16 @@ function envString(env: Record<string, string | undefined>, name: string): strin
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function pagerDutyFailMessage(error: unknown): string {
+  // Prefer Error.message when present; otherwise coerce. Single helper so both sync and async
+  // failure paths share one branch surface for Codecov patch.
+  return (error instanceof Error ? error.message : String(error)).slice(0, 200);
+}
+
+function warnKillSwitchPagerDutyFailed(repo: string, error: unknown): void {
+  console.warn(JSON.stringify({ event: "kill_switch_pagerduty_failed", repo, message: pagerDutyFailMessage(error) }));
+}
+
 /**
  * Miner-side mirror of `triggerPagerDutyIncident` (#7666): same flag, same global routing key, same Events
  * API v2 enqueue. No D1 audit/cooldown (miner has no Worker Env) -- PagerDuty's own `dedup_key` still
@@ -104,14 +114,7 @@ export async function notifyMinerKillSwitchPagerDuty(
       );
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(
-      JSON.stringify({
-        event: "kill_switch_pagerduty_failed",
-        repo: alert.repoFullName,
-        message: message.slice(0, 200),
-      }),
-    );
+    warnKillSwitchPagerDutyFailed(alert.repoFullName, error);
   }
 }
 
@@ -143,28 +146,12 @@ export function recordMinerKillSwitchTransition(
     const notify = options.notify ?? notifyMinerKillSwitchPagerDuty;
     const env = options.env ?? process.env;
     try {
-      const maybePromise = notify(alert, env);
-      if (maybePromise != null && typeof (maybePromise as Promise<void>).then === "function") {
-        void (maybePromise as Promise<void>).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(
-            JSON.stringify({
-              event: "kill_switch_pagerduty_failed",
-              repo: alert.repoFullName,
-              message: message.slice(0, 200),
-            }),
-          );
-        });
-      }
+      // Promise.resolve wraps sync returns so both sync throws and async rejects share one failure path.
+      void Promise.resolve(notify(alert, env)).catch((error: unknown) => {
+        warnKillSwitchPagerDutyFailed(alert.repoFullName, error);
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(
-        JSON.stringify({
-          event: "kill_switch_pagerduty_failed",
-          repo: alert.repoFullName,
-          message: message.slice(0, 200),
-        }),
-      );
+      warnKillSwitchPagerDutyFailed(alert.repoFullName, error);
     }
   }
 
