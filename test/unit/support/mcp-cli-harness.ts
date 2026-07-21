@@ -571,6 +571,18 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #7801: AMS probe for live gate thresholds (snake_case fields). Auth required in prod; fixture is open.
+    if (request.url === "/v1/repos/owner/repo/live-gate-thresholds" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          confidence_floor: 0.91,
+          scope_cap_files: 8,
+          scope_cap_lines: 250,
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/repos/owner/repo/outcome-patterns" && request.method === "GET") {
       response.end(
         JSON.stringify({

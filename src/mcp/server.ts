@@ -185,6 +185,13 @@ import { buildRepoDataQuality } from "../signals/data-quality";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
 import { SCENARIO_MAX_BRANCH_REF_CHARS, SCENARIO_MAX_LINKED_ISSUE_NUMBERS, SCENARIO_MAX_REPO_FULL_NAME_CHARS } from "../scenarios/input-model";
 import { loadUpstreamStatus } from "../upstream/ruleset";
+import {
+  authoritativeGateOverride,
+  loadOverride,
+  loadShadowOverride,
+  toLiveGateThresholdFields,
+  type StorageEnv,
+} from "../review/auto-apply";
 import { simulateOpenPrPressure, type OpenPrPressureInput } from "../services/open-pr-pressure-scenarios";
 import { buildFindingTaxonomyDocument, FINDING_TAXONOMY_URI } from "../review/finding-taxonomy";
 import { buildEnrichmentAnalyzersTaxonomyDocument, ENRICHMENT_ANALYZERS_URI } from "../review/enrichment-analyzers-taxonomy";
@@ -987,6 +994,15 @@ const freshnessResponseOutputSchema = {
   freshness: z.string().optional(),
   generatedAt: z.string().optional(),
   report: z.unknown().optional(),
+};
+
+const liveGateThresholdsOutputSchema = {
+  repoFullName: z.string().optional(),
+  confidence_floor: z.number().nullable().optional(),
+  scope_cap_files: z.number().nullable().optional(),
+  scope_cap_lines: z.number().nullable().optional(),
+  error: z.string().optional(),
+  status: z.string().optional(),
 };
 
 const maintainerMeasurementReportOutputSchema = {
@@ -1887,6 +1903,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_upstream_ruleset: "utility",
   loopover_get_issue_quality: "maintainer",
   loopover_get_pr_reviewability: "review",
+  loopover_get_live_gate_thresholds: "maintainer",
   loopover_validate_linked_issue: "discovery",
   loopover_check_before_start: "discovery",
   loopover_find_opportunities: "discovery",
@@ -2436,6 +2453,17 @@ export class LoopoverMcp {
         outputSchema: freshnessResponseOutputSchema,
       },
       async (input) => this.toolResult(await this.getPrReviewability(input)),
+    );
+
+    register(
+      "loopover_get_live_gate_thresholds",
+      {
+        description:
+          "Return the currently-authoritative live gate thresholds for a repo (confidence floor and scope caps) as a field-limited snake_case AMS probe. Live override wins; soaking shadow fills in only when live is absent. Metadata-only, repo-scoped, no GitHub writes.",
+        inputSchema: ownerRepoShape,
+        outputSchema: liveGateThresholdsOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getLiveGateThresholds(input)),
     );
 
     register(
@@ -3385,6 +3413,32 @@ export class LoopoverMcp {
         generatedAt: report.generatedAt,
         report,
       } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getLiveGateThresholds(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    // Mirrors GET /v1/repos/:owner/:repo/live-gate-thresholds: same mcp allowlist gate as reviewability,
+    // same authoritative live/shadow projection, and a normal not-found result (never throw) when neither
+    // override is active — same error code the REST route uses.
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access live gate thresholds for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    const storageEnv = this.env as unknown as StorageEnv;
+    const [live, shadow] = await Promise.all([loadOverride(storageEnv, fullName), loadShadowOverride(storageEnv, fullName)]);
+    const fields = toLiveGateThresholdFields(authoritativeGateOverride(live, shadow));
+    if (!fields) {
+      return {
+        summary: `No live gate thresholds are active for ${fullName}.`,
+        data: { error: "live_gate_thresholds_not_found", repoFullName: fullName },
+      };
+    }
+    return {
+      summary: `Live gate thresholds for ${fullName}.`,
+      data: { repoFullName: fullName, ...fields } as unknown as Record<string, unknown>,
     };
   }
 
