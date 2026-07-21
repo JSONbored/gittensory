@@ -139,4 +139,38 @@ describe("AmsMinerCohortCard", () => {
     });
     expect(screen.getByText(/This view is unavailable for this repository\./i)).toBeTruthy();
   });
+
+  it("drops a superseded response when repoFullName changes before the first fetch resolves (#7784)", async () => {
+    let resolveStale!: (value: unknown) => void;
+    let resolveFresh!: (value: unknown) => void;
+    apiFetch
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveStale = resolve)))
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveFresh = resolve)));
+
+    render(<AmsMinerCohortCard reviewability={REVIEWABILITY} />);
+    expect(screen.getByText(/Loading AMS contributor mix/i)).toBeTruthy();
+
+    // Keystroke races a second request while the first is still in flight.
+    fireEvent.change(screen.getByPlaceholderText("owner/repo"), {
+      target: { value: "acme/other" },
+    });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
+
+    const freshComparison = {
+      ...POPULATED_COMPARISON,
+      windowDays: 30,
+      totalSubmitterCount: 2,
+      checkedSubmitterCount: 2,
+    };
+    // Newer request resolves first and must win.
+    resolveFresh({ ok: true, data: freshComparison });
+    await waitFor(() => expect(screen.getByText(/Window: 30 days · checked 2 of/i)).toBeTruthy());
+
+    // Stale request resolves last — must not overwrite the fresh window.
+    resolveStale({ ok: true, data: POPULATED_COMPARISON });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(screen.getByText(/Window: 30 days · checked 2 of/i)).toBeTruthy();
+    expect(screen.queryByText(/Window: 90 days · checked 5 of/i)).toBeNull();
+  });
 });

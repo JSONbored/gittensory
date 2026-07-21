@@ -65,31 +65,41 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
-  const load = useCallback(async () => {
-    const apiBase = repoApiBase(repoFullName);
-    if (!apiBase) {
-      setPreview(null);
+  const load = useCallback(
+    async (opts?: { cancelled?: () => boolean }) => {
+      const isCancelled = opts?.cancelled ?? (() => false);
+      const apiBase = repoApiBase(repoFullName);
+      if (!apiBase) {
+        setPreview(null);
+        setLoadError(null);
+        return;
+      }
       setLoadError(null);
-      return;
-    }
-    setLoadError(null);
-    setLoading(true);
-    const result = await apiFetch<ActivationPreviewResponse>(`${apiBase}/activation-preview`, {
-      label: "Activation preview",
-      credentials: "include",
-      silentStatus: true,
-    });
-    if (result.ok) {
-      setPreview(result.data);
-    } else {
-      setPreview(null);
-      setLoadError(result.message);
-    }
-    setLoading(false);
-  }, [repoFullName]);
+      setLoading(true);
+      const result = await apiFetch<ActivationPreviewResponse>(`${apiBase}/activation-preview`, {
+        label: "Activation preview",
+        credentials: "include",
+        silentStatus: true,
+      });
+      // Ignore responses after a newer repoFullName keyed a fresh load (#7784).
+      if (isCancelled()) return;
+      if (result.ok) {
+        setPreview(result.data);
+      } else {
+        setPreview(null);
+        setLoadError(result.message);
+      }
+      setLoading(false);
+    },
+    [repoFullName],
+  );
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void load({ cancelled: () => cancelled });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   return (
@@ -148,8 +158,8 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
           isLoading={Boolean(base) && loading}
           isError={Boolean(base) && !loading && loadError !== null}
           isEmpty={Boolean(base) && !loading && preview !== null && preview.evaluatedCount === 0}
-          onRetry={load}
-          onRefresh={load}
+          onRetry={() => void load()}
+          onRefresh={() => void load()}
           loadingTitle="Building activation preview…"
           errorTitle="Couldn't load the activation preview"
           errorDescription={loadError ?? undefined}

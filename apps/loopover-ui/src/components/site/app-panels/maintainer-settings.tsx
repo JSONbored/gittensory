@@ -145,32 +145,42 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
-  const load = useCallback(async () => {
-    const apiBase = repoApiBase(repoFullName);
-    if (!apiBase) return;
-    setMessage(null);
-    setLoading(true);
-    const result = await apiFetch<MaintainerSettings>(`${apiBase}/settings`, {
-      label: "Repository settings",
-      credentials: "include",
-      silentStatus: true,
-    });
-    // Default the agent-layer fields defensively so the editor renders even against an older response shape.
-    setSettings(
-      result.ok
-        ? {
-            ...result.data,
-            autonomy: result.data.autonomy ?? {},
-            agentPaused: result.data.agentPaused ?? false,
-            agentDryRun: result.data.agentDryRun ?? false,
-          }
-        : null,
-    );
-    setLoading(false);
-  }, [repoFullName]);
+  const load = useCallback(
+    async (opts?: { cancelled?: () => boolean }) => {
+      const isCancelled = opts?.cancelled ?? (() => false);
+      const apiBase = repoApiBase(repoFullName);
+      if (!apiBase) return;
+      setMessage(null);
+      setLoading(true);
+      const result = await apiFetch<MaintainerSettings>(`${apiBase}/settings`, {
+        label: "Repository settings",
+        credentials: "include",
+        silentStatus: true,
+      });
+      // Ignore responses after a newer repoFullName keyed a fresh load (#7784).
+      if (isCancelled()) return;
+      // Default the agent-layer fields defensively so the editor renders even against an older response shape.
+      setSettings(
+        result.ok
+          ? {
+              ...result.data,
+              autonomy: result.data.autonomy ?? {},
+              agentPaused: result.data.agentPaused ?? false,
+              agentDryRun: result.data.agentDryRun ?? false,
+            }
+          : null,
+      );
+      setLoading(false);
+    },
+    [repoFullName],
+  );
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void load({ cancelled: () => cancelled });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   function setField<K extends keyof MaintainerSettings>(key: K, value: MaintainerSettings[K]) {
@@ -520,21 +530,31 @@ function FocusManifestEditor({ base }: { base: string | null }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
 
-  const load = useCallback(async () => {
-    if (!base) return;
-    setLoading(true);
-    setMessage(null);
-    const result = await apiFetch<FocusManifestResponse>(`${base}/focus-manifest`, {
-      label: "Focus manifest",
-      credentials: "include",
-      silentStatus: true,
-    });
-    setText(result.ok ? JSON.stringify(result.data.manifest, null, 2) : "");
-    setLoading(false);
-  }, [base]);
+  const load = useCallback(
+    async (opts?: { cancelled?: () => boolean }) => {
+      const isCancelled = opts?.cancelled ?? (() => false);
+      if (!base) return;
+      setLoading(true);
+      setMessage(null);
+      const result = await apiFetch<FocusManifestResponse>(`${base}/focus-manifest`, {
+        label: "Focus manifest",
+        credentials: "include",
+        silentStatus: true,
+      });
+      // Ignore responses after a newer base keyed a fresh load (#7784).
+      if (isCancelled()) return;
+      setText(result.ok ? JSON.stringify(result.data.manifest, null, 2) : "");
+      setLoading(false);
+    },
+    [base],
+  );
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void load({ cancelled: () => cancelled });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   async function save() {

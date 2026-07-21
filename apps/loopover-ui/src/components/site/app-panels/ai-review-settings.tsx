@@ -61,35 +61,45 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
-  const load = useCallback(async () => {
-    const apiBase = repoApiBase(repoFullName);
-    if (!apiBase) return;
-    setMessage(null);
-    setLoading(true);
-    const [settings, key] = await Promise.all([
-      apiFetch<RepoSettingsResponse>(`${apiBase}/settings`, {
-        label: "AI review settings",
-        credentials: "include",
-        silentStatus: true,
-      }),
-      apiFetch<AiKeyStatus>(`${apiBase}/ai-key`, {
-        label: "AI key status",
-        credentials: "include",
-        silentStatus: true,
-      }),
-    ]);
-    if (settings.ok) {
-      setMode(settings.data.aiReviewMode ?? "off");
-      setByok(settings.data.aiReviewByok ?? false);
-      setProvider(settings.data.aiReviewProvider ?? "anthropic");
-      setModel(settings.data.aiReviewModel ?? "");
-    }
-    setKeyStatus(key.ok ? key.data : null);
-    setLoading(false);
-  }, [repoFullName]);
+  const load = useCallback(
+    async (opts?: { cancelled?: () => boolean }) => {
+      const isCancelled = opts?.cancelled ?? (() => false);
+      const apiBase = repoApiBase(repoFullName);
+      if (!apiBase) return;
+      setMessage(null);
+      setLoading(true);
+      const [settings, key] = await Promise.all([
+        apiFetch<RepoSettingsResponse>(`${apiBase}/settings`, {
+          label: "AI review settings",
+          credentials: "include",
+          silentStatus: true,
+        }),
+        apiFetch<AiKeyStatus>(`${apiBase}/ai-key`, {
+          label: "AI key status",
+          credentials: "include",
+          silentStatus: true,
+        }),
+      ]);
+      // Ignore responses after a newer repoFullName keyed a fresh load (#7784).
+      if (isCancelled()) return;
+      if (settings.ok) {
+        setMode(settings.data.aiReviewMode ?? "off");
+        setByok(settings.data.aiReviewByok ?? false);
+        setProvider(settings.data.aiReviewProvider ?? "anthropic");
+        setModel(settings.data.aiReviewModel ?? "");
+      }
+      setKeyStatus(key.ok ? key.data : null);
+      setLoading(false);
+    },
+    [repoFullName],
+  );
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void load({ cancelled: () => cancelled });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   async function saveKey() {

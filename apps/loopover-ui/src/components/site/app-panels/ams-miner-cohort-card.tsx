@@ -98,31 +98,41 @@ export function AmsMinerCohortCard({ reviewability }: { reviewability: Array<{ p
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
-  const load = useCallback(async () => {
-    const apiBase = repoApiBase(repoFullName);
-    if (!apiBase) {
-      setComparison(null);
+  const load = useCallback(
+    async (opts?: { cancelled?: () => boolean }) => {
+      const isCancelled = opts?.cancelled ?? (() => false);
+      const apiBase = repoApiBase(repoFullName);
+      if (!apiBase) {
+        setComparison(null);
+        setLoadError(null);
+        return;
+      }
       setLoadError(null);
-      return;
-    }
-    setLoadError(null);
-    setLoading(true);
-    const result = await apiFetch<AmsMinerCohortComparison>(`${apiBase}/ams-miner-cohort`, {
-      label: "AMS miner cohort comparison",
-      credentials: "include",
-      silentStatus: true,
-    });
-    if (result.ok) {
-      setComparison(result.data);
-    } else {
-      setComparison(null);
-      setLoadError(result.message);
-    }
-    setLoading(false);
-  }, [repoFullName]);
+      setLoading(true);
+      const result = await apiFetch<AmsMinerCohortComparison>(`${apiBase}/ams-miner-cohort`, {
+        label: "AMS miner cohort comparison",
+        credentials: "include",
+        silentStatus: true,
+      });
+      // Ignore responses after a newer repoFullName keyed a fresh load (#7784).
+      if (isCancelled()) return;
+      if (result.ok) {
+        setComparison(result.data);
+      } else {
+        setComparison(null);
+        setLoadError(result.message);
+      }
+      setLoading(false);
+    },
+    [repoFullName],
+  );
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void load({ cancelled: () => cancelled });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   return (
@@ -171,8 +181,8 @@ export function AmsMinerCohortCard({ reviewability }: { reviewability: Array<{ p
           isLoading={Boolean(base) && loading}
           isError={Boolean(base) && !loading && loadError !== null}
           isEmpty={Boolean(base) && !loading && comparison !== null && !comparison.present}
-          onRetry={load}
-          onRefresh={load}
+          onRetry={() => void load()}
+          onRefresh={() => void load()}
           loadingTitle="Loading AMS contributor mix…"
           errorTitle="Couldn't load the AMS contributor mix"
           errorDescription={loadError ?? undefined}
