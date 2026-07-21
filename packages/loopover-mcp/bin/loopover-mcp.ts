@@ -702,6 +702,42 @@ const checkSlopRiskShape = {
   testFiles: z.array(z.string().max(400)).max(2000).optional(),
 };
 
+// #7759: mirrors checkImprovementPotentialShape in src/mcp/server.ts — same optional local-metadata fields the
+// CLI / REST route already accept. Stdio proxies POST /v1/lint/improvement-potential (builders stay app-side).
+const checkImprovementPotentialShape = {
+  changedFiles: z
+    .array(z.object({ path: z.string().min(1).max(400), additions: z.number().int().min(0).optional(), deletions: z.number().int().min(0).optional() }))
+    .max(2000)
+    .optional(),
+  tests: z.array(z.string().max(400)).max(2000).optional(),
+  testFiles: z.array(z.string().max(400)).max(2000).optional(),
+  patchCoverageDeltaPercent: z.number().optional(),
+  complexityDeltas: z
+    .array(
+      z.object({
+        file: z.string().min(1).max(400),
+        line: z.number().int().min(1),
+        name: z.string().min(1).max(400),
+        before: z.number().int().min(0),
+        after: z.number().int().min(0),
+        delta: z.number().int(),
+      }),
+    )
+    .max(2000)
+    .optional(),
+  duplicationDeltas: z
+    .array(
+      z.object({
+        file: z.string().min(1).max(400),
+        line: z.number().int().min(1),
+        duplicateOfLine: z.number().int().min(1),
+        lines: z.number().int().min(1),
+      }),
+    )
+    .max(2000)
+    .optional(),
+};
+
 const checkIssueSlopShape = {
   title: z.string().max(500).optional(),
   body: z.string().max(40000).optional(),
@@ -1060,6 +1096,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_check_slop_risk",
     category: "review",
     description: "Assess the deterministic slop risk of a planned change from local diff metadata (paths + line counts) + the PR description — an agent-native, source-free quality self-check. Returns slopRisk (0-100), band, findings, and the rubric. Computed in-process; no repo data and no API round-trip.",
+  },
+  {
+    name: "loopover_check_improvement_potential",
+    category: "review",
+    description:
+      "Assess the deterministic structural-improvement potential of a planned change from local diff metadata plus optional complexity/duplication/patch-coverage deltas — mirrors loopover_check_slop_risk on the positive axis. Same as `loopover-mcp improvement-potential` / POST /v1/lint/improvement-potential.",
   },
   {
     name: "loopover_simulate_open_pr_pressure",
@@ -1819,6 +1861,18 @@ registerStdioTool(
     inputSchema: checkSlopRiskShape,
   },
   (input: any) => toolResult("LoopOver slop-risk self-check.", { ...buildSlopAssessment(input), rubric: SLOP_RUBRIC_MARKDOWN }),
+);
+
+// #7759: CLI already proxies POST /v1/lint/improvement-potential (#6748); register the matching stdio tool.
+// Proxies rather than computing in-process (same rationale as the CLI): builders live app-side, not in
+// @loopover/engine. Forward the validated input object as the POST body — no local branching.
+registerStdioTool(
+  "loopover_check_improvement_potential",
+  {
+    description: stdioToolDescription("loopover_check_improvement_potential"),
+    inputSchema: checkImprovementPotentialShape,
+  },
+  async (input: any) => toolResult("LoopOver improvement-potential self-check.", await apiPost("/v1/lint/improvement-potential", input)),
 );
 
 // #6751: CLI mirror of the remote server's loopover_simulate_open_pr_pressure. Proxies rather than computing
