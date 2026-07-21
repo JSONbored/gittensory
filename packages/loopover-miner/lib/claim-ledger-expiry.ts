@@ -28,7 +28,11 @@ export function findExpiredClaims(claims: ClaimEntry[], nowMs: number, maxAgeMs:
   for (const claim of claims) {
     if (claim?.status !== "active") continue;
     const ageMs = claimAgeMs(claim, nowMs);
-    if (ageMs === null) continue;
+    // Fail-closed: an unparseable claimedAt is unusable — sweep it rather than retaining it forever.
+    if (ageMs === null) {
+      expired.push(claim);
+      continue;
+    }
     if (ageMs > maxAgeMs) expired.push(claim);
   }
   return expired;
