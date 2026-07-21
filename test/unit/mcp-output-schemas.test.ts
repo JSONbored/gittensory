@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import { persistSignalSnapshot, upsertBounty, upsertIssueFromGitHub, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, updatePullRequestSlopAssessment, persistUpstreamRulesetSnapshot } from "../../src/db/repositories";
-import { writeLiveOverride, type StorageEnv } from "../../src/review/auto-apply";
+import { writeLiveOverride, writeShadowOverride, type StorageEnv } from "../../src/review/auto-apply";
 import type { AuthIdentity } from "../../src/auth/security";
 import { LoopoverMcp } from "../../src/mcp/server";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
@@ -16,6 +16,7 @@ const TOOLS_WITH_OUTPUT_SCHEMA = [
   "loopover_get_maintainer_noise",
   "loopover_get_activation_preview",
   "loopover_get_live_gate_thresholds",
+  "loopover_get_gate_config_effective",
   "loopover_get_label_audit",
   "loopover_get_maintainer_lane",
   "loopover_get_repo_onboarding_pack",
@@ -153,6 +154,10 @@ describe("MCP output schema discovery", () => {
     const liveGate = byName.get("loopover_get_live_gate_thresholds");
     const liveGateProps = Object.keys((liveGate?.outputSchema?.properties ?? {}) as Record<string, unknown>);
     expect(liveGateProps).toEqual(expect.arrayContaining(["repoFullName", "confidence_floor", "scope_cap_files", "scope_cap_lines", "error"]));
+
+    const gateConfig = byName.get("loopover_get_gate_config_effective");
+    const gateConfigProps = Object.keys((gateConfig?.outputSchema?.properties ?? {}) as Record<string, unknown>);
+    expect(gateConfigProps).toEqual(expect.arrayContaining(["repoFullName", "effective", "shadowPending"]));
   });
 
   it("preserves the full tool inventory while adding output schemas", async () => {
@@ -342,6 +347,39 @@ describe("MCP tool calls return schema-valid structured content", () => {
     await writeLiveOverride(env as unknown as StorageEnv, "octo/demo", { confidenceFloor: 0.9 });
     const { client } = await connectTestClient(env);
     const result = await client.callTool({ name: "loopover_get_live_gate_thresholds", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({ status: "forbidden", repoFullName: "octo/demo" });
+  });
+
+  it("loopover_get_gate_config_effective returns nulls when no override exists (#7800)", async () => {
+    const { client } = await connectTestClient(createTestEnv());
+    const result = await client.callTool({ name: "loopover_get_gate_config_effective", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      repoFullName: "octo/demo",
+      effective: { confidenceFloor: null, scopeCap: { files: null, lines: null } },
+      shadowPending: false,
+    });
+  });
+
+  it("loopover_get_gate_config_effective returns live override + shadowPending (#7800)", async () => {
+    const env = createTestEnv();
+    await writeLiveOverride(env as unknown as StorageEnv, "octo/demo", { confidenceFloor: 0.91, scopeCap: { files: 8, lines: 250 } });
+    await writeShadowOverride(env as unknown as StorageEnv, "octo/demo", { confidenceFloor: 0.4 }, "2099-01-01T00:00:00.000Z");
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({ name: "loopover_get_gate_config_effective", arguments: { owner: "octo", repo: "demo" } });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      repoFullName: "octo/demo",
+      effective: { confidenceFloor: 0.91, scopeCap: { files: 8, lines: 250 } },
+      shadowPending: true,
+    });
+  });
+
+  it("loopover_get_gate_config_effective denies mcp callers outside the read allowlist (#7800)", async () => {
+    const env = createTestEnv({ MCP_READ_REPO_ALLOWLIST: "" });
+    const { client } = await connectTestClient(env);
+    const result = await client.callTool({ name: "loopover_get_gate_config_effective", arguments: { owner: "octo", repo: "demo" } });
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({ status: "forbidden", repoFullName: "octo/demo" });
   });

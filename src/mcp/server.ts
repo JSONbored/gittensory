@@ -1006,6 +1006,13 @@ const liveGateThresholdsOutputSchema = {
   status: z.string().optional(),
 };
 
+const gateConfigEffectiveOutputSchema = {
+  repoFullName: z.string().optional(),
+  effective: z.unknown().optional(),
+  shadowPending: z.boolean().optional(),
+  status: z.string().optional(),
+};
+
 const maintainerMeasurementReportOutputSchema = {
   repoFullName: z.string().optional(),
   generatedAt: z.string().optional(),
@@ -1906,6 +1913,7 @@ export const MCP_TOOL_CATEGORIES: Record<string, McpToolCategory> = {
   loopover_get_pr_reviewability: "review",
   loopover_get_pr_maintainer_packet: "review",
   loopover_get_live_gate_thresholds: "maintainer",
+  loopover_get_gate_config_effective: "maintainer",
   loopover_validate_linked_issue: "discovery",
   loopover_check_before_start: "discovery",
   loopover_find_opportunities: "discovery",
@@ -2477,6 +2485,17 @@ export class LoopoverMcp {
         outputSchema: liveGateThresholdsOutputSchema,
       },
       async (input) => this.toolResult(await this.getLiveGateThresholds(input)),
+    );
+
+    register(
+      "loopover_get_gate_config_effective",
+      {
+        description:
+          "Return a repo's current effective self-tuned gate thresholds (confidenceFloor, scopeCap) plus whether a shadow override is soaking. Metadata-only, repo-scoped, no GitHub writes.",
+        inputSchema: ownerRepoShape,
+        outputSchema: gateConfigEffectiveOutputSchema,
+      },
+      async (input) => this.toolResult(await this.getGateConfigEffective(input)),
     );
 
     register(
@@ -3494,6 +3513,35 @@ export class LoopoverMcp {
     return {
       summary: `Live gate thresholds for ${fullName}.`,
       data: { repoFullName: fullName, ...fields } as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async getGateConfigEffective(input: { owner: string; repo: string }): Promise<ToolPayload> {
+    // Mirrors GET /v1/repos/:owner/:repo/gate-config/effective: same mcp allowlist gate as reviewability,
+    // same loadOverride/loadShadowOverride projection, always returning the effective + shadowPending shape
+    // (nulls when no live override — never a not-found throw).
+    const fullName = `${input.owner}/${input.repo}`;
+    if (!(await this.canAccessRepo(fullName))) {
+      return {
+        summary: `Forbidden: session cannot access effective gate config for ${fullName}.`,
+        data: { status: "forbidden", repoFullName: fullName },
+      };
+    }
+    const storageEnv = this.env as unknown as StorageEnv;
+    const [override, shadow] = await Promise.all([loadOverride(storageEnv, fullName), loadShadowOverride(storageEnv, fullName)]);
+    return {
+      summary: `Effective gate config for ${fullName}.`,
+      data: {
+        repoFullName: fullName,
+        effective: {
+          confidenceFloor: override?.confidenceFloor ?? null,
+          scopeCap: {
+            files: override?.scopeCap?.files ?? null,
+            lines: override?.scopeCap?.lines ?? null,
+          },
+        },
+        shadowPending: shadow !== null,
+      },
     };
   }
 

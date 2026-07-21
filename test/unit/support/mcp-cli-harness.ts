@@ -583,6 +583,17 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #7800: effective self-tuned gate thresholds (camelCase effective + shadowPending).
+    if (request.url === "/v1/repos/owner/repo/gate-config/effective" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          effective: { confidenceFloor: 0.91, scopeCap: { files: 8, lines: 250 } },
+          shadowPending: true,
+        }),
+      );
+      return;
+    }
     if (request.url === "/v1/repos/owner/repo/outcome-patterns" && request.method === "GET") {
       response.end(
         JSON.stringify({
