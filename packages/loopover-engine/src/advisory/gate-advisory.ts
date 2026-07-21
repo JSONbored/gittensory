@@ -84,6 +84,13 @@ export type GateCheckPolicy = {
    *  the PR author also filed the linked issue — becomes a hard blocker. Defaults to `advisory` — the
    *  finding is surfaced but never blocks unless the maintainer opts in. */
   selfAuthoredLinkedIssueGateMode?: GateRuleMode | undefined;
+  /** Linked-issue satisfaction gate (#1961/#3906). When `block`, a `linked_issue_scope_mismatch` finding —
+   *  raised when the AI assessment judged (above its confidence floor) that the PR's diff does NOT satisfy
+   *  its primary linked issue's intent — becomes a hard blocker. Defaults to `advisory` — the finding is
+   *  never even produced under `advisory`/`off` (the caller gates the assessment itself on this mode; see
+   *  runLinkedIssueSatisfactionForAdvisory, src/queue/processors.ts on the host side), so this branch only
+   *  matters once a repo has explicitly opted into `block`. */
+  linkedIssueSatisfactionGateMode?: GateRuleMode | undefined;
   /** Content-lane linked-issue deliverable gate (#content-lane-deliverable). When `block`, a
    *  `content_lane_deliverable_missing` finding — raised when the PR's linked issue's own text names a
    *  content-lane path the PR's changed files never touch — becomes a hard blocker. Fully deterministic (a
@@ -621,6 +628,10 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to
   // advisory — the finding surfaces in the panel without ever closing the PR unless explicitly configured.
   if (code === "self_authored_linked_issue") return gatePolicyBlocks(policy.selfAuthoredLinkedIssueGateMode, "advisory");
+  // Linked-issue satisfaction gate (#1961/#3906): blocks only when the maintainer opts in with `block`. The
+  // finding itself is only ever produced when the caller already resolved `block` mode (host side), so this
+  // is a defense-in-depth mirror of that gate, not the primary enforcement point.
+  if (code === "linked_issue_scope_mismatch") return gatePolicyBlocks(policy.linkedIssueSatisfactionGateMode, "advisory");
   // Content-lane linked-issue deliverable gate (#content-lane-deliverable): blocks only when the maintainer
   // opts in with `block`. Fully deterministic (no AI judgment involved), so it is exempt from the
   // close-precision circuit breaker on the host side.
