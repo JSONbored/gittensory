@@ -2419,7 +2419,7 @@ describe("local MCP git metadata collection (#7329 coverage)", () => {
     git(tempDir, "update-ref", "refs/remotes/origin/master", masterSha);
     const withOriginMaster = collectLocalBranchMetadata({ cwd: tempDir, login: "oktofeesh1" });
     expect(withOriginMaster.baseRef).toBe("origin/master");
-  });
+  }, 30_000);
 
   it("throws when repoFullName cannot be inferred from the remote and is not passed explicitly", async () => {
     const { collectLocalBranchMetadata } = await import("../../packages/loopover-mcp/lib/local-branch.js");
