@@ -28,7 +28,7 @@ import { isOpsEnabled, resolveOpsManifestOverride, runOpsAlerts } from "../revie
 import { isSweepWatchdogEnabled, resolveSweepWatchdogManifestOverride, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
 import { isLoopEscalationSweepEnabled, runLoopEscalationSweep } from "../review/loop-escalation-wire";
 import { isPrReconciliationEnabled, resolvePrReconciliationManifestOverride, runOpenPrReconciliation } from "../review/pr-reconciliation";
-import { isActiveReviewReconciliationEnabled, runActiveReviewReconciliation } from "../review/active-review-reconciliation";
+import { isActiveReviewReconciliationEnabled, resolveActiveReviewReconciliationManifestOverride, runActiveReviewReconciliation } from "../review/active-review-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import { runSelfTuneBreaker } from "../review/outcomes-wire";
 import { isRagEnabled } from "../review/rag-wire";
@@ -324,9 +324,12 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       return;
     case "reconcile-active-review-tracking":
       // Self-heal (flag LOOPOVER_ACTIVE_REVIEW_RECONCILIATION). Defense-in-depth: the cron only ENQUEUES this
-      // when the flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op. Fails
-      // safe internally — never throws into the queue.
-      if (isActiveReviewReconciliationEnabled(env)) await runActiveReviewReconciliation(env);
+      // when enabled (env OR manifest), but a stale in-flight job that lands after a flag-flip must still
+      // no-op, so disabled does zero work here too. Fails safe internally — never throws into the queue.
+      {
+        const activeReviewReconciliationManifestOverride = await resolveActiveReviewReconciliationManifestOverride(env);
+        if (isActiveReviewReconciliationEnabled(env, activeReviewReconciliationManifestOverride)) await runActiveReviewReconciliation(env);
+      }
       return;
     case "selftune":
       // Convergence (self-improve / auto-tune, flag LOOPOVER_REVIEW_SELFTUNE). Defense-in-depth: the cron only

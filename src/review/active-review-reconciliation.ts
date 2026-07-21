@@ -13,6 +13,8 @@ import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import { createInstallationToken } from "../github/app";
 import { fetchLivePullRequestState } from "../github/backfill";
 import { getRepository, listStaleActiveReviewTracking, terminalizeActiveReviewTracking } from "../db/repositories";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { incr } from "../selfhost/metrics";
 import { errorMessage } from "../utils/json";
 
@@ -21,10 +23,55 @@ import { errorMessage } from "../utils/json";
  *  worth spending a live GitHub call to check. */
 export const STALE_ACTIVE_REVIEW_MIN_AGE_MS = 15 * 60_000;
 
-/** True when the active-review-tracking reconciliation sweep is enabled. Matches the codebase's shared
- *  truthy-string convention (see isLoopEscalationSweepEnabled et al.) -- default OFF. */
-export function isActiveReviewReconciliationEnabled(env: { LOOPOVER_ACTIVE_REVIEW_RECONCILIATION?: string | undefined }): boolean {
+/** A manifest-sourced enable override (#webhook-reorder-clobber) -- the top-level `activeReviewReconciliation`
+ *  block of the loopover self-repo's `.loopover.yml` (see FocusManifestActiveReviewReconciliationConfig).
+ *  `present: false` means "no override configured", not "disabled" -- the caller falls through to the env var.
+ *  Mirrors PrReconciliationManifestOverride exactly. */
+export type ActiveReviewReconciliationManifestOverride = { present: boolean; enabled: boolean };
+
+/** True when the active-review-tracking reconciliation sweep is enabled. Config-as-code (#webhook-reorder-
+ *  clobber): a present top-level `activeReviewReconciliation` manifest block on the loopover self-repo wins
+ *  outright; otherwise falls back to the LOOPOVER_ACTIVE_REVIEW_RECONCILIATION env flag (default OFF).
+ *  Flag-OFF (default) → the caller never invokes the sweep, so the cron enqueues no reconciliation job and the
+ *  queue processor no-ops on a stale in-flight one. */
+export function isActiveReviewReconciliationEnabled(
+  env: { LOOPOVER_ACTIVE_REVIEW_RECONCILIATION?: string | undefined },
+  manifestOverride?: ActiveReviewReconciliationManifestOverride | undefined,
+): boolean {
+  if (manifestOverride?.present) return manifestOverride.enabled;
   return /^(1|true|yes|on)$/i.test((env.LOOPOVER_ACTIVE_REVIEW_RECONCILIATION ?? "").trim());
+}
+
+// Short in-isolate TTL cache for resolveActiveReviewReconciliationManifestOverride, mirroring
+// pr-reconciliation.ts / ops-wire.ts / sweep-watchdog.ts: fleet-wide self-repo override, single slot, 60s TTL.
+const ACTIVE_REVIEW_RECONCILIATION_MANIFEST_OVERRIDE_CACHE_TTL_MS = 60_000;
+let activeReviewReconciliationManifestOverrideCache: { override: ActiveReviewReconciliationManifestOverride; at: number } | null = null;
+
+/**
+ * Config-as-code override lookup (#webhook-reorder-clobber): read the top-level `activeReviewReconciliation`
+ * block off the loopover self-repo's `.loopover.yml`. A manifest load failure degrades to `{ present: false }`
+ * so a hiccup can never accidentally enable or disable the sweep.
+ */
+export async function resolveActiveReviewReconciliationManifestOverride(env: Env, nowMs: number = Date.now()): Promise<ActiveReviewReconciliationManifestOverride> {
+  const hit = activeReviewReconciliationManifestOverrideCache;
+  if (hit && nowMs - hit.at < ACTIVE_REVIEW_RECONCILIATION_MANIFEST_OVERRIDE_CACHE_TTL_MS) return hit.override;
+  try {
+    const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
+    const config = manifest.activeReviewReconciliation;
+    const override = { present: config.present, enabled: config.enabled };
+    activeReviewReconciliationManifestOverrideCache = { override, at: nowMs };
+    return override;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "active_review_reconciliation_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
+    const override = { present: false, enabled: false };
+    activeReviewReconciliationManifestOverrideCache = { override, at: nowMs };
+    return override;
+  }
+}
+
+/** Test-only: clears the cached override, mirroring clearPrReconciliationManifestOverrideCacheForTest. */
+export function clearActiveReviewReconciliationManifestOverrideCacheForTest(): void {
+  activeReviewReconciliationManifestOverrideCache = null;
 }
 
 export interface ReconciledActiveReview {

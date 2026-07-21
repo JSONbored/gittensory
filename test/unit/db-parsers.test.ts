@@ -709,6 +709,49 @@ describe("database row parser hardening", () => {
 
       expect(redelivered.title).toBe("PR redelivered"); // non-guarded fields still apply on an equal-timestamp resync
     });
+
+    it("REGRESSION: a stale payload's rejected head SHA does not reset the review-latency clock (headShaObservedAt) -- the clock must follow the RESOLVED head, not the raw payload's", async () => {
+      const env = createTestEnv();
+      const first = await upsertPullRequestFromGitHub(env, "owner/repo", {
+        number: 36, title: "PR", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [], updated_at: "2026-07-21T12:00:00.000Z",
+      });
+      expect(typeof first.headShaObservedAt).toBe("string");
+      // A genuine fresh commit lands and is processed promptly -- the real current head is now a2.
+      const pushed = await upsertPullRequestFromGitHub(env, "owner/repo", {
+        number: 36, title: "PR", state: "open", user: { login: "bob" }, head: { sha: "a2" }, labels: [], updated_at: "2026-07-21T12:05:00.000Z",
+      });
+      expect(pushed.headSha).toBe("a2");
+      expect(pushed.headShaObservedAt).not.toBe(first.headShaObservedAt);
+
+      // A delayed job for the OLDER `review_requested` event (before the push) finally dequeues, still carrying
+      // the STALE head "a1". Without resolvedHeadSha driving headShaChanged, this would look like "a2 -> a1", a
+      // head change, and wrongly reset the clock even though the stored head never actually moved off "a2".
+      const stale = await upsertPullRequestFromGitHub(env, "owner/repo", {
+        number: 36, title: "PR", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [], updated_at: "2026-07-21T12:01:00.000Z",
+      });
+
+      expect(stale.headSha).toBe("a2"); // still protected by the out-of-order guard
+      expect(stale.headShaObservedAt).toBe(pushed.headShaObservedAt); // clock untouched by the stale rejection
+    });
+
+    it("REGRESSION: a stale payload claiming state: open does not re-stamp lastSeenOpenAt once the PR has actually closed", async () => {
+      const env = createTestEnv();
+      await upsertPullRequestFromGitHub(env, "owner/repo", {
+        number: 37, title: "PR", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [], updated_at: "2026-07-21T12:00:00.000Z",
+      });
+      await upsertPullRequestFromGitHub(env, "owner/repo", {
+        number: 37, title: "PR", state: "closed", user: { login: "bob" }, head: { sha: "a1" }, labels: [], updated_at: "2026-07-21T12:05:00.000Z",
+      });
+      // A delayed job for an older still-"open" event dequeues after the real close.
+      await upsertPullRequestFromGitHub(env, "owner/repo", {
+        number: 37, title: "PR", state: "open", user: { login: "bob" }, head: { sha: "a1" }, labels: [], updated_at: "2026-07-21T12:01:00.000Z",
+      });
+
+      const row = await env.DB.prepare("select last_seen_open_at from pull_requests where repo_full_name = ? and number = ?")
+        .bind("owner/repo", 37)
+        .first<{ last_seen_open_at: string | null }>();
+      expect(row?.last_seen_open_at).toBeNull(); // not re-stamped as "seen open" by the stale rejection
+    });
   });
 
   it("countRecentDeadLetters counts github_app.dlq_dead_lettered audits since a cutoff, independent of any ops flag (#1276)", async () => {
