@@ -19,12 +19,17 @@ export const IDEA_CONSTRAINT_MAX_CHARS = 200;
 
 export type IdeaPriority = "normal" | "high";
 
+/** Where an idea's work lands: an existing repo (BYOR) or a not-yet-created one to auto-provision (#7589). */
+export type IdeaTarget =
+  | { kind: "existing"; repo: string }
+  | { kind: "provision" };
+
 /** The raw input a renter provides (spec §1). */
 export type IdeaSubmission = {
   id: string;
   title: string;
   body: string;
-  targetRepo: string;
+  targetRepo: IdeaTarget;
   constraints?: string[] | undefined;
   acceptanceHints?: string[] | undefined;
   priority?: IdeaPriority | undefined;
@@ -91,10 +96,16 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
   else if (input.title.length > IDEA_TITLE_MAX_CHARS) errors.push("title_too_long");
   if (!isNonEmptyString(input.body)) errors.push("body_required");
   else if (input.body.length > IDEA_BODY_MAX_CHARS) errors.push("body_too_long");
-  // `owner/name`, each segment a GitHub-legal slug — an uninstallable/malformed repo is rejected at intake,
-  // never scored, since it can never produce a `go`.
-  if (!isNonEmptyString(input.targetRepo)) errors.push("target_repo_required");
-  else if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(input.targetRepo)) errors.push("target_repo_malformed");
+  // Back-compat wire form: a bare "owner/name" string means an existing repo (each segment a GitHub-legal
+  // slug -- an uninstallable/malformed repo is rejected at intake, never scored, since it can never produce a
+  // `go`). A `{ kind: "provision" }` object requests a not-yet-created repo (#7589). Anything else is missing.
+  let resolvedTarget: IdeaTarget | undefined;
+  if (isNonEmptyString(input.targetRepo)) {
+    if (/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(input.targetRepo)) resolvedTarget = { kind: "existing", repo: input.targetRepo };
+    else errors.push("target_repo_malformed");
+  } else if (typeof input.targetRepo === "object" && input.targetRepo !== null && (input.targetRepo as Record<string, unknown>).kind === "provision") {
+    resolvedTarget = { kind: "provision" };
+  } else errors.push("target_repo_required");
 
   const constraints = input.constraints;
   if (constraints !== undefined) {
@@ -116,7 +127,7 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
       id: input.id as string,
       title: input.title as string,
       body: input.body as string,
-      targetRepo: input.targetRepo as string,
+      targetRepo: resolvedTarget as IdeaTarget,
       constraints: constraints as string[] | undefined,
       acceptanceHints: acceptanceHints as string[] | undefined,
       priority: priority as IdeaPriority | undefined,
@@ -254,7 +265,11 @@ export type ClaimPlan = {
  *  (#4798) to the claim/code/submit loop. Each issue is dispositioned by its already-computed feasibility
  *  verdict — `go` → claimable, `raise` → deferred, `avoid` → skipped — preserving the graph's own
  *  dependency-respecting order so a prerequisite is always claimed before its dependents. No IO, no claiming. */
-export function buildClaimPlan(graph: TaskGraph, targetRepo: string): ClaimPlan {
+export function buildClaimPlan(graph: TaskGraph, target: IdeaTarget | string): ClaimPlan {
+  // Accepts either a bare repo string (its historical shape) or an IdeaTarget, so callers threading a
+  // submission's `targetRepo` (#7635) need no change. A not-yet-provisioned target has no repo yet, so the
+  // plan carries "" -- ClaimStep/ClaimPlan.targetRepo stays a plain string, unchanged for every consumer.
+  const targetRepo = typeof target === "string" ? target : target.kind === "existing" ? target.repo : "";
   const claimable: ClaimStep[] = [];
   const deferred: ClaimStep[] = [];
   const skipped: ClaimStep[] = [];

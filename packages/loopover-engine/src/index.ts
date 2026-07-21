@@ -621,6 +621,7 @@ export {
   type ConstituentIssueDraft,
   type IdeaPriority,
   type IdeaSubmission,
+  type IdeaTarget,
   type IdeaValidationResult,
   type TaskGraph,
   type TaskGraphIssueScore,

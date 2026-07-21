@@ -13,6 +13,12 @@ import {
 } from "../../packages/loopover-engine/src/idea-intake";
 
 function validIdea(overrides: Partial<IdeaSubmission> = {}): IdeaSubmission {
+  return { id: "idea-1", title: "One-line intent", body: "A freeform description of the outcome.", targetRepo: { kind: "existing", repo: "acme/widgets" }, ...overrides };
+}
+
+// Loose raw input for validateIdeaSubmission(unknown): lets a test pass a bare-string or malformed targetRepo
+// (the back-compat wire form) that a strict IdeaSubmission would reject.
+function rawIdea(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { id: "idea-1", title: "One-line intent", body: "A freeform description of the outcome.", targetRepo: "acme/widgets", ...overrides };
 }
 
@@ -47,44 +53,62 @@ describe("validateIdeaSubmission", () => {
   });
 
   it("flags over-length title and body", () => {
-    const r = validateIdeaSubmission(validIdea({ title: "x".repeat(IDEA_TITLE_MAX_CHARS + 1), body: "y".repeat(IDEA_BODY_MAX_CHARS + 1) }));
+    const r = validateIdeaSubmission(rawIdea({ title: "x".repeat(IDEA_TITLE_MAX_CHARS + 1), body: "y".repeat(IDEA_BODY_MAX_CHARS + 1) }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors).toEqual(expect.arrayContaining(["title_too_long", "body_too_long"]));
   });
 
   it("flags a malformed targetRepo (must be owner/name)", () => {
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "no-slash" })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "a/b/c" })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "owner/name" })).ok).toBe(true);
+    expect(validateIdeaSubmission(rawIdea({ targetRepo: "no-slash" })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ targetRepo: "a/b/c" })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ targetRepo: "owner/name" })).ok).toBe(true);
+  });
+
+  it("resolves a back-compat string targetRepo to an existing target, and accepts a provision object", () => {
+    const existing = validateIdeaSubmission(rawIdea({ targetRepo: "owner/name" }));
+    expect(existing.ok).toBe(true);
+    if (existing.ok) expect(existing.idea.targetRepo).toEqual({ kind: "existing", repo: "owner/name" });
+
+    const provision = validateIdeaSubmission(rawIdea({ targetRepo: { kind: "provision" } }));
+    expect(provision.ok).toBe(true);
+    if (provision.ok) expect(provision.idea.targetRepo).toEqual({ kind: "provision" });
+  });
+
+  it("rejects an object targetRepo that is not a provision request", () => {
+    for (const targetRepo of [{}, { kind: "existing" }]) {
+      const r = validateIdeaSubmission(rawIdea({ targetRepo }));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errors).toContain("target_repo_required");
+    }
   });
 
   it("flags invalid constraints (non-array, non-string element, over-length entry)", () => {
-    expect((validateIdeaSubmission(validIdea({ constraints: "x" as unknown as string[] }))).ok).toBe(false);
-    expect((validateIdeaSubmission(validIdea({ constraints: [1] as unknown as string[] }))).ok).toBe(false);
-    const long = validateIdeaSubmission(validIdea({ constraints: ["c".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
+    expect((validateIdeaSubmission(rawIdea({ constraints: "x" as unknown as string[] }))).ok).toBe(false);
+    expect((validateIdeaSubmission(rawIdea({ constraints: [1] as unknown as string[] }))).ok).toBe(false);
+    const long = validateIdeaSubmission(rawIdea({ constraints: ["c".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
     expect(long.ok).toBe(false);
     if (!long.ok) expect(long.errors).toContain("constraint_too_long");
-    expect(validateIdeaSubmission(validIdea({ constraints: ["ok"] })).ok).toBe(true);
+    expect(validateIdeaSubmission(rawIdea({ constraints: ["ok"] })).ok).toBe(true);
   });
 
   it("flags invalid acceptanceHints and an invalid priority", () => {
-    expect(validateIdeaSubmission(validIdea({ acceptanceHints: "x" as unknown as string[] })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ acceptanceHints: [2] as unknown as string[] })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ priority: "urgent" as unknown as IdeaSubmission["priority"] })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ priority: "normal" })).ok).toBe(true);
+    expect(validateIdeaSubmission(rawIdea({ acceptanceHints: "x" as unknown as string[] })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ acceptanceHints: [2] as unknown as string[] })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ priority: "urgent" as unknown as IdeaSubmission["priority"] })).ok).toBe(false);
+    expect(validateIdeaSubmission(rawIdea({ priority: "normal" })).ok).toBe(true);
   });
 
   it("caps acceptanceHints entry length at IDEA_CONSTRAINT_MAX_CHARS, same bound as constraints (#7243)", () => {
-    const atCap = validateIdeaSubmission(validIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS)] }));
+    const atCap = validateIdeaSubmission(rawIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS)] }));
     expect(atCap.ok).toBe(true);
 
-    const overCap = validateIdeaSubmission(validIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
+    const overCap = validateIdeaSubmission(rawIdea({ acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)] }));
     expect(overCap.ok).toBe(false);
     if (!overCap.ok) expect(overCap.errors).toContain("acceptance_hint_too_long");
   });
 
   it("does not raise acceptance_hint_too_long for a malformed (non-array) acceptanceHints — shape error only", () => {
-    const r = validateIdeaSubmission(validIdea({ acceptanceHints: "x".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1) as unknown as string[] }));
+    const r = validateIdeaSubmission(rawIdea({ acceptanceHints: "x".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1) as unknown as string[] }));
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.errors).toContain("acceptance_hints_invalid");
@@ -230,7 +254,15 @@ describe("scoreTaskGraph — graph verdict is the least-favorable across issues"
 });
 
 describe("buildClaimPlan — routes a scored task-graph into a loop claim plan (#4799)", () => {
-  const idea = validIdea({ id: "idea-C", targetRepo: "acme/widgets" });
+  const idea = validIdea({ id: "idea-C" });
+
+  it("accepts a bare repo string and an IdeaTarget, and carries \"\" for a not-yet-provisioned target", () => {
+    const graph = buildTaskGraph(idea, [{ key: "issue-1", title: "Add widget", body: "new" }]);
+    // bare string (historical shape), existing IdeaTarget, and a provision target all resolve correctly.
+    expect(buildClaimPlan(graph, "acme/widgets").targetRepo).toBe("acme/widgets");
+    expect(buildClaimPlan(graph, { kind: "existing", repo: "acme/widgets" }).targetRepo).toBe("acme/widgets");
+    expect(buildClaimPlan(graph, { kind: "provision" }).targetRepo).toBe("");
+  });
 
   it("puts a lone go issue in claimable, carrying the target repo", () => {
     const plan = buildClaimPlan(buildTaskGraph(idea, [{ key: "issue-1", title: "Add widget", body: "new" }]), idea.targetRepo);
