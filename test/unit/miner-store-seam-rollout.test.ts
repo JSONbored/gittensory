@@ -99,23 +99,23 @@ describe("SqliteDriver seam rollout — non-transactional store round-trips (#72
   it("replay-snapshot: saveSnapshot writes through the seam and getSnapshot reads the identical bundle back", () => {
     const store = track(openReplaySnapshotStore(tempPath("replay-snapshot.sqlite3")));
 
-    expect(store.getSnapshot("acme/widgets", "abc123")).toBeNull();
+    expect(store.getSnapshot("acme/widgets", "abc1234def0")).toBeNull();
 
     const saved = store.saveSnapshot({
       repoFullName: "acme/widgets",
-      commitSha: "abc123",
+      commitSha: "abc1234def0",
       worktreePath: "/tmp/wt/abc123",
       targetDate: "2026-07-01T00:00:00.000Z",
-      commits: [{ sha: "abc123", date: "2026-07-01T00:00:00.000Z", subject: "root" }],
-      tags: [{ name: "v1.0.0", date: "2026-07-01T00:00:00.000Z", targetSha: "abc123" }],
+      commits: [{ sha: "abc1234def0", date: "2026-07-01T00:00:00.000Z", subject: "root" }],
+      tags: [{ name: "v1.0.0", date: "2026-07-01T00:00:00.000Z", targetSha: "abc1234def0" }],
       readme: { filename: "README.md", content: "# hi" },
     });
-    expect(saved).toMatchObject({ repoFullName: "acme/widgets", commitSha: "abc123" });
+    expect(saved).toMatchObject({ repoFullName: "acme/widgets", commitSha: "abc1234def0" });
 
-    const read = store.getSnapshot("acme/widgets", "abc123");
+    const read = store.getSnapshot("acme/widgets", "abc1234def0");
     expect(read).toEqual(saved);
     // JSON-encoded columns survive the round-trip intact.
-    expect(read?.commits).toEqual([{ sha: "abc123", date: "2026-07-01T00:00:00.000Z", subject: "root" }]);
+    expect(read?.commits).toEqual([{ sha: "abc1234def0", date: "2026-07-01T00:00:00.000Z", subject: "root" }]);
     expect(read?.readme).toEqual({ filename: "README.md", content: "# hi" });
   });
 });
