@@ -329,6 +329,20 @@ gate:
   # spelling has the same real effect; this one wins if both are set.
   linkedIssueSatisfaction: off
 
+  # Content-lane linked-issue deliverable gate — only meaningful for a repo with
+  # a registry content-lane spec resolved (see review/content-lane/spec-resolver.ts);
+  # a no-op otherwise. When the PR's primary linked issue's own text names a path
+  # matching that spec's entry/provider file pattern, the PR's changed files must
+  # touch at least one matching file -- a PR that never touches the content lane
+  # at all (e.g. adds only a regression test) cannot silently close a content-
+  # delivery issue via a bare "Closes #N" reference. off = never checked;
+  # advisory = a miss renders as a warning but never blocks; block = a miss
+  # ALSO becomes a hard blocker (content_lane_deliverable_missing). Fully
+  # deterministic (a text/path match, no AI call). off | advisory | block.
+  # Default: off. DB-backed (dashboard-settable too); this overrides the stored
+  # value.
+  contentLaneDeliverable: off
+
   # Gate-check dry-run. When true, the posted check conclusion remains the real
   # non-enforcing verdict while comments/check text may also show the would-be
   # stricter verdict for AI-review blocker mode. It does not disable downstream

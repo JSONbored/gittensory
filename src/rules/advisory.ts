@@ -91,6 +91,14 @@ export type GateCheckPolicy = {
    *  runLinkedIssueSatisfactionForAdvisory, src/queue/processors.ts), so this branch only matters once a
    *  repo has explicitly opted into `block`. */
   linkedIssueSatisfactionGateMode?: GateRuleMode | undefined;
+  /** Content-lane linked-issue deliverable gate (#content-lane-deliverable). When `block`, a
+   *  `content_lane_deliverable_missing` finding — raised when the PR's linked issue's own text names a
+   *  content-lane path the PR's changed files never touch — becomes a hard blocker. Fully deterministic (a
+   *  text/path match, no AI call), so this finding is exempt from the AI-judgment close-precision breaker.
+   *  Defaults to `off` — the finding is never even produced under `off` (the caller gates the check itself
+   *  on this mode; see runContentLaneDeliverableCheckForAdvisory, src/queue/processors.ts), so this branch
+   *  only matters once a repo has explicitly opted into `advisory`/`block`. */
+  contentLaneDeliverableGateMode?: GateRuleMode | undefined;
   /** CLA / license-compatibility gate (#2564). When `block`, a `cla_consent_missing` finding — raised when
    *  neither configured detection method (a consent phrase in the PR body, or a named CLA-bot check-run
    *  conclusion) confirms consent — becomes a hard blocker. `off` (default) = no finding at all; `advisory` =
@@ -999,6 +1007,11 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // runLinkedIssueSatisfactionForAdvisory), so this is a defense-in-depth mirror of that gate, not the
   // primary enforcement point.
   if (code === "linked_issue_scope_mismatch") return gateMode(policy.linkedIssueSatisfactionGateMode ?? "advisory") === "block";
+  // Content-lane linked-issue deliverable gate (#content-lane-deliverable): blocks only when the maintainer
+  // opts in with `block`. The finding itself is only ever produced when the caller already resolved a non-
+  // "off" mode (see runContentLaneDeliverableCheckForAdvisory), so this is a defense-in-depth mirror of that
+  // gate, not the primary enforcement point -- mirrors linked_issue_scope_mismatch immediately above.
+  if (code === "content_lane_deliverable_missing") return gateMode(policy.contentLaneDeliverableGateMode ?? "off") === "block";
   // Lockfile-tamper-risk gate (#2563): blocks only when the maintainer opts in with `block`. Defaults to `off`
   // (the finding is never even produced — see maybeAddLockfileTamperFinding's mode gate in queue/processors.ts),
   // so this branch only matters once a repo has explicitly turned the scan on.

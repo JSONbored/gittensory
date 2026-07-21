@@ -937,6 +937,17 @@ export type RepositorySettings = {
    *  `signals/focus-manifest.ts` — so setting either spelling has the same real effect. Default `off` —
    *  opt-in. */
   linkedIssueSatisfactionGateMode: GateRuleMode;
+  /** Content-lane linked-issue deliverable gate (#content-lane-deliverable). Only meaningful for a repo with
+   *  a registry content-lane spec resolved (see `review/content-lane/spec-resolver.ts`) — a no-op otherwise.
+   *  `off` = never checked (byte-identical to today). `advisory`/`block`: when the PR's primary linked
+   *  issue's own text names a path matching the resolved spec's entry/provider file pattern, the PR's
+   *  changed files must touch AT LEAST ONE matching file; `block` additionally lets a miss become a gate
+   *  blocker (`content_lane_deliverable_missing`) — fully deterministic (a text/path match, no AI call), so
+   *  it is exempt from the AI-judgment close-precision breaker, like `surface_lane_reject`. This is the
+   *  DB-backed, dashboard-settable counterpart; `.loopover.yml gate.contentLaneDeliverable` overrides it
+   *  exactly like every other `gate:` field overrides its `RepositorySettings` counterpart. Default `off` —
+   *  opt-in. */
+  contentLaneDeliverableGateMode: GateRuleMode;
   /** Slop-risk threshold (0-100) at/above which `slopGateMode: block` blocks. Default 60 (the `high` band). */
   slopGateMinScore?: number | null | undefined;
   /** AI-assisted slop advisory (the `slopAiAdvisory` capability). When true AND `slopGateMode != off`, a

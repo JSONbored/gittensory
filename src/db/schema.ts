@@ -54,6 +54,9 @@ export const repositorySettings = sqliteTable("repository_settings", {
   // confidence-floor "unaddressed" verdict additionally becomes a hard blocker. See src/rules/advisory.ts's
   // isConfiguredGateBlocker (linked_issue_scope_mismatch) and loopover-gate-setting-wiring for the pattern.
   linkedIssueSatisfactionGateMode: text("linked_issue_satisfaction_gate_mode").notNull().default("off"),
+  // Content-lane linked-issue deliverable gate (#content-lane-deliverable): off by default. Only meaningful
+  // for a repo with a registry content-lane spec resolved. Enforcement lands in the content-lane wire, not here.
+  contentLaneDeliverableGateMode: text("content_lane_deliverable_gate_mode").notNull().default("off"),
   slopGateMinScore: integer("slop_gate_min_score"),
   slopAiAdvisory: integer("slop_ai_advisory", { mode: "boolean" }).notNull().default(false),
   // AI-review low-confidence disposition (#4603): one_shot | hold_for_review | advisory_only. Governs a

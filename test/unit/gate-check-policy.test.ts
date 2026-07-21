@@ -989,6 +989,33 @@ describe("linked-issue satisfaction gate blocker (#1961/#3906)", () => {
   });
 });
 
+describe("content-lane linked-issue deliverable gate blocker (#content-lane-deliverable)", () => {
+  const deliverableAdvisory = (): Advisory => ({
+    ...missingIssueAdvisory(),
+    findings: [{ code: "content_lane_deliverable_missing", title: "Linked issue's expected content was never delivered", severity: "warning", detail: "The linked issue names registry/subnets/nepher-robotics.json, but this PR's changed files never touch it.", action: "Edit registry/subnets/nepher-robotics.json to deliver the issue's actual ask, or link the correct issue." }],
+  });
+
+  it("blocks (failure) under contentLaneDeliverableGateMode: block, confirmed contributor", () => {
+    const result = evaluateGateCheck(deliverableAdvisory(), { contentLaneDeliverableGateMode: "block", confirmedContributor: true });
+    expect(result.conclusion).toBe("failure");
+    expect(result.blockers.map((b) => b.code)).toContain("content_lane_deliverable_missing");
+  });
+
+  it("stays advisory (never blocks) under off/unset (default) or advisory mode, even if a finding exists", () => {
+    expect(evaluateGateCheck(deliverableAdvisory(), {}).conclusion).toBe("success"); // unset ⇒ defaults to off
+    expect(evaluateGateCheck(deliverableAdvisory(), { contentLaneDeliverableGateMode: "off" }).conclusion).toBe("success");
+    const advisoryResult = evaluateGateCheck(deliverableAdvisory(), { contentLaneDeliverableGateMode: "advisory" });
+    expect(advisoryResult.conclusion).toBe("success");
+    expect(advisoryResult.warnings.map((w) => w.code)).toContain("content_lane_deliverable_missing");
+  });
+
+  it("resolveEffectiveSettings maps gate.contentLaneDeliverable → contentLaneDeliverableGateMode, and gateCheckPolicy threads it", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { contentLaneDeliverable: "block" } }));
+    expect(eff.contentLaneDeliverableGateMode).toBe("block");
+    expect(gateCheckPolicy(settings({ contentLaneDeliverableGateMode: "block" }), null, true).contentLaneDeliverableGateMode).toBe("block");
+  });
+});
+
 describe("dry-run disposition (#gate-dryrun): would-be verdict without enforcing", () => {
   // #disposition-redesign: the dry-run shadow promotes ONLY the AI sub-gate. CLOSE is driven by AI confidence; the
   // advisory signals (linked issue, readiness/quality, slop, duplicates) can NEVER drive a would-be close.

@@ -9745,6 +9745,14 @@
             "nullable": true,
             "minimum": 0,
             "exclusiveMinimum": true
+          },
+          "contentLaneDeliverableGateMode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "advisory",
+              "block"
+            ]
           }
         },
         "required": [
@@ -9765,6 +9773,7 @@
           "manifestPolicyGateMode",
           "selfAuthoredLinkedIssueGateMode",
           "linkedIssueSatisfactionGateMode",
+          "contentLaneDeliverableGateMode",
           "slopAiAdvisory",
           "aiReviewMode",
           "aiReviewByok",
@@ -10467,6 +10476,14 @@
                   "defaultAllowed",
                   "commandOverrides"
                 ]
+              },
+              "contentLaneDeliverableGateMode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "advisory",
+                  "block"
+                ]
               }
             },
             "required": [
@@ -10487,6 +10504,7 @@
               "manifestPolicyGateMode",
               "selfAuthoredLinkedIssueGateMode",
               "linkedIssueSatisfactionGateMode",
+              "contentLaneDeliverableGateMode",
               "autoLabelEnabled",
               "typeLabelsEnabled",
               "gittensorLabel",

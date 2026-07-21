@@ -26,6 +26,7 @@ function settings(over: Partial<RepositorySettings> = {}): RepositorySettings {
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
     linkedIssueSatisfactionGateMode: "off",
+    contentLaneDeliverableGateMode: "off",
     slopAiAdvisory: false,
     qualityGateMinScore: null,
     autoLabelEnabled: true,

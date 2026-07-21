@@ -4,10 +4,14 @@ import {
   assessSubnetDocument,
   assessFreshness,
   assessProviderDocument,
+  checkContentLaneDeliverable,
   classifyRegistryPrScope,
+  extractPathTokens,
   findDuplicateAppendedEntry,
+  FLAT_PROVIDER_PATTERN,
   isRegistrySubmissionScope,
   METAGRAPHED_LANE_SPEC,
+  SUBNET_ENTRY_PATTERN,
   type RegistryLaneSpec,
   computeGrounding,
   containsSecretLikeText,
@@ -498,6 +502,81 @@ describe("findDuplicateAppendedEntry (generic, spec-driven duplicate detection �
     // b is appended once; the base document ALSO already independently contains an unrelated entry `a` — the
     // presence of an unrelated existing entry must not spuriously flag the single new append as a duplicate.
     expect(findDuplicateAppendedEntry(specUrl, [b], [a])).toBeNull();
+  });
+});
+
+describe("extractPathTokens", () => {
+  it("extracts path-like tokens from free-form prose", () => {
+    expect(extractPathTokens("Add the missing surfaces to registry/subnets/nepher-robotics.json please.")).toEqual(["registry/subnets/nepher-robotics.json"]);
+  });
+
+  it("dedupes repeated mentions of the same token", () => {
+    expect(extractPathTokens("See registry/subnets/foo.json. Edit registry/subnets/foo.json again.")).toEqual(["registry/subnets/foo.json"]);
+  });
+
+  it("returns [] for text with no path-shaped tokens", () => {
+    expect(extractPathTokens("This issue has no file paths mentioned at all")).toEqual([]);
+  });
+
+  it("extracts multiple distinct tokens in declaration order", () => {
+    expect(extractPathTokens("Touch registry/subnets/a.json and registry/providers/b.json")).toEqual(["registry/subnets/a.json", "registry/providers/b.json"]);
+  });
+});
+
+// #content-lane-deliverable: the metagraphed #7385/#7382/#7379-class incident this check exists to catch — a
+// PR that adds only a regression test file and closes an issue whose entire ask is a registry/subnets/*.json
+// edit, with the registry file itself never touched.
+describe("checkContentLaneDeliverable (generic, spec-driven — #content-lane-deliverable)", () => {
+  const spec: RegistryLaneSpec = { entryFilePattern: SUBNET_ENTRY_PATTERN, providerFilePattern: FLAT_PROVIDER_PATTERN, collectionField: "surfaces" };
+
+  it("is not-applicable when the issue text names no path matching this spec at all (an unrelated issue)", () => {
+    const result = checkContentLaneDeliverable(spec, "Fix the flaky CI timeout in the Worker API.", ["src/api/routes.ts"]);
+    expect(result).toEqual({ verdict: "not-applicable" });
+  });
+
+  it("regression: is 'missing' when the issue names the entry file but the PR only adds a test (the reported incident's exact shape)", () => {
+    const issueText = [
+      "MCP execute: verify + wire SN49 (Nepher Robotics) once Phase 1 ships",
+      "",
+      "Missing surfaces to add to registry/subnets/nepher-robotics.json:",
+      "- subnet-api at https://api.nepher.example/v1",
+    ].join("\n");
+    const changedFiles = ["tests/nepher-robotics-call-subnet-surface-verify.test.mjs"];
+    expect(checkContentLaneDeliverable(spec, issueText, changedFiles)).toEqual({
+      verdict: "missing",
+      mentionedPath: "registry/subnets/nepher-robotics.json",
+    });
+  });
+
+  it("is 'delivered' when the PR actually touches the entry file the issue names", () => {
+    const issueText = "Add the missing surfaces to registry/subnets/nepher-robotics.json.";
+    const changedFiles = ["tests/nepher-robotics-call-subnet-surface-verify.test.mjs", "registry/subnets/nepher-robotics.json"];
+    expect(checkContentLaneDeliverable(spec, issueText, changedFiles)).toEqual({ verdict: "delivered" });
+  });
+
+  it("is 'delivered' via the provider file pattern too, not just the entry pattern", () => {
+    const issueText = "Register the new provider at registry/providers/acme.json.";
+    expect(checkContentLaneDeliverable(spec, issueText, ["registry/providers/acme.json"])).toEqual({ verdict: "delivered" });
+  });
+
+  it("is 'missing' when the issue names a provider path but the PR touches an unrelated file", () => {
+    const issueText = "Register the new provider at registry/providers/acme.json.";
+    const result = checkContentLaneDeliverable(spec, issueText, ["tests/acme-verify.test.mjs"]);
+    expect(result).toEqual({ verdict: "missing", mentionedPath: "registry/providers/acme.json" });
+  });
+
+  it("canonicalizes changed-file paths the same way classifyRegistryPrScope does (case/./-prefix/backslash-insensitive)", () => {
+    const issueText = "Add registry/subnets/foo.json.";
+    expect(checkContentLaneDeliverable(spec, issueText, ["REGISTRY/SUBNETS/FOO.JSON"]).verdict).toBe("delivered");
+    expect(checkContentLaneDeliverable(spec, issueText, ["./registry/subnets/foo.json"]).verdict).toBe("delivered");
+    expect(checkContentLaneDeliverable(spec, issueText, ["registry\\subnets\\foo.json"]).verdict).toBe("delivered");
+  });
+
+  it("is not-applicable for a spec with no providerFilePattern configured, even if the issue mentions an entry-shaped path (guards the optional-chaining branch)", () => {
+    const entryOnlySpec: RegistryLaneSpec = { entryFilePattern: SUBNET_ENTRY_PATTERN, collectionField: "surfaces" };
+    const issueText = "Add registry/subnets/foo.json.";
+    expect(checkContentLaneDeliverable(entryOnlySpec, issueText, ["registry/subnets/foo.json"]).verdict).toBe("delivered");
+    expect(checkContentLaneDeliverable(entryOnlySpec, issueText, ["tests/foo.test.mjs"]).verdict).toBe("missing");
   });
 });
 

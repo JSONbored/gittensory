@@ -877,6 +877,7 @@ const maintainerSettingsSchema = z
     mergeReadinessGateMode: z.enum(["off", "advisory", "block"]),
     manifestPolicyGateMode: z.enum(["off", "advisory", "block"]),
     linkedIssueSatisfactionGateMode: z.enum(["off", "advisory", "block"]),
+    contentLaneDeliverableGateMode: z.enum(["off", "advisory", "block"]),
     // #6443: mergeTrainMode/gittensorLabel/blacklistLabel/createMissingLabel removed -- no longer DB-backed,
     // config-as-code only via .loopover.yml's settings: block now.
     // #6446: firstTimeContributorGrace removed -- a dead, never-wired RESERVED/INERT field (#2266); deleted

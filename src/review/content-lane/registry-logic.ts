@@ -829,6 +829,46 @@ export function findDuplicateAppendedEntry(
   return null;
 }
 
+// ── Linked-issue content-lane deliverable check (generic, config-as-code — #content-lane-deliverable) ────
+//
+// A content-lane repo's contribution issues typically name the specific entry/provider file the PR is meant to
+// touch (e.g. "add the missing surfaces to registry/subnets/foo.json"). A PR whose diff never touches ANY file
+// matching the spec's own patterns can still close that issue via a bare "Closes #N" reference — the classic
+// "test-only PR closes a content issue without ever delivering the content" gap. This check is entirely driven
+// by the CALLER's own already-resolved RegistryLaneSpec (metagraphed's or any other registry's) and the free-
+// form issue text — it hardcodes no registry's own path shape or issue-template wording.
+
+/** Path-like tokens in free-form text: word characters, dots, slashes, hyphens, ending in a dot-extension —
+ *  e.g. "registry/subnets/foo-bar.json" inside an issue body's prose. Generic text scanning, not anchored to
+ *  any one registry's path shape; the caller's own spec.entryFilePattern/providerFilePattern narrows the
+ *  candidates down to ones that actually matter for that registry. */
+const PATH_TOKEN_PATTERN = /[\w][\w./-]*\.[A-Za-z0-9]+/g;
+export function extractPathTokens(text: string): string[] {
+  return [...new Set(text.match(PATH_TOKEN_PATTERN) ?? [])];
+}
+
+/** `not-applicable`: the issue text names no path matching this spec's own patterns at all — nothing to check
+ *  (an unrelated issue, e.g. a docs or code-fix issue, on the same content-lane repo). `delivered`: the issue
+ *  names such a path AND the PR's changed files touch at least one file matching the spec — the common,
+ *  expected case for a real contribution. `missing`: the issue names such a path but the PR touches NONE
+ *  matching — the gap this check exists to catch, independent of AI judgment, CI status, or a closing keyword. */
+export type ContentLaneDeliverableCheck = { verdict: "not-applicable" } | { verdict: "delivered" } | { verdict: "missing"; mentionedPath: string };
+
+/**
+ * Determine whether a PR's changed files deliver the content-lane file its linked issue's own text names.
+ * PURE — no I/O, no registry-specific hardcoding; entirely driven by `spec` (the caller's already-resolved
+ * RegistryLaneSpec) and the two text inputs. `changedFiles` are matched the SAME way classifyRegistryPrScope
+ * matches them (canonicalized: lowercased + `./`-stripped + `\`→`/`), so an uppercase / `./`-prefixed /
+ * `\`-separated changed path is recognized identically to how the rest of the content lane already treats it.
+ */
+export function checkContentLaneDeliverable(spec: RegistryLaneSpec, issueText: string, changedFiles: readonly string[]): ContentLaneDeliverableCheck {
+  const matchesSpec = (candidate: string): boolean => spec.entryFilePattern.test(candidate) || (spec.providerFilePattern?.test(candidate) ?? false);
+  const mentionedPath = extractPathTokens(issueText).find(matchesSpec);
+  if (!mentionedPath) return { verdict: "not-applicable" };
+  const delivered = changedFiles.some((file) => matchesSpec(canonicalize(file)));
+  return delivered ? { verdict: "delivered" } : { verdict: "missing", mentionedPath };
+}
+
 // metagraphed's spec — the first RegistryLaneSpec. surfaces[] live in registry/subnets/<slug>.json; providers
 // are FLAT registry/providers/<slug>.json (the community/ subdir was retired). A PR touching the old
 // registry/candidates/community/* path matches none of these → mixed-files / not-direct (correctly not adopted

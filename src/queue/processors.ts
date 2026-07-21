@@ -579,6 +579,8 @@ import {
   withReviewPipelineSpan,
 } from "../selfhost/review-tracing";
 import { evaluateWithSurfaceLane } from "../review/content-lane-wire";
+import { checkContentLaneDeliverable } from "../review/content-lane/registry-logic";
+import { resolveRegistryLaneSpec } from "../review/content-lane/spec-resolver";
 import { reviewThreadBlockerFinding } from "../review/review-thread-findings";
 import { indexRepo, reindexChangedPaths } from "../review/rag-index";
 import {
@@ -7479,6 +7481,83 @@ export async function runLinkedIssueSatisfactionForAdvisory(
 }
 
 /**
+ * Run the content-lane linked-issue deliverable check for advisory purposes (#content-lane-deliverable) --
+ * opt-in via `contentLaneDeliverableGateMode != "off"`. Fully deterministic (no AI call): resolves the repo's
+ * registry content-lane spec (resolveRegistryLaneSpec -- a no-op when the repo has none configured, e.g. any
+ * repo other than a registry-model contribution repo) and, when the PR's primary linked issue's own text
+ * names a path matching that spec's entry/provider file pattern, requires the PR's changed files to touch at
+ * least one matching file. No-op (returns without pushing anything) when there is no linked issue, no
+ * content-lane spec resolved, the issue couldn't be fetched, or the deterministic check finds nothing to flag
+ * (not-applicable or delivered).
+ *
+ * In `block` mode, a "missing" verdict pushes a `content_lane_deliverable_missing` finding into
+ * `args.advisory.findings` so `isConfiguredGateBlocker` can block the gate; `advisory` mode pushes the SAME
+ * finding as a non-blocking warning -- unlike `runLinkedIssueSatisfactionForAdvisory`'s AI-judgment sibling,
+ * this check has no dedicated rendered section to avoid duplicating against, so the finding is the only
+ * surface either way.
+ *
+ * Fail-safe: any error is swallowed so the gate still finalizes. Runs for every PR with a linked issue
+ * regardless of confirmed-contributor status (unlike the AI-based sibling, which gates on that to protect
+ * shared/BYOK AI spend) -- this spends no AI budget, only a bounded GitHub issue-text fetch, the same modest
+ * per-repo cost `runLinkedIssueSatisfactionForAdvisory`'s own doc comment already accepts for feature isolation.
+ */
+export async function runContentLaneDeliverableCheckForAdvisory(
+  env: Env,
+  args: {
+    mode: AgentActionMode;
+    settings: RepositorySettings;
+    advisory: { findings: AdvisoryFinding[] };
+    repoFullName: string;
+    pr: { linkedIssues: number[] };
+    files: Awaited<ReturnType<typeof listPullRequestFiles>>;
+    installationId: number;
+  },
+): Promise<void> {
+  if (args.mode === "paused" || args.settings.contentLaneDeliverableGateMode === "off") return;
+  const primaryIssueNumber = args.pr.linkedIssues[0];
+  if (primaryIssueNumber === undefined) return;
+  try {
+    const manifest = await loadRepoFocusManifest(env, args.repoFullName).catch(() => null);
+    const spec = resolveRegistryLaneSpec(env, manifest, args.repoFullName);
+    if (!spec) return;
+    const token = (await createInstallationToken(env, args.installationId).catch(() => undefined)) ?? env.GITHUB_PUBLIC_TOKEN;
+    const admissionKey = githubAdmissionKeyForToken(env, args.installationId, token);
+    const issueFetch = await fetchLinkedIssueFacts(env, args.repoFullName, primaryIssueNumber, token, admissionKey);
+    if (issueFetch.status !== "found") return;
+    const issueText = [issueFetch.facts.title, issueFetch.facts.body]
+      .filter((part): part is string => Boolean(part?.trim()))
+      .join("\n\n");
+    if (!issueText.trim()) return;
+    const changedFiles = args.files.map((file) => file.path);
+    const result = checkContentLaneDeliverable(spec, issueText, changedFiles);
+    if (result.verdict !== "missing") return;
+    args.advisory.findings.push({
+      code: "content_lane_deliverable_missing",
+      severity: "warning",
+      title: "Linked issue's expected content was never delivered",
+      detail: `The linked issue names ${result.mentionedPath}, but this PR's changed files never touch it.`,
+      action: `Edit ${result.mentionedPath} to deliver the issue's actual ask, or link the correct issue.`,
+      publicText: `This PR's linked issue names \`${result.mentionedPath}\`, but the PR's changed files never touch it -- the issue's actual content deliverable does not appear to have been added.`,
+    });
+  } catch (error) {
+    /* v8 ignore next -- defense-in-depth: every call in the try block above is already self-guarded
+     * (loadRepoFocusManifest/.catch, createInstallationToken/.catch, fetchLinkedIssueFacts's own internal
+     * try/catch that never rethrows) or pure (resolveRegistryLaneSpec, checkContentLaneDeliverable), so this
+     * branch is currently unreachable by any realistic input -- kept so a future change to one of those
+     * calls (e.g. a DB-backed cache layer) degrades to "no finding" instead of an unhandled rejection. */
+    console.error(
+      JSON.stringify({
+        level: "warn",
+        event: "content_lane_deliverable_check_failed",
+        repository: args.repoFullName,
+        pullNumber: primaryIssueNumber,
+        error: errorMessage(error),
+      }),
+    );
+  }
+}
+
+/**
  * Map a PR's realized terminal state + the gate verdict to the {@link SubmissionOutcome} the reputation table
  * records — or `undefined` when there is no terminal signal to record yet. Pure + total; uses ONLY the PR
  * state / merged flag and the gate conclusion (no PR content):
@@ -9244,6 +9323,21 @@ async function maybePublishPrPublicSurface(
           installationId,
         });
       }
+    }
+    // Content-lane linked-issue deliverable check (#content-lane-deliverable, opt-in via
+    // contentLaneDeliverableGateMode). Independent gate mode from the AI-based satisfaction assessment above --
+    // `off` (default) short-circuits before any fetch, so this is byte-identical to before this feature existed
+    // for every repo that hasn't opted in. See runContentLaneDeliverableCheckForAdvisory's own doc comment.
+    if (settings.contentLaneDeliverableGateMode !== "off" && pr.linkedIssues.length > 0) {
+      await runContentLaneDeliverableCheckForAdvisory(env, {
+        mode,
+        settings,
+        advisory,
+        repoFullName,
+        pr,
+        files: await getReviewFiles(),
+        installationId,
+      });
     }
     // Focus-manifest policy gate (#555) -- see maybeApplyManifestPolicyGate's own doc comment.
     await maybeApplyManifestPolicyGate(env, {

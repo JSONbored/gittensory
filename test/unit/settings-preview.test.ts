@@ -50,6 +50,7 @@ function settings(overrides: Partial<RepositorySettings> = {}): RepositorySettin
     manifestPolicyGateMode: "off",
     selfAuthoredLinkedIssueGateMode: "advisory",
     linkedIssueSatisfactionGateMode: "off",
+    contentLaneDeliverableGateMode: "off",
     slopAiAdvisory: false,
     qualityGateMinScore: null,
     autoLabelEnabled: true,

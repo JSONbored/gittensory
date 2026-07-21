@@ -124,6 +124,11 @@ concern from the gate's own merge/close decision.
   its primary linked issue's intent, distinct from `linkedIssueGateMode` (which only checks a link
   exists). Default `off`; `advisory` renders in the review comment without blocking, `block`
   additionally lets a confidence-floor-passing "unaddressed" verdict become a blocker.
+- `contentLaneDeliverableGateMode` — only meaningful for a repo with a registry content-lane spec
+  configured; a no-op otherwise. Fully deterministic (a text/path match, no AI call): when the PR's
+  primary linked issue's own text names a path matching the content lane's entry/provider file
+  pattern, the PR's changed files must touch at least one matching file. Default `off`; `advisory`
+  renders a miss as a warning, `block` additionally makes a miss a blocker.
 - `moderationGateMode` — whether the moderation-rules engine (contributor cap, blacklist,
   review-nag feeding a shared cross-repo violation tally) runs on this repo. Default `inherit`
   (defers to the instance-wide default); `off`/`enabled` force it per repo.

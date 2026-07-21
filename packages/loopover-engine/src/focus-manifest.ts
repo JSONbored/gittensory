@@ -154,6 +154,17 @@ export type FocusManifestGateConfig = {
    *  merge/close decision. See `src/types.ts`'s `linkedIssueSatisfactionGateMode` doc for the authoritative
    *  cross-reference. */
   linkedIssueSatisfaction: GateRuleMode | null;
+  /** `gate.contentLaneDeliverable` (#content-lane-deliverable): off|advisory|block, off by default. Only
+   *  meaningful for a repo with a registry content-lane spec resolved (see content-lane/spec-resolver.ts) —
+   *  no-op otherwise. When not off, and the PR's primary linked issue's own text names a path matching that
+   *  spec's entry/provider file pattern, the PR's changed files must touch AT LEAST ONE matching file — a PR
+   *  that never touches the content lane at all (e.g. adds only a regression test) cannot silently close a
+   *  content-delivery issue via a bare "Closes #N" reference. Fully deterministic (a text/path match, no AI
+   *  call) — `block` treats a miss as a hard, zero-hallucination blocker, exempt from the AI-judgment close-
+   *  precision breaker. DB-backed (dashboard-settable too); this overrides the stored value — mirrors
+   *  `linkedIssueSatisfaction` immediately above in shape, but is a purely structural check, not an AI
+   *  opinion, so it carries none of that feature's AI-budget/confidence-floor machinery. */
+  contentLaneDeliverable: GateRuleMode | null;
   dryRun: boolean | null;
   /** `gate.premergeContentRecheck` (#2550): for a PR touching `migrations/**`, re-verify against a live,
    *  freshly-fetched tip of the base branch — unioned with this PR's own new migration filenames — for a
@@ -1253,6 +1264,7 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   manifestPolicy: null,
   selfAuthoredLinkedIssue: null,
   linkedIssueSatisfaction: null,
+  contentLaneDeliverable: null,
   dryRun: null,
   premergeContentRecheck: null,
   requireFreshRebaseWindowMinutes: null,
@@ -1723,6 +1735,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     manifestPolicy: normalizeOptionalGateMode(record.manifestPolicy, "gate.manifestPolicy", warnings),
     selfAuthoredLinkedIssue: normalizeOptionalGateMode(record.selfAuthoredLinkedIssue, "gate.selfAuthoredLinkedIssue", warnings),
     linkedIssueSatisfaction: normalizeOptionalGateMode(record.linkedIssueSatisfaction, "gate.linkedIssueSatisfaction", warnings),
+    contentLaneDeliverable: normalizeOptionalGateMode(record.contentLaneDeliverable, "gate.contentLaneDeliverable", warnings),
     dryRun: normalizeOptionalBoolean(record.dryRun, "gate.dryRun", warnings),
     premergeContentRecheck: normalizeOptionalBoolean(record.premergeContentRecheck, "gate.premergeContentRecheck", warnings),
     requireFreshRebaseWindowMinutes: normalizeOptionalPositiveInteger(record.requireFreshRebaseWindow, "gate.requireFreshRebaseWindow", warnings),
@@ -1779,6 +1792,7 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.manifestPolicy !== null ||
     gate.selfAuthoredLinkedIssue !== null ||
     gate.linkedIssueSatisfaction !== null ||
+    gate.contentLaneDeliverable !== null ||
     gate.dryRun !== null ||
     gate.premergeContentRecheck !== null ||
     gate.requireFreshRebaseWindowMinutes !== null ||
@@ -1861,6 +1875,7 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
   if (gate.manifestPolicy !== null) out.manifestPolicy = gate.manifestPolicy;
   if (gate.selfAuthoredLinkedIssue !== null) out.selfAuthoredLinkedIssue = gate.selfAuthoredLinkedIssue;
   if (gate.linkedIssueSatisfaction !== null) out.linkedIssueSatisfaction = gate.linkedIssueSatisfaction;
+  if (gate.contentLaneDeliverable !== null) out.contentLaneDeliverable = gate.contentLaneDeliverable;
   if (gate.dryRun !== null) out.dryRun = gate.dryRun;
   if (gate.premergeContentRecheck !== null) out.premergeContentRecheck = gate.premergeContentRecheck;
   if (gate.requireFreshRebaseWindowMinutes !== null) out.requireFreshRebaseWindow = gate.requireFreshRebaseWindowMinutes;

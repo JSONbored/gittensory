@@ -233,6 +233,7 @@ export const GATE_MODE_MANIFEST = [
   { field: "manifestPolicyGateMode", aliases: ["manifestPolicyGateMode", "gate.manifestPolicy"], pages: ["how-reviews-work.mdx", "tuning.mdx"] },
   { field: "selfAuthoredLinkedIssueGateMode", aliases: ["selfAuthoredLinkedIssueGateMode", "gate.selfAuthoredLinkedIssue"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
   { field: "linkedIssueSatisfactionGateMode", aliases: ["linkedIssueSatisfactionGateMode", "gate.linkedIssueSatisfaction"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
+  { field: "contentLaneDeliverableGateMode", aliases: ["contentLaneDeliverableGateMode", "gate.contentLaneDeliverable"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
   { field: "moderationGateMode", aliases: ["moderationGateMode", "settings.moderationGateMode"], pages: ["how-reviews-work.mdx", "tuning.mdx", "github-app.mdx"] },
 ];
 

@@ -93,6 +93,7 @@ export function gateCheckPolicy(
     manifestPolicyGateMode: settings.manifestPolicyGateMode,
     selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
     linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode,
+    contentLaneDeliverableGateMode: settings.contentLaneDeliverableGateMode,
     authorMergedPrCount: authorHistory?.mergedPrCount,
     authorClosedUnmergedPrCount: authorHistory?.closedUnmergedPrCount,
     slopGateMinScore: settings.slopGateMinScore ?? null,

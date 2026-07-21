@@ -246,6 +246,7 @@ export type RepoSettingsPreview = {
     manifestPolicyGateMode: RepositorySettings["manifestPolicyGateMode"];
     selfAuthoredLinkedIssueGateMode: RepositorySettings["selfAuthoredLinkedIssueGateMode"];
     linkedIssueSatisfactionGateMode: RepositorySettings["linkedIssueSatisfactionGateMode"];
+    contentLaneDeliverableGateMode: RepositorySettings["contentLaneDeliverableGateMode"];
     slopGateMinScore?: number | null | undefined;
     autoLabelEnabled: boolean;
     typeLabelsEnabled: boolean;
@@ -382,6 +383,7 @@ export function buildRepoSettingsPreview(args: {
       manifestPolicyGateMode: settings.manifestPolicyGateMode,
       selfAuthoredLinkedIssueGateMode: settings.selfAuthoredLinkedIssueGateMode,
       linkedIssueSatisfactionGateMode: settings.linkedIssueSatisfactionGateMode,
+      contentLaneDeliverableGateMode: settings.contentLaneDeliverableGateMode,
       slopGateMinScore: settings.slopGateMinScore ?? null,
       autoLabelEnabled: settings.autoLabelEnabled,
       typeLabelsEnabled: settings.typeLabelsEnabled ?? true,

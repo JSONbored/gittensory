@@ -2115,6 +2115,7 @@ describe("v2 signal builders", () => {
         manifestPolicyGateMode: "off",
         selfAuthoredLinkedIssueGateMode: "advisory",
         linkedIssueSatisfactionGateMode: "off",
+        contentLaneDeliverableGateMode: "off",
         slopAiAdvisory: false,
         qualityGateMinScore: null,
         autoLabelEnabled: true,
