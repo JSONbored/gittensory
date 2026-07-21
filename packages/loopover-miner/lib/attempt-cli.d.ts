@@ -9,6 +9,7 @@ import type { resolveRejectionSignaled as ResolveRejectionSignaledFn } from "./r
 import type { cleanupAttemptWorktree as CleanupAttemptWorktreeFn, prepareAttemptWorktree as PrepareAttemptWorktreeFn } from "./attempt-worktree.js";
 import type { SelfReviewContextFetch, fetchSelfReviewContext as FetchSelfReviewContextFn } from "./self-review-context.js";
 import type { buildCodingTaskSpec as BuildCodingTaskSpecFn } from "./coding-task-spec.js";
+import { scheduleAmsNotificationEvents, type PublishAmsNotificationEventsOptions } from "./ams-notifications.js";
 import type { resolveAmsPolicy as ResolveAmsPolicyFn } from "./ams-policy.js";
 import type { checkMinerKillSwitch as CheckMinerKillSwitchFn } from "./governor-kill-switch.js";
 import type { getAttemptHistory as GetAttemptHistoryFn } from "./portfolio-queue.js";
@@ -94,6 +95,8 @@ export type RunAttemptOptions = {
     /** Hosted soft-claim coordination at work-start/work-end, when the plane is enabled (#7168). Defaults to
      *  discovery-index-client.js's own submitSoftClaim. */
     submitSoftClaim?: typeof SubmitSoftClaimFn;
+    /** AMS badge notifications (#7657). Defaults to scheduleAmsNotificationEvents (session POST / inject). */
+    scheduleAmsNotifications?: (events: Parameters<typeof scheduleAmsNotificationEvents>[0], options?: PublishAmsNotificationEventsOptions) => void;
     /** Invoked with the real structured result at every return point, in addition to (never instead of) the
      *  plain exit-code return -- the loop orchestrator's real hook into what actually happened. */
     onResult?: (result: AttemptCliResult) => void;

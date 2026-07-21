@@ -272,6 +272,8 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
       const deliveries = (
         await mapWithConcurrency(events, NOTIFY_EVALUATE_EVENT_CONCURRENCY, (event) => evaluateNotificationEvent(env, event))
       ).flat();
+      // Same notify-deliver handoff shape as evaluateAndEnqueueNotificationDeliveries (#7657) — keep the
+      // concurrency-bounded evaluate here for large webhook batches, then enqueue delivers identically.
       await Promise.all(
         deliveries.map((delivery) =>
           env.JOBS.send({

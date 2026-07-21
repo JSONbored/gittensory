@@ -1,4 +1,5 @@
 import type { AppendEventInput, LedgerEntry } from "./event-ledger.js";
+import { scheduleAmsNotificationEvents, type PublishAmsNotificationEventsOptions } from "./ams-notifications.js";
 /** Event-ledger vocabulary for a miner-local PR outcome. */
 export declare const MINER_PR_OUTCOME_EVENT: "pr_outcome";
 /** The terminal decisions a miner records for one of its own PRs. */
@@ -24,6 +25,10 @@ export type RecordPrOutcomeOptions = {
     eventLedger?: {
         appendEvent(event: AppendEventInput): LedgerEntry;
     };
+    /** Recipient for AMS badge notify (#7657). When absent, notification is skipped (ledger write still happens). */
+    recipientLogin?: string;
+    env?: Record<string, string | undefined>;
+    scheduleAmsNotifications?: (events: Parameters<typeof scheduleAmsNotificationEvents>[0], options?: PublishAmsNotificationEventsOptions) => void;
 };
 export type PrOutcomeLedgerReader = {
     readEvents(filter?: {

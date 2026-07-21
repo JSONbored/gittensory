@@ -27,6 +27,8 @@ import {
   ContributorPrOutcomesSchema,
   NotificationFeedSchema,
   NotificationsMarkedSchema,
+  AmsNotificationsAcceptedSchema,
+  AmsNotificationsBodySchema,
   ContributorRewardRiskStrategySchema,
   ContributorProfileSchema,
   ContributorScoringProfileSchema,
@@ -828,6 +830,30 @@ export function buildOpenApiSpec() {
         content: { "application/json": { schema: NotificationsMarkedSchema } },
       },
       400: { description: "Invalid mark-read body" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/contributors/{login}/ams-notifications",
+    summary: "Enqueue AMS notification events for a contributor",
+    request: {
+      params: z.object({ login: z.string() }),
+      body: {
+        content: {
+          "application/json": {
+            schema: AmsNotificationsBodySchema,
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description:
+          "Accepts AMS-relevant notification events (attempt start/fail, governor pause, PR outcome) and evaluates them through the existing notify-evaluate → notify-deliver path (#7657).",
+        content: { "application/json": { schema: AmsNotificationsAcceptedSchema } },
+      },
+      400: { description: "Invalid AMS notification body" },
+      403: { description: "Forbidden when login does not match the authenticated session" },
     },
   });
   registry.registerPath({

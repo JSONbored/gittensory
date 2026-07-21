@@ -519,6 +519,32 @@ export const NotificationsMarkedSchema = z
   })
   .openapi("NotificationsMarked");
 
+export const AmsNotificationsAcceptedSchema = z
+  .object({
+    login: z.string(),
+    accepted: z.number(),
+    enqueued: z.number(),
+  })
+  .openapi("AmsNotificationsAccepted");
+
+export const AmsNotificationEventInputSchema = z
+  .object({
+    eventType: z.enum(["ams_attempt_started", "ams_attempt_failed", "ams_governor_paused", "ams_pr_outcome"]),
+    repoFullName: z.string(),
+    pullNumber: z.number().int().min(0),
+    dedupKey: z.string(),
+    deeplink: z.string(),
+    actorLogin: z.string(),
+    detectedAt: z.string(),
+  })
+  .openapi("AmsNotificationEventInput");
+
+export const AmsNotificationsBodySchema = z
+  .object({
+    events: z.array(AmsNotificationEventInputSchema).min(1).max(20),
+  })
+  .openapi("AmsNotificationsBody");
+
 export const ContributorOpportunitySchema = z
   .object({
     repoFullName: z.string(),
