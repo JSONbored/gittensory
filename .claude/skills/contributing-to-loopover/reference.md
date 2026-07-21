@@ -55,6 +55,20 @@ jobs run only if their path filter matched; on push to `main`, everything runs.
 | ui → typecheck | `tsc --noEmit` (UI) | `npm run ui:typecheck` | UI type error |
 | ui → tests | vitest jsdom (UI) | `npm run ui:test` | failing UI component test |
 | ui → build | UI build | `npm run ui:build` | build failure (note: it re-runs `ui:openapi` internally) |
+
+**Verifying the built artifact actually serves — do not use `apps/loopover-ui`'s `preview` in the raw
+TanStack Start template sense.** `apps/loopover-ui` targets nitro's `cloudflare-module` preset
+(`vite.config.ts`), which repackages the server build as `dist/server/index.mjs`. `@tanstack/start-plugin-core`'s
+`vite preview` integration derives the file it imports from the vite-level server entry's basename
+(`server.js`) and has no awareness of nitro's repackaging, so it 500s with `ERR_MODULE_NOT_FOUND` on
+every request after any build — no upstream fix exists as of `@tanstack/start-plugin-core@1.171.24`
+(confirmed identical to the installed `1.171.19`). `apps/loopover-ui/package.json`'s `preview` script is
+already fixed to use `wrangler dev --config dist/server/wrangler.json --ip 127.0.0.1 --port 4173 --local`
+instead (the same mechanism `deploy:built`/`version:built` use) — run `npm --workspace @loopover/ui run
+build && npm --workspace @loopover/ui run preview`, or `npm run ui:preview` from the repo root (which
+builds everything first), to actually exercise the production build locally. `test/unit/loopover-ui-preview-script.test.ts`
+regression-guards the script itself against reverting to `vite preview`.
+
 | ui → extension lint | `eslint` (VS Code + miner extensions) | `npm run extension:lint && npm run miner-extension:lint` | extension ESLint error (same `push \|\| ui==true` trigger as the `ui →` rows) |
 | ui → extension typecheck | `tsc --noEmit` (extensions) | `npm run extension:typecheck && npm run miner-extension:typecheck` | extension type error (same `push \|\| ui==true` trigger) |
 | security (PR only) | dependency-review (moderate+) | `npm audit --audit-level=moderate` | a **newly added** dep has a moderate+ advisory |

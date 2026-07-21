@@ -14,7 +14,7 @@
     "build:dev": "vite build --mode development",
     "bundle-analysis": "bundle-analyzer ./dist/client --bundle-name=loopover-ui --upload-token=$CODECOV_TOKEN",
     "deploy:built": "wrangler deploy --config dist/server/wrangler.json",
-    "preview": "vite preview",
+    "preview": "wrangler dev --config dist/server/wrangler.json --ip 127.0.0.1 --port 4173 --local",
     "version:built": "wrangler versions upload --config dist/server/wrangler.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
