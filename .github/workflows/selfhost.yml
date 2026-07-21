@@ -145,10 +145,12 @@ jobs:
           docker network create gt-smoke
           docker run -d --name gt-redis --network gt-smoke redis:7-alpine
           trap 'docker rm -f gt gt-redis >/dev/null 2>&1 || true; docker network rm gt-smoke >/dev/null 2>&1 || true' EXIT
+          ok=0
           for _ in $(seq 1 30); do
-            if docker exec gt-redis redis-cli ping | grep -q PONG; then break; fi
+            if docker exec gt-redis redis-cli ping | grep -q PONG; then ok=1; break; fi
             sleep 1
           done
+          if [ "$ok" != "1" ]; then echo "::error::redis did not become ready"; docker logs gt-redis; exit 1; fi
           docker run -d --name gt --network gt-smoke -p 8787:8787 \
             -e REDIS_URL=redis://gt-redis:6379 \
             -e SELFHOST_SETUP_TOKEN=selfhost-ci-setup-token \
