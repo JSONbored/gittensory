@@ -179,7 +179,8 @@ jobs:
             # 6 of the 7 MCP CLI-cluster test files, and ONLY these 6, are truly self-contained w.r.t. root
             # src/**: verified by direct-import inspection that test/unit/mcp-cli-*.test.ts (5 files) and
             # their shared test/unit/support/mcp-cli-harness.ts import nothing but node:* builtins + vitest,
-            # and mcp-discovery.test.ts spawns packages/loopover-mcp/bin/loopover-mcp.js as a real
+            # and mcp-discovery.test.ts spawns packages/loopover-mcp/bin/loopover-mcp.ts (gitignored
+            # compiled output; Node's own type-stripping runs the .ts directly, no build needed) as a real
             # subprocess via StdioClientTransport -- none of the 6 ever load root src/ in-process. This mirrors
             # the `mcp` filter's own established trust boundary above (a self-contained package build). They are
             # NOT self-contained w.r.t. packages/loopover-engine/**, though: loopover-mcp now has a real
@@ -218,7 +219,7 @@ jobs:
             # Both miner-package test files are self-contained w.r.t. root src/**, the same trust boundary as
             # mcpCliHarness above: check-miner-package.test.ts only spawns scripts/check-miner-package.mjs as a
             # real subprocess (node:child_process + vitest, nothing else), and miner-calibration-types.test.ts
-            # only imports the scaffolded packages/loopover-miner/lib/calibration.js -- neither ever loads
+            # only imports the scaffolded packages/loopover-miner/lib/calibration.ts -- neither ever loads
             # root src/ in-process. Mirrors mcpCliHarness's filter shape for the same reason (tooling/config
             # changes that could plausibly affect how these tests run, plus the miner package + the test files
             # themselves), swapping in the miner-specific package and test files.
@@ -401,7 +402,10 @@ jobs:
         run: node scripts/validate-observability-configs.mjs
       # Runs ahead of Typecheck AND "Test with coverage" (#ci-engine-build-order): src/mcp/find-opportunities.ts
       # (root backend, since #2281/#3985) imports packages/loopover-miner/lib/opportunity-fanout.js --
-      # committed, pre-built JS -- which itself imports @loopover/engine. That package's dist/ is
+      # a .js-suffixed specifier esbuild/Vite resolve straight to the real (gitignored, uncompiled)
+      # .ts source, same as @loopover/engine's own src/**, so THIS half needs no build at all -- which
+      # itself imports @loopover/engine THE PACKAGE, though, via a bare `@loopover/engine` specifier
+      # elsewhere in the chain, and THAT resolves through node_modules to dist/. That package's dist/ is
       # gitignored and only exists after this build step, so ANY backend typecheck or test run needs it built
       # first, not just a PR that touches packages/loopover-engine/** directly (this step's original, too-
       # narrow trigger). Originally ran after coverage (broke test:coverage on PRs that didn't touch the
@@ -510,49 +514,36 @@ jobs:
       # old npm run build:mcp -- turbo resolves @loopover/engine as its topological dependency (mcp's own
       # package.json depends on @loopover/engine) and reuses the "Restore Turborepo cache" above, so an
       # engine-only PR's already-built engine is never rebuilt a second time here.
+      # packages/loopover-mcp ships .ts source only -- no compiled .js/.d.ts is committed (gitignored;
+      # see vitest.config.ts's resolveMinerMcpTsSourcePlugin for how tests run against the .ts directly
+      # with no build step). This "Build MCP" step still exists because the PACKAGE ITSELF has to ship
+      # runnable .js in its published npm tarball (npm install -g gives you plain Node, no TS toolchain),
+      # and "MCP package check" right below needs that real build output on disk to validate.
       - name: Build MCP
         if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npx turbo run build --filter=@loopover/mcp
-      # packages/loopover-mcp/{bin,lib} compile real TypeScript in place (tsc's outDir === rootDir, so
-      # e.g. lib/foo.ts emits lib/foo.js right next to it) and commit that emitted output -- the package
-      # ships as an installable CLI (npm install -g), so a runnable .js has to exist in the published
-      # tarball, and test/**/*.test.ts imports the emitted .js by its literal specifier, not the .ts
-      # source. "Build MCP" above (this job) and the "Test with coverage" job below run as separate GitHub
-      # Actions jobs with independent checkouts, so nothing in this job's build step can ever self-heal a
-      # stale commit before the coverage job's tests run against it -- a contributor who edits .ts and
-      # forgets to rebuild+commit the .js gets tests silently exercising old behavior with no CI signal,
-      # same drift-class gap the Selfhost/Miner env-reference checks above were added to close. This
-      # fails loudly instead: the build one step up already regenerated bin/lib in place, so any git
-      # status output here means the committed .js/.d.ts didn't match what that build just produced.
-      - name: MCP build drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' }}
-        run: node scripts/check-build-drift.mjs mcp
       - name: MCP package check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npm run test:mcp-pack
-      # Invokes turbo.json's @loopover/miner#build:tsc (cache: false -- historically to avoid a cache
-      # restore stomping this package's hand-written .js files while the #7290 migration was still
-      # in-flight; now that #7317 closed it out, every bin/lib file is compiler-owned and that original
-      # risk no longer applies, but re-enabling caching here is a separate change this PR doesn't make)
-      # and @loopover/miner#build:verify (real caching win: skips re-`node --check`-ing all 121 bin/lib
-      # files when neither changed) DIRECTLY as their own task names, deliberately NOT via the aggregate
-      # `@loopover/miner#build` task (which exists for standalone/local `npm run build` callers) -- that
-      # aggregate's own script is `npm run build:tsc && npm run build:verify`, i.e. it re-invokes both of
-      # these exact scripts a second time even when turbo already ran them as cached prerequisite tasks
-      # (declaring a task as a dependsOn prerequisite doesn't replace a parent task's own script body).
-      # Calling the aggregate here would silently double both the tsc compile and the syntax check on
-      # every run, negating the caching win this comment describes -- confirmed by reproducing the double
-      # execution locally before switching to this direct form. This also finally activates the
-      # build:tsc/build:verify split from Phase 0, which no ci.yml step exercised until now.
+      # Same "ships .ts only, this build is for the published npm tarball + the pack-check below, not for
+      # tests" story as MCP's own "Build MCP" step above. Invokes turbo.json's @loopover/miner#build:tsc
+      # (cache: false -- historically to avoid a cache restore stomping this package's hand-written .js
+      # files while the #7290 migration was still in-flight; now that #7317 closed it out, every bin/lib
+      # file is compiler-owned and that original risk no longer applies, but re-enabling caching here is a
+      # separate change this PR doesn't make) and @loopover/miner#build:verify (real caching win: skips
+      # re-`node --check`-ing all 121 bin/lib files when neither changed) DIRECTLY as their own task names,
+      # deliberately NOT via the aggregate `@loopover/miner#build` task (which exists for standalone/local
+      # `npm run build` callers) -- that aggregate's own script is `npm run build:tsc && npm run
+      # build:verify`, i.e. it re-invokes both of these exact scripts a second time even when turbo already
+      # ran them as cached prerequisite tasks (declaring a task as a dependsOn prerequisite doesn't replace
+      # a parent task's own script body). Calling the aggregate here would silently double both the tsc
+      # compile and the syntax check on every run, negating the caching win this comment describes --
+      # confirmed by reproducing the double execution locally before switching to this direct form. This
+      # also finally activates the build:tsc/build:verify split from Phase 0, which no ci.yml step
+      # exercised until now.
       - name: Build miner CLI
         if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npx turbo run build:tsc build:verify --filter=@loopover/miner
-      # Same "separate job, no self-heal" drift-class gap as MCP's own build drift check above, and the
-      # ORIGINAL motivating case for it: packages/loopover-miner/lib/cross-repo-evaluation.{ts,js,d.ts}
-      # are real files a contributor edits directly, not obscure internals.
-      - name: Miner build drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.engine == 'true' }}
-        run: node scripts/check-build-drift.mjs miner
       # loopover-miner depends on @loopover/engine for real too (same relationship as loopover-mcp above
       # -- packages/loopover-miner/package.json lists it as a dependency), so this and "Build miner CLI"
       # above now also trigger on an engine-only PR, matching "Build MCP"/"MCP package check"'s existing

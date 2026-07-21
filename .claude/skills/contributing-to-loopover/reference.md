@@ -40,6 +40,13 @@ jobs run only if their path filter matched; on push to `main`, everything runs.
 | mcp → pack | tarball hygiene | `npm run test:mcp-pack` | unexpected/forbidden file or stale README in the npm tarball |
 | miner → build | miner engine/pkg build | `npm run build:miner` | `@loopover/{engine,miner}` build error |
 | miner → pack | tarball hygiene | `npm run test:miner-pack` | unexpected/forbidden file in the miner npm tarball |
+
+`packages/loopover-{miner,mcp}` are `.ts`-only in git: editing their `bin`/`lib` source means editing `.ts`
+and nothing else — the compiled `.js`/`.d.ts` these two `build` commands produce is gitignored, never
+committed, and never something a PR needs to touch. Tests (in-process imports and the CLI-harness
+subprocess spawns alike) run straight off the `.ts`; `build:mcp`/`build:miner` above exist only to
+validate the real publishable artifact still compiles and packs cleanly.
+
 | rees → test | review-enrichment-service's own suite | `npm run rees:test` | any failing test under `review-enrichment/` |
 | ui → openapi drift | spec check | `npm run ui:openapi:check` | committed `openapi.json` is stale (run `npm run ui:openapi`) |
 | ui → openapi settings-parity | schema/type structural diff | `npm run ui:openapi:settings-parity` | `RepositorySettingsSchema` (src/openapi/schemas.ts) is missing a field the `RepositorySettings` type has |
