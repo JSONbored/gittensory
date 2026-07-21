@@ -243,15 +243,27 @@ export async function findPreviewUrlFromChecks(params: {
       const url = extractPreviewUrl(status.target_url);
       if (url) return url;
     }
-    const checks = await githubJson<{ check_runs?: Array<{ status?: string; conclusion?: string; details_url?: string; output?: { summary?: string; text?: string } }> }>(
+    // Paginate check-runs the same way getPreviewBuildState does (#7779): a commit with >100 check-runs
+    // can push the Cloudflare Workers Builds check onto page 2+, and a single per_page=100 read would then
+    // miss the preview URL even though getPreviewBuildState (which already paginates) still sees the build.
+    return await findAcrossPages<
+      { status?: string; conclusion?: string; details_url?: string; output?: { summary?: string; text?: string } },
+      string
+    >(
       `${base}/commits/${encodeURIComponent(params.sha)}/check-runs?per_page=100`,
       opts,
-    ).catch(() => null);
-    for (const run of checks?.check_runs ?? []) {
-      if (run.status === "completed" && run.conclusion && run.conclusion !== "success") continue;
-      const url = extractPreviewUrl(run.details_url) ?? extractPreviewUrl(run.output?.summary) ?? extractPreviewUrl(run.output?.text);
-      if (url) return url;
-    }
+      (payload) =>
+        (payload as { check_runs?: Array<{ status?: string; conclusion?: string; details_url?: string; output?: { summary?: string; text?: string } }> })
+          ?.check_runs ?? [],
+      (runs) => {
+        for (const run of runs) {
+          if (run.status === "completed" && run.conclusion && run.conclusion !== "success") continue;
+          const url = extractPreviewUrl(run.details_url) ?? extractPreviewUrl(run.output?.summary) ?? extractPreviewUrl(run.output?.text);
+          if (url) return url;
+        }
+        return null;
+      },
+    );
   } catch (error) {
     console.log(JSON.stringify({ event: "preview_from_checks_error", repo: `${params.repo.owner}/${params.repo.repo}`, message: String(error).slice(0, 200) }));
   }

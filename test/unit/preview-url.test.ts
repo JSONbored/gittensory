@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearGitHubResponseCacheForTest, githubRateLimitAdmissionKeyForInstallation, latestGitHubRestRateLimitObservation } from "../../src/github/client";
-import { extractPreviewUrl, findPreviewUrlFromPrComments, getLatestDeploymentStatus, getPreviewBuildState } from "../../src/review/visual/preview-url";
+import {
+  extractPreviewUrl,
+  findPreviewUrlFromChecks,
+  findPreviewUrlFromPrComments,
+  getLatestDeploymentStatus,
+  getPreviewBuildState,
+} from "../../src/review/visual/preview-url";
 
 /** GitHub's `Link` header for a page that advertises a next page (the exact shape findAcrossPages walks). */
 const NEXT_LINK = '<https://api.github.com/resource?per_page=100&page=99>; rel="next", <https://api.github.com/resource?per_page=100&page=99>; rel="last"';
@@ -138,6 +144,124 @@ describe("preview-url pagination (#7450)", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(getPreviewBuildState({ token: "t", repo: REPO, sha: "abc" })).resolves.toBe("building");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("findPreviewUrlFromChecks follows Link: rel=next and finds the preview URL on page 2 (#7779)", async () => {
+    const page1 = {
+      check_runs: Array.from({ length: 100 }, (_v, i) => ({
+        name: `ci-${i}`,
+        status: "completed",
+        conclusion: "success",
+        details_url: "https://example.com/ci",
+      })),
+    };
+    const page2 = {
+      check_runs: [
+        {
+          name: "Cloudflare Workers Builds",
+          status: "completed",
+          conclusion: "success",
+          details_url: "https://pr-42.app.workers.dev/path",
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/status") && !url.includes("check-runs")) return Response.json({ statuses: [] });
+      if (url.includes("check-runs")) {
+        return isPage2(input) ? Response.json(page2) : Response.json(page1, { headers: { link: NEXT_LINK } });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(findPreviewUrlFromChecks({ token: "t", repo: REPO, sha: "deadbeef" })).resolves.toBe("https://pr-42.app.workers.dev");
+    const checkRunCalls = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("check-runs"));
+    expect(checkRunCalls).toHaveLength(2);
+    expect(checkRunCalls[0]).toContain("/commits/deadbeef/check-runs?per_page=100");
+    expect(checkRunCalls[0]).not.toContain("&page=");
+    expect(checkRunCalls[1]).toContain("&page=2");
+  });
+
+  it("findPreviewUrlFromChecks stops as soon as a preview URL is found on page 1 (#7779)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/status") && !url.includes("check-runs")) return Response.json({ statuses: [] });
+      return Response.json(
+        {
+          check_runs: [
+            {
+              name: "Cloudflare Workers Builds",
+              status: "completed",
+              conclusion: "success",
+              details_url: "https://pr-1.app.workers.dev",
+            },
+          ],
+        },
+        { headers: { link: NEXT_LINK } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(findPreviewUrlFromChecks({ token: "t", repo: REPO, sha: "abc" })).resolves.toBe("https://pr-1.app.workers.dev");
+    expect(fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("check-runs"))).toHaveLength(1);
+  });
+
+  it("findPreviewUrlFromChecks skips failed check-runs and reads output summary/text (#7779)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/status") && !url.includes("check-runs")) return Response.json({ statuses: [] });
+      return Response.json({
+        check_runs: [
+          {
+            name: "lint",
+            status: "completed",
+            conclusion: "failure",
+            details_url: "https://pr-stale.app.workers.dev",
+          },
+          {
+            name: "Cloudflare Workers Builds",
+            status: "completed",
+            conclusion: "success",
+            output: { summary: "Preview: https://pr-summary.app.workers.dev/x" },
+          },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(findPreviewUrlFromChecks({ token: "t", repo: REPO, sha: "sum" })).resolves.toBe("https://pr-summary.app.workers.dev");
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/status") && !url.includes("check-runs")) return Response.json({ statuses: [] });
+      return Response.json({
+        check_runs: [
+          {
+            name: "Cloudflare Workers Builds",
+            status: "completed",
+            conclusion: "success",
+            output: { text: "Deployed to https://pr-text.app.workers.dev" },
+          },
+        ],
+      });
+    });
+    await expect(findPreviewUrlFromChecks({ token: "t", repo: REPO, sha: "txt" })).resolves.toBe("https://pr-text.app.workers.dev");
+  });
+
+  it("findPreviewUrlFromChecks returns null when check-runs pages have no preview URL (#7779)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/status") && !url.includes("check-runs")) return Response.json({ statuses: [] });
+      if (url.includes("check-runs")) {
+        // Missing check_runs exercises the ?? [] arm; page 2 has only non-preview details.
+        return isPage2(input)
+          ? Response.json({ check_runs: [{ name: "ci", status: "completed", conclusion: "success", details_url: "https://example.com" }] })
+          : Response.json({}, { headers: { link: NEXT_LINK } });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(findPreviewUrlFromChecks({ token: "t", repo: REPO, sha: "none" })).resolves.toBeNull();
+    expect(fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("check-runs"))).toHaveLength(2);
   });
 
   it("getPreviewBuildState classifies a completed Workers Builds check as succeeded or failed", async () => {
