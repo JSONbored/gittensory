@@ -28,7 +28,6 @@ import {
   NotificationFeedSchema,
   NotificationsMarkedSchema,
   AmsNotificationsAcceptedSchema,
-  AmsNotificationsBodySchema,
   ContributorRewardRiskStrategySchema,
   ContributorProfileSchema,
   ContributorScoringProfileSchema,
@@ -841,7 +840,29 @@ export function buildOpenApiSpec() {
       body: {
         content: {
           "application/json": {
-            schema: AmsNotificationsBodySchema,
+            // Inline Zod (not a registered components.schemas $ref) — matches every other request body in
+            // this generator so Cloudflare schema pruning stays response-free (#write-cloudflare-schema).
+            schema: z.object({
+              events: z
+                .array(
+                  z.object({
+                    eventType: z.enum([
+                      "ams_attempt_started",
+                      "ams_attempt_failed",
+                      "ams_governor_paused",
+                      "ams_pr_outcome",
+                    ]),
+                    repoFullName: z.string(),
+                    pullNumber: z.number().int().min(0),
+                    dedupKey: z.string(),
+                    deeplink: z.string(),
+                    actorLogin: z.string(),
+                    detectedAt: z.string(),
+                  }),
+                )
+                .min(1)
+                .max(20),
+            }),
           },
         },
       },

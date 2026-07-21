@@ -14603,64 +14603,6 @@
           "accepted",
           "enqueued"
         ]
-      },
-      "AmsNotificationsBody": {
-        "type": "object",
-        "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AmsNotificationEventInput"
-            },
-            "minItems": 1,
-            "maxItems": 20
-          }
-        },
-        "required": [
-          "events"
-        ]
-      },
-      "AmsNotificationEventInput": {
-        "type": "object",
-        "properties": {
-          "eventType": {
-            "type": "string",
-            "enum": [
-              "ams_attempt_started",
-              "ams_attempt_failed",
-              "ams_governor_paused",
-              "ams_pr_outcome"
-            ]
-          },
-          "repoFullName": {
-            "type": "string"
-          },
-          "pullNumber": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "dedupKey": {
-            "type": "string"
-          },
-          "deeplink": {
-            "type": "string"
-          },
-          "actorLogin": {
-            "type": "string"
-          },
-          "detectedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "eventType",
-          "repoFullName",
-          "pullNumber",
-          "dedupKey",
-          "deeplink",
-          "actorLogin",
-          "detectedAt"
-        ]
       }
     },
     "parameters": {},
@@ -19099,7 +19041,59 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AmsNotificationsBody"
+                "type": "object",
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "eventType": {
+                          "type": "string",
+                          "enum": [
+                            "ams_attempt_started",
+                            "ams_attempt_failed",
+                            "ams_governor_paused",
+                            "ams_pr_outcome"
+                          ]
+                        },
+                        "repoFullName": {
+                          "type": "string"
+                        },
+                        "pullNumber": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "dedupKey": {
+                          "type": "string"
+                        },
+                        "deeplink": {
+                          "type": "string"
+                        },
+                        "actorLogin": {
+                          "type": "string"
+                        },
+                        "detectedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "eventType",
+                        "repoFullName",
+                        "pullNumber",
+                        "dedupKey",
+                        "deeplink",
+                        "actorLogin",
+                        "detectedAt"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "events"
+                ]
               }
             }
           }
