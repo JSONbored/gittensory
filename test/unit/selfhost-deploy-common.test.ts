@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -112,6 +112,66 @@ describe("maybe_infisical_run (#5120)", () => {
       expect(result.stdout).not.toContain("actual-command-ran");
     } finally {
       harness.cleanup();
+    }
+  });
+});
+
+describe("env_put (#7766 -- atomic write + mode preservation)", () => {
+  // Source the lib and invoke env_put directly with (key, value, file) positional args.
+  function runEnvPut(file: string, key: string, value: string) {
+    const script = `set -euo pipefail; . "${libPath.replace(/\\/g, "/")}"; env_put "$1" "$2" "$3"`;
+    return spawnSync("bash", ["-c", script, "bash", key, value, file], { encoding: "utf8" });
+  }
+
+  function tempEnvFile(contents: string): { dir: string; file: string } {
+    const dir = mkdtempSync(join(tmpdir(), "loopover-env-put-"));
+    const file = join(dir, ".env");
+    writeFileSync(file, contents);
+    return { dir, file };
+  }
+
+  it("updates an existing key in place, leaving the rest of the file intact", () => {
+    const { dir, file } = tempEnvFile("FOO=1\nBAR=old\n");
+    try {
+      const r = runEnvPut(file, "BAR", "new");
+      expect(r.status, r.stderr).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("FOO=1\nBAR=new\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("appends a key that is not present yet", () => {
+    const { dir, file } = tempEnvFile("FOO=1\n");
+    try {
+      const r = runEnvPut(file, "BAZ", "added");
+      expect(r.status, r.stderr).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("FOO=1\nBAZ=added\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the target file's non-default mode across the write (does not narrow to mktemp's 0600)", () => {
+    const { dir, file } = tempEnvFile("FOO=1\n");
+    try {
+      chmodSync(file, 0o640);
+      const r = runEnvPut(file, "FOO", "2");
+      expect(r.status, r.stderr).toBe(0);
+      expect(statSync(file).mode & 0o777).toBe(0o640);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves no leftover temp file behind (an atomic rename, not a copy)", () => {
+    const { dir, file } = tempEnvFile("FOO=1\n");
+    try {
+      const r = runEnvPut(file, "FOO", "2");
+      expect(r.status, r.stderr).toBe(0);
+      expect(readdirSync(dir).filter((name) => name.includes(".tmp."))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
