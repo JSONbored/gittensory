@@ -6,7 +6,7 @@ import { Button } from "@loopover/ui-kit/components/button";
 // is present on <html> — so this control only flips that class, mirrors it into colorScheme (so native form
 // controls follow the theme), and persists the choice. index.html's inline no-flash script reads the same
 // persisted value to restore the theme before first paint. Compact ghost icon so the header row stays usable
-// beside the four nav links on narrow widths.
+// beside the primary nav links on narrow widths.
 const STORAGE_KEY = "loopover.miner_theme";
 
 function SunIcon() {

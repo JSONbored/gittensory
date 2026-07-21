@@ -106,7 +106,7 @@ describe("RootShell header nav (#6828)", () => {
     expect(portfolio.className).toMatch(/after:bg-mint/);
   });
 
-  it("highlights Run history and Ledgers on their own routes", () => {
+  it("highlights Run history, Ledgers, and Earnings on their own routes", () => {
     mockPath = "/run-history";
     const { rerender } = render(
       <RootShell>
@@ -123,6 +123,17 @@ describe("RootShell header nav (#6828)", () => {
     );
     expect(screen.getByRole("link", { name: "Ledgers" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Run history" }).getAttribute("aria-current")).toBeNull();
+
+    mockPath = "/earnings";
+    rerender(
+      <RootShell>
+        <div>page</div>
+      </RootShell>,
+    );
+    const earnings = screen.getByRole("link", { name: "Earnings — not yet available" });
+    expect(earnings.getAttribute("aria-current")).toBe("page");
+    expect(earnings.className).toMatch(/after:bg-mint/);
+    expect(screen.getByRole("link", { name: "Ledgers" }).getAttribute("aria-current")).toBeNull();
   });
 
   it("exposes a Primary nav landmark and sticky header chrome classes", () => {

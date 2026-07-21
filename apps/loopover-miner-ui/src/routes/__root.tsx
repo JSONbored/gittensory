@@ -22,6 +22,8 @@ const NAV_ITEMS = [
   { to: "/run-history", label: "Run history" },
   { to: "/portfolio", label: "Portfolio" },
   { to: "/ledgers", label: "Ledgers" },
+  // #7673: layout reservation only — the route is an empty placeholder until settlement data exists.
+  { to: "/earnings", label: "Earnings — not yet available" },
 ] as const;
 
 /** Shared nav-link chrome (#6828) — mint underline active cue mirrors loopover-ui's site-header. */
@@ -31,8 +33,8 @@ const NAV_LINK_CLASS =
 /**
  * The persistent app shell (#6513). Exported for unit testing. It owns the chat-rail open/collapsed state, and
  * because it's rendered by the root route, TanStack Router keeps it — and that state — mounted across
- * client-side navigation between the four routes, so the rail never resets on a route change. The routed page
- * is `children` (the `<Outlet/>` content), which is what swaps on navigation while this shell stays mounted.
+ * client-side navigation between the dashboard routes, so the rail never resets on a route change. The routed
+ * page is `children` (the `<Outlet/>` content), which is what swaps on navigation while this shell stays mounted.
  *
  * Header chrome (#6828): sticky translucent bar + mint-underline active routes (site-header language), without
  * adopting sidebar.tsx as primary nav (reserved for the chat rail's mobile sheet).
