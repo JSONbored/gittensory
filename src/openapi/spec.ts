@@ -1065,6 +1065,7 @@ export function buildOpenApiSpec() {
     ["/v1/app/miner-dashboard", "Miner dashboard data"],
     ["/v1/app/maintainer-dashboard", "Maintainer dashboard data"],
     ["/v1/app/operator-dashboard", "Operator dashboard data"],
+    ["/v1/app/tenant-ai-usage", "Tenant-scoped AI usage/spend, in normalized compute-units"],
     ["/v1/app/commands", "@loopover command catalog"],
     ["/v1/app/commands/usefulness", "@loopover command usefulness rollup"],
     ["/v1/app/digest", "Maintainer digest content"],
