@@ -594,18 +594,22 @@ export async function evaluateRepoFullExecution(
   const diffPresent = diff.trim().length > 0;
 
   // Compile/build the edited clone when the stack exposes a build command -- a failure means the agent's code
-  // doesn't compile.
+  // doesn't compile. `built` stays null when there is no build step to run (no inferred build command, or no
+  // build runner wired) and only becomes true after a build actually ran and passed, so the report never claims
+  // 'built' for a build that was silently skipped.
+  let built: boolean | null = null;
   const buildCommand = stack.buildCommand;
   if (buildCommand && typeof options.buildRepo === "function") {
-    const built = await options.buildRepo({ repoPath, command: buildCommand });
-    if (!built.ok) {
+    const buildResult = await options.buildRepo({ repoPath, command: buildCommand });
+    if (!buildResult.ok) {
       return buildExecutionFailure(
         repoFullName,
         CROSS_REPO_EXECUTION_CATEGORY.CODE_BUILD_FAILED,
-        `Build failed: ${built.detail ?? buildCommand}`,
+        `Build failed: ${buildResult.detail ?? buildCommand}`,
         { readinessPassed: true, diffPresent, built: false, stack },
       );
     }
+    built = true;
   }
 
   // Run the target repo's own test suite against the edited clone.
@@ -615,7 +619,7 @@ export async function evaluateRepoFullExecution(
       repoFullName,
       CROSS_REPO_EXECUTION_CATEGORY.OTHER,
       "No test runner was provided; full execution cannot run the repo's tests.",
-      { readinessPassed: true, diffPresent, built: true, stack },
+      { readinessPassed: true, diffPresent, built, stack },
     );
   }
   const tested = await runRepoTests({ repoPath, command: testCommand });
@@ -624,7 +628,7 @@ export async function evaluateRepoFullExecution(
       repoFullName,
       CROSS_REPO_EXECUTION_CATEGORY.TESTS_FAILED,
       `Tests failed: ${tested.detail ?? testCommand}`,
-      { readinessPassed: true, diffPresent, built: true, testsPassed: false, stack },
+      { readinessPassed: true, diffPresent, built, testsPassed: false, stack },
     );
   }
 
@@ -634,7 +638,7 @@ export async function evaluateRepoFullExecution(
       repoFullName,
       CROSS_REPO_EXECUTION_CATEGORY.NO_OP_DIFF,
       "Tests passed but the agent produced an empty diff (no real change).",
-      { readinessPassed: true, diffPresent: false, built: true, testsPassed: true, stack },
+      { readinessPassed: true, diffPresent: false, built, testsPassed: true, stack },
     );
   }
 
@@ -645,7 +649,7 @@ export async function evaluateRepoFullExecution(
     reason: null,
     readinessPassed: true,
     diffPresent: true,
-    built: true,
+    built,
     testsPassed: true,
     stack,
   };

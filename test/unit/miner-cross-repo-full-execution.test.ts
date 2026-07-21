@@ -182,6 +182,21 @@ describe("cross-repo full-execution harness (#7634)", () => {
       expect(buildCalled).toBe(false);
       expect(result.passed).toBe(true);
       expect(result.executionCategory).toBeNull();
+      // The build was skipped (no build command), so `built` must be null -- never misreported as true.
+      expect(result.built).toBeNull();
+    });
+
+    it("reports built:null (not true) when tests fail on a stack with no build command", async () => {
+      const result = await evaluateRepoFullExecution(
+        entry,
+        opts({
+          detectRepoStack: () => ({ detected: true, testCommand: "npm test", buildCommand: null }),
+          runAgentAttempt: async () => ({ diff: "real change" }),
+          runRepoTests: async () => ({ ok: false, detail: "1 failing" }),
+        }),
+      );
+      expect(result.executionCategory).toBe(CROSS_REPO_EXECUTION_CATEGORY.TESTS_FAILED);
+      expect(result.built).toBeNull();
     });
   });
 
