@@ -167,6 +167,27 @@ describe("runContentLaneDeliverableCheckForAdvisory (processor wiring, #content-
     expect(adv.findings.map((f) => f.code)).toEqual(["content_lane_deliverable_missing"]);
   });
 
+  // #codecov-patch-gap: the processor call site passes `issueFetch.facts.title ?? undefined` to
+  // checkContentLaneDeliverable -- a real branch (fetchLinkedIssueFacts maps an empty/absent title to
+  // `null`) that no existing test exercised, since stubIssueFetch's own default always supplies SOME
+  // title string. Pins that a null title degrades to `undefined` cleanly: the literal-path-in-body
+  // signal alone still fires, and passing `undefined` never throws or wrongly suppresses it.
+  it("still detects a missing deliverable from the body's literal path when the issue has no usable title (title ?? undefined branch)", async () => {
+    const env = createTestEnv({ LOOPOVER_REVIEW_CONTENT_LANE: "true" });
+    await seedContentLaneRepo(env);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/issues/1275")) {
+        return Response.json({ number: 1275, state: "open", title: "", body: "Missing surfaces to add to registry/subnets/foo.json." });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const adv = advisory();
+    await runContentLaneDeliverableCheckForAdvisory(env, { mode: "live", settings: blockMode, advisory: adv, repoFullName: "acme/widgets", pr, files, installationId: 1 });
+    expect(adv.findings.map((f) => f.code)).toEqual(["content_lane_deliverable_missing"]);
+  });
+
   it("no-ops when the found issue has no usable title/body text at all (empty after trimming)", async () => {
     const env = createTestEnv({ LOOPOVER_REVIEW_CONTENT_LANE: "true" });
     await seedContentLaneRepo(env);
