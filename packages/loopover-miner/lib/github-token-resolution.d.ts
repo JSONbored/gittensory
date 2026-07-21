@@ -12,6 +12,13 @@ export declare function resolveLoopoverBackendSession(env?: NodeJS.ProcessEnv): 
     sessionToken: string;
 } | null;
 /**
+ * The GitHub login recorded in the active loopover-mcp session on disk (written by `loopover-mcp login`), or
+ * null when no session names one. Lets a miner command default `:login` to the operator's own configured
+ * identity without retyping it, mirroring loopover-mcp's own `activeProfile.session?.login` resolution -- the
+ * login-side companion to resolveLoopoverBackendSession's token/apiUrl.
+ */
+export declare function resolveLoopoverSessionLogin(env?: NodeJS.ProcessEnv): string | null;
+/**
  * Resolve a GitHub token for AMS's git operations (#6116). Returns null when nothing is available: no
  * GITHUB_TOKEN override, no loopover-mcp session on disk, or the session-token fetch fails for any reason --
  * callers already treat a missing token as "git operations requiring auth will fail," the same failure mode

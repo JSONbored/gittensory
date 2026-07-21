@@ -19,6 +19,7 @@ import { runPurge } from "../lib/purge-cli.js";
 import { runQueueCli } from "../lib/portfolio-queue-cli.js";
 import { runOrbExportCli } from "../lib/orb-export.js";
 import { runTenantCli } from "../lib/tenant-cli.js";
+import { runPrOutcomes } from "../lib/pr-outcomes-cli.js";
 import { installCliSignalHandlers } from "../lib/process-lifecycle.js";
 import { captureMinerErrorAndFlush, initMinerSentry } from "../lib/sentry.js";
 import { runStateCli } from "../lib/run-state-cli.js";
@@ -124,6 +125,13 @@ if (cliArgs[0] === "orb" && cliArgs[1] === "export") {
 // network command) rather than the strictly-local commands; it fails loud on any control-plane error.
 if (cliArgs[0] === "tenant") {
   process.exit(await runTenantCli(cliArgs[1], cliArgs.slice(2)));
+}
+
+// `pr-outcomes` (#7658) queries the hosted AMS endpoint GET /v1/contributors/:login/pr-outcomes for the miner's
+// own configured login, over the same authenticated loopover-mcp session the other network commands use. A
+// read-only diagnostic — grouped with the other network commands above, not the strictly-local stores.
+if (cliArgs[0] === "pr-outcomes") {
+  process.exit(await runPrOutcomes(cliArgs.slice(1)));
 }
 
 if (cliArgs[0] === "claim") {

@@ -24,7 +24,7 @@ export type GitHubTokenResolutionFetch = (
 
 type LoopoverConfigProfile = {
   apiUrl?: unknown;
-  session?: { token?: unknown } | null | undefined;
+  session?: { token?: unknown; login?: unknown } | null | undefined;
 };
 
 type LoopoverConfig = {
@@ -103,6 +103,17 @@ export function resolveLoopoverBackendSession(
   const sessionToken = loopoverSessionToken(env);
   if (!sessionToken) return null;
   return { apiUrl: loopoverApiUrl(env), sessionToken };
+}
+
+/**
+ * The GitHub login recorded in the active loopover-mcp session on disk (written by `loopover-mcp login`), or
+ * null when no session names one. Lets a miner command default `:login` to the operator's own configured
+ * identity without retyping it, mirroring loopover-mcp's own `activeProfile.session?.login` resolution -- the
+ * login-side companion to resolveLoopoverBackendSession's token/apiUrl.
+ */
+export function resolveLoopoverSessionLogin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const login = activeLoopoverProfile(env).session?.login;
+  return typeof login === "string" && login.trim() ? login.trim() : null;
 }
 
 async function fetchLiveGitHubTokenFromSession(

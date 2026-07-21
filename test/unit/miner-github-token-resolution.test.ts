@@ -7,6 +7,7 @@ import {
   resetGitHubTokenResolutionForTesting,
   resolveGitHubToken,
   resolveLoopoverBackendSession,
+  resolveLoopoverSessionLogin,
 } from "../../packages/loopover-miner/lib/github-token-resolution.js";
 
 function writeConfig(dir: string, config: unknown) {
@@ -318,5 +319,43 @@ describe("hasGitHubTokenSource (#6116)", () => {
   it("is false when neither GITHUB_TOKEN nor a loopover-mcp session is available", () => {
     dir = mkdtempSync(join(tmpdir(), "loopover-miner-github-token-source-none-"));
     expect(hasGitHubTokenSource(configuredEnv(dir))).toBe(false);
+  });
+});
+
+describe("resolveLoopoverSessionLogin (#7658)", () => {
+  let dir: string;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns the active profile's recorded session login, trimmed", () => {
+    dir = mkdtempSync(join(tmpdir(), "loopover-miner-session-login-ok-"));
+    writeConfig(dir, { profiles: { default: { session: { token: "t", login: "  octocat  " } } } });
+    expect(resolveLoopoverSessionLogin(configuredEnv(dir))).toBe("octocat");
+  });
+
+  it("returns null when the session records no login", () => {
+    dir = mkdtempSync(join(tmpdir(), "loopover-miner-session-login-missing-"));
+    writeConfig(dir, { profiles: { default: { session: { token: "t" } } } });
+    expect(resolveLoopoverSessionLogin(configuredEnv(dir))).toBeNull();
+  });
+
+  it("returns null when the login is blank whitespace", () => {
+    dir = mkdtempSync(join(tmpdir(), "loopover-miner-session-login-blank-"));
+    writeConfig(dir, { profiles: { default: { session: { token: "t", login: "   " } } } });
+    expect(resolveLoopoverSessionLogin(configuredEnv(dir))).toBeNull();
+  });
+
+  it("returns null when the recorded login is not a string", () => {
+    dir = mkdtempSync(join(tmpdir(), "loopover-miner-session-login-nonstring-"));
+    writeConfig(dir, { profiles: { default: { session: { token: "t", login: 42 } } } });
+    expect(resolveLoopoverSessionLogin(configuredEnv(dir))).toBeNull();
+  });
+
+  it("returns null when the profile has no session at all", () => {
+    dir = mkdtempSync(join(tmpdir(), "loopover-miner-session-login-nosession-"));
+    writeConfig(dir, { profiles: { default: {} } });
+    expect(resolveLoopoverSessionLogin(configuredEnv(dir))).toBeNull();
   });
 });
