@@ -205,6 +205,9 @@ export async function startFixtureServer(
     /** #6743: overrides the repo-doc refresh route's default "opened a new PR" response, e.g. to exercise
      *  the reused-PR or not-opened branches. */
     repoDocRefresh?: unknown;
+    /** #7753: overrides the propose (POST bare pending-actions) route's default `created: true` response,
+     *  e.g. to exercise the "already staged" (created: false) branch. */
+    proposeActionCreated?: boolean;
     /** #6792: queued /v1/auth/github/device/poll responses, consumed one per request -- the last entry
      *  repeats once exhausted. Lets a test simulate a transient 429 (or GitHub's own slow_down/pending
      *  statuses) before the device flow eventually resolves. Requires deviceFlowStart to be set too. */
@@ -536,7 +539,12 @@ export async function startFixtureServer(
     if (request.url === "/v1/repos/owner/repo/agent/pending-actions" && request.method === "POST") {
       const body = (await readJsonRequest(request)) as { pullNumber?: number; actionClass?: string; reason?: string | null };
       const action = { id: "pa-1", actionClass: body.actionClass ?? "merge", pullNumber: body.pullNumber ?? 7, status: "pending", reason: body.reason ?? null };
-      response.end(JSON.stringify({ created: true, action: options.terminalInjection ? { ...action, actionClass: options.terminalInjection } : action }));
+      response.end(
+        JSON.stringify({
+          created: options.proposeActionCreated ?? true,
+          action: options.terminalInjection ? { ...action, actionClass: options.terminalInjection } : action,
+        }),
+      );
       return;
     }
     if (request.url === "/v1/repos/owner/repo/maintainer-noise" && request.method === "GET") {

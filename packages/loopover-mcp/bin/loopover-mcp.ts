@@ -957,6 +957,23 @@ const planRepoIssuesShape = {
   limit: z.number().int().min(1).max(10).optional().default(5),
 };
 
+// #7753: loopover_propose_action — the stdio counterpart to the remote tool of the same name
+// (src/mcp/server.ts's proposeActionShape) and to `maintain propose` (loopover-mcp.ts's maintainCli, "propose"
+// subcommand). #6744 added the route + CLI mirror but never this stdio registration, so it fell outside #6152's
+// batch even though it is the same maintain-adjacent family. actionClass reuses PROPOSE_ACTION_CLASSES so this
+// schema and `maintain propose`'s own validation can never disagree about what the route accepts.
+const proposeActionShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  pullNumber: z.number().int().positive(),
+  actionClass: z.enum(PROPOSE_ACTION_CLASSES),
+  reason: z.string().max(500).optional(),
+  label: z.string().min(1).max(100).optional(),
+  reviewBody: z.string().max(60000).optional(),
+  mergeMethod: z.enum(["merge", "squash", "rebase"]).optional(),
+  closeComment: z.string().max(60000).optional(),
+};
+
 // Single source of truth for stdio tool name + one-line description (#2233).
 // Registration and `loopover-mcp tools` both read this list.
 const STDIO_TOOL_DESCRIPTORS = [
@@ -1342,6 +1359,13 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_get_gate_precision",
     category: "maintainer",
     description: "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged counts and false-positive rates with low-sample guards. Optionally bounded by windowDays. Maintainer-authenticated; measurement only.",
+  },
+  // #7753 — the sixth maintain-surface tool (#6744's route + CLI mirror never got a stdio registration in
+  // #6152's batch). Category mirrors the remote server's MCP_TOOL_CATEGORIES entry for the same name.
+  {
+    name: "loopover_propose_action",
+    category: "agent",
+    description: "Stage a PR action (label / request_changes / approve / merge / close) into the repo's approval queue for a maintainer to accept or reject, same as `loopover-mcp maintain propose <action-class> <pull-number>`. Maintainer access required; the action is NOT executed until approved.",
   },
   {
     name: "loopover_plan_repo_issues",
@@ -2706,6 +2730,31 @@ registerStdioTool(
     );
   },
 );
+
+// #7753: the sixth maintain-surface tool -- calls the exact endpoint `maintain propose` already calls
+// (POST .../agent/pending-actions, see maintainCli's "propose" subcommand above), through the same apiPost
+// client, so this adds no new HTTP path. The route always returns a fully-populated `action` (id/actionClass/
+// status set unconditionally, see src/api/routes.ts's POST handler) -- only `created` genuinely varies (false
+// when an equivalent action is already staged), so that's the only branch this formats defensively.
+registerStdioTool(
+  "loopover_propose_action",
+  {
+    description: stdioToolDescription("loopover_propose_action"),
+    inputSchema: proposeActionShape,
+  },
+  async ({ owner, repo, pullNumber, actionClass, reason, label, reviewBody, mergeMethod, closeComment }: any) => {
+    const payload = await apiPost(
+      `${toolRepoBase(owner, repo)}/agent/pending-actions`,
+      stripUndefined({ pullNumber, actionClass, reason, label, reviewBody, mergeMethod, closeComment }),
+    );
+    const action = payload.action;
+    return toolResult(
+      `${payload.created ? "Staged" : "Already staged"} ${action.actionClass} on ${owner}/${repo}#${pullNumber} (${action.status}), id ${action.id}.`,
+      payload,
+    );
+  },
+);
+
 // ── Write-tools (#6149): pure LOCAL-execution spec builders. loopover NEVER performs the write -- each tool
 // returns a spec the caller runs with its OWN gh creds. Brings the local stdio server to parity with the
 // miner-auto-dev profile's recommendedTools, using the same @loopover/engine builders as the remote server.
