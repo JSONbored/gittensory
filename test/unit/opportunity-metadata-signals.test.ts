@@ -51,6 +51,18 @@ describe("opportunity metadata signals", () => {
     expect(computeMetadataDupRisk({ ...base, repoFullName: "acme/other" }, peers)).toBe(0);
   });
 
+  it("excludes the self row from dup risk even when its repoFullName casing differs (#7731)", () => {
+    // A self row echoed back with different repoFullName casing (same issueNumber, same title) must still be
+    // recognized as self and skipped — not counted as a same-repo title-overlapping duplicate that inflates the
+    // issue's own dup risk. Before #7731 the self-skip was case-sensitive, so this row overlapped itself.
+    const selfEchoedUppercase = { ...base, repoFullName: base.repoFullName.toUpperCase() };
+    expect(computeMetadataDupRisk(base, [selfEchoedUppercase])).toBe(0);
+    // A genuinely different same-repo issue with an overlapping title is still counted (guard is self-skip, not
+    // a blanket case-fold that would swallow real duplicates).
+    const realDuplicate = { ...base, issueNumber: 11, repoFullName: base.repoFullName.toUpperCase() };
+    expect(computeMetadataDupRisk(base, [realDuplicate])).toBeGreaterThan(0);
+  });
+
   it("buildMetadataRankInput applies repo-specific goal specs case-insensitively", () => {
     const input = buildMetadataRankInput(
       { ...base, labels: ["feature"] },

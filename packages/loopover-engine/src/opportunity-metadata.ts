@@ -180,8 +180,11 @@ export function computeMetadataDupRisk(
   if (!normalized) return 1;
   let overlaps = 0;
   for (const peer of peers) {
+    // repoFullName casing isn't guaranteed consistent across API responses, so normalize it the same way the
+    // same-repo guard just below does (#7731) — otherwise a self row echoed back in different casing escapes this
+    // skip, passes the (normalized) same-repo guard, and inflates the issue's own dup risk by overlapping itself.
     /* v8 ignore next -- Self-peer rows are skipped when scanning the shared batch list. */
-    if (peer.issueNumber === issue.issueNumber && peer.repoFullName === issue.repoFullName) continue;
+    if (peer.issueNumber === issue.issueNumber && peer.repoFullName.trim().toLowerCase() === issue.repoFullName.trim().toLowerCase()) continue;
     /* v8 ignore next -- Cross-repo peers are ignored when scanning for overlap inside a batch. */
     if (peer.repoFullName.trim().toLowerCase() !== issue.repoFullName.trim().toLowerCase()) continue;
     /* v8 ignore next -- Overlap hits are counted only for same-repo peers with shared title segments. */
