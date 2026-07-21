@@ -16,7 +16,7 @@ let client: Client;
 let transport: StdioClientTransport;
 let configDir: string;
 
-const VALID = { id: "idea-1", title: "Retry uploads on 5xx", body: "Uploads fail silently on 5xx.", targetRepo: "acme/widgets" };
+const VALID = { id: "idea-1", title: "Retry uploads on 5xx", body: "Uploads fail silently on 5xx.", targetRepo: { kind: "existing", repo: "acme/widgets" } };
 
 beforeEach(async () => {
   configDir = mkdtempSync(join(tmpdir(), "loopover-intake-idea-"));
@@ -67,7 +67,7 @@ describe("loopover_intake_idea stdio mirror (#6755)", () => {
   it("returns the engine's actionable error list — not a silent failure — for a malformed submission", async () => {
     for (const [args, expectedError] of [
       [{}, "id_required"],
-      [{ ...VALID, targetRepo: "not-a-repo" }, "target_repo_malformed"],
+      [{ ...VALID, targetRepo: { kind: "existing", repo: "not-a-repo" } }, "target_repo_malformed"],
       [{ ...VALID, priority: "urgent" }, "priority_invalid"],
     ] as Array<[Record<string, unknown>, string]>) {
       const result = await client.callTool({ name: "loopover_intake_idea", arguments: args });

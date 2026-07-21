@@ -552,7 +552,10 @@ const intakeIdeaSchema = z.object({
   id: z.string().optional(),
   title: z.string().optional(),
   body: z.string().optional(),
-  targetRepo: z.string().optional(),
+  // Deliberately loose: `kind` is a bare string (not a "existing"|"provision" enum) so this shape stays a
+  // pass-through -- validateIdeaSubmission owns the real discrimination (#7635). Do NOT tighten it into an enum
+  // here; that would duplicate the engine's check and let the two drift.
+  targetRepo: z.object({ kind: z.string(), repo: z.string().optional() }).optional(),
   constraints: z.array(z.string()).max(50).optional(),
   acceptanceHints: z.array(z.string()).max(50).optional(),
   priority: z.string().optional(),
