@@ -8,7 +8,7 @@ import {
   assessSubnetDocument,
   type RegistryLaneSpec,
 } from "../../src/review/content-lane/registry-logic";
-import { diffAppendedSurfaceEntries, runSurfaceReview, type SurfaceReviewInput } from "../../src/review/content-lane/orchestrator";
+import { diffAppendedSurfaceEntries, runSurfaceReview, survivingExistingEntries, type SurfaceReviewInput } from "../../src/review/content-lane/orchestrator";
 
 const existing = { kind: "website", url: "https://old.example.ai", source_url: "https://github.com/a/b", public_safe: true };
 const newEntry = { kind: "subnet-api", url: "https://api.example.ai", source_url: "https://github.com/x/y", public_safe: true };
@@ -54,6 +54,28 @@ describe("diffAppendedSurfaceEntries", () => {
   it("returns null when head is unparseable or has no surfaces[] array", () => {
     expect(diffAppendedSurfaceEntries("{not json", doc([existing]), "surfaces")).toBeNull();
     expect(diffAppendedSurfaceEntries(JSON.stringify({ netuid: 14 }), doc([existing]), "surfaces")).toBeNull();
+  });
+});
+
+describe("survivingExistingEntries", () => {
+  const doc = (surfaces: unknown[]) => JSON.stringify({ netuid: 14, surfaces });
+
+  it("returns base entries that are still present, byte-identical, in head", () => {
+    expect(survivingExistingEntries(doc([existing, newEntry]), doc([existing]), "surfaces")).toEqual([existing]);
+  });
+
+  it("excludes a base entry that was edited in place (no longer byte-identical in head)", () => {
+    const edited = { ...existing, notes: "changed" };
+    expect(survivingExistingEntries(doc([edited]), doc([existing]), "surfaces")).toEqual([]);
+  });
+
+  it("returns [] when head is unreadable/malformed", () => {
+    expect(survivingExistingEntries("{not json", doc([existing]), "surfaces")).toEqual([]);
+    expect(survivingExistingEntries(JSON.stringify({ netuid: 14 }), doc([existing]), "surfaces")).toEqual([]);
+  });
+
+  it("returns [] when base is absent (nothing to survive)", () => {
+    expect(survivingExistingEntries(doc([existing]), null, "surfaces")).toEqual([]);
   });
 });
 
@@ -427,6 +449,39 @@ describe("runSurfaceReview (deterministic + decisive: merge/close, rarely manual
   it("closes an appended entry that resubmits a url already present in the base document's surfaces[]", async () => {
     const resubmission = { ...existing, id: "resubmitted-existing-url" };
     const r = await review([SUBNET], { [`head:${SUBNET}`]: doc([existing, resubmission]), [`base:${SUBNET}`]: doc([existing]) });
+    expect(r).toEqual({
+      verdict: "close",
+      summary: "A surface submission must not duplicate an entry already in this PR or already in the registry — resubmit without the duplicate.",
+    });
+  });
+
+  // Regression (metagraphed #7291-class incident): a PR that only EDITS an already-registered surface (e.g.
+  // tightening probe.expect after live-verification) keeps the surface's own url unchanged — the entry's edited
+  // content collides with its OWN prior base self under the url identity key. Before survivingExistingEntries,
+  // that self-collision read as a resubmitted duplicate and closed every legitimate content fix outright,
+  // regardless of correctness. The old entry is gone from head (replaced in place, not resubmitted alongside
+  // itself), so it must not be treated as still "existing" for duplicate purposes.
+  it("regression: an in-place edit of an existing entry (same url, changed field) is not a duplicate — merges when the new content is itself valid", async () => {
+    const edited = { ...existing, notes: "Live-verified 2026-07-20: still a public JSON endpoint." };
+    const r = await review([SUBNET], { [`head:${SUBNET}`]: doc([edited]), [`base:${SUBNET}`]: doc([existing]) });
+    expect(r?.verdict).toBe("merge");
+  });
+
+  it("regression: an in-place edit whose new content is itself invalid closes with the real validator reason, not the generic duplicate message", async () => {
+    const edited = { ...existing, public_safe: false };
+    const r = await review([SUBNET], { [`head:${SUBNET}`]: doc([edited]), [`base:${SUBNET}`]: doc([existing]) });
+    expect(r?.verdict).toBe("close");
+    expect(r?.summary).toContain("public_safe=true");
+    expect(r?.summary).not.toContain("duplicate");
+  });
+
+  it("an edit landing alongside a GENUINE duplicate append still closes: the untouched original survives to collide with the new entry", async () => {
+    const edited = { ...existing, notes: "edited" }; // replaces `existing` in place — not itself a duplicate
+    const freshResubmission = { ...newEntry, id: "resubmitted-newEntry-url" }; // newEntry's ORIGINAL self is untouched below
+    const r = await review(
+      [SUBNET],
+      { [`head:${SUBNET}`]: doc([edited, newEntry, freshResubmission]), [`base:${SUBNET}`]: doc([existing, newEntry]) },
+    );
     expect(r).toEqual({
       verdict: "close",
       summary: "A surface submission must not duplicate an entry already in this PR or already in the registry — resubmit without the duplicate.",

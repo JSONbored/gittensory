@@ -268,7 +268,8 @@ describe("buildDualReviewNotes", () => {
         recommendation: "merge",
         verdict: "merge",
       });
-      expect(reviews[0]?.notes?.blockers).toEqual(["No linked issue"]); // the real (non-AI) gate blocker still blocks
+      // the real (non-AI) gate blocker still blocks, now WITH its detail (FIX D-detail — see gateBlockerLine)
+      expect(reviews[0]?.notes?.blockers).toEqual(["No linked issue: ..."]);
       expect(reviews[0]?.notes?.nits).toEqual(["Off-by-one: Loop bound is wrong. (advisory only — not configured to block merge)"]);
     });
   });
@@ -305,6 +306,65 @@ describe("buildDualReviewNotes", () => {
       "Add a doc comment.",
       "Missing test — Add a test.",
     ]);
+  });
+
+  // FIX D-detail: metagraphed #7291-class incident — every content-lane finding shares the SAME constant title
+  // ("Registry surface review") regardless of the actual reason, so title-only rendering made "Why this is
+  // blocked" identically generic across a duplicate resubmission, an unsafe URL, and a secret leak alike. The
+  // real, verdict-specific reason lives in detail/publicText and must now reach the rendered blocker line.
+  describe("gate blocker lines surface their detail, not just a constant title (FIX D-detail)", () => {
+    it("appends the detail when it says something the title doesn't", () => {
+      const reviews = buildDualReviewNotes({
+        gateBlockers: [
+          { code: "surface_lane_reject", severity: "critical", title: "Registry surface review", detail: "A surface submission must not duplicate an entry already in the registry — resubmit without the duplicate." },
+        ],
+        recommendation: "close",
+        verdict: "close",
+      });
+      expect(reviews[0]?.notes?.blockers).toEqual([
+        "Registry surface review: A surface submission must not duplicate an entry already in the registry — resubmit without the duplicate.",
+      ]);
+    });
+
+    it("omits the ': detail' suffix when detail is empty", () => {
+      const reviews = buildDualReviewNotes({
+        gateBlockers: [{ code: "c", severity: "critical", title: "Secret leak detected", detail: "" }],
+        recommendation: "close",
+        verdict: "close",
+      });
+      expect(reviews[0]?.notes?.blockers).toEqual(["Secret leak detected"]);
+    });
+
+    it("omits the ': detail' suffix when detail is identical to the title (nothing new to add)", () => {
+      const reviews = buildDualReviewNotes({
+        gateBlockers: [{ code: "c", severity: "critical", title: "No linked issue", detail: "No linked issue" }],
+        recommendation: "close",
+        verdict: "close",
+      });
+      expect(reviews[0]?.notes?.blockers).toEqual(["No linked issue"]);
+    });
+
+    it("prefers publicText over detail when a producer sets both", () => {
+      const reviews = buildDualReviewNotes({
+        gateBlockers: [
+          { code: "c", severity: "critical", title: "Registry surface review", detail: "internal-only wording", publicText: "public-safe wording" },
+        ],
+        recommendation: "close",
+        verdict: "close",
+      });
+      expect(reviews[0]?.notes?.blockers).toEqual(["Registry surface review: public-safe wording"]);
+    });
+
+    it("still appends the action suffix after the combined title:detail", () => {
+      const reviews = buildDualReviewNotes({
+        gateBlockers: [{ code: "c", severity: "critical", title: "Missing linked issue", detail: "No issue is linked in the PR body.", action: "Link an eligible open issue." }],
+        recommendation: "close",
+        verdict: "close",
+      });
+      expect(reviews[0]?.notes?.blockers).toEqual([
+        "Missing linked issue: No issue is linked in the PR body. — Link an eligible open issue.",
+      ]);
+    });
   });
 });
 

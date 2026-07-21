@@ -167,6 +167,28 @@ function holdWarningVerdictReason(finding: AdvisoryFinding): string {
   return detail.length > 0 ? `${title}: ${detail}` : title;
 }
 
+/** Human-facing text for a gate HARD blocker finding: `title` alone when there's nothing more specific to add,
+ *  or `title: detail` when detail says something the title doesn't already (mirrors holdWarningVerdictReason's
+ *  shape immediately above, now applied to blockers too). Prefers `publicText` over `detail` when a producer set
+ *  both (the same preference every other public-facing reader of AdvisoryFinding uses, e.g. local-branch.ts /
+ *  github/commands.ts) — `publicSafeNit` below still scrubs the result either way as defense-in-depth.
+ *
+ *  FIX D-detail: before this, gateBlockerLines rendered ONLY `finding.title`, dropping `detail`/`publicText`
+ *  entirely for every hard-blocker close. Several finding producers deliberately give EVERY verdict from a given
+ *  check the SAME constant title (e.g. the content lane's surface findings are all titled "Registry surface
+ *  review" regardless of whether the actual reason is a duplicate resubmission, an unsafe URL, or a secret) so
+ *  the check-run itself stays identifiable — the verdict-specific explanation lives entirely in detail/publicText.
+ *  Title-only rendering made "Why this is blocked" read identically generic across every distinct close reason,
+ *  hiding the one thing a contributor (or a maintainer auditing a close) actually needs to see.
+ *  `.action`, when present, is still appended as its own suffix — a distinct call-to-action some finding
+ *  producers set independently of detail/publicText. */
+function gateBlockerLine(finding: AdvisoryFinding): string {
+  const title = finding.title.trim();
+  const reason = (finding.publicText ?? finding.detail).trim();
+  const base = reason.length > 0 && reason !== title ? `${title}: ${reason}` : title;
+  return `${base}${finding.action ? ` — ${finding.action}` : ""}`.trim();
+}
+
 function gateVerdictReason(gate: GateCheckEvaluation): string | undefined {
   const holdReasons = gate.warnings
     .filter((finding) => MANUAL_HOLD_WARNING_CODES.has(finding.code))
@@ -238,7 +260,7 @@ export function buildDualReviewNotes(args: {
   // and scrub each through the same public-safe boundary as Nits, DROPPING any that still leaks a private term.
   const gateBlockerLines = (args.gateBlockers ?? [])
     .filter((finding) => finding.code !== "ai_consensus_defect")
-    .map((finding) => `${finding.title}${finding.action ? ` — ${finding.action}` : ""}`.trim())
+    .map(gateBlockerLine)
     .filter(Boolean)
     .map((line) => publicSafeNit(line))
     .filter((line): line is string => line !== null);

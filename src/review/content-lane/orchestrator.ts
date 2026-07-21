@@ -55,9 +55,11 @@ function surfacesOf(doc: unknown, field: string): unknown[] | null {
 /**
  * ALL surfaces[] entries present at head but absent at base — a pure head-vs-base structural diff. Returns null
  * when head is unreadable / has no surfaces[] array; returns an empty array when nothing was added (a
- * reorder/reformat/edit of existing entries reads as zero "added"). A missing base file (a brand-new entry file)
- * means every head entry is new. Makes no count judgement itself — the caller (runSurfaceReview) enforces the
- * spec's maxAppendedEntries cap and the ≥1-entry requirement.
+ * byte-identical reorder reads as zero "added" — an actual FIELD EDIT to an existing entry does NOT: the edited
+ * entry's new content differs from every base entry, so it reads as one "added" entry, same as a brand-new
+ * append — see survivingExistingEntries below for how the caller tells the two apart before duplicate-checking).
+ * A missing base file (a brand-new entry file) means every head entry is new. Makes no count judgement itself —
+ * the caller (runSurfaceReview) enforces the spec's maxAppendedEntries cap and the ≥1-entry requirement.
  */
 export function diffAppendedSurfaceEntries(headRaw: string | null, baseRaw: string | null, field: string): unknown[] | null {
   const headEntries = surfacesOf(safeParseJson(headRaw), field);
@@ -65,6 +67,34 @@ export function diffAppendedSurfaceEntries(headRaw: string | null, baseRaw: stri
   const baseEntries = surfacesOf(safeParseJson(baseRaw), field) ?? [];
   const baseKeys = new Set(baseEntries.map((entry) => JSON.stringify(entry)));
   return headEntries.filter((entry) => !baseKeys.has(JSON.stringify(entry)));
+}
+
+/**
+ * Base surfaces[] entries that are STILL PRESENT, byte-identical, in the head document — i.e. entries this PR
+ * left completely untouched. Feeds findDuplicateAppendedEntry's `existingEntries` argument so a submission's
+ * duplicate check only ever collides against an entry that genuinely still occupies that identity in the
+ * registry, not one this very PR just edited away.
+ *
+ * Why this matters: an in-place edit (e.g. tightening `probe.expect` on an already-registered surface, keeping
+ * its url) makes diffAppendedSurfaceEntries read the edited entry as "added" (its new content differs from every
+ * base entry — see that function's own doc comment), and the edited entry's identity key (typically its url)
+ * still matches its OWN prior self in base. Passing the raw base surfaces[] array as `existingEntries` (the
+ * pre-fix behavior) makes an entry collide with its own now-superseded version and reads as a resubmitted
+ * duplicate, closing every legitimate "fix an existing surface" PR outright regardless of content correctness.
+ * Filtering to only the base entries that SURVIVE into head fixes this: an edited entry's old self is gone from
+ * head (replaced in place), so it is excluded here and can no longer collide with the edit. A genuine duplicate
+ * resubmission is unaffected — the untouched original entry remains in head, stays in this filtered set, and
+ * still collides with the newly appended entry sharing its identity, so that case still closes as before.
+ *
+ * Returns [] when head is unreadable (mirrors diffAppendedSurfaceEntries' own null-safety); the orchestrator only
+ * reaches this after diffAppendedSurfaceEntries has already confirmed head parses with a surfaces[] array.
+ */
+export function survivingExistingEntries(headRaw: string | null, baseRaw: string | null, field: string): unknown[] {
+  const headEntries = surfacesOf(safeParseJson(headRaw), field);
+  if (headEntries === null) return [];
+  const baseEntries = surfacesOf(safeParseJson(baseRaw), field) ?? [];
+  const headKeys = new Set(headEntries.map((entry) => JSON.stringify(entry)));
+  return baseEntries.filter((entry) => headKeys.has(JSON.stringify(entry)));
 }
 
 function fromProvider(assessment: ProviderAssessment): SurfaceReviewResult {
@@ -237,7 +267,9 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   if (appendedEntries === null || appendedEntries.length === 0 || appendedEntries.length > maxAppendedEntries) {
     return { verdict: "close", summary: appendCountCloseSummary(maxAppendedEntries) };
   }
-  const existingEntries = surfacesOf(safeParseJson(baseRaw), spec.collectionField) ?? [];
+  // survivingExistingEntries, not the raw base array — an entry this PR edited in place must not collide with
+  // its own now-superseded prior self (see that function's doc comment for the full false-positive it fixes).
+  const existingEntries = survivingExistingEntries(headRaw, baseRaw, spec.collectionField);
   const duplicate = findDuplicateAppendedEntry(spec, appendedEntries, existingEntries);
   if (duplicate !== null) {
     return { verdict: "close", summary: duplicateEntryCloseSummary() };
