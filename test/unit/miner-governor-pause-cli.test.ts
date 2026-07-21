@@ -92,6 +92,28 @@ describe("loopover-miner governor pause/resume/status CLI (#4851)", () => {
     expect(governorState.loadPauseState()).toEqual({ paused: false, reason: null, pausedAt: null });
   });
 
+  it("publishes an AMS governor-paused notification when a session login is available (#7657)", async () => {
+    const governorState = tempGovernorState();
+    const published: Array<{ eventType: string; recipientLogin: string }> = [];
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(
+      await runGovernorPause(["--reason", "ops", "--json"], {
+        openGovernorState: () => governorState,
+        publishAmsNotifications: async (events) => {
+          published.push(...(events as Array<{ eventType: string; recipientLogin: string }>));
+          return { sent: events.length };
+        },
+        fetchSessionLogin: async () => "miner",
+      }),
+    ).toBe(0);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      eventType: "ams_governor_paused",
+      recipientLogin: "miner",
+    });
+  });
+
   it("pauses with no reason and renders the plain-text form", async () => {
     const governorState = tempGovernorState();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

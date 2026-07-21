@@ -27,6 +27,7 @@ import {
   ContributorPrOutcomesSchema,
   NotificationFeedSchema,
   NotificationsMarkedSchema,
+  AmsNotificationsAcceptedSchema,
   ContributorRewardRiskStrategySchema,
   ContributorProfileSchema,
   ContributorScoringProfileSchema,
@@ -828,6 +829,52 @@ export function buildOpenApiSpec() {
         content: { "application/json": { schema: NotificationsMarkedSchema } },
       },
       400: { description: "Invalid mark-read body" },
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/contributors/{login}/ams-notifications",
+    summary: "Enqueue AMS notification events for a contributor",
+    request: {
+      params: z.object({ login: z.string() }),
+      body: {
+        content: {
+          "application/json": {
+            // Inline Zod (not a registered components.schemas $ref) — matches every other request body in
+            // this generator so Cloudflare schema pruning stays response-free (#write-cloudflare-schema).
+            schema: z.object({
+              events: z
+                .array(
+                  z.object({
+                    eventType: z.enum([
+                      "ams_attempt_started",
+                      "ams_attempt_failed",
+                      "ams_governor_paused",
+                      "ams_pr_outcome",
+                    ]),
+                    repoFullName: z.string(),
+                    pullNumber: z.number().int().min(0),
+                    dedupKey: z.string(),
+                    deeplink: z.string(),
+                    actorLogin: z.string(),
+                    detectedAt: z.string(),
+                  }),
+                )
+                .min(1)
+                .max(20),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description:
+          "Accepts AMS-relevant notification events (attempt start/fail, governor pause, PR outcome) and evaluates them through the existing notify-evaluate → notify-deliver path (#7657).",
+        content: { "application/json": { schema: AmsNotificationsAcceptedSchema } },
+      },
+      400: { description: "Invalid AMS notification body" },
+      403: { description: "Forbidden when login does not match the authenticated session" },
     },
   });
   registry.registerPath({

@@ -519,6 +519,14 @@ export const NotificationsMarkedSchema = z
   })
   .openapi("NotificationsMarked");
 
+export const AmsNotificationsAcceptedSchema = z
+  .object({
+    login: z.string(),
+    accepted: z.number(),
+    enqueued: z.number(),
+  })
+  .openapi("AmsNotificationsAccepted");
+
 export const ContributorOpportunitySchema = z
   .object({
     repoFullName: z.string(),

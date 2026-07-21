@@ -1,4 +1,5 @@
 import type { GovernorState } from "./governor-state.js";
+import { publishAmsNotificationEvents } from "./ams-notifications.js";
 export type ParsedGovernorPauseArgs = {
     json: boolean;
     dryRun: boolean;
@@ -19,6 +20,13 @@ export type ParsedGovernorNoArgsSubcommand = {
 };
 export type GovernorPauseCliOptions = {
     openGovernorState?: () => GovernorState;
+    env?: Record<string, string | undefined>;
+    /** Override AMS badge notify (#7657). Defaults to publishAmsNotificationEvents. */
+    publishAmsNotifications?: typeof publishAmsNotificationEvents;
+    fetchSessionLogin?: (session: {
+        apiUrl: string;
+        sessionToken: string;
+    }) => Promise<string | null>;
 };
 export declare function parseGovernorPauseArgs(args: string[]): ParsedGovernorPauseArgs;
 export declare function parseGovernorResumeArgs(args: string[]): ParsedGovernorResumeArgs;

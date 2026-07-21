@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MINER_PR_OUTCOME_DECISIONS,
   MINER_PR_OUTCOME_EVENT,
@@ -78,6 +78,21 @@ describe("recordPrOutcomeSnapshot (#4274)", () => {
     expect(entry.repoFullName).toBe("acme/widgets");
     expect(entry.payload).toEqual({ prNumber: 12, decision: "closed", closedAt: "t", reason: "superseded_by_duplicate" });
     expect(MINER_PR_OUTCOME_DECISIONS).toEqual(["merged", "closed"]);
+  });
+
+  it("schedules an AMS pr-outcome notification when recipientLogin is provided (#7657)", () => {
+    const schedule = vi.fn();
+    const ledger = mockLedger();
+    recordPrOutcomeSnapshot(
+      { repoFullName: "acme/widgets", prNumber: 4, decision: "merged", closedAt: "2026-07-21T00:00:00.000Z" },
+      { eventLedger: ledger, recipientLogin: "miner", scheduleAmsNotifications: schedule },
+    );
+    expect(schedule).toHaveBeenCalledOnce();
+    expect(schedule.mock.calls[0]![0][0]).toMatchObject({
+      eventType: "ams_pr_outcome",
+      recipientLogin: "miner",
+      pullNumber: 4,
+    });
   });
 });
 
