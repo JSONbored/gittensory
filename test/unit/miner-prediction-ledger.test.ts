@@ -75,6 +75,13 @@ describe("miner prediction ledger (#4263)", () => {
     expect(() => ledger.appendPrediction({ ...VALID, readinessScore: Number.NaN })).toThrow(/invalid_readiness_score/);
   });
 
+  it("REGRESSION (#7795): rejects path-traversal or invalid-character repo segments", () => {
+    const ledger = tempLedger();
+    expect(() => ledger.appendPrediction({ ...VALID, repoFullName: "../etc" })).toThrow(/invalid_repo_full_name/);
+    expect(() => ledger.appendPrediction({ ...VALID, repoFullName: "o/.." })).toThrow(/invalid_repo_full_name/);
+    expect(() => ledger.appendPrediction({ ...VALID, repoFullName: "o baz/a" })).toThrow(/invalid_repo_full_name/);
+  });
+
   it("scopes readPredictions by repo, preserving insertion order", () => {
     const ledger = tempLedger();
     ledger.appendPrediction({ ...VALID, repoFullName: "owner/repo-a", targetId: 1 });

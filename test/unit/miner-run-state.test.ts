@@ -131,6 +131,10 @@ describe("loopover-miner run-state store (#2289)", () => {
       expect(() => store.setRunState("owner/repo/extra", "idle")).toThrow("invalid_repo_full_name");
       expect(() => store.setRunState("owner/repo", "blocked" as never)).toThrow("invalid_run_state");
       expect(store.getRunState("owner/repo")).toBeNull();
+      // #7795: path-traversal / invalid-character segments must fail closed like claim-ledger (#5831).
+      expect(() => store.getRunState("../etc")).toThrow("invalid_repo_full_name");
+      expect(() => store.setRunState("o/..", "idle")).toThrow("invalid_repo_full_name");
+      expect(() => store.setRunState("o baz/a", "idle")).toThrow("invalid_repo_full_name");
     } finally {
       store.close();
     }

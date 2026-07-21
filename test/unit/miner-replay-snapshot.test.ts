@@ -341,6 +341,10 @@ describe("exportReplaySnapshot (#3010)", () => {
 
     await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "noslash", commitSha: "a" }, deps)).rejects.toThrow("invalid_repo_full_name");
     await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "a/b/c", commitSha: "a" }, deps)).rejects.toThrow("invalid_repo_full_name");
+    // #7795: path-traversal / invalid-character segments must fail closed like claim-ledger (#5831).
+    await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "../etc", commitSha: "a" }, deps)).rejects.toThrow("invalid_repo_full_name");
+    await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "o/..", commitSha: "a" }, deps)).rejects.toThrow("invalid_repo_full_name");
+    await expect(exportReplaySnapshot({ repoPath: "/repo", repoFullName: "o baz/a", commitSha: "a" }, deps)).rejects.toThrow("invalid_repo_full_name");
   });
 
   it("assertExecResult falls back to a generic exit-code message when stderr is entirely absent", async () => {

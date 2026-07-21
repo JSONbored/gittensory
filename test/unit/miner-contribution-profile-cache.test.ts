@@ -158,6 +158,10 @@ describe("contribution-profile cache store (#6797)", () => {
     expect(() => store.put({ repoFullName: 42 } as never)).toThrow(
       "invalid_repo_full_name",
     );
+    // #7795: path-traversal / invalid-character segments must fail closed like claim-ledger (#5831).
+    expect(() => store.get("../etc")).toThrow("invalid_repo_full_name");
+    expect(() => store.get("o/..")).toThrow("invalid_repo_full_name");
+    expect(() => store.put({ repoFullName: "o baz/a" } as never)).toThrow("invalid_repo_full_name");
   });
 
   it("exposes module-level get/put helpers backed by the default DB path", () => {
