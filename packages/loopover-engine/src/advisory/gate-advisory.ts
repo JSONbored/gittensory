@@ -84,6 +84,14 @@ export type GateCheckPolicy = {
    *  the PR author also filed the linked issue — becomes a hard blocker. Defaults to `advisory` — the
    *  finding is surfaced but never blocks unless the maintainer opts in. */
   selfAuthoredLinkedIssueGateMode?: GateRuleMode | undefined;
+  /** Content-lane linked-issue deliverable gate (#content-lane-deliverable). When `block`, a
+   *  `content_lane_deliverable_missing` finding — raised when the PR's linked issue's own text names a
+   *  content-lane path the PR's changed files never touch — becomes a hard blocker. Fully deterministic (a
+   *  text/path match, no AI call), so this finding is exempt from the AI-judgment close-precision breaker.
+   *  Defaults to `off` — the finding is never even produced under `off` (the caller gates the check itself
+   *  on this mode; see runContentLaneDeliverableCheckForAdvisory, src/queue/processors.ts on the host side),
+   *  so this branch only matters once a repo has explicitly opted into `advisory`/`block`. */
+  contentLaneDeliverableGateMode?: GateRuleMode | undefined;
   /** CLA / license-compatibility gate (#2564). When `block`, a `cla_consent_missing` finding — raised when
    *  neither configured detection method (a consent phrase in the PR body, or a named CLA-bot check-run
    *  conclusion) confirms consent — becomes a hard blocker. `off` (default) = no finding at all; `advisory` =
@@ -613,6 +621,10 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // Self-authored linked-issue gate: blocks only when the maintainer opts in with `block`. Defaults to
   // advisory — the finding surfaces in the panel without ever closing the PR unless explicitly configured.
   if (code === "self_authored_linked_issue") return gatePolicyBlocks(policy.selfAuthoredLinkedIssueGateMode, "advisory");
+  // Content-lane linked-issue deliverable gate (#content-lane-deliverable): blocks only when the maintainer
+  // opts in with `block`. Fully deterministic (no AI judgment involved), so it is exempt from the
+  // close-precision circuit breaker on the host side.
+  if (code === "content_lane_deliverable_missing") return gatePolicyBlocks(policy.contentLaneDeliverableGateMode, "off");
   // Lockfile-tamper-risk gate (#2563): blocks only when the maintainer opts in with `block`. Defaults to `off`
   // (the finding is never even produced — see maybeAddLockfileTamperFinding's mode gate in queue/processors.ts),
   // so this branch only matters once a repo has explicitly turned the scan on.
