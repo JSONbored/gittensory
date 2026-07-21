@@ -14,7 +14,6 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { captureBrowserError } from "../lib/browser-sentry";
 import { SiteHeader } from "@/components/site/site-header";
 import { SiteFooter } from "@/components/site/site-footer";
-import { THEME_NOFLASH_SCRIPT } from "@/components/site/theme-toggle";
 import { BackToTop } from "@/components/site/back-to-top";
 import { Toaster } from "@/components/ui/sonner";
 import { ApiProgressBar } from "@/components/site/api-progress-bar";
@@ -149,9 +148,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     ],
     scripts: [
       {
-        children: THEME_NOFLASH_SCRIPT,
-      },
-      {
         type: "application/ld+json",
         children: JSON.stringify({
           "@context": "https://schema.org",
@@ -177,7 +173,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark" style={{ colorScheme: "dark" }}>
       <head>
         <HeadContent />
       </head>
