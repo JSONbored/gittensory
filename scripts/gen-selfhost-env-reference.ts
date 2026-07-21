@@ -228,14 +228,30 @@ function sourceFiles(rootDir: string, sourceRoots: readonly string[]): string[] 
   return files;
 }
 
+const COMPILED_JS_EXTENSIONS = new Set([".js", ".mjs", ".cjs"]);
+
 function walkSourceFiles(dir: string): string[] {
   const files: string[] = [];
   const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  // A same-basename .ts/.tsx sibling in this same directory listing means the .js/.mjs/.cjs file is that
+  // source's compiled output, not independent source -- skip it. Once a package's compiled output is
+  // gitignored and built on demand rather than committed (#7290/#7291/#7705), whether that .js physically
+  // exists on disk varies by environment (a dev machine that happens to have already run a build vs. a
+  // fresh CI checkout before its own build step runs), and scanning both would let firstReference
+  // attribution silently flip between the .js and .ts path depending on which environment generated the
+  // committed reference doc. A genuinely source-only .mjs with no .ts sibling (e.g. scripts/build-
+  // selfhost.mjs, reached via a file source root rather than this directory walk, but the same rule would
+  // apply if one were ever added to a walked directory) is unaffected -- it has nothing to be shadowed by.
+  const tsBasenames = new Set(
+    entries.filter((entry) => entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx"))).map((entry) => entry.name.slice(0, entry.name.lastIndexOf("."))),
+  );
   for (const entry of entries) {
     const abs = resolve(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...walkSourceFiles(abs));
     } else if (entry.isFile() && isSupportedSourceFile(abs)) {
+      const ext = extname(entry.name);
+      if (COMPILED_JS_EXTENSIONS.has(ext) && tsBasenames.has(entry.name.slice(0, -ext.length))) continue;
       files.push(abs);
     }
   }
