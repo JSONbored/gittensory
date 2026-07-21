@@ -56,6 +56,19 @@ jobs run only if their path filter matched; on push to `main`, everything runs.
 | ui → tests | vitest jsdom (UI) | `npm run ui:test` | failing UI component test |
 | ui → build | UI build | `npm run ui:build` | build failure (note: it re-runs `ui:openapi` internally) |
 
+**The Node-version guard: `test/helpers/vitest-global-setup-node-version.ts`, not just `pretest*`.**
+Every `vitest.config.ts` in the repo (root, `vitest.workers.config.ts`, and every workspace with its own
+config) wires this as `globalSetup`, so it runs once before any test file regardless of how vitest was
+invoked — including a direct `npx vitest run test/unit/<file>.test.ts`, which this doc's own §6 ("Iterate,
+then verify") recommends for fast iteration. `scripts/check-node-version.mjs`'s `pretest*` hooks
+(`package.json`) only cover 5 high-traffic npm script names (`test`, `test:ci`, `test:coverage`,
+`test:workers`, `ui:test`) as a genuinely-faster fail there (before npm even spawns vitest) — they are a
+nicety on top of the globalSetup guarantee, not a substitute for it. An earlier version of this guard was
+`pretest*`-only and missed 8 of 12 vitest-invoking script names, plus every direct `npx vitest` call
+structurally (caught by a repo-wide audit shortly after it shipped, #7619-follow-up) — if you add a new
+top-level test script or workspace, you do not need to remember a matching `pretest*` entry; the
+`globalSetup` wiring already covers it.
+
 **Verifying the built artifact actually serves — do not use `apps/loopover-ui`'s `preview` in the raw
 TanStack Start template sense.** `apps/loopover-ui` targets nitro's `cloudflare-module` preset
 (`vite.config.ts`), which repackages the server build as `dist/server/index.mjs`. `@tanstack/start-plugin-core`'s

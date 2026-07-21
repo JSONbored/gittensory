@@ -9,6 +9,7 @@ export default defineConfig({
   ],
   test: {
     globals: true,
+    globalSetup: ["./test/helpers/vitest-global-setup-node-version.ts"],
     // Retry once before failing — a transient flake must not red the required CI and one-shot-close a PR.
     retry: 1,
     include: ["test/workers/**/*.test.ts"],

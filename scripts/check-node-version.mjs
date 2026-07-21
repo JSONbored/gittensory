@@ -5,8 +5,18 @@
 // followed by simply switching the active `node` (nvm/homebrew default change) with no reinstall, sails
 // straight past engine-strict on every later `npm run`. That's exactly the shape of gap that let the
 // Node 26 jsdom/localStorage bug (#7592/#7597/#7612) go unnoticed the first two times: a pile of
-// confusing downstream test failures instead of one clear "wrong Node version" message up front. Wired as
-// a `pretest*` hook (see package.json) on the commands people actually run vitest through.
+// confusing downstream test failures instead of one clear "wrong Node version" message up front.
+//
+// The actual, complete guarantee is test/helpers/vitest-global-setup-node-version.ts, wired as every
+// vitest.config.ts's `globalSetup` (root, workers, and every workspace with its own config) -- it covers
+// every invocation path, including a direct `npx vitest run test/unit/<file>.test.ts` (which the
+// contributing skill docs explicitly recommend for fast iteration), not just specific npm script names.
+// This module is ALSO wired as a `pretest*` hook (see package.json) on the highest-traffic commands
+// (test, test:ci, test:coverage, test:workers, ui:test) as a genuinely-faster fail there -- it runs
+// before npm even spawns vitest, vs. globalSetup which still pays vitest's own startup cost first -- but
+// that hook is a nicety on top of the globalSetup guarantee, not a substitute for it; it was originally
+// (incompletely) the only mechanism, missing 8 of 12 vitest-invoking script names (#7592-class gap,
+// caught by a repo-wide audit after #7619 shipped).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
