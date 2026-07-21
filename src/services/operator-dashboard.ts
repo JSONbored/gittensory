@@ -33,7 +33,7 @@ import type {
 import { computeFleetAnalytics, getFleetHealthSummary, type FleetAnalytics, type FleetHealthSummary } from "../orb/analytics";
 import { computeAgentHealth, computeCalibration, type AgentHealth, type Calibration } from "../review/ops";
 import { computeGateEval, type GateEvalReport } from "../review/parity";
-import { computeContributorGateEval, contributorFairnessFlags } from "../review/contributor-gate-eval";
+import { computeContributorGateEval, contributorFairnessFlags, computeBlendedContributorGateEval, contributorGlobalFairnessFlags } from "../review/contributor-gate-eval";
 import { computeCycleTimeAggregate, computeFindingAcceptance, type CycleTimeAggregate } from "../review/stats";
 import { loadUpstreamStatus, type UpstreamStatus } from "../upstream/ruleset";
 import { nowIso } from "../utils/json";
@@ -138,6 +138,7 @@ export async function buildOperatorDashboardPayload(
     fleetMetrics,
     gateEval,
     contributorGateEval,
+    blendedContributorGateEval,
     cycleTime,
     calibration,
     agentHealth,
@@ -167,6 +168,8 @@ export async function buildOperatorDashboardPayload(
     computeGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     // #fairness-analytics: per-contributor gate accuracy, same window; fails safe to an empty report.
     computeContributorGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
+    // #global-contributor-trust: the SAME data pooled cross-repo into one blended figure per login, same window.
+    computeBlendedContributorGateEval(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     // #2194: cycle-time percentiles from the stats feed; fails safe to an empty aggregate.
     computeCycleTimeAggregate(env, { days: GATE_ANALYTICS_WINDOW_DAYS, nowMs: Date.now() }),
     computeCalibration(env, operatorAgentConfig(env)),
@@ -200,6 +203,8 @@ export async function buildOperatorDashboardPayload(
   });
   // #fairness-analytics: pure fold over the already-fetched eval rows, no extra I/O.
   const contributorFairnessFlagCount = contributorFairnessFlags(contributorGateEval.rows).length;
+  // #global-contributor-trust: same fold, but over the blended (cross-repo) rows.
+  const globalContributorFairnessFlagCount = contributorGlobalFairnessFlags(blendedContributorGateEval.rows).length;
   const installedRepos = repositories.filter((repo: RepositoryRecord) => repo.isInstalled).length;
   const registeredRepos = repositories.filter((repo: RepositoryRecord) => repo.isRegistered).length;
   // #1967: map FindingAcceptanceAggregate's field names onto the AcceptanceRateCard's expected shape.
@@ -269,6 +274,14 @@ export async function buildOperatorDashboardPayload(
         label: "Contributor fairness flags",
         value: String(contributorFairnessFlagCount),
         delta: contributorFairnessFlagCount > 0 ? `${contributorGateEval.rows.length} contributor(s) evaluated` : "no outliers detected",
+      },
+      {
+        // #global-contributor-trust: the cross-repo blended counterpart -- one row per LOGIN (pooled across
+        // every repo they've touched) rather than one row per (login, project), same privacy posture as the
+        // per-project tile above (counts only, never individual logins).
+        label: "Global contributor fairness flags",
+        value: String(globalContributorFairnessFlagCount),
+        delta: globalContributorFairnessFlagCount > 0 ? `${blendedContributorGateEval.rows.length} contributor(s) evaluated` : "no outliers detected",
       },
     ],
     noiseReduction: [

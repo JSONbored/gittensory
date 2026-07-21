@@ -213,6 +213,11 @@ describe("operator dashboard payload", () => {
     expect(payload.metrics).toEqual(
       expect.arrayContaining([expect.objectContaining({ label: "Contributor fairness flags", value: "1", delta: "3 contributor(s) evaluated" })]),
     );
+    // #global-contributor-trust: every login here touches exactly one project, so the blended fold degenerates
+    // to the same per-login numbers as the per-project fold -- same outlier, same evaluated count.
+    expect(payload.metrics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: "Global contributor fairness flags", value: "1", delta: "3 contributor(s) evaluated" })]),
+    );
     // Count-only -- the flagged login itself never appears anywhere in the dashboard payload.
     expect(JSON.stringify(payload)).not.toContain("flagged-login");
   });

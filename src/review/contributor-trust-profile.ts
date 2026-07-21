@@ -1,17 +1,22 @@
-// Per-contributor trust profile (#fairness-analytics, private/internal-only): composes THREE already-existing
+// Per-contributor trust profile (#fairness-analytics, private/internal-only): composes FOUR already-existing
 // data sources into one queryable view, per repo -- nothing here is a new signal, it's a new lens on data this
 // codebase already collects:
 //   - submitter_stats (migration 0046) -- raw per-(project, submitter) submission/merge/close counts.
 //   - moderation violations (audit_events, MODERATION_VIOLATION_EVENT_TYPE) -- adverse actions/warnings already
 //     recorded by the moderation-rules engine (src/services/agent-action-executor.ts).
 //   - computeContributorGateEval (contributor-gate-eval.ts) -- per-repo gate-decision accuracy.
+//   - computeBlendedContributorGateEval (contributor-gate-eval.ts, #global-contributor-trust) -- the SAME
+//     underlying data pooled across every repo this login has touched, into one cross-repo accuracy figure.
+//     This is what makes the profile a genuine cross-repo "global" trust score rather than a bundle of
+//     per-repo rows a caller must average themselves.
 //
-// SCOPE (inherits contributor-gate-eval.ts's design note verbatim): NEVER rendered on any public surface.
+// SCOPE (inherits contributor-gate-eval.ts's design note verbatim): NEVER rendered on any public surface --
+// the blended figure especially, since it summarizes a login's ENTIRE cross-repo history in one number.
 // Internal/bearer-gated consumers only.
 
 import { MODERATION_VIOLATION_EVENT_TYPE } from "../settings/moderation-rules";
 import { listModerationViolationsForActor } from "../db/repositories";
-import { computeContributorGateEval } from "./contributor-gate-eval";
+import { computeContributorGateEval, computeBlendedContributorGateEval } from "./contributor-gate-eval";
 import { resolveEligibleFairnessAnalyticsProjects } from "./contributor-trust-profile-wire";
 import { nowIso } from "../utils/json";
 
@@ -51,6 +56,11 @@ export interface ContributorTrustProfile {
   repoStats: ContributorRepoStats[];
   moderation: ContributorModerationSummary[];
   gateAccuracy: Array<{ project: string; decided: number; weightedAccuracy: number | null }>;
+  /** The cross-repo blend of gateAccuracy: one pooled figure across every fairness-analytics-eligible project
+   *  this login has touched (#global-contributor-trust), volume-weighted rather than an average of the
+   *  per-project rows above -- see computeBlendedContributorGateEval's own note. Null when this login has no
+   *  decided rows on any eligible project in the window. */
+  blendedGateAccuracy: { decided: number; projectCount: number; weightedAccuracy: number | null } | null;
   totals: { submissions: number; merged: number; closed: number; violations: number };
 }
 
@@ -133,11 +143,13 @@ export async function getContributorTrustProfile(env: Env, login: string, opts: 
   const nowMs = opts.nowMs ?? Date.now();
   const windowDays = Number.isFinite(opts.days) && (opts.days as number) > 0 ? Math.min(opts.days as number, 730) : 90;
 
-  const [rawRepoStats, violationRows, gateEval] = await Promise.all([
+  const [rawRepoStats, violationRows, gateEval, blendedGateEval] = await Promise.all([
     loadContributorRepoStats(env, login),
     listModerationViolationsForActor(env, login, ALL_MODERATION_EVENT_TYPES).catch(() => []),
     // computeContributorGateEval already applies the same per-repo opt-out filter below internally.
     computeContributorGateEval(env, { days: windowDays, nowMs, login }),
+    // computeBlendedContributorGateEval applies the SAME per-repo opt-out filter, before pooling (#global-contributor-trust).
+    computeBlendedContributorGateEval(env, { days: windowDays, nowMs, login }),
   ]);
 
   const rawModeration = summarizeModerationViolationsByRepo(violationRows);
@@ -149,11 +161,14 @@ export async function getContributorTrustProfile(env: Env, login: string, opts: 
   const repoStats = rawRepoStats.filter((r) => eligibleProjects.has(r.project));
   const moderation = rawModeration.filter((m) => eligibleProjects.has(m.project));
   const gateAccuracy = gateEval.rows.map((r) => ({ project: r.project, decided: r.decided, weightedAccuracy: r.weightedAccuracy }));
+  // blendedGateEval.rows is scoped to `login` (opts.login was passed above), so it's at most one row.
+  const blendedRow = blendedGateEval.rows[0];
+  const blendedGateAccuracy = blendedRow ? { decided: blendedRow.decided, projectCount: blendedRow.projectCount, weightedAccuracy: blendedRow.weightedAccuracy } : null;
 
   const totals = repoStats.reduce(
     (acc, r) => ({ submissions: acc.submissions + r.submissions, merged: acc.merged + r.merged, closed: acc.closed + r.closed, violations: acc.violations }),
     { submissions: 0, merged: 0, closed: 0, violations: moderation.reduce((sum, m) => sum + m.violationCount, 0) },
   );
 
-  return { login, generatedAt: nowIso(), windowDays, repoStats, moderation, gateAccuracy, totals };
+  return { login, generatedAt: nowIso(), windowDays, repoStats, moderation, gateAccuracy, blendedGateAccuracy, totals };
 }

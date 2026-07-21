@@ -4597,10 +4597,17 @@ describe("api routes", () => {
 
     const res = await app.request("/v1/internal/fairness/contributors/octocat", { headers }, env);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { profile: { login: string; repoStats: unknown[] }; fairnessFlags: unknown[] };
+    const body = (await res.json()) as {
+      profile: { login: string; repoStats: unknown[]; blendedGateAccuracy: unknown };
+      fairnessFlags: unknown[];
+      globalFairnessFlags: unknown[];
+    };
     expect(body.profile.login).toBe("octocat");
     expect(body.profile.repoStats).toHaveLength(1);
     expect(Array.isArray(body.fairnessFlags)).toBe(true);
+    // #global-contributor-trust: the cross-repo blend rides along in the same profile payload.
+    expect(body.profile.blendedGateAccuracy).toBeNull(); // no gate decisions inserted in this fixture
+    expect(Array.isArray(body.globalFairnessFlags)).toBe(true);
 
     const offEnv = createTestEnv();
     const off = await app.request("/v1/internal/fairness/contributors/octocat", { headers }, offEnv);
@@ -4614,8 +4621,23 @@ describe("api routes", () => {
 
     const res = await app.request("/v1/internal/fairness/contributors", { headers }, env);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { contributorsEvaluated: number; hasSignal: boolean; flaggedCount: number };
-    expect(body).toEqual({ contributorsEvaluated: 0, hasSignal: false, flaggedCount: 0 });
+    const body = (await res.json()) as {
+      contributorsEvaluated: number;
+      hasSignal: boolean;
+      flaggedCount: number;
+      contributorsEvaluatedGlobally: number;
+      globalHasSignal: boolean;
+      globalFlaggedCount: number;
+    };
+    // #global-contributor-trust: the fleet-wide blended counts ride along beside the per-project ones.
+    expect(body).toEqual({
+      contributorsEvaluated: 0,
+      hasSignal: false,
+      flaggedCount: 0,
+      contributorsEvaluatedGlobally: 0,
+      globalHasSignal: false,
+      globalFlaggedCount: 0,
+    });
     expect(JSON.stringify(body)).not.toContain("login"); // counts only, never a per-contributor breakdown
 
     const offEnv = createTestEnv();

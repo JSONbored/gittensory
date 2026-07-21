@@ -300,7 +300,7 @@ import { computeOpsStats, isOpsEnabled, resolveOpsManifestOverride } from "../re
 import { handleInternalCalibration, handleInternalDecision, type OpsAgentConfig } from "../review/ops";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
 import { computePredictedGateAgreement } from "../review/predicted-gate-agreement";
-import { computeContributorGateEval, contributorFairnessFlags } from "../review/contributor-gate-eval";
+import { computeContributorGateEval, contributorFairnessFlags, computeBlendedContributorGateEval, contributorGlobalFairnessFlags } from "../review/contributor-gate-eval";
 import { getContributorTrustProfile } from "../review/contributor-trust-profile";
 import { backfillContributorGateHistory } from "../review/contributor-gate-history-backfill";
 import { isFairnessAnalyticsEnabled, resolveFairnessAnalyticsManifestOverride } from "../review/contributor-trust-profile-wire";
@@ -4482,25 +4482,44 @@ export function createApp() {
   // when LOOPOVER_FAIRNESS_ANALYTICS is off. NEVER exposed publicly -- see contributor-trust-profile.ts's design
   // note. The fleet-wide fairness flags need every contributor's rows to compute each project's median, so this
   // computes the full report and filters to :login rather than re-deriving a login-scoped median in isolation.
+  // Same reasoning applies to globalFairnessFlags (#global-contributor-trust) against the blended report.
   app.get("/v1/internal/fairness/contributors/:login", async (c) => {
     if (!isFairnessAnalyticsEnabled(c.env, await resolveFairnessAnalyticsManifestOverride(c.env))) return c.json({ error: "not_found" }, 404);
     const login = c.req.param("login");
     const nowMs = Date.now();
-    const [profile, evalReport] = await Promise.all([
+    const [profile, evalReport, blendedEvalReport] = await Promise.all([
       getContributorTrustProfile(c.env, login, { nowMs }),
       computeContributorGateEval(c.env, { days: 90, nowMs }),
+      computeBlendedContributorGateEval(c.env, { days: 90, nowMs }),
     ]);
     const flags = contributorFairnessFlags(evalReport.rows).filter((f) => f.login === login);
-    return c.json({ profile, fairnessFlags: flags });
+    const globalFlags = contributorGlobalFairnessFlags(blendedEvalReport.rows).filter((f) => f.login === login);
+    return c.json({ profile, fairnessFlags: flags, globalFairnessFlags: globalFlags });
   });
 
   // Fleet-wide fairness summary (#fairness-analytics): counts only, never individual contributor rows -- the
   // per-login detail lives behind the :login route above. Intended for the operator dashboard tile.
+  // globalFlaggedCount/contributorsEvaluatedGlobally (#global-contributor-trust) are the blended,
+  // pooled-across-every-repo counterparts to flaggedCount/contributorsEvaluated -- one row per LOGIN rather
+  // than one row per (login, project), so the two counts intentionally diverge for any login active on more
+  // than one repo.
   app.get("/v1/internal/fairness/contributors", async (c) => {
     if (!isFairnessAnalyticsEnabled(c.env, await resolveFairnessAnalyticsManifestOverride(c.env))) return c.json({ error: "not_found" }, 404);
-    const evalReport = await computeContributorGateEval(c.env, { days: 90, nowMs: Date.now() });
+    const nowMs = Date.now();
+    const [evalReport, blendedEvalReport] = await Promise.all([
+      computeContributorGateEval(c.env, { days: 90, nowMs }),
+      computeBlendedContributorGateEval(c.env, { days: 90, nowMs }),
+    ]);
     const flags = contributorFairnessFlags(evalReport.rows);
-    return c.json({ contributorsEvaluated: evalReport.rows.length, hasSignal: evalReport.hasSignal, flaggedCount: flags.length });
+    const globalFlags = contributorGlobalFairnessFlags(blendedEvalReport.rows);
+    return c.json({
+      contributorsEvaluated: evalReport.rows.length,
+      hasSignal: evalReport.hasSignal,
+      flaggedCount: flags.length,
+      contributorsEvaluatedGlobally: blendedEvalReport.rows.length,
+      globalHasSignal: blendedEvalReport.hasSignal,
+      globalFlaggedCount: globalFlags.length,
+    });
   });
 
   // Backfill (#fairness-analytics): reconstructs historical contributor_gate_history rows predating migration

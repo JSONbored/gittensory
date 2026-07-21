@@ -112,7 +112,28 @@ describe("getContributorTrustProfile — end-to-end composition over real D1 (#f
     expect(profile.moderation).toHaveLength(1);
     expect(profile.moderation[0]!.violationCount).toBe(2);
     expect(profile.gateAccuracy).toEqual([{ project: "owner/repo", decided: 1, weightedAccuracy: 1 }]);
+    // #global-contributor-trust: with only one project in play, the blend equals that project's own row.
+    expect(profile.blendedGateAccuracy).toEqual({ decided: 1, projectCount: 1, weightedAccuracy: 1 });
     expect(profile.totals).toEqual({ submissions: 5, merged: 3, closed: 2, violations: 2 });
+  });
+
+  it("#global-contributor-trust: blendedGateAccuracy pools gate decisions across TWO different repos for the same login", async () => {
+    const env = createTestEnv();
+    await recordContributorGateDecision(env, { login: "octocat", project: "owner/repo-a", pullNumber: 1, headSha: "sha1", decision: "merge" });
+    await insertReviewAuditOutcome(env, "owner/repo-a", "owner/repo-a#1", "merged", new Date(NOW).toISOString());
+    await recordContributorGateDecision(env, { login: "octocat", project: "owner/repo-b", pullNumber: 2, headSha: "sha2", decision: "close" });
+    await insertReviewAuditOutcome(env, "owner/repo-b", "owner/repo-b#2", "merged", new Date(NOW).toISOString()); // false-close
+
+    const profile = await getContributorTrustProfile(env, "octocat", { nowMs: NOW });
+
+    expect(profile.gateAccuracy).toEqual(
+      expect.arrayContaining([
+        { project: "owner/repo-a", decided: 1, weightedAccuracy: 1 },
+        { project: "owner/repo-b", decided: 1, weightedAccuracy: 0 },
+      ]),
+    );
+    // Blended: 2 decided total, only 1 confirmed -> 0.5, pooled across both repos in one figure.
+    expect(profile.blendedGateAccuracy).toEqual({ decided: 2, projectCount: 2, weightedAccuracy: 0.5 });
   });
 
   it("reads a null last_seen as null (the column is nullable, unlike submissions/merged/closed/manual)", async () => {
@@ -158,6 +179,21 @@ describe("getContributorTrustProfile — end-to-end composition over real D1 (#f
     expect(profile.totals.submissions).toBe(3);
   });
 
+  it("REGRESSION (#global-contributor-trust): blendedGateAccuracy excludes an opted-out repo's gate decisions from the pool", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "owner/opted-out" });
+    await upsertRepoFocusManifest(env, "owner/opted-out", { settings: { fairnessAnalyticsMode: "off" } });
+
+    await recordContributorGateDecision(env, { login: "octocat", project: "owner/opted-out", pullNumber: 1, headSha: "sha1", decision: "close" });
+    await insertReviewAuditOutcome(env, "owner/opted-out", "owner/opted-out#1", "merged", new Date(NOW).toISOString()); // would be a false-close if counted
+    await recordContributorGateDecision(env, { login: "octocat", project: "owner/opted-in", pullNumber: 2, headSha: "sha2", decision: "merge" });
+    await insertReviewAuditOutcome(env, "owner/opted-in", "owner/opted-in#2", "merged", new Date(NOW).toISOString());
+
+    const profile = await getContributorTrustProfile(env, "octocat", { nowMs: NOW });
+
+    expect(profile.blendedGateAccuracy).toEqual({ decided: 1, projectCount: 1, weightedAccuracy: 1 });
+  });
+
   it("never mixes another contributor's rows into the profile", async () => {
     const env = createTestEnv();
     await insertSubmitterStats(env, "owner/repo", "octocat", { submissions: 5 });
@@ -174,6 +210,7 @@ describe("getContributorTrustProfile — end-to-end composition over real D1 (#f
     expect(profile.repoStats).toEqual([]);
     expect(profile.moderation).toEqual([]);
     expect(profile.gateAccuracy).toEqual([]);
+    expect(profile.blendedGateAccuracy).toBeNull();
     expect(profile.totals).toEqual({ submissions: 0, merged: 0, closed: 0, violations: 0 });
   });
 

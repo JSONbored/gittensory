@@ -3,6 +3,9 @@ import {
   computeContributorGateEval,
   type ContributorGateEvalRow,
   contributorFairnessFlags,
+  computeBlendedContributorGateEval,
+  type BlendedContributorGateEvalRow,
+  contributorGlobalFairnessFlags,
 } from "../../src/review/contributor-gate-eval";
 import { REVERSAL_DISCOUNT_WEIGHT } from "../../src/review/parity";
 import { upsertRepositorySettings } from "../../src/db/repositories";
@@ -305,6 +308,229 @@ describe("contributorFairnessFlags — per-login deviation from the project medi
       row({ login: "zeta", project: "p", weightedAccuracy: 0.9 }),
       row({ login: "mid", project: "p", weightedAccuracy: 0.5 }), // median: (0.9+0.5)/2=0.7, neither flags alone...
       row({ login: "alpha", project: "p", weightedAccuracy: 0.1 }), // ...but this pulls the median down
+    ]);
+    expect(flags.map((f) => f.login)).toEqual(["alpha", "zeta"]);
+  });
+});
+
+describe("computeBlendedContributorGateEval — cross-repo blended gate accuracy (#global-contributor-trust)", () => {
+  it("pools cells across TWO projects for the SAME login into one VOLUME-WEIGHTED row, not an average of each project's precision", async () => {
+    const out = await computeBlendedContributorGateEval(
+      cellEnv([
+        // project p1: 8/10 merge precision (80%)
+        { login: "octocat", project: "p1", pred: "merge", truth: "merged", n: 8 },
+        { login: "octocat", project: "p1", pred: "merge", truth: "closed", n: 2 },
+        // project p2: 1/1 merge precision (100%)
+        { login: "octocat", project: "p2", pred: "merge", truth: "merged", n: 1 },
+      ]),
+      { days: 90, nowMs: NOW },
+    );
+    expect(out.rows).toHaveLength(1);
+    const r = out.rows[0]!;
+    expect(r.login).toBe("octocat");
+    expect(r.projectCount).toBe(2);
+    expect(r.wouldMerge).toBe(11);
+    expect(r.mergeConfirmed).toBe(9);
+    // Volume-weighted: 9/11 ≈ 0.818 -- NOT a naive average of 0.8 and 1.0 (which would be 0.9).
+    expect(r.mergePrecision).toBeCloseTo(9 / 11);
+    expect(r.mergePrecision).not.toBeCloseTo(0.9, 1);
+    expect(r.decided).toBe(11);
+  });
+
+  it("keeps two different logins as separate blended rows, sorted by login", async () => {
+    const out = await computeBlendedContributorGateEval(
+      cellEnv([
+        { login: "hubot", project: "p1", pred: "close", truth: "closed", n: 2 },
+        { login: "octocat", project: "p1", pred: "merge", truth: "merged", n: 3 },
+        { login: "octocat", project: "p2", pred: "merge", truth: "merged", n: 1 },
+      ]),
+      { days: 90, nowMs: NOW },
+    );
+    expect(out.rows.map((r) => r.login)).toEqual(["hubot", "octocat"]);
+    expect(out.rows.find((r) => r.login === "octocat")!.projectCount).toBe(2);
+    expect(out.rows.find((r) => r.login === "hubot")!.projectCount).toBe(1);
+  });
+
+  it("#2348-equivalent: discounts a reverted merge's credit the same way as the per-project computation", async () => {
+    const out = await computeBlendedContributorGateEval(
+      cellEnv([
+        { login: "octocat", project: "p1", pred: "merge", truth: "merged", reversed: 0, n: 6 },
+        { login: "octocat", project: "p2", pred: "merge", truth: "merged", reversed: 1, n: 4 }, // later reverted, on a DIFFERENT project
+      ]),
+      { days: 90, nowMs: NOW },
+    );
+    const r = out.rows[0]!;
+    expect(r.mergeConfirmed).toBe(10); // raw: unaffected by reversal
+    expect(r.weightedMergeConfirmed).toBe(6 + 4 * REVERSAL_DISCOUNT_WEIGHT);
+    expect(r.weightedAccuracy).toBeCloseTo((6 + 4 * REVERSAL_DISCOUNT_WEIGHT) / 10);
+  });
+
+  it("leaves weightedAccuracy 0 (not null) when decided > 0 but no confusion bucket matched (same 'counts decided' semantics as the per-project fold)", async () => {
+    const out = await computeBlendedContributorGateEval(cellEnv([{ login: "octocat", project: "p", pred: "hold", truth: "merged", n: 4 }]), { days: 90, nowMs: NOW });
+    const r = out.rows[0]!;
+    expect(r.decided).toBe(4);
+    expect(r.weightedAccuracy).toBe(0);
+  });
+
+  it("leaves weightedAccuracy null for a login with zero decided", async () => {
+    // A cell with n=0 can't come from a real GROUP BY COUNT(*) query, but exercises the decided<=0 branch
+    // directly rather than asserting it's unreachable (mirrors computeContributorGateEval's identical test).
+    const out = await computeBlendedContributorGateEval(cellEnv([{ login: "octocat", project: "p", pred: "merge", truth: "merged", n: 0 }]), { days: 90, nowMs: NOW });
+    expect(out.rows[0]!.decided).toBe(0);
+    expect(out.rows[0]!.weightedAccuracy).toBeNull();
+  });
+
+  it("counts a false-close (would-close, human merged) and a false-merge is unaffected by an inconclusive outcome, pooled across projects", async () => {
+    const out = await computeBlendedContributorGateEval(
+      cellEnv([
+        { login: "octocat", project: "p1", pred: "close", truth: "merged", n: 1 }, // false-close: the dangerous error
+        { login: "octocat", project: "p2", pred: "merge", truth: "expired", n: 4 }, // neither merged nor closed
+        { login: "octocat", project: "p1", pred: "close", truth: "expired", n: 3 }, // neither merged nor closed
+      ]),
+      { days: 90, nowMs: NOW },
+    );
+    const r = out.rows[0]!;
+    expect(r.wouldClose).toBe(4); // 1 false-close + 3 expired
+    expect(r.closeConfirmed).toBe(0);
+    expect(r.closeFalse).toBe(1);
+    expect(r.closePrecision).toBe(0);
+    expect(r.wouldMerge).toBe(4);
+    expect(r.mergeConfirmed).toBe(0);
+    expect(r.mergeFalse).toBe(0); // expired is neither confirmed nor false
+    expect(r.mergePrecision).toBe(0);
+  });
+
+  it("REGRESSION (#global-contributor-trust): excludes an opted-out project's cells from another eligible project's blend", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "owner/opted-out" });
+    await upsertRepoFocusManifest(env, "owner/opted-out", { settings: { fairnessAnalyticsMode: "off" } });
+
+    const insert = async (project: string, pr: number, n: number): Promise<void> => {
+      for (let i = 0; i < n; i++) {
+        const targetId = `${project}#${pr}-${i}`;
+        await env.DB.prepare(`INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, created_at) VALUES (?, 'octocat', 'gittensory-native', ?, ?, 'merge', ?)`)
+          .bind(`cgh-${targetId}`, project, targetId, new Date().toISOString())
+          .run();
+        await env.DB.prepare(`INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES (?, ?, ?, 'pr_outcome', 'merged', 'github', ?)`)
+          .bind(`po-${targetId}`, project, targetId, new Date().toISOString())
+          .run();
+      }
+    };
+    await insert("owner/opted-out", 1, 5); // would dominate the blend if not excluded
+    await insert("owner/opted-in", 2, 1);
+
+    const out = await computeBlendedContributorGateEval(env, { days: 90, nowMs: NOW });
+    expect(out.rows).toHaveLength(1);
+    expect(out.rows[0]!.decided).toBe(1); // only the opted-in project's single decision counted
+    expect(out.rows[0]!.projectCount).toBe(1);
+  });
+
+  it("is fail-safe: a throwing D1 read degrades to an empty report, not an error", async () => {
+    const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => { throw new Error("d1 down"); } }) }) } } as unknown as Env;
+    const out = await computeBlendedContributorGateEval(env, { days: 90, nowMs: NOW });
+    expect(out.rows).toEqual([]);
+    expect(out.hasSignal).toBe(false);
+  });
+
+  it("hasSignal reflects the blended decided count crossing MIN_DECIDED_FOR_SIGNAL(10), pooled across projects", async () => {
+    const under = await computeBlendedContributorGateEval(
+      cellEnv([
+        { login: "octocat", project: "p1", pred: "merge", truth: "merged", n: 4 },
+        { login: "octocat", project: "p2", pred: "merge", truth: "merged", n: 5 },
+      ]),
+      { days: 90, nowMs: NOW },
+    );
+    expect(under.hasSignal).toBe(false); // 9 < 10, even though neither project alone would show signal either
+
+    const over = await computeBlendedContributorGateEval(
+      cellEnv([
+        { login: "octocat", project: "p1", pred: "merge", truth: "merged", n: 4 },
+        { login: "octocat", project: "p2", pred: "merge", truth: "merged", n: 6 },
+      ]),
+      { days: 90, nowMs: NOW },
+    );
+    expect(over.hasSignal).toBe(true); // 10 >= 10, achieved ONLY by pooling across the two projects
+  });
+});
+
+describe("contributorGlobalFairnessFlags — blended (cross-repo) deviation from the FLEET median (#global-contributor-trust)", () => {
+  const row = (over: Partial<BlendedContributorGateEvalRow>): BlendedContributorGateEvalRow => ({
+    login: "octocat", projectCount: 1, wouldMerge: 0, mergeConfirmed: 0, mergeFalse: 0, wouldClose: 0, closeConfirmed: 0, closeFalse: 0, decided: 10,
+    mergePrecision: null, closePrecision: null, weightedMergeConfirmed: 0, weightedCloseConfirmed: 0, weightedMergePrecision: null, weightedClosePrecision: null, weightedAccuracy: 0.9,
+    ...over,
+  });
+
+  it("does not flag a contributor within the outlier band of the fleet median", () => {
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "a", weightedAccuracy: 0.9 }),
+      row({ login: "b", weightedAccuracy: 0.85 }),
+    ]);
+    expect(flags).toEqual([]);
+  });
+
+  it("flags a contributor whose BLENDED accuracy is unusually UNFAVORABLE vs the fleet median", () => {
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "a", weightedAccuracy: 0.9 }),
+      row({ login: "b", weightedAccuracy: 0.9 }),
+      row({ login: "c", weightedAccuracy: 0.5, projectCount: 3 }),
+    ]);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toMatchObject({ login: "c", projectCount: 3, deviation: -0.4 });
+    expect(flags[0]!.fleetMedianAccuracy).toBeCloseTo(0.9);
+  });
+
+  it("flags a contributor whose BLENDED accuracy is unusually FAVORABLE vs the fleet median -- neither direction is asserted as fault", () => {
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "a", weightedAccuracy: 0.5 }),
+      row({ login: "b", weightedAccuracy: 0.5 }),
+      row({ login: "c", weightedAccuracy: 1.0 }),
+    ]);
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.login).toBe("c");
+    expect(flags[0]!.deviation).toBeCloseTo(0.5);
+  });
+
+  it("never flags a contributor below the minimum sample size, even with an extreme deviation", () => {
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "a", weightedAccuracy: 0.9 }),
+      row({ login: "b", weightedAccuracy: 0.9 }),
+      row({ login: "c", weightedAccuracy: 0, decided: 4 }),
+    ]);
+    expect(flags).toEqual([]);
+  });
+
+  it("never flags when fewer than 2 eligible contributors exist fleet-wide (no peer group to compare against)", () => {
+    const flags = contributorGlobalFairnessFlags([row({ login: "a", weightedAccuracy: 0.1 })]);
+    expect(flags).toEqual([]);
+  });
+
+  it("skips a row with a null weightedAccuracy (nothing decided) without throwing", () => {
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "a", weightedAccuracy: 0.9 }),
+      row({ login: "b", weightedAccuracy: null }),
+    ]);
+    expect(flags).toEqual([]);
+  });
+
+  it("returns [] for an empty input", () => {
+    expect(contributorGlobalFairnessFlags([])).toEqual([]);
+  });
+
+  it("a login can be flagged globally without any single per-project row being an outlier, and vice versa", () => {
+    // Globally: c's blended 0.5 deviates from the fleet median of ~0.9 by more than the band.
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "a", weightedAccuracy: 0.9 }),
+      row({ login: "b", weightedAccuracy: 0.9 }),
+      row({ login: "c", weightedAccuracy: 0.5 }),
+    ]);
+    expect(flags.map((f) => f.login)).toEqual(["c"]);
+  });
+
+  it("sorts flags by login", () => {
+    const flags = contributorGlobalFairnessFlags([
+      row({ login: "zeta", weightedAccuracy: 0.9 }),
+      row({ login: "mid", weightedAccuracy: 0.5 }),
+      row({ login: "alpha", weightedAccuracy: 0.1 }),
     ]);
     expect(flags.map((f) => f.login)).toEqual(["alpha", "zeta"]);
   });
