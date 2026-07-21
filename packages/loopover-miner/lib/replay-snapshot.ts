@@ -75,8 +75,18 @@ function normalizeRepoFullName(repoFullName: string): string {
   return `${owner}/${repo}`;
 }
 
+// A commit SHA is joined directly into a filesystem path (planReplaySnapshotPath), so it must be a real
+// commit-SHA-shaped hex string -- otherwise a traversal-shaped value like "../../evil" would escape the
+// intended snapshot sandbox subdir via path.join (#7796). Mirrors replay-task-generation.ts's own
+// /^[0-9a-f]{7,40}$/i validator for the same identifier class rather than inventing a different check.
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
+
+function isCommitShaShaped(commitSha: unknown): commitSha is string {
+  return typeof commitSha === "string" && COMMIT_SHA_PATTERN.test(commitSha.trim());
+}
+
 function normalizeCommitSha(commitSha: string): string {
-  if (typeof commitSha !== "string" || !commitSha.trim()) throw new Error("invalid_commit_sha");
+  if (!isCommitShaShaped(commitSha)) throw new Error("invalid_commit_sha");
   return commitSha.trim();
 }
 
@@ -234,6 +244,10 @@ export function openReplaySnapshotStore(dbPath: string = resolveReplaySnapshotDb
   `;
 
   function getSnapshot(repoFullName: string, commitSha: string): ReplaySnapshot | null {
+    // A read-only lookup by exact key: a malformed commitSha simply can't match any stored row (writes go
+    // through the strict normalizeCommitSha in saveSnapshot), so treat it as "not found" rather than throwing
+    // -- preserving getSnapshot's "unknown pair -> null" contract while the write path stays hardened (#7796).
+    if (!isCommitShaShaped(commitSha)) return null;
     const row = driver.query(getSql, [normalizeRepoFullName(repoFullName), normalizeCommitSha(commitSha)]).rows[0] as
       | ReplaySnapshotRow
       | undefined;
