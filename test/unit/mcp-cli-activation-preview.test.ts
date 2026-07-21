@@ -47,15 +47,18 @@ beforeAll(async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   holder.serverTransport = serverTransport;
 
-  // cliArgs[0] === undefined skips the module's `if (cliArgs[0] && cliArgs[0] !== "--stdio")` CLI-dispatch
-  // guard (which would runCli + process.exit), so importing just registers the tools and connects our
-  // in-memory transport instead of a real stdio one.
-  const originalArgv = process.argv;
-  process.argv = [process.execPath, "loopover-mcp"];
   // Import the .ts source explicitly (not the .js): a committed/build-artifact .js on disk would otherwise be
   // resolved and instrumented under its .js path, so codecov/patch would map the new lines to the wrong file.
   // A non-literal specifier keeps tsc from rejecting the .ts extension (TS5097) while vitest still loads it.
   const binTsModule = "../../packages/loopover-mcp/bin/loopover-mcp.ts";
+  // #7764 gated the bin's top-level `await server.connect(new StdioServerTransport())` behind
+  // isProcessEntrypoint() (realpath(argv[1]) === realpath(this module)). Point argv[1] at the bin's own
+  // resolved path so that guard is satisfied on import — otherwise the top-level connect is skipped, our
+  // mocked in-memory transport is never wired to the server, and client.connect below hangs to the timeout.
+  // argv[2..] stays empty, so the `if (cliArgs[0] && cliArgs[0] !== "--stdio")` CLI-dispatch guard (runCli +
+  // process.exit) is still skipped — importing only registers the tools and connects our transport.
+  const originalArgv = process.argv;
+  process.argv = [process.execPath, join(process.cwd(), "packages/loopover-mcp/bin/loopover-mcp.ts")];
   await import(/* @vite-ignore */ binTsModule);
   process.argv = originalArgv;
 
