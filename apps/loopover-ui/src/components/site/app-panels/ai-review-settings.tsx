@@ -1,5 +1,5 @@
 import { KeyRound, Loader2, Save, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StatusPill } from "@/components/site/control-primitives";
 import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
@@ -57,11 +57,14 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  // Stale-response generation (#7784): ignore out-of-order resolutions when the free-text repo picker races.
+  const requestGenerationRef = useRef(0);
 
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
   const load = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     const apiBase = repoApiBase(repoFullName);
     if (!apiBase) return;
     setMessage(null);
@@ -78,6 +81,7 @@ export function AiReviewSettings({ reviewability }: { reviewability: Array<{ pr:
         silentStatus: true,
       }),
     ]);
+    if (generation !== requestGenerationRef.current) return;
     if (settings.ok) {
       setMode(settings.data.aiReviewMode ?? "off");
       setByok(settings.data.aiReviewByok ?? false);

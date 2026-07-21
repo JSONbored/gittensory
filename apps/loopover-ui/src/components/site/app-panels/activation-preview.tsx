@@ -1,5 +1,5 @@
 import { CheckCircle2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StatusPill, type Status } from "@/components/site/control-primitives";
 import { TableScroll } from "@/components/site/data-table";
@@ -61,13 +61,17 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
   const [preview, setPreview] = useState<ActivationPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Stale-response generation (#7784): ignore out-of-order resolutions when the free-text repo picker races.
+  const requestGenerationRef = useRef(0);
 
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
   const load = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     const apiBase = repoApiBase(repoFullName);
     if (!apiBase) {
+      if (generation !== requestGenerationRef.current) return;
       setPreview(null);
       setLoadError(null);
       return;
@@ -79,6 +83,7 @@ export function ActivationPreview({ reviewability }: { reviewability: Array<{ pr
       credentials: "include",
       silentStatus: true,
     });
+    if (generation !== requestGenerationRef.current) return;
     if (result.ok) {
       setPreview(result.data);
     } else {

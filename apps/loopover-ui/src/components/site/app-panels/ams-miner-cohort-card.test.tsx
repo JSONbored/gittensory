@@ -139,4 +139,41 @@ describe("AmsMinerCohortCard", () => {
     });
     expect(screen.getByText(/This view is unavailable for this repository\./i)).toBeTruthy();
   });
+
+  it("ignores a stale response after the free-text repo picker races (#7784)", async () => {
+    let resolveFirst!: (value: { ok: true; data: typeof POPULATED_COMPARISON }) => void;
+    const first = new Promise<{ ok: true; data: typeof POPULATED_COMPARISON }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondComparison = {
+      ...POPULATED_COMPARISON,
+      windowDays: 30,
+      checkedSubmitterCount: 2,
+      amsCohort: { ...POPULATED_COMPARISON.amsCohort, submitterCount: 9 },
+    };
+    apiFetch.mockImplementation((url: string) => {
+      if (String(url).includes("/acme/widgets/")) return first;
+      return Promise.resolve({ ok: true, data: secondComparison });
+    });
+
+    render(
+      <AmsMinerCohortCard
+        reviewability={[{ pr: "acme/widgets#1" }, { pr: "other/repo#2" }]}
+      />,
+    );
+    // Initial load for acme/widgets is in flight (deferred). Type a different repo so a newer request starts.
+    fireEvent.change(screen.getByPlaceholderText("owner/repo"), {
+      target: { value: "other/repo" },
+    });
+    await waitFor(() => expect(screen.getByText(/Window: 30 days · checked 2 of/i)).toBeTruthy());
+
+    // Stale first response arrives late — must not overwrite the newer repo's state.
+    resolveFirst({ ok: true, data: POPULATED_COMPARISON });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/repos/other/repo/ams-miner-cohort"),
+      expect.anything(),
+    ));
+    expect(screen.getByText(/Window: 30 days · checked 2 of/i)).toBeTruthy();
+    expect(screen.queryByText(/Window: 90 days · checked 5 of/i)).toBeNull();
+  });
 });

@@ -1,5 +1,5 @@
 import { FileCog, Loader2, Save } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiFetch } from "@/lib/api/request";
 import { getApiOrigin } from "@/lib/api/origin";
@@ -141,11 +141,14 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  // Stale-response generation (#7784): ignore out-of-order resolutions when the free-text repo picker races.
+  const requestGenerationRef = useRef(0);
 
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
   const load = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     const apiBase = repoApiBase(repoFullName);
     if (!apiBase) return;
     setMessage(null);
@@ -155,6 +158,7 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
       credentials: "include",
       silentStatus: true,
     });
+    if (generation !== requestGenerationRef.current) return;
     // Default the agent-layer fields defensively so the editor renders even against an older response shape.
     setSettings(
       result.ok
@@ -519,8 +523,11 @@ function FocusManifestEditor({ base }: { base: string | null }) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  // Stale-response generation (#7784): ignore out-of-order resolutions when `base` changes mid-flight.
+  const requestGenerationRef = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     if (!base) return;
     setLoading(true);
     setMessage(null);
@@ -529,6 +536,7 @@ function FocusManifestEditor({ base }: { base: string | null }) {
       credentials: "include",
       silentStatus: true,
     });
+    if (generation !== requestGenerationRef.current) return;
     setText(result.ok ? JSON.stringify(result.data.manifest, null, 2) : "");
     setLoading(false);
   }, [base]);

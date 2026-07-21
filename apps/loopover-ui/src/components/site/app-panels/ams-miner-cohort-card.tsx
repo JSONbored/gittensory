@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { StateBoundary } from "@/components/site/state-views";
 import { apiFetch } from "@/lib/api/request";
@@ -94,13 +94,18 @@ export function AmsMinerCohortCard({ reviewability }: { reviewability: Array<{ p
   const [comparison, setComparison] = useState<AmsMinerCohortComparison | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Stale-response generation (#7784): every keystroke that changes repoFullName bumps this; a response
+  // whose generation no longer matches is ignored so an earlier in-flight fetch can't overwrite later state.
+  const requestGenerationRef = useRef(0);
 
   const base = repoApiBase(repoFullName);
   const hasRepos = repoOptions.length > 0;
 
   const load = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     const apiBase = repoApiBase(repoFullName);
     if (!apiBase) {
+      if (generation !== requestGenerationRef.current) return;
       setComparison(null);
       setLoadError(null);
       return;
@@ -112,6 +117,7 @@ export function AmsMinerCohortCard({ reviewability }: { reviewability: Array<{ p
       credentials: "include",
       silentStatus: true,
     });
+    if (generation !== requestGenerationRef.current) return;
     if (result.ok) {
       setComparison(result.data);
     } else {
