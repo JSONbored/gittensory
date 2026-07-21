@@ -4637,9 +4637,17 @@ describe("api routes", () => {
       .run();
     const headers = { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" };
 
+    // No `limit` field in the body -> route's `typeof body?.limit === "number"` ternary takes its `undefined`
+    // branch, so backfillContributorGateHistory falls back to its own DEFAULT_BATCH_LIMIT (500).
+    const noLimitRes = await app.request("/v1/internal/jobs/backfill-contributor-gate-history/run", { method: "POST", headers, body: "{}" }, env);
+    expect(noLimitRes.status).toBe(200);
+    await expect(noLimitRes.json()).resolves.toEqual({ scanned: 1, inserted: 1, skippedNoAuthor: 0, hasMore: false });
+
     const res = await app.request("/v1/internal/jobs/backfill-contributor-gate-history/run", { method: "POST", headers, body: JSON.stringify({ limit: 10 }) }, env);
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ scanned: 1, inserted: 1, skippedNoAuthor: 0, hasMore: false });
+    // Idempotent: the backfill query only selects rows not yet in contributor_gate_history, so the row
+    // backfilled above is no longer scanned at all on this second (differently-limited) run.
+    await expect(res.json()).resolves.toEqual({ scanned: 0, inserted: 0, skippedNoAuthor: 0, hasMore: false });
 
     const offEnv = createTestEnv();
     const offHeaders = { authorization: `Bearer ${offEnv.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" };
