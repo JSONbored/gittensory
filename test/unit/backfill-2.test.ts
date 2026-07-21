@@ -224,6 +224,38 @@ describe("GitHub backfill", () => {
       await expect(fetchAndStorePullRequestFilesForReview(env, "JSONbored/gittensory", 56, "public-token")).resolves.toEqual([]);
       expect(filesCalls).toBe(2);
     });
+
+    it("logs a structured warning (#7602) when both REST and GraphQL file fetches fail -- this used to be totally silent", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async () => new Response("boom", { status: 500 }));
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(fetchAndStorePullRequestFilesForReview(env, "JSONbored/gittensory", 100, "public-token")).resolves.toEqual([]);
+        const traceLine = errorSpy.mock.calls.map((c) => String(c[0])).find((line) => line.includes("review_files_fetch_failed"));
+        expect(traceLine).toBeDefined();
+        const parsed = JSON.parse(traceLine as string) as Record<string, unknown>;
+        expect(parsed).toMatchObject({ level: "warn", event: "review_files_fetch_failed", repoFullName: "JSONbored/gittensory", pullNumber: 100 });
+        // Both fetchOnce() attempts hit the REST+GraphQL double-failure path, so the warning is recorded twice.
+        expect(parsed.warnings).toEqual([
+          "File sync failed for #100: GitHub REST and GraphQL detail fetches failed.",
+          "File sync failed for #100: GitHub REST and GraphQL detail fetches failed.",
+        ]);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("never logs a warning when GitHub returns a real, successful empty files list (not a fetch failure)", async () => {
+      const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+      vi.stubGlobal("fetch", async () => Response.json([]));
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(fetchAndStorePullRequestFilesForReview(env, "JSONbored/gittensory", 101, "public-token")).resolves.toEqual([]);
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
   });
 
   describe("fetchLiveCiAggregate", () => {

@@ -2442,6 +2442,9 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Fail-safe by construction: a fetch failure returns `[]` (never throws), so the review degrades to the same
  * empty-diff state it has today rather than breaking. The persist is best-effort and only runs when the fetch
  * actually returned files (a failed REST+GraphQL fetch must not wipe a row another sync just wrote).
+ *
+ * A REST+GraphQL double failure is logged (#7602) even though it stays fail-safe -- that combination used to
+ * discard its `warnings` entry silently, leaving no trace of how often the double-failure case actually happens.
  */
 export async function fetchAndStorePullRequestFilesForReview(
   env: Env,
@@ -2456,6 +2459,9 @@ export async function fetchAndStorePullRequestFilesForReview(
   if (files.length === 0) {
     await sleep(REVIEW_FILES_EMPTY_RETRY_DELAY_MS);
     files = await fetchOnce();
+  }
+  if (warnings.length > 0) {
+    console.error(JSON.stringify({ level: "warn", event: "review_files_fetch_failed", repoFullName, pullNumber, warnings }));
   }
   if (files.length === 0) return [];
   const records = files.map((file) => toPullRequestFileRecordFromGitHub(repoFullName, pullNumber, file));
