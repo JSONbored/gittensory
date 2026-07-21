@@ -603,6 +603,46 @@ function contributorCapCloseMessage(authorLogin: string, openCount: number, cap:
   return `LoopOver closed this because @${authorLogin} has ${openCount} open ${itemNoun}, above ${scopeDescription} of ${cap}. Close or merge an existing one to open a new one. This is an automated maintenance action.`;
 }
 
+/**
+ * Plan JUST the per-contributor open-item cap short-circuit (#7284-fix, resource-waste ordering) — factored
+ * out of planAgentMaintenanceActions so a cheap, CI-independent caller (the PR-open webhook path in
+ * processors.ts) can plan the SAME close+label actions the full disposition plan would eventually produce,
+ * without needing gate/ciAggregate/blacklistEntry/etc — none of which this short-circuit ever reads. Pure,
+ * deterministic, zero-hallucination, identical output to what planAgentMaintenanceActions itself produces for
+ * the same contributorCapMatch input (that function calls this as its own first check, below).
+ */
+export function planContributorCapClose(input: {
+  autonomy: AutonomyPolicy | null | undefined;
+  authorIsOwner: boolean;
+  authorIsAdmin: boolean;
+  authorIsAutomationBot: boolean;
+  contributorCapMatch: AgentActionPlanInput["contributorCapMatch"];
+  contributorCapLabel: AgentActionPlanInput["contributorCapLabel"];
+  pr: { headSha?: string | null | undefined };
+}): PlannedAgentAction[] | null {
+  const capContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
+  if (input.contributorCapMatch?.matched !== true || !capContributor) return null;
+  const level = (actionClass: AgentActionClass) => resolveAutonomy(input.autonomy, actionClass);
+  const acting = (actionClass: AgentActionClass) => isActingAutonomyLevel(level(actionClass));
+  const approval = (actionClass: AgentActionClass) => autonomyRequiresApproval(level(actionClass));
+  const { authorLogin, openCount, cap, itemKind, scope } = input.contributorCapMatch;
+  const label = resolveNullableLabel(input.contributorCapLabel, DEFAULT_CONTRIBUTOR_CAP_LABEL);
+  const actions: PlannedAgentAction[] = [];
+  if (acting("close")) {
+    actions.push({
+      actionClass: "close",
+      requiresApproval: approval("close"),
+      reason: "over the per-contributor open-item cap",
+      closeReasons: ["over the per-contributor open-item cap"],
+      closeComment: sanitizePublicComment(contributorCapCloseMessage(authorLogin, openCount, cap, itemKind, scope)),
+      closeKind: "contributor_cap",
+      ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
+    });
+  }
+  if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", closeKind: "contributor_cap", requiresApproval: approval("close"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
+  return actions;
+}
+
 // The close comment for review-nag cooldown (#2463). DOES interpolate authorLogin/pingCount/maxPings — none of
 // that is private (the author's own login and their own public @loopover ping count are already public/
 // derivable from the PR thread itself), mirroring the contributor-cap close message's same reasoning.
@@ -735,31 +775,20 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   }
 
   // Per-contributor open-item cap (#2270): same zero-hallucination short-circuit shape as the blacklist above —
-  // fires ahead of ALL merit/CI/AI analysis, for a CONTRIBUTOR only. Re-checks the owner/admin/bot exemption
-  // independently of the caller (defense-in-depth, matching the blacklist block's own redundant check above).
-  const capContributor = !input.authorIsOwner && !input.authorIsAdmin && !input.authorIsAutomationBot;
-  if (input.contributorCapMatch?.matched === true && capContributor) {
-    const { authorLogin, openCount, cap, itemKind, scope } = input.contributorCapMatch;
-    // #label-scoping: same close-autonomy-gated, null-clearable shape as the blacklist label above.
-    const label = resolveNullableLabel(input.contributorCapLabel, DEFAULT_CONTRIBUTOR_CAP_LABEL);
-    // Close is pushed BEFORE its coupled label (#label-close-split-brain) — see the closeKind doc comment above.
-    if (acting("close")) {
-      actions.push({
-        actionClass: "close",
-        requiresApproval: approval("close"),
-        reason: "over the per-contributor open-item cap",
-        closeReasons: ["over the per-contributor open-item cap"],
-        closeComment: sanitizePublicComment(contributorCapCloseMessage(authorLogin, openCount, cap, itemKind, scope)),
-        closeKind: "contributor_cap",
-        // Pin like blacklist/review_nag/copycat/screenshot_table above (#2452): without this an auto_with_approval
-        // stage persists params.expectedHeadSha as undefined, so decidePendingAgentAction's isUnpinnedRatifyingAction
-        // guard unconditionally rejects the maintainer's accept before the close ever executes.
-        ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
-      });
-    }
-    if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", closeKind: "contributor_cap", requiresApproval: approval("close"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
-    return actions;
-  }
+  // fires ahead of ALL merit/CI/AI analysis, for a CONTRIBUTOR only. Delegates to planContributorCapClose
+  // (#7284-fix) so the SAME short-circuit is also directly callable from a CI-independent caller (the PR-open
+  // webhook path in processors.ts) without needing this function's other inputs (gate/ciAggregate/etc, none of
+  // which this short-circuit reads).
+  const capClose = planContributorCapClose({
+    autonomy: input.autonomy,
+    authorIsOwner: input.authorIsOwner,
+    authorIsAdmin: input.authorIsAdmin,
+    authorIsAutomationBot: input.authorIsAutomationBot,
+    contributorCapMatch: input.contributorCapMatch,
+    contributorCapLabel: input.contributorCapLabel,
+    pr: input.pr,
+  });
+  if (capClose !== null) return capClose;
 
   // Review-nag cooldown (#2463): same zero-hallucination short-circuit shape as the blacklist above — fires
   // ahead of ALL merit/CI/AI analysis, for a CONTRIBUTOR only. The webhook trigger has already decided "this

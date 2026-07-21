@@ -41,6 +41,7 @@ import {
 import { incr } from "../selfhost/metrics";
 import { shouldWaitForOlderSiblings } from "../review/merge-train";
 import { captureError } from "../selfhost/sentry";
+import { claimContributorCapLock, releaseContributorCapLock } from "../queue/transient-locks";
 
 // The agent actor name on every audit record — the App acts on the maintainer's behalf per their configured
 // autonomy (the config IS the authorization; there is no human commenter to authorize, unlike #824).
@@ -166,6 +167,17 @@ export type AgentActionExecutionContext = {
   // ?? the CONTRIBUTOR_CAP_CANCEL_CI_DEFAULT env var) before building the context — the executor itself has no
   // settings access, only whatever ctx carries, mirroring how agentPaused/agentDryRun are already threaded in.
   contributorCapCancelCi?: boolean | undefined;
+  // Pre-merge contributor-cap re-check (#7284-fix, TOCTOU race): a caller-supplied closure (closed over the
+  // repo's settings/token, resolved before this ctx was built — same "the executor has no settings access"
+  // shape as every other field here) the executor calls, under the per-(repo, author) mutex
+  // (claimContributorCapLock), immediately before actually executing a merge. Returns true when still safe to
+  // merge, false when a fresh check confirms the author is NOW over cap (a sibling opened/closed since this
+  // PR's own cap check earlier in its pipeline pass) — the executor records a "denied" outcome and skips the
+  // merge (same idiom as every other pre-condition denial in this loop) rather than duplicating close-planning
+  // logic inline; the next natural re-evaluation (webhook/sweep) plans a close off the current, accurate cap
+  // state. Absent when the caller has no cap configured for this repo — merge proceeds exactly as before this
+  // field existed, zero added cost.
+  contributorCapMergeRecheck?: (() => Promise<boolean>) | undefined;
   // Moderation-rules engine (#selfhost-mod-engine): the repo's PER-REPO override fields, resolved by the
   // CALLER from RepositorySettings before building the context (same "the executor has no settings access"
   // shape as contributorCapCancelCi above). Absent/undefined ⇒ inherit the global config's own defaults. The
@@ -530,6 +542,32 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
           detail: `merge train (audit mode): would wait for older mergeable sibling #${decision.blockingPr}`,
           metadata: { repoFullName: ctx.repoFullName, pullNumber: ctx.pullNumber, blockingPr: decision.blockingPr },
         }).catch(() => undefined);
+      }
+    }
+    // 8c) pre-merge contributor-cap re-check (#7284-fix, TOCTOU race): confirmed live -- a PR whose OWN earlier
+    // cap check passed can still merge after a sibling's later cap-close made the author over cap, because each
+    // PR's cap check runs independently with no shared lock. Re-verify right before the irreversible write,
+    // under the SAME per-author mutex a concurrent sibling's cap-close/wake also acquires, so the two can never
+    // both act on a stale view of the author's open-PR count. `ctx.contributorCapMergeRecheck` is only ever set
+    // by the caller when a cap is actually configured for this repo (the common case leaves it undefined) —
+    // zero added cost, byte-identical to before this field existed.
+    if (action.actionClass === "merge" && ctx.contributorCapMergeRecheck) {
+      const authorLogin = ctx.authorLogin ?? "";
+      const { acquired, ownerToken } = await claimContributorCapLock(env, ctx.repoFullName, authorLogin);
+      if (!acquired) {
+        // "denied", not a thrown error: the next natural re-evaluation (webhook/sweep) picks this PR back up
+        // with fresh state once the concurrent holder finishes deciding for this same author.
+        await audit("denied", `contributor cap lock contended for ${ctx.repoFullName} author ${authorLogin} — action not executed`);
+        continue;
+      }
+      try {
+        const stillUnderCap = await ctx.contributorCapMergeRecheck();
+        if (!stillUnderCap) {
+          await audit("denied", `contributor cap re-check confirmed ${authorLogin} is now over cap on ${ctx.repoFullName} — action not executed`);
+          continue;
+        }
+      } finally {
+        await releaseContributorCapLock(env, ctx.repoFullName, authorLogin, ownerToken);
       }
     }
     // 9) live — perform the real mutation, recording success or the error.

@@ -130,3 +130,34 @@ export class PrActuationLockContendedError extends RetryableJobError {
     this.name = "PrActuationLockContendedError";
   }
 }
+
+// Per-(repo, author) contributor open-item-cap mutex (#7284-fix, TOCTOU race): every existing lock above
+// scopes to ONE PR; the cap-membership decision is inherently about the AUTHOR's whole open-PR set on this
+// repo, so a burst of sibling PRs from the same author needs ONE shared lock namespace keyed by author, not
+// per-PR — two siblings' cap-checks (or a cap-check racing a merge) must never both proceed against a stale
+// view of "how many of this author's PRs are currently open" at the same time. Same short-TTL, best-effort,
+// per-holder-token shape as claimPrActuationLock above; see this module's own header comment for why a
+// missing claim()/releaseIfValue() primitive fails OPEN rather than fake exclusivity.
+const CONTRIBUTOR_CAP_LOCK_TTL_SECONDS = 30;
+function contributorCapLockKey(repoFullName: string, authorLogin: string): string {
+  return `contributor-cap-lock:${repoFullName.toLowerCase()}:${authorLogin.toLowerCase()}`;
+}
+export async function claimContributorCapLock(
+  env: Env,
+  repoFullName: string,
+  authorLogin: string,
+): Promise<TransientLockClaim> {
+  return claimTransientLock(
+    env,
+    contributorCapLockKey(repoFullName, authorLogin),
+    CONTRIBUTOR_CAP_LOCK_TTL_SECONDS,
+  );
+}
+export async function releaseContributorCapLock(
+  env: Env,
+  repoFullName: string,
+  authorLogin: string,
+  ownerToken: string | null,
+): Promise<void> {
+  await releaseTransientLockIfOwner(env, contributorCapLockKey(repoFullName, authorLogin), ownerToken);
+}

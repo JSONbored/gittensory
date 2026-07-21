@@ -269,6 +269,7 @@ import {
   MAX_REVIEW_NAG_COOLDOWN_DAYS,
   isProtectedAutomationAuthor,
   planAgentMaintenanceActions,
+  planContributorCapClose,
   type AgentActionPlanInput,
   type AgentDispositionLabelSettings,
   type PlannedAgentAction,
@@ -332,8 +333,10 @@ import { estimateReviewEffort } from "../review/review-effort";
 import { buildUnifiedCommentBody } from "../review/unified-comment-bridge";
 import { isRetryableJobError, RetryableJobError } from "./retryable";
 import {
+  claimContributorCapLock,
   claimPrActuationLock,
   PrActuationLockContendedError,
+  releaseContributorCapLock,
   releasePrActuationLock,
   type TransientLockClaim,
 } from "./transient-locks";
@@ -2514,6 +2517,225 @@ function buildAgentMaintenancePlanInput(args: {
   };
 }
 
+/**
+ * Resolve JUST the per-repo contributor open-PR cap match (#2270), including the #2479 webhook-delivery-order
+ * wake side effect — extracted from {@link runAgentMaintenancePlanAndExecute} (#7284-fix) so a cheap,
+ * CI-independent caller (the PR-open webhook path) can compute the SAME match ahead of the expensive review
+ * pipeline. Deliberately excludes the install-wide cap below (see {@link resolveContributorCapMatch}): that
+ * check needs a miner-detection lookup on every non-exempt author regardless of whether this repo even has a
+ * per-repo cap configured, so an early-path caller that always ran both would double that lookup's cost for
+ * EVERY PR-open across the fleet, not just the rare over-cap ones — this function alone is cheap enough (one
+ * DB query + a bounded live-GitHub confirm) to run unconditionally on open.
+ */
+async function resolvePerRepoContributorCapMatch(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  settings: RepositorySettings,
+  token: string | undefined,
+  admissionKey: string | undefined,
+  isNewAccount: boolean,
+): Promise<AgentActionPlanInput["contributorCapMatch"]> {
+  let contributorCapMatch: AgentActionPlanInput["contributorCapMatch"];
+  const contributorOpenPrCap =
+    isNewAccount && typeof settings.contributorOpenPrCap === "number"
+      ? Math.max(1, Math.ceil(settings.contributorOpenPrCap / 2))
+      : settings.contributorOpenPrCap;
+  if (typeof contributorOpenPrCap === "number" && pr.authorLogin && !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) {
+    const otherAuthorOpenPullRequests = await listOtherOpenPullRequestsForAuthor(env, repoFullName, pr.number, pr.authorLogin);
+    const confirmedOpen = new Set<number>();
+    await mapWithConcurrency(otherAuthorOpenPullRequests, CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY, async (other) => {
+      const liveState = await fetchLivePullRequestState(env, repoFullName, other.number, token, admissionKey).catch(() => undefined);
+      if (liveState === "open") confirmedOpen.add(other.number);
+    });
+    const authorOpenPrNumbers = otherAuthorOpenPullRequests
+      .filter((other) => confirmedOpen.has(other.number))
+      .map((other) => other.number)
+      .concat(pr.number)
+      .sort((a, b) => a - b);
+    const overCapNumbers = new Set(authorOpenPrNumbers.slice(contributorOpenPrCap));
+    if (overCapNumbers.has(pr.number)) {
+      contributorCapMatch = { matched: true, authorLogin: pr.authorLogin, openCount: authorOpenPrNumbers.length, cap: contributorOpenPrCap, itemKind: "pull requests" };
+    }
+    const otherOverCapSiblingNumbers = otherAuthorOpenPullRequests
+      .filter((other) => confirmedOpen.has(other.number) && overCapNumbers.has(other.number))
+      .map((other) => other.number);
+    if (otherOverCapSiblingNumbers.length > 0) {
+      await wakeOverCapSiblingPullRequests(env, deliveryId, installationId, repoFullName, otherOverCapSiblingNumbers);
+    }
+  }
+  return contributorCapMatch;
+}
+
+/**
+ * Resolve the per-contributor open-item cap match (#2270 per-repo + #2562 install-wide) — the per-repo half
+ * delegates to {@link resolvePerRepoContributorCapMatch}; the install-wide half (only evaluated when the
+ * per-repo half didn't already match) is kept HERE, not in the cheap early-path helper, precisely because it
+ * needs a miner-detection lookup on every non-exempt author and must not run on every single PR-open across
+ * the fleet — see that function's own doc comment. Identical behavior to the single inline block this used to
+ * be.
+ */
+async function resolveContributorCapMatch(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  settings: RepositorySettings,
+  token: string | undefined,
+  admissionKey: string | undefined,
+  isNewAccount: boolean,
+): Promise<AgentActionPlanInput["contributorCapMatch"]> {
+  let contributorCapMatch = await resolvePerRepoContributorCapMatch(env, deliveryId, installationId, repoFullName, pr, settings, token, admissionKey, isNewAccount);
+
+  const prGlobalCapForHuman = resolveGlobalContributorOpenItemCap(env);
+  const prGlobalCapForMiner = resolveGlobalContributorOpenItemCapForMiner(env);
+  if (
+    contributorCapMatch === undefined &&
+    pr.authorLogin &&
+    (prGlobalCapForHuman !== null || prGlobalCapForMiner !== null) &&
+    !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)
+  ) {
+    const officialMiner = await getCachedOfficialMinerDetection(env, pr.authorLogin, {
+      targetKey: `${repoFullName}#${pr.number}`,
+      deliveryId,
+    });
+    const globalCap = officialMiner.status === "confirmed" ? prGlobalCapForMiner : prGlobalCapForHuman;
+    if (globalCap !== null) {
+      const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, pr.authorLogin, {
+        repoFullName,
+        number: pr.number,
+        kind: "pull_request",
+      }, globalCap);
+      if (globalOpenCount > globalCap) {
+        contributorCapMatch = { matched: true, authorLogin: pr.authorLogin, openCount: globalOpenCount, cap: globalCap, itemKind: "pull requests and issues", scope: "install" };
+      }
+    }
+  }
+  return contributorCapMatch;
+}
+
+/**
+ * Cheap, CI-independent contributor open-item cap short-circuit (#7284-fix, resource-waste ordering): called
+ * on `pull_request` `opened` BEFORE prReadyForReview/CI-wait/AI-review ever run, so an over-cap PR is closed
+ * immediately instead of only after the full review pipeline (miner detection, type-labeling, AI slop
+ * advisory, linked-issue satisfaction, the actual multi-LLM-call AI code review, CI-completeness
+ * verification, public surface publish) already ran for it — confirmed live: the end-of-pipeline cap check
+ * alone let a burst of over-cap PRs pay for that entire pipeline before being caught (2026-07-21 incident,
+ * PRs #7284-#7289). Returns true when this PR was closed for the cap (caller should stop processing this
+ * webhook delivery); false when the author is under cap, exempt, owner/admin/bot, or the lock is contended
+ * (another pass is already deciding for this same author — safe to skip, the existing end-of-pipeline check
+ * still runs as defense-in-depth, and the #2479 wake mechanism covers a sibling this pass would have caught).
+ * Wrapped in the per-(repo, author) mutex (#7284-fix Fix B) so this decision and a concurrent sibling's
+ * decision (or a concurrent merge's pre-merge re-check) can never both act on a stale view of the author's
+ * open-PR count.
+ */
+async function maybeCloseForContributorCapOnOpen(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  settings: RepositorySettings,
+): Promise<boolean> {
+  if (!pr.authorLogin || isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) return false;
+  /* v8 ignore next -- defensive: String.prototype.split always returns at least one element, so
+   * repoFullName.split("/")[0] is never undefined for any non-empty repoFullName (every real caller's). */
+  const repoOwner = repoFullName.split("/")[0] ?? "";
+  const authorIsOwner = pr.authorLogin.toLowerCase() === repoOwner.toLowerCase();
+  const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(pr.authorLogin.toLowerCase());
+  const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
+  if (authorIsOwner || authorIsAdmin || authorIsAutomationBot) return false;
+  // #ignore-authors-parity: a manifest ignore_authors match (e.g. "release-please*") means the bot treats
+  // this author as entirely invisible -- maybePublishPrPublicSurface's own reviewEligibility check (deep
+  // inside the expensive pipeline this early path exists to skip) already enforces this; this early path must
+  // enforce it too, or an ignored author would gain a NEW live-GitHub/DB cost here that the rest of the
+  // pipeline deliberately never pays for them. Cheap: a cached manifest read, no GitHub call.
+  const reviewManifest = await loadRepoFocusManifest(env, repoFullName).catch(() => null);
+  const autoReviewConfig = resolveReviewAutoReviewConfig(reviewManifest);
+  if (!decideReviewEligibility({ authorLogin: pr.authorLogin, ignoreAuthors: autoReviewConfig.ignoreAuthors }).eligible) return false;
+  // #resource-waste-guard: no per-repo cap configured at all ⇒ resolvePerRepoContributorCapMatch can never
+  // match regardless of isNewAccount's account-age scaling (that only shrinks an EXISTING numeric cap, never
+  // conjures one from nothing) — bail before minting an installation token or doing any other work below, so
+  // a repo with no cap configured pays NOTHING extra for this early path (matches today's behavior exactly).
+  if (typeof settings.contributorOpenPrCap !== "number") return false;
+
+  const { acquired, ownerToken } = await claimContributorCapLock(env, repoFullName, pr.authorLogin);
+  if (!acquired) return false;
+  try {
+    const ciToken = await createInstallationToken(env, installationId).catch(() => undefined);
+    /* v8 ignore next -- the GITHUB_PUBLIC_TOKEN fallback mirrors the identical, already-covered pattern in
+     * runAgentMaintenancePlanAndExecute above; a mint failure here degrades to that same fallback rather than
+     * a distinct code path. */
+    const token = ciToken ?? env.GITHUB_PUBLIC_TOKEN;
+    const admissionKey = githubAdmissionKeyForToken(env, installationId, token);
+    const isNewAccount = await isBelowAccountAgeThreshold(env, installationId, pr.authorLogin, settings.accountAgeThresholdDays);
+    const contributorCapMatch = await resolvePerRepoContributorCapMatch(env, deliveryId, installationId, repoFullName, pr, settings, token, admissionKey, isNewAccount);
+    if (!contributorCapMatch) return false;
+    // #account-age-parity: the end-of-pipeline path's account-age throttle (#2561) applies this SAME visibility
+    // label whenever isNewAccount is true, independent of the cap outcome -- preserve that here too (scoped to
+    // the PR actually about to close for cap, not every new-account PR unconditionally, so an under-cap
+    // new-account PR still gets it exactly once, from the normal pipeline this early path lets it reach).
+    if (isNewAccount && resolveAutonomy(settings.autonomy, "review_state_label") === "auto") {
+      const newAccountMode = resolveAgentActionMode({
+        globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)),
+        agentPaused: settings.agentPaused,
+        agentDryRun: settings.agentDryRun,
+      });
+      /* v8 ignore next -- the settings.newAccountLabel ?? "new-account" fallback mirrors the identical,
+       * already-covered field the end-of-pipeline account-age throttle above uses ("a configured
+       * newAccountLabel is used instead of the default"); this call site reuses the same settings field. */
+      await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, settings.newAccountLabel ?? "new-account", {
+        createMissingLabel: settings.createMissingLabel,
+        mode: newAccountMode,
+      }).catch(
+        /* v8 ignore next -- fail-safe: a label-application failure must never block the rest of the handler */
+        () => undefined,
+      );
+    }
+    const planned = planContributorCapClose({
+      autonomy: settings.autonomy,
+      authorIsOwner,
+      authorIsAdmin,
+      authorIsAutomationBot,
+      contributorCapMatch,
+      contributorCapLabel: settings.contributorCapLabel,
+      pr: { headSha: pr.headSha },
+    });
+    if (planned === null || planned.length === 0) return false;
+    const installation = await getInstallation(env, installationId);
+    const outcomes = await executeAgentMaintenanceActions(
+      env,
+      {
+        installationId,
+        repoFullName,
+        pullNumber: pr.number,
+        headSha: pr.headSha,
+        autonomy: settings.autonomy,
+        agentPaused: settings.agentPaused,
+        agentDryRun: settings.agentDryRun,
+        /* v8 ignore next -- defensive: mirrors runAgentMaintenancePlanAndExecute's own identical fallback
+         * above -- an installed-App PR webhook always carries an installation record; the null is defensive. */
+        installationPermissions: installation?.permissions ?? null,
+        authorLogin: pr.authorLogin,
+        contributorCapCancelCi: settings.contributorCapCancelCi ?? env.CONTRIBUTOR_CAP_CANCEL_CI_DEFAULT === "true",
+        moderationSettings: {
+          moderationGateMode: settings.moderationGateMode,
+          moderationRules: settings.moderationRules,
+          moderationWarningLabel: settings.moderationWarningLabel,
+          moderationBannedLabel: settings.moderationBannedLabel,
+        },
+      },
+      planned,
+    );
+    return outcomes.some((outcome) => outcome.actionClass === "close" && outcome.outcome === "completed");
+  } finally {
+    await releaseContributorCapLock(env, repoFullName, pr.authorLogin, ownerToken);
+  }
+}
+
 /** The plan-and-execute critical section of {@link maybeRunAgentMaintenance}, extracted so the caller's
  *  per-PR lock (#2129) wraps it in a try/finally without reindenting this whole block. */
 async function runAgentMaintenancePlanAndExecute(
@@ -2829,104 +3051,12 @@ async function runAgentMaintenancePlanAndExecute(
     }
   }
 
-  // Per-contributor open-PR cap (#2270, anti-abuse): count this author's OTHER currently-open PRs on this repo
-  // (otherOpenPullRequests already excludes the current PR — see reconcileLiveDuplicateSiblings) plus this one,
-  // ranked by PR NUMBER (GitHub's own creation order, not webhook-arrival order) so a burst of near-simultaneous
-  // opens still ranks deterministically. Only matches when THIS PR's number is among the ones over the cap — an
-  // older sibling that was already under the cap when it was opened stays open. The owner/admin/automation-bot
-  // exemption is applied by the planner itself (defense-in-depth, mirroring how blacklistEntry above is resolved
-  // unconditionally and exempted only inside planAgentMaintenanceActions). Disabled (null/undefined cap, the
-  // default) ⇒ this block is a no-op. A below-account-age-threshold author (#2561) gets a TIGHTER effective
-  // cap (half, rounded up, minimum 1) — visibility/friction, still never a close on account age by itself
-  // (the close, if any, is still tagged/reasoned as the ordinary contributor-cap close).
-  let contributorCapMatch: { matched: boolean; authorLogin: string; openCount: number; cap: number; itemKind: "pull requests" | "issues" | "pull requests and issues"; scope?: "repository" | "install" | undefined } | undefined;
-  const contributorOpenPrCap =
-    isNewAccount && typeof settings.contributorOpenPrCap === "number"
-      ? Math.max(1, Math.ceil(settings.contributorOpenPrCap / 2))
-      : settings.contributorOpenPrCap;
-  // #2270/#2463-parity: the per-repo cap now honors the SAME shared `autoCloseExemptLogins` allowlist the
-  // install-wide cap (below) and review-nag cooldown already do -- previously only the owner/admin/automation-bot
-  // exemption (applied later, inside planAgentMaintenanceActions) protected an author here, so a maintainer-named
-  // trusted-but-not-a-recognized-bot login (e.g. a third-party automation App like Sentry's Seer fix bot) had no
-  // way to opt out of the PER-REPO cap specifically, even though `.loopover.yml`'s own doc comment already
-  // promised this reuse (auto-close-exempt.ts).
-  if (typeof contributorOpenPrCap === "number" && pr.authorLogin && !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) {
-    // Fixed-budget author-scoped set (the lowest-numbered sibling sample), with every counted sibling
-    // positively LIVE-confirmed still open before it counts toward an irreversible close decision (#2270
-    // busy-repo bypass fix). Runs unconditionally now -- not just for isNewAccount -- since a stale-DB-row
-    // false positive is exactly as wrong for an established contributor as for a new one; this supersedes the
-    // narrower new-account-only live-verify this block used to have. Reuses the function-scoped token/admissionKey
-    // (already resolved above for the live-CI recheck) rather than minting a second one.
-    const otherAuthorOpenPullRequests = await listOtherOpenPullRequestsForAuthor(env, repoFullName, pr.number, pr.authorLogin);
-    const confirmedOpen = new Set<number>();
-    // Bounded concurrency (security review finding): an unbounded Promise.all here scales with the author's
-    // OWN open-PR sample, not a fixed small number -- an author with dozens of open PRs would fire that many
-    // concurrent GitHub calls from a single webhook, and the delivery-order-guard wake below re-triggers this
-    // same block for every over-cap sibling, compounding into near-quadratic API growth that can exhaust the
-    // installation's rate-limit budget. Every sampled entry must still be verified (the exact over-cap PR
-    // numbers below depend on the confirmed-open sample, not just "is the count over cap"), so this bounds
-    // concurrency in addition to the repository query's total row cap.
-    await mapWithConcurrency(otherAuthorOpenPullRequests, CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY, async (other) => {
-      const liveState = await fetchLivePullRequestState(env, repoFullName, other.number, token, admissionKey).catch(() => undefined);
-      if (liveState === "open") confirmedOpen.add(other.number);
-    });
-    const authorOpenPrNumbers = otherAuthorOpenPullRequests
-      .filter((other) => confirmedOpen.has(other.number))
-      .map((other) => other.number)
-      .concat(pr.number)
-      .sort((a, b) => a - b);
-    const overCapNumbers = new Set(authorOpenPrNumbers.slice(contributorOpenPrCap));
-    if (overCapNumbers.has(pr.number)) {
-      contributorCapMatch = { matched: true, authorLogin: pr.authorLogin, openCount: authorOpenPrNumbers.length, cap: contributorOpenPrCap, itemKind: "pull requests" };
-    }
-    // Webhook-delivery-order guard (#2479 gate finding): delivery order is not guaranteed to match PR creation
-    // order, so a sibling PR's own webhook can process before THIS PR exists in the DB and wrongly conclude the
-    // author is within the cap. Use the fixed-budget author-scoped set and only siblings positively confirmed
-    // open, matching the issue-cap fail-safe close contract.
-    const otherOverCapSiblingNumbers = otherAuthorOpenPullRequests
-      .filter((other) => confirmedOpen.has(other.number) && overCapNumbers.has(other.number))
-      .map((other) => other.number);
-    if (otherOverCapSiblingNumbers.length > 0) {
-      await wakeOverCapSiblingPullRequests(env, deliveryId, installationId, repoFullName, otherOverCapSiblingNumbers);
-    }
-  }
-
-  // Install-wide contributor open-item cap (#2562, anti-abuse): IN ADDITION TO the per-repo cap above, not
-  // instead of it -- only evaluated when the per-repo cap didn't already match (short-circuit: no need for a
-  // second cross-repo DB read once this PR is already being closed). Defaults to a real cap even when unset
-  // (#4511) -- a CONFIRMED official Gittensor miner gets its own, higher fleet-appropriate default instead of
-  // either "no cap" or the plain human default, since a legitimate fleet spread across many repos in one
-  // install is expected to run more concurrent open items than a single human contributor. Reuses the shared
-  // autoCloseExemptLogins list (#2463) so a maintainer-named login is exempt here exactly like the per-repo
-  // caps and review-nag cooldown.
-  const prGlobalCapForHuman = resolveGlobalContributorOpenItemCap(env);
-  const prGlobalCapForMiner = resolveGlobalContributorOpenItemCapForMiner(env);
-  if (
-    contributorCapMatch === undefined &&
-    pr.authorLogin &&
-    (prGlobalCapForHuman !== null || prGlobalCapForMiner !== null) &&
-    !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)
-  ) {
-    // Deferred until we know at least one of the two resolvers is actually active (#4511): the identity
-    // lookup below is cached but still a DB/network round trip, and both resolvers above are plain env reads.
-    const officialMiner = await getCachedOfficialMinerDetection(env, pr.authorLogin, {
-      targetKey: `${repoFullName}#${pr.number}`,
-      deliveryId,
-    });
-    const globalCap = officialMiner.status === "confirmed" ? prGlobalCapForMiner : prGlobalCapForHuman;
-    if (globalCap !== null) {
-      const globalOpenCount = await verifiedGlobalOpenItemCount(env, installationId, pr.authorLogin, {
-        repoFullName,
-        number: pr.number,
-        kind: "pull_request",
-      }, globalCap);
-      if (globalOpenCount > globalCap) {
-        // verifiedGlobalOpenItemCount sums BOTH open PRs and open issues -- reporting this as "pull requests"
-        // when the author's over-cap total may include issues would be a factually wrong close message.
-        contributorCapMatch = { matched: true, authorLogin: pr.authorLogin, openCount: globalOpenCount, cap: globalCap, itemKind: "pull requests and issues", scope: "install" };
-      }
-    }
-  }
+  // Per-contributor open-item cap (#2270 per-repo + #2562 install-wide, anti-abuse): a below-account-age-
+  // threshold author (#2561) gets a TIGHTER effective per-repo cap inside resolveContributorCapMatch (half,
+  // rounded up, minimum 1) — visibility/friction, still never a close on account age by itself. Extracted
+  // (#7284-fix) so the SAME logic is also directly callable from a cheap, CI-independent caller (the PR-open
+  // webhook path) ahead of the expensive review pipeline — see resolveContributorCapMatch's own doc comment.
+  const contributorCapMatch = await resolveContributorCapMatch(env, deliveryId, installationId, repoFullName, pr, settings, token, admissionKey, isNewAccount);
 
   const autoMaintain =
     settings.autoMaintain ?? DEFAULT_AUTO_MAINTAIN_POLICY;
@@ -3178,6 +3308,26 @@ async function runAgentMaintenancePlanAndExecute(
       // CI-run cancellation on a contributor_cap close (#2462): the repo's own explicit setting always wins;
       // null/undefined (unset) falls back to the install-wide CONTRIBUTOR_CAP_CANCEL_CI_DEFAULT env var.
       contributorCapCancelCi: settings.contributorCapCancelCi ?? env.CONTRIBUTOR_CAP_CANCEL_CI_DEFAULT === "true",
+      // Pre-merge contributor-cap re-check (#7284-fix, TOCTOU race): only constructed when a merge might
+      // actually execute this pass AND a per-repo cap is configured AND the author isn't exempt from it (the
+      // SAME conditions resolveContributorCapMatch/planContributorCapClose already gate on above) — absent
+      // otherwise, so a repo with no cap configured (or an owner/admin/bot merge) pays nothing extra. Closes
+      // over the current settings/token (already resolved above for THIS pass) and calls the SAME
+      // resolvePerRepoContributorCapMatch the early-path webhook check and the planning step above both use,
+      // so "over cap" means the exact same thing everywhere.
+      contributorCapMergeRecheck:
+        planHasImminentMerge &&
+        typeof settings.contributorOpenPrCap === "number" &&
+        pr.authorLogin &&
+        !authorIsOwner &&
+        !authorIsAdmin &&
+        !authorIsAutomationBot &&
+        !isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)
+          ? async () => {
+              const recheckMatch = await resolvePerRepoContributorCapMatch(env, deliveryId, installationId, repoFullName, pr, settings, token, admissionKey, isNewAccount);
+              return recheckMatch?.matched !== true;
+            }
+          : undefined,
       moderationSettings: {
         moderationGateMode: settings.moderationGateMode,
         moderationRules: settings.moderationRules,
@@ -5812,6 +5962,23 @@ async function handlePullRequestWebhookEvent(
           }),
         );
       });
+      await recordWebhookEvent(env, {
+        deliveryId,
+        eventName,
+        action: payload.action,
+        installationId: payload.installation?.id,
+        repositoryFullName: payload.repository?.full_name,
+        payloadHash: "processed",
+        status: "processed",
+      });
+      return true;
+    }
+    // #7284-fix (resource-waste ordering): a cheap, CI-independent cap short-circuit on PR-open, BEFORE any of
+    // the expensive work below (CI-wait, miner detection, AI review, etc.) ever runs for an over-cap PR. See
+    // maybeCloseForContributorCapOnOpen's own doc comment. Scoped to "opened" only -- the author's open-PR
+    // count doesn't change on synchronize/reopened/etc, and the existing end-of-pipeline check (inside
+    // maybeRunAgentMaintenance below) still runs as defense-in-depth for every other action.
+    if (payload.action === "opened" && installationId && (await maybeCloseForContributorCapOnOpen(env, deliveryId, installationId, repoFullName, pr, settings))) {
       await recordWebhookEvent(env, {
         deliveryId,
         eventName,
