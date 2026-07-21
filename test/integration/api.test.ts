@@ -5529,6 +5529,7 @@ describe("api routes", () => {
     expect(toolNames).toContain("loopover_get_upstream_drift");
     expect(toolNames).toContain("loopover_get_upstream_ruleset");
     expect(toolNames).toContain("loopover_get_live_gate_thresholds");
+    expect(toolNames).toContain("loopover_get_pr_maintainer_packet");
     expect(toolNames).toContain("loopover_explain_review_risk");
     expect(toolNames).toContain("loopover_compare_pr_variants");
     expect(toolNames).toContain("loopover_local_status");
@@ -5804,6 +5805,7 @@ describe("api routes", () => {
       ["loopover_get_upstream_drift", {}],
       ["loopover_get_upstream_ruleset", {}],
       ["loopover_get_live_gate_thresholds", { owner: "entrius", repo: "allways-ui" }],
+      ["loopover_get_pr_maintainer_packet", { owner: "entrius", repo: "allways-ui", number: 12 }],
       [
         "loopover_preview_local_pr_score",
         {

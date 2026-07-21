@@ -971,6 +971,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the reviewability report for an open PR: how ready it is to review/merge, the blocking or advisory signals against it, and its lane/duplicate/linked-issue context. Metadata-only, no GitHub writes.",
   },
   {
+    name: "loopover_get_pr_maintainer_packet",
+    category: "review",
+    description:
+      "Return the full maintainer packet for an open PR: triage context assembled from cached repo/PR/issue/review/check metadata, wrapped with data-quality. Metadata-only; takes owner, repo, and pull number.",
+  },
+  {
     name: "loopover_get_pr_ai_review_findings",
     category: "review",
     description:
@@ -1510,6 +1516,18 @@ registerStdioTool(
   async ({ owner, repo, number }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver PR reviewability.", await apiGet(`${prefix}/pulls/${number}/reviewability`));
+  },
+);
+
+registerStdioTool(
+  "loopover_get_pr_maintainer_packet",
+  {
+    description: stdioToolDescription("loopover_get_pr_maintainer_packet"),
+    inputSchema: ownerRepoPullShape,
+  },
+  async ({ owner, repo, number }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult("LoopOver PR maintainer packet.", await apiGet(`${prefix}/pulls/${number}/maintainer-packet`));
   },
 );
 

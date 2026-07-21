@@ -921,6 +921,20 @@ export async function startFixtureServer(
       );
       return;
     }
+    // #7802: maintainer packet sibling of reviewability.
+    if (request.url === "/v1/repos/owner/repo/pulls/7/maintainer-packet" && request.method === "GET") {
+      response.end(
+        JSON.stringify({
+          repoFullName: "owner/repo",
+          pullNumber: 7,
+          generatedAt: "2026-05-30T00:00:00.000Z",
+          summary: "PR 7 maintainer packet.",
+          actions: ["review_now"],
+          dataQuality: { status: "ok" },
+        }),
+      );
+      return;
+    }
     // #6619: the route carries the author login as a query param, so match on the path prefix.
     if (request.url?.startsWith("/v1/repos/owner/repo/pulls/7/ai-review-findings") && request.method === "GET") {
       response.end(
