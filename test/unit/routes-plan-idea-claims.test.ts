@@ -21,7 +21,7 @@ const VALID = {
   id: "idea-1",
   title: "Retry uploads on 5xx",
   body: "Uploads fail silently on 5xx.",
-  targetRepo: "acme/widgets",
+  targetRepo: { kind: "existing", repo: "acme/widgets" },
 };
 
 function expectedPayload(body: unknown) {
@@ -63,6 +63,9 @@ describe("POST /v1/loop/plan-idea-claims (#6756)", () => {
           { key: "b", title: "Second", body: "Body.", dependsOn: ["a"] },
         ],
       },
+      // #7635: a provision target has no repo, so the consumer's `resolveIdeaTargetRepo(...) ?? ""` falls back to
+      // an empty targetRepo on the plan — exercises the null/provision branch of that unwrap.
+      { ...VALID, targetRepo: { kind: "provision" } },
     ];
     for (const body of cases) {
       const response = await post(env, body);
@@ -71,6 +74,10 @@ describe("POST /v1/loop/plan-idea-claims (#6756)", () => {
         JSON.parse(JSON.stringify(expectedPayload(body))),
       );
     }
+    // The provision case specifically drives the empty-repo plan (the `?? ""` fallback).
+    const provisionResponse = await post(env, { ...VALID, targetRepo: { kind: "provision" } });
+    const provisionPayload = (await provisionResponse.json()) as { claimPlan: { targetRepo: string } };
+    expect(provisionPayload.claimPlan.targetRepo).toBe("");
   });
 
   it("returns the engine's actionable error list for a malformed or empty submission", async () => {
@@ -80,7 +87,7 @@ describe("POST /v1/loop/plan-idea-claims (#6756)", () => {
       { ...VALID, id: "" },
       { ...VALID, title: "" },
       { ...VALID, body: "" },
-      { ...VALID, targetRepo: "" },
+      { ...VALID, targetRepo: { kind: "existing", repo: "" } },
     ];
     for (const body of cases) {
       const response = await post(env, body);

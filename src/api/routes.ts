@@ -552,7 +552,7 @@ const intakeIdeaSchema = z.object({
   id: z.string().optional(),
   title: z.string().optional(),
   body: z.string().optional(),
-  targetRepo: z.string().optional(),
+  targetRepo: z.object({ kind: z.string(), repo: z.string().optional() }).optional(),
   constraints: z.array(z.string()).max(50).optional(),
   acceptanceHints: z.array(z.string()).max(50).optional(),
   priority: z.string().optional(),

@@ -19,12 +19,22 @@ export const IDEA_CONSTRAINT_MAX_CHARS = 200;
 
 export type IdeaPriority = "normal" | "high";
 
+/** Where an idea is meant to land (#7635, for the BYOR+APR epic #7589): an existing repo the renter already owns
+ *  (BYOR), or a not-yet-created one the platform will auto-provision (APR). Kept as a discriminated union so every
+ *  downstream consumer must decide which path an idea takes rather than silently assuming a repo already exists. */
+export type IdeaTarget = { kind: "existing"; repo: string } | { kind: "provision" };
+
+/** The concrete `owner/name` an idea targets, or `null` for a provision target that has no repo yet (#7635). */
+export function resolveIdeaTargetRepo(target: IdeaTarget): string | null {
+  return target.kind === "existing" ? target.repo : null;
+}
+
 /** The raw input a renter provides (spec §1). */
 export type IdeaSubmission = {
   id: string;
   title: string;
   body: string;
-  targetRepo: string;
+  targetRepo: IdeaTarget;
   constraints?: string[] | undefined;
   acceptanceHints?: string[] | undefined;
   priority?: IdeaPriority | undefined;
@@ -91,10 +101,10 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
   else if (input.title.length > IDEA_TITLE_MAX_CHARS) errors.push("title_too_long");
   if (!isNonEmptyString(input.body)) errors.push("body_required");
   else if (input.body.length > IDEA_BODY_MAX_CHARS) errors.push("body_too_long");
-  // `owner/name`, each segment a GitHub-legal slug — an uninstallable/malformed repo is rejected at intake,
-  // never scored, since it can never produce a `go`.
-  if (!isNonEmptyString(input.targetRepo)) errors.push("target_repo_required");
-  else if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(input.targetRepo)) errors.push("target_repo_malformed");
+  // targetRepo is a discriminated union (#7635): `{kind:"existing",repo}` (BYOR — must be a valid `owner/name`,
+  // each segment a GitHub-legal slug, so an uninstallable/malformed repo is rejected at intake and never scored)
+  // or `{kind:"provision"}` (APR — no repo yet, nothing more to validate).
+  const target = parseIdeaTarget(input.targetRepo, errors);
 
   const constraints = input.constraints;
   if (constraints !== undefined) {
@@ -116,12 +126,38 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
       id: input.id as string,
       title: input.title as string,
       body: input.body as string,
-      targetRepo: input.targetRepo as string,
+      // `target` is non-null whenever no errors were pushed — parseIdeaTarget only returns null alongside an error.
+      targetRepo: target as IdeaTarget,
       constraints: constraints as string[] | undefined,
       acceptanceHints: acceptanceHints as string[] | undefined,
       priority: priority as IdeaPriority | undefined,
     },
   };
+}
+
+/** Validate a raw `targetRepo` into an `IdeaTarget` (#7635), pushing a specific error and returning null when it
+ *  is neither a valid `{kind:"existing",repo}` nor `{kind:"provision"}`. */
+function parseIdeaTarget(raw: unknown, errors: string[]): IdeaTarget | null {
+  if (typeof raw !== "object" || raw === null) {
+    errors.push("target_repo_required");
+    return null;
+  }
+  const kind = (raw as { kind?: unknown }).kind;
+  if (kind === "provision") return { kind: "provision" };
+  if (kind === "existing") {
+    const repo = (raw as { repo?: unknown }).repo;
+    if (!isNonEmptyString(repo)) {
+      errors.push("target_repo_required");
+      return null;
+    }
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) {
+      errors.push("target_repo_malformed");
+      return null;
+    }
+    return { kind: "existing", repo };
+  }
+  errors.push("target_repo_malformed");
+  return null;
 }
 
 // Score ONE issue against the feasibility gate. Rule 5 (spec §2): an issue with an unlanded prerequisite is
@@ -253,8 +289,13 @@ export type ClaimPlan = {
 /** Route a scored task-graph into a loop claim plan (#4799): the deterministic hand-off from idea intake
  *  (#4798) to the claim/code/submit loop. Each issue is dispositioned by its already-computed feasibility
  *  verdict — `go` → claimable, `raise` → deferred, `avoid` → skipped — preserving the graph's own
- *  dependency-respecting order so a prerequisite is always claimed before its dependents. No IO, no claiming. */
-export function buildClaimPlan(graph: TaskGraph, targetRepo: string): ClaimPlan {
+ *  dependency-respecting order so a prerequisite is always claimed before its dependents. No IO, no claiming.
+ *
+ *  `target` accepts either a bare repo string (the historical form) or an `IdeaTarget` (#7635): a `provision`
+ *  target has no repo yet, so the plan carries an empty `targetRepo` for it. Accepting the union here keeps the
+ *  unwrap in one covered place instead of each consumer call site. */
+export function buildClaimPlan(graph: TaskGraph, target: string | IdeaTarget): ClaimPlan {
+  const targetRepo = typeof target === "string" ? target : (resolveIdeaTargetRepo(target) ?? "");
   const claimable: ClaimStep[] = [];
   const deferred: ClaimStep[] = [];
   const skipped: ClaimStep[] = [];

@@ -15,7 +15,7 @@ const PATH = "/v1/loop/intake-idea";
 const post = (env: Env, body: unknown) =>
   createApp().request(PATH, { method: "POST", headers: apiHeaders(env), body: JSON.stringify(body) }, env);
 
-const VALID = { id: "idea-1", title: "Retry uploads on 5xx", body: "Uploads fail silently on 5xx.", targetRepo: "acme/widgets" };
+const VALID = { id: "idea-1", title: "Retry uploads on 5xx", body: "Uploads fail silently on 5xx.", targetRepo: { kind: "existing", repo: "acme/widgets" } };
 
 describe("POST /v1/loop/intake-idea (#6755)", () => {
   it("turns a valid submission into a scored task-graph", async () => {
@@ -77,8 +77,8 @@ describe("POST /v1/loop/intake-idea (#6755)", () => {
       [{ ...VALID, id: "" }, "id_required"],
       [{ ...VALID, title: "" }, "title_required"],
       [{ ...VALID, body: "" }, "body_required"],
-      [{ ...VALID, targetRepo: "" }, "target_repo_required"],
-      [{ ...VALID, targetRepo: "not-a-repo" }, "target_repo_malformed"],
+      [{ ...VALID, targetRepo: { kind: "existing", repo: "" } }, "target_repo_required"],
+      [{ ...VALID, targetRepo: { kind: "existing", repo: "not-a-repo" } }, "target_repo_malformed"],
       [{ ...VALID, title: "x".repeat(IDEA_TITLE_MAX_CHARS + 1) }, "title_too_long"],
       [{ ...VALID, priority: "urgent" }, "priority_invalid"],
     ];

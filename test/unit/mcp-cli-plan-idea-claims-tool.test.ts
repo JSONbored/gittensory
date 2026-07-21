@@ -20,7 +20,7 @@ const VALID = {
   id: "idea-1",
   title: "Retry uploads on 5xx",
   body: "Uploads fail silently on 5xx.",
-  targetRepo: "acme/widgets",
+  targetRepo: { kind: "existing", repo: "acme/widgets" },
 };
 
 function expectedPayload(body: unknown) {
@@ -71,6 +71,8 @@ describe("loopover_plan_idea_claims stdio mirror (#6756)", () => {
           { key: "b", title: "Second", body: "Body.", dependsOn: ["a"] },
         ],
       },
+      // #7635: a provision target drives the consumer's `resolveIdeaTargetRepo(...) ?? ""` empty-repo fallback.
+      { ...VALID, targetRepo: { kind: "provision" } },
     ];
     for (const args of cases) {
       const result = await client.callTool({ name: "loopover_plan_idea_claims", arguments: args as Record<string, unknown> });
