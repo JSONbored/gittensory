@@ -364,6 +364,16 @@ const prAiReviewFindingsShape = {
   login: z.string().min(1).optional(),
 };
 
+// #7763: the remote loopover_watch_issues tool's shape (src/mcp/server.ts's watchIssuesShape), with `login`
+// made optional -- same login-resolution convention as prAiReviewFindingsShape above and the `watch` CLI
+// command (watchCli), since a local stdio operator is already authenticated.
+const watchIssuesShape = {
+  login: z.string().min(1).optional(),
+  action: z.enum(["watch", "unwatch", "list"]).default("list"),
+  repoFullName: z.string().min(3).max(200).optional(),
+  labels: z.array(z.string().min(1).max(100)).max(50).optional(),
+};
+
 // #6149 write-tool input shapes -- mirror src/mcp/server.ts's remote shapes (same bounds) so the local
 // server validates identically. The builders (buildOpenPrSpec, ...) are the same @loopover/engine functions.
 const WRITE_TOOL_REPO_FULL_NAME_MAX = 200;
@@ -1301,6 +1311,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     name: "loopover_get_gate_precision",
     category: "maintainer",
     description: "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged counts and false-positive rates with low-sample guards. Optionally bounded by windowDays. Maintainer-authenticated; measurement only.",
+  },
+  {
+    name: "loopover_watch_issues",
+    category: "utility",
+    description:
+      "Watch repos for NEW grabbable, high-multiplier issues (maintainer-created, not WIP) — mirrors the `watch` CLI command and the remote loopover_watch_issues tool. action=watch subscribes a repo (optional label filter), unwatch removes it, list (default) returns your current watches. Self-scoped; login resolves from the argument, the active session, LOOPOVER_LOGIN, then GITHUB_LOGIN.",
   },
   {
     name: "loopover_open_pr",
@@ -2623,6 +2639,38 @@ registerStdioTool(
     return toolResult(`Gate precision for ${owner}/${repo}.`, payload);
   },
   );
+
+// #7763: loopover_watch_issues was already a remote MCP tool (src/mcp/server.ts) and had a CLI mirror
+// (`watch`, watchCli below, #6746), but never got the matching local stdio registration -- the same gap
+// class the five maintain-surface tools above filled for #6152/#6382. Calls the exact
+// /v1/contributors/:login/watches endpoint watchCli already calls, through the same apiGet/apiPost/
+// apiDelete client (list=GET, watch=POST, unwatch=DELETE) -- no duplicated HTTP logic.
+registerStdioTool(
+  "loopover_watch_issues",
+  {
+    description: stdioToolDescription("loopover_watch_issues"),
+    inputSchema: watchIssuesShape,
+  },
+  async ({ login, action, repoFullName, labels }: any) => {
+    const contributorLogin = login ?? activeProfile.session?.login ?? process.env.LOOPOVER_LOGIN ?? process.env.GITHUB_LOGIN;
+    if (!contributorLogin) throw new Error("No GitHub login: pass `login`, log in with `loopover-mcp login`, or set LOOPOVER_LOGIN.");
+    const base = `/v1/contributors/${encodeURIComponent(contributorLogin)}/watches`;
+    let payload: any;
+    if (action === "watch" || action === "unwatch") {
+      if (!repoFullName) throw new Error(`${action} requires repoFullName.`);
+      payload =
+        action === "watch"
+          ? await apiPost(base, { repoFullName, ...(labels && labels.length > 0 ? { labels } : {}) })
+          : await apiDelete(base, { repoFullName });
+    } else {
+      payload = await apiGet(base);
+    }
+    return toolResult(
+      `Watching ${(payload.watching ?? []).length} repo(s) for ${contributorLogin}${payload.changed ? ` (${payload.changed})` : ""}.`,
+      payload,
+    );
+  },
+);
 // ── Write-tools (#6149): pure LOCAL-execution spec builders. loopover NEVER performs the write -- each tool
 // returns a spec the caller runs with its OWN gh creds. Brings the local stdio server to parity with the
 // miner-auto-dev profile's recommendedTools, using the same @loopover/engine builders as the remote server.
