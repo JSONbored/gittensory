@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { to: "/ranked-candidates", label: "Ranked candidates" },
   { to: "/portfolio", label: "Portfolio" },
   { to: "/ledgers", label: "Ledgers" },
+  { to: "/attempts", label: "Attempts" },
   // #7673: layout reservation only — the route is an empty placeholder until settlement data exists.
   { to: "/earnings", label: "Earnings — not yet available" },
 ] as const;

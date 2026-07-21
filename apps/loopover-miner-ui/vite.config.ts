@@ -5,6 +5,7 @@ import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 import { attemptApiPlugin } from "./vite-attempt-api";
+import { attemptLogApiPlugin } from "./vite-attempt-log-api";
 import { authPlugin } from "./vite-auth";
 import { chatApiPlugin } from "./vite-chat-api";
 import { chatDiscoverAttemptActionsPlugin } from "./vite-chat-discover-attempt-actions";
@@ -33,6 +34,7 @@ export default defineConfig({
     portfolioQueueApiPlugin(),
     portfolioQueueActionsApiPlugin(),
     ledgersApiPlugin(),
+    attemptLogApiPlugin(),
     governorApiPlugin(),
     rankedCandidatesApiPlugin(),
     discoverApiPlugin(),

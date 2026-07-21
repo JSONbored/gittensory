@@ -5,15 +5,16 @@
 // build-time constant, so the "off" branch (the real fetch calls) is dead-code-eliminated from a demo bundle and
 // vice versa -- a production self-host build never carries this module's data.
 //
-// Scope: the six REST fetchers backing the four main dashboard routes (run-history, ledgers, portfolio + its
-// queue actions, governor, ranked-candidates (#7675)). discover/attempt/chat are NOT covered here -- those
-// trigger a real coding-agent iteration or ground against a live MCP connection, and fabricating a convincing
-// multi-minute agent run is a separate, much larger content-design task than tabular summary data (tracked as
-// follow-up work, not this PR).
+// Scope: the REST fetchers backing the main tabular dashboard routes (run-history, ledgers, portfolio + its
+// queue actions, governor, ranked-candidates (#7675), attempt-log (#7656)). discover/attempt/chat are NOT covered
+// here -- those trigger a real coding-agent iteration or ground against a live MCP connection, and fabricating a
+// convincing multi-minute agent run is a separate, much larger content-design task than tabular summary data
+// (tracked as follow-up work, not this PR).
 //
 // Every value below is entirely synthetic -- no real repo, run, ledger entry, or account referenced anywhere.
 
 import type { RunStateRow } from "./run-history";
+import type { AttemptLogSummary } from "./attempt-log";
 import type { LedgersSummary } from "./ledgers";
 import type { PortfolioQueueSummary } from "./portfolio-queue";
 import type { PortfolioQueueActionItem } from "./portfolio-queue-actions";
@@ -107,6 +108,109 @@ export const DEMO_LEDGERS_SUMMARY: LedgersSummary = {
     ],
   },
   governor: { total: 9, byEventType: { paused: 4, resumed: 5 } },
+};
+
+// Synthetic per-attempt history + PR-outcome roll-up (#7656). Entirely fabricated: only the four demo repos, the
+// engine's attempt-event vocabulary, and non-secret placeholder ids appear. `totalCostUsd` is the sum of the
+// recent feed's non-null `costUsd`; byActionClass / byEventType each sum to `attempts.total`.
+export const DEMO_ATTEMPT_LOG_SUMMARY: AttemptLogSummary = {
+  attempts: {
+    total: 6,
+    byActionClass: { code_edit: 3, tool_call: 2, plan: 1 },
+    byEventType: { attempt_started: 2, tool_used: 2, attempt_succeeded: 1, attempt_failed: 1 },
+    totalCostUsd: 0.183,
+    recent: [
+      {
+        attemptId: "att-2451",
+        eventType: "attempt_succeeded",
+        actionClass: "code_edit",
+        provider: "claude-code",
+        costUsd: 0.072,
+        tokensUsed: null,
+        createdAt: "2026-07-18T14:01:00.000Z",
+      },
+      {
+        attemptId: "att-2451",
+        eventType: "tool_used",
+        actionClass: "tool_call",
+        provider: "claude-code",
+        costUsd: 0.041,
+        tokensUsed: null,
+        createdAt: "2026-07-18T13:58:00.000Z",
+      },
+      {
+        attemptId: "att-2438",
+        eventType: "attempt_failed",
+        actionClass: "code_edit",
+        provider: "claude-code",
+        costUsd: 0.07,
+        tokensUsed: null,
+        createdAt: "2026-07-18T13:20:00.000Z",
+      },
+      {
+        attemptId: "att-2438",
+        eventType: "attempt_started",
+        actionClass: "plan",
+        provider: null,
+        costUsd: null,
+        tokensUsed: null,
+        createdAt: "2026-07-18T13:12:00.000Z",
+      },
+      {
+        attemptId: "att-2402",
+        eventType: "tool_used",
+        actionClass: "tool_call",
+        provider: "claude-code",
+        costUsd: null,
+        tokensUsed: null,
+        createdAt: "2026-07-18T11:05:00.000Z",
+      },
+      {
+        attemptId: "att-2402",
+        eventType: "attempt_started",
+        actionClass: "code_edit",
+        provider: null,
+        costUsd: null,
+        tokensUsed: null,
+        createdAt: "2026-07-18T11:02:00.000Z",
+      },
+    ],
+  },
+  prOutcomes: {
+    total: 4,
+    byDecision: { merged: 3, closed: 1 },
+    byReason: { insufficient_test_coverage: 1 },
+    recent: [
+      {
+        repoFullName: "acme/widgets",
+        prNumber: 2451,
+        decision: "merged",
+        reason: null,
+        closedAt: "2026-07-18T15:10:00.000Z",
+      },
+      {
+        repoFullName: "acme/api-gateway",
+        prNumber: 118,
+        decision: "closed",
+        reason: "insufficient_test_coverage",
+        closedAt: "2026-07-18T13:40:00.000Z",
+      },
+      {
+        repoFullName: "acme/docs-site",
+        prNumber: 58,
+        decision: "merged",
+        reason: null,
+        closedAt: "2026-07-17T22:05:00.000Z",
+      },
+      {
+        repoFullName: "northwind/inventory",
+        prNumber: 77,
+        decision: "merged",
+        reason: null,
+        closedAt: "2026-07-17T18:30:00.000Z",
+      },
+    ],
+  },
 };
 
 export const DEMO_PORTFOLIO_QUEUE_SUMMARY: PortfolioQueueSummary = {

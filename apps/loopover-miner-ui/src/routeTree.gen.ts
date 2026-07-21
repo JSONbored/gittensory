@@ -14,6 +14,7 @@ import { Route as RankedCandidatesRouteImport } from './routes/ranked-candidates
 import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as LedgersRouteImport } from './routes/ledgers'
 import { Route as EarningsRouteImport } from './routes/earnings'
+import { Route as AttemptsRouteImport } from './routes/attempts'
 import { Route as IndexRouteImport } from './routes/index'
 
 const RunHistoryRoute = RunHistoryRouteImport.update({
@@ -41,6 +42,11 @@ const EarningsRoute = EarningsRouteImport.update({
   path: '/earnings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AttemptsRoute = AttemptsRouteImport.update({
+  id: '/attempts',
+  path: '/attempts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -49,6 +55,7 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/attempts': typeof AttemptsRoute
   '/earnings': typeof EarningsRoute
   '/ledgers': typeof LedgersRoute
   '/portfolio': typeof PortfolioRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/attempts': typeof AttemptsRoute
   '/earnings': typeof EarningsRoute
   '/ledgers': typeof LedgersRoute
   '/portfolio': typeof PortfolioRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/attempts': typeof AttemptsRoute
   '/earnings': typeof EarningsRoute
   '/ledgers': typeof LedgersRoute
   '/portfolio': typeof PortfolioRoute
@@ -76,6 +85,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/attempts'
     | '/earnings'
     | '/ledgers'
     | '/portfolio'
@@ -84,6 +94,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/attempts'
     | '/earnings'
     | '/ledgers'
     | '/portfolio'
@@ -92,6 +103,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/attempts'
     | '/earnings'
     | '/ledgers'
     | '/portfolio'
@@ -101,6 +113,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AttemptsRoute: typeof AttemptsRoute
   EarningsRoute: typeof EarningsRoute
   LedgersRoute: typeof LedgersRoute
   PortfolioRoute: typeof PortfolioRoute
@@ -145,6 +158,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EarningsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/attempts': {
+      id: '/attempts'
+      path: '/attempts'
+      fullPath: '/attempts'
+      preLoaderRoute: typeof AttemptsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -157,6 +177,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AttemptsRoute: AttemptsRoute,
   EarningsRoute: EarningsRoute,
   LedgersRoute: LedgersRoute,
   PortfolioRoute: PortfolioRoute,
