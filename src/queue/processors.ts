@@ -65,6 +65,7 @@ import {
   countRecentAuditEventsForActorAndTarget,
   countRecentAuditEventsForActorInRepo,
   countRecentAuditEventsForActorInRepoWithTargetSuffix,
+  recentStaleRecheckDeniedPullNumbers,
   hasAuditEventForDelivery,
   hasAuditEventForHeadSha,
   recordGateBlockOutcome,
@@ -1123,7 +1124,7 @@ async function isRegateRepairExhausted(env: Env, repoFullName: string, pr: Pick<
   return true;
 }
 
-async function surfaceRepairPriorityPullNumbers(
+export async function surfaceRepairPriorityPullNumbers(
   env: Env,
   repoFullName: string,
   pulls: readonly PullRequestRecord[],
@@ -1133,7 +1134,23 @@ async function surfaceRepairPriorityPullNumbers(
   for (const pr of pulls) {
     if (pr.headSha && pr.lastPublishedSurfaceSha !== pr.headSha)
       priorityPullNumbers.add(pr.number);
+    // #orb-stale-recheck-priority: the bot already approved THIS exact commit (approvedHeadSha === headSha,
+    // set only once agentHoldAuditDetail's own gate-passed/CI-green/approvals-satisfied checks all cleared),
+    // yet the PR is still open with mergeable_state neither "clean" (would already have merged) nor "dirty"
+    // (a real conflict, which needs a human, not a fast recheck) -- i.e. GitHub is still computing
+    // mergeability. GitHub sends NO webhook when that computation finishes, so without this the PR waits out
+    // whatever the ordinary sweep cadence happens to be instead of the few seconds this actually takes
+    // (observed: green+approved PRs stuck OPEN, see fetchLivePullRequestMergeState's own doc comment).
+    if (pr.headSha && pr.approvedHeadSha === pr.headSha && pr.mergeableState && pr.mergeableState !== "clean" && pr.mergeableState !== "dirty")
+      priorityPullNumbers.add(pr.number);
   }
+  // Scoped to `pulls` (not added unconditionally): a denial recorded against a PR that has SINCE closed/merged
+  // (so no longer appears in this open-PR list) must not resurrect a priority entry for it here — and doing so
+  // would violate the "every priorityPullNumbers entry has a pulls match with a truthy headSha" invariant the
+  // exhaustion-check loop below relies on.
+  const openPullNumbers = new Set(pulls.filter((pr) => pr.headSha).map((pr) => pr.number));
+  for (const prNumber of await recentStaleRecheckDeniedPullNumbers(env, repoFullName, new Date(Date.now() - REGATE_REPAIR_ATTEMPT_LOOKBACK_MS).toISOString()))
+    if (openPullNumbers.has(prNumber)) priorityPullNumbers.add(prNumber);
   if (gateCheckEnabled) {
     await Promise.all(
       pulls.map(async (pr) => {
@@ -1154,7 +1171,7 @@ async function surfaceRepairPriorityPullNumbers(
   await Promise.all(
     [...priorityPullNumbers].map(async (prNumber) => {
       const pr = pulls.find((candidate) => candidate.number === prNumber);
-      /* v8 ignore next -- priorityPullNumbers is only ever populated (both loops above) from a `pr` in `pulls` that already had a truthy headSha, so this lookup always succeeds with one; the guard only satisfies Array#find's `| undefined` return type. */
+      /* v8 ignore next -- priorityPullNumbers is only ever populated (every loop above, including the openPullNumbers-scoped stale-recheck one) from a `pr` in `pulls` that already had a truthy headSha, so this lookup always succeeds with one; the guard only satisfies Array#find's `| undefined` return type. */
       if (!pr?.headSha) return;
       if (await isRegateRepairExhausted(env, repoFullName, pr)) priorityPullNumbers.delete(prNumber);
     }),

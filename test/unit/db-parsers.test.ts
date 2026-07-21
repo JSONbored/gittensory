@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   claimMaintainerRecapPeriod,
@@ -8,6 +9,7 @@ import {
   countRecentAuditEventsForActorAndTarget,
   countRecentAuditEventsForActorInRepo,
   countRecentAuditEventsForActorInRepoWithTargetSuffix,
+  recentStaleRecheckDeniedPullNumbers,
   findHottestInconclusiveReviewTargetForRepo,
   findHottestReviewTargetForRepo,
   hasAuditEventForDelivery,
@@ -944,6 +946,124 @@ describe("database row parser hardening", () => {
     await recordAuditEvent(env, { eventType: "github_app.monitored_mention_ping", actor: "chatty", targetKey: "owner/foo_bar#3#mention:someXlogin", outcome: "completed", createdAt: "2026-06-24T10:02:00.000Z" });
 
     expect(await countRecentAuditEventsForActorInRepoWithTargetSuffix(env, "chatty", "github_app.monitored_mention_ping", "owner/foo_bar", "mention:some_login", "2026-06-24T09:00:00.000Z")).toBe(1);
+  });
+
+  describe("recentStaleRecheckDeniedPullNumbers (#orb-stale-recheck-priority)", () => {
+    it("returns the PR number for a duplicate-cluster-winner staleness denial", async () => {
+      const env = createTestEnv();
+      await recordAuditEvent(env, {
+        eventType: "agent.action.close",
+        actor: "loopover",
+        targetKey: "owner/repo#5",
+        outcome: "denied",
+        detail: "duplicate-cluster winner #7437 is no longer open — action not executed",
+        createdAt: "2026-06-24T10:00:00.000Z",
+      });
+
+      expect(await recentStaleRecheckDeniedPullNumbers(env, "owner/repo", "2026-06-24T09:00:00.000Z")).toEqual([5]);
+    });
+
+    it("returns the PR number for a base-conflict or a review-thread staleness denial, and dedupes repeats for the same PR", async () => {
+      const env = createTestEnv();
+      await recordAuditEvent(env, {
+        eventType: "agent.action.close",
+        actor: "loopover",
+        targetKey: "owner/repo#6",
+        outcome: "denied",
+        detail: "the base-branch conflict that justified this close has since cleared — action not executed",
+        createdAt: "2026-06-24T10:00:00.000Z",
+      });
+      // A second denial for the SAME pr later in the window must not produce a duplicate entry.
+      await recordAuditEvent(env, {
+        eventType: "agent.action.merge",
+        actor: "loopover",
+        targetKey: "owner/repo#6",
+        outcome: "denied",
+        detail: "the review thread(s) that justified this close are now all resolved — action not executed",
+        createdAt: "2026-06-24T10:05:00.000Z",
+      });
+
+      expect(await recentStaleRecheckDeniedPullNumbers(env, "owner/repo", "2026-06-24T09:00:00.000Z")).toEqual([6]);
+    });
+
+    it("ignores a denial reason that is NOT one of the three self-resolving staleness reasons", async () => {
+      const env = createTestEnv();
+      // A manual-review-label denial is durable (needs a human to remove the label) -- retrying fast wastes a
+      // cycle for zero output, so it must not be surfaced here.
+      await recordAuditEvent(env, {
+        eventType: "agent.action.merge",
+        actor: "loopover",
+        targetKey: "owner/repo#7",
+        outcome: "denied",
+        detail: 'manual-review label "manual-review" is present on the live PR — merge not executed',
+        createdAt: "2026-06-24T10:00:00.000Z",
+      });
+      // A live-CI staleness denial already gets a fresh look from the check-run/status webhook that changed
+      // CI in the first place, so it's deliberately excluded too.
+      await recordAuditEvent(env, {
+        eventType: "agent.action.merge",
+        actor: "loopover",
+        targetKey: "owner/repo#8",
+        outcome: "denied",
+        detail: "live CI is no longer passing (now: pending) — action not executed",
+        createdAt: "2026-06-24T10:00:00.000Z",
+      });
+
+      expect(await recentStaleRecheckDeniedPullNumbers(env, "owner/repo", "2026-06-24T09:00:00.000Z")).toEqual([]);
+    });
+
+    it("ignores a matching denial outside the actor/eventType/outcome/repo/time scope", async () => {
+      const env = createTestEnv();
+      const matchingDetail = "duplicate-cluster winner #1 is no longer open — action not executed";
+      // Wrong actor.
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "someone-else", targetKey: "owner/repo#10", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:00:00.000Z" });
+      // Wrong event type (a "completed" close whose OWN detail happens to reuse the phrase, e.g. a comment quoting it).
+      await recordAuditEvent(env, { eventType: "agent.action.hold", actor: "loopover", targetKey: "owner/repo#11", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:00:00.000Z" });
+      // Wrong outcome (the SAME reason text, but the action actually went through).
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/repo#12", outcome: "completed", detail: matchingDetail, createdAt: "2026-06-24T10:00:00.000Z" });
+      // Wrong repo.
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/other-repo#13", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:00:00.000Z" });
+      // Before the cutoff.
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/repo#14", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T07:00:00.000Z" });
+
+      expect(await recentStaleRecheckDeniedPullNumbers(env, "owner/repo", "2026-06-24T09:00:00.000Z")).toEqual([]);
+    });
+
+    it("treats the repo name as a literal LIKE prefix (regression mirroring countRecentAuditEventsForActorInRepo's escaping fix)", async () => {
+      const env = createTestEnv();
+      const matchingDetail = "duplicate-cluster winner #1 is no longer open — action not executed";
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/foo_bar#20", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:00:00.000Z" });
+      // owner/fooXbar is a DIFFERENT repo that would spuriously match "owner/foo_bar#%" if `_` were left as a
+      // SQL wildcard instead of being escaped.
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/fooXbar#21", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:01:00.000Z" });
+
+      expect(await recentStaleRecheckDeniedPullNumbers(env, "owner/foo_bar", "2026-06-24T09:00:00.000Z")).toEqual([20]);
+    });
+
+    it("skips a matching row whose targetKey fails to parse into a pull number (matches the LIKE prefix but has a non-numeric suffix)", async () => {
+      const env = createTestEnv();
+      const matchingDetail = "duplicate-cluster winner #1 is no longer open — action not executed";
+      // Satisfies the "owner/repo#%" SQL prefix but parsePullRequestTargetKey rejects the non-integer suffix.
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/repo#abc", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:00:00.000Z" });
+      await recordAuditEvent(env, { eventType: "agent.action.close", actor: "loopover", targetKey: "owner/repo#22", outcome: "denied", detail: matchingDetail, createdAt: "2026-06-24T10:01:00.000Z" });
+
+      expect(await recentStaleRecheckDeniedPullNumbers(env, "owner/repo", "2026-06-24T09:00:00.000Z")).toEqual([22]);
+    });
+
+    // #orb-stale-recheck-priority parity guard: STALE_RECHECK_DENIAL_DETAIL_PATTERN hand-types the three
+    // "denied" reason strings the executor's live staleness rechecks can produce, rather than importing them
+    // from agent-action-executor.ts -- that module imports FROM db/repositories.ts, so the reverse import would
+    // create a real module-load cycle (same hazard CONCRETE_EVIDENCE_BLOCKER_CODES's own parity guard,
+    // agent-actions.test.ts, documents). This reads the real producer source text instead, so a future rewording
+    // at the producer fails this test immediately rather than silently making the hand-typed pattern permanently
+    // unmatchable.
+    it.each(["duplicate-cluster winner #${action.duplicateWinnerPrNumber} is no longer open", "the base-branch conflict that justified this close has since cleared", "the review thread(s) that justified this close are now all resolved"])(
+      "%s is still produced (not merely mentioned) in its producer (src/services/agent-action-executor.ts)",
+      (reason) => {
+        const source = readFileSync("src/services/agent-action-executor.ts", "utf8");
+        expect(source).toContain(reason);
+      },
+    );
   });
 
   it("findHottestReviewTargetForRepo returns the PR with the most published surfaces in the window, scoped to ONE repo (#orb-ci-stuck-repeat)", async () => {

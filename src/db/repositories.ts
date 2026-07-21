@@ -2942,6 +2942,57 @@ export async function countRecentAuditEventsForActorInRepoWithTargetSuffix(
   return row.count;
 }
 
+// #orb-stale-recheck-priority: the THREE self-resolving "denied" detail strings the executor's live staleness
+// rechecks can produce (agent-action-executor.ts's "8) Live ... re-verification" block -- duplicateStaleReason /
+// mergeableStaleReason / threadStaleReason, each suffixed with " — action not executed" by that block's shared
+// `audit("denied", ...)` call). Deliberately NOT imported from agent-action-executor.ts: that module imports
+// FROM db/repositories.ts (installation tokens, PR records, ...), so importing back would create a real
+// module-load cycle -- same hazard agent-actions.ts's CONCRETE_EVIDENCE_BLOCKER_CODES comment documents for the
+// identical reason. A source-text parity test guards these three literals against producer-side drift instead.
+// Deliberately EXCLUDES a CI-staleness denial (ciStaleReason): CI flipping already re-triggers a fresh
+// evaluation via the check-run/status webhook that changed it, so it doesn't share the other three's "no
+// webhook ever reaches this PR" gap.
+const STALE_RECHECK_DENIAL_DETAIL_PATTERN =
+  /^(duplicate-cluster winner #\d+ is no longer open|the base-branch conflict that justified this close has since cleared|the review thread\(s\) that justified this close are now all resolved) — action not executed$/;
+
+/**
+ * PR numbers within `repoFullName` whose most recent `agent.action.close`/`agent.action.merge` attempt was
+ * DENIED by one of the executor's live staleness rechecks (duplicate-cluster winner / base-conflict / review-
+ * thread) within `sinceIso`, rather than by a durable, externally-actioned reason (a manual-review label, a
+ * merge-train wait, contributor-cap contention, ...). Those rechecks exist precisely because the fact that
+ * justified the close/merge can flip WITHOUT a webhook ever notifying THIS pr -- a duplicate-cluster sibling
+ * merging fires a webhook about the SIBLING, not this PR, so nothing naturally re-triggers a look here. Callers
+ * (surfaceRepairPriorityPullNumbers) fold this into the SAME priority set the outage-repair path already uses,
+ * so a matching PR gets a fast, prioritized re-look instead of waiting out the ordinary sweep cadence -- and
+ * inherits that path's existing per-head-SHA attempt cap for free, so a genuinely stuck PR still falls back to
+ * ordinary cadence rather than being re-selected forever. Reuses the same literal-prefix `LIKE ... ESCAPE`
+ * scoping as {@link countRecentAuditEventsForActorInRepo} so a repo name containing a SQL wildcard is matched
+ * literally.
+ */
+export async function recentStaleRecheckDeniedPullNumbers(env: Env, repoFullName: string, sinceIso: string): Promise<number[]> {
+  const db = getDb(env.DB);
+  const targetPrefixPattern = `${escapeSqlLikePattern(repoFullName)}#%`;
+  const rows = await db
+    .select({ targetKey: auditEvents.targetKey, detail: auditEvents.detail })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.actor, "loopover"),
+        inArray(auditEvents.eventType, ["agent.action.close", "agent.action.merge"]),
+        eq(auditEvents.outcome, "denied"),
+        sql`${auditEvents.targetKey} LIKE ${targetPrefixPattern} ESCAPE '\\'`,
+        gte(auditEvents.createdAt, sinceIso),
+      ),
+    );
+  const pullNumbers = new Set<number>();
+  for (const row of rows) {
+    if (!row.detail || !STALE_RECHECK_DENIAL_DETAIL_PATTERN.test(row.detail)) continue;
+    const target = parsePullRequestTargetKey(row.targetKey);
+    if (target) pullNumbers.add(target.pullNumber);
+  }
+  return [...pullNumbers];
+}
+
 /** #orb-ci-stuck-repeat / #orb-retry-storm ops-alerts signal: the single PR within `repoFullName` that published
  *  the most review surfaces in the last `sinceIso`-bounded window, and how many. `github_app.pr_public_surface_
  *  published` is a genuine INSERT-only event (never upserted) recorded once per successful publish pass
