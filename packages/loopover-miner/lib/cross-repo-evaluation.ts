@@ -551,13 +551,15 @@ export async function evaluateRepoFullExecution(
       readiness.failureCategory === CROSS_REPO_FAILURE_CATEGORY.CLONE_SETUP
         ? CROSS_REPO_EXECUTION_CATEGORY.CLONE_SETUP
         : CROSS_REPO_EXECUTION_CATEGORY.PLAN_NOT_FORMED;
-    return buildExecutionFailure(repoFullName, category, readiness.reason ?? "readiness check failed", {
+    return buildExecutionFailure(repoFullName, category, readiness.reason as string, {
       stack: readiness.stack,
     });
   }
 
-  const stack = readiness.stack;
-  const testCommand = stack?.detected ? stack.testCommand : null;
+  // Readiness passed, so the stack is present and detected -- narrow to the detected shape so its testCommand /
+  // buildCommand read as plain string|null with no defensive (unreachable) re-check.
+  const stack = readiness.stack as Extract<RepoStackResult, { detected: true }>;
+  const testCommand = stack.testCommand;
   if (!testCommand) {
     return buildExecutionFailure(
       repoFullName,
@@ -580,8 +582,8 @@ export async function evaluateRepoFullExecution(
   const repoPath = resolveEvaluationRepoPath(entry, options);
   let diff: string;
   try {
-    const attempt = await runAgentAttempt({ repoFullName, repoPath, stack: stack as RepoStackResult });
-    diff = typeof attempt?.diff === "string" ? attempt.diff : "";
+    const attempt = await runAgentAttempt({ repoFullName, repoPath, stack });
+    diff = attempt.diff;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return buildExecutionFailure(repoFullName, CROSS_REPO_EXECUTION_CATEGORY.OTHER, `Coding agent failed: ${message}`, {
@@ -593,7 +595,7 @@ export async function evaluateRepoFullExecution(
 
   // Compile/build the edited clone when the stack exposes a build command -- a failure means the agent's code
   // doesn't compile.
-  const buildCommand = stack?.detected ? stack.buildCommand : null;
+  const buildCommand = stack.buildCommand;
   if (buildCommand && typeof options.buildRepo === "function") {
     const built = await options.buildRepo({ repoPath, command: buildCommand });
     if (!built.ok) {

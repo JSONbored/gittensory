@@ -267,3 +267,39 @@ describe("cross-repo full-execution harness (#7634)", () => {
     });
   });
 });
+
+describe("full-execution remaining-branch coverage (#7634)", () => {
+  const okAgent = () => Promise.resolve({ diff: "real change" });
+  const okBuild = () => Promise.resolve({ ok: true });
+  const okTest = () => Promise.resolve({ ok: true });
+
+  it("reports a non-Error thrown by the agent via String(error)", async () => {
+    const r = await evaluateRepoFullExecution(entry, opts({ runAgentAttempt: () => { throw "plain-string-throw"; } }));
+    expect(r.executionCategory).toBe(CROSS_REPO_EXECUTION_CATEGORY.OTHER);
+    expect(r.reason).toContain("plain-string-throw");
+  });
+
+  it("falls back to the build command in the reason when a build failure carries no detail", async () => {
+    const r = await evaluateRepoFullExecution(
+      entry,
+      opts({ runAgentAttempt: okAgent, buildRepo: () => Promise.resolve({ ok: false }), runRepoTests: okTest }),
+    );
+    expect(r.executionCategory).toBe(CROSS_REPO_EXECUTION_CATEGORY.CODE_BUILD_FAILED);
+    expect(r.reason).toContain("npm run build");
+  });
+
+  it("falls back to the test command in the reason when a test failure carries no detail", async () => {
+    const r = await evaluateRepoFullExecution(
+      entry,
+      opts({ runAgentAttempt: okAgent, buildRepo: okBuild, runRepoTests: () => Promise.resolve({ ok: false }) }),
+    );
+    expect(r.executionCategory).toBe(CROSS_REPO_EXECUTION_CATEGORY.TESTS_FAILED);
+    expect(r.reason).toContain("npm test");
+  });
+
+  it("runFullCrossRepoExecution returns [] for a null parsed manifest", async () => {
+    expect(
+      await runFullCrossRepoExecution(null as any, opts({ runAgentAttempt: okAgent, buildRepo: okBuild, runRepoTests: okTest })),
+    ).toEqual([]);
+  });
+});
