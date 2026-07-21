@@ -267,9 +267,14 @@ merge instead of a one-shot close.
 below needs real, clickable thumbnail URLs — here's how to get them when you can't drag-and-drop into
 GitHub's web editor (which needs a human browser session an AI coding tool can't drive end-to-end):
 
-1. **Local dev server:** `npm --prefix apps/loopover-ui run dev` (Vite forces port **8080** regardless
-   of what you request — use that port in any launch config, or `preview_screenshot`-style tooling just
-   hangs waiting for the server). For an auth-gated page, use the sanctioned local-preview escape hatch
+1. **Local dev server:** `npm --prefix apps/loopover-ui run dev`. Vite *defaults* to port **8080**, but
+   only *forces* it — hard-failing if taken — inside a Lovable sandbox; `@lovable.dev/vite-tanstack-config`'s
+   `strictPort: true` is gated on `isSandbox`. On a normal contributor machine, CI runner, or AI-agent
+   worktree, an already-occupied 8080 silently shifts to the next free port with only one easy-to-miss
+   console line (`Port 8080 is in use, trying another one...`) and no error. **Read the server's actual
+   `Local:` URL from its startup output before hardcoding a port into any launch config** — don't assume
+   8080; `preview_screenshot`-style tooling that assumes it unconditionally just hangs waiting for a
+   server that's actually listening on 8081+. For an auth-gated page, use the sanctioned local-preview escape hatch
    instead of real GitHub OAuth: `useSession().signInPreview()` (`apps/loopover-ui/src/lib/api/session.ts`),
    gated on `import.meta.env.DEV` — it sets a synthetic session client-side with no network write. Click
    the "Continue with local preview" button in the sign-in wall rather than calling the hook indirectly
