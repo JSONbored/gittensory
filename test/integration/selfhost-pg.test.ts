@@ -10,6 +10,7 @@ import { pruneExpiredRecords } from "../../src/db/retention";
 import { processJob } from "../../src/queue/processors";
 import { getGateBlockOutcome, markGateOutcomeOverridden, recordGateBlockOutcome } from "../../src/db/repositories";
 import { backfillContributorGateHistory } from "../../src/review/contributor-gate-history-backfill";
+import { computeContributorGateEval } from "../../src/review/contributor-gate-eval";
 
 const URL = process.env.PG_TEST_URL;
 const suite = URL ? describe : describe.skip;
@@ -61,6 +62,28 @@ suite("Postgres backend (#977) — real Postgres", () => {
 
     const row = await db.prepare(`SELECT login, project, target_id FROM contributor_gate_history WHERE target_id = ?`).bind("owner/instr-repo#42").first<{ login: string; project: string; target_id: string }>();
     expect(row).toEqual({ login: "octocat", project: "owner/instr-repo", target_id: "owner/instr-repo#42" });
+  });
+
+  it("REGRESSION: computeContributorGateEval's ROW_NUMBER()-based 'latest row per key' query runs against real Postgres and picks the CORRECT latest decision (SQLite's bare-column-with-MAX() trick this replaced is not just non-portable -- it can pick an arbitrary row's project/decision within a tied group, not necessarily the max-created_at row's own)", async () => {
+    const db = createPgAdapter(pool);
+    const env = { DB: db } as unknown as Env;
+
+    // A contributor's PR gets re-reviewed after a force-push: the EARLIER headSha was predicted "close",
+    // the LATER (higher created_at) headSha was predicted "merge". Only the latest should count.
+    await db.prepare(`INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, head_sha, created_at) VALUES (?, 'pg-latest-row', 'gittensory-native', 'owner/latest-row', 'owner/latest-row#7', 'close', 'sha-old', ?)`)
+      .bind("cgh-latest-1", "2026-01-01T00:00:00.000Z")
+      .run();
+    await db.prepare(`INSERT INTO contributor_gate_history (id, login, source, project, target_id, decision, head_sha, created_at) VALUES (?, 'pg-latest-row', 'gittensory-native', 'owner/latest-row', 'owner/latest-row#7', 'merge', 'sha-new', ?)`)
+      .bind("cgh-latest-2", "2026-01-02T00:00:00.000Z")
+      .run();
+    await db.prepare(`INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES (?, 'owner/latest-row', 'owner/latest-row#7', 'pr_outcome', 'merged', 'github', ?)`)
+      .bind("po-latest-1", "2026-01-03T00:00:00.000Z")
+      .run();
+
+    const report = await computeContributorGateEval(env, { days: 730, nowMs: Date.parse("2026-01-10T00:00:00.000Z"), login: "pg-latest-row" });
+    expect(report.rows).toEqual([
+      expect.objectContaining({ login: "pg-latest-row", project: "owner/latest-row", wouldMerge: 1, mergeConfirmed: 1, wouldClose: 0 }),
+    ]);
   });
 
   it("batch is transactional (rolls back on error)", async () => {

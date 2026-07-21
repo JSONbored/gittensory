@@ -82,16 +82,21 @@ async function queryContributorGateCells(env: Env, opts: { days: number; nowMs: 
   const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(opts.days, 730) : 90;
   const fromIso = new Date(opts.nowMs - days * 86_400_000).toISOString().slice(0, 10);
   const loginFilter = opts.login ? "AND login = ?" : "";
+  // Latest row per key via ROW_NUMBER()+rn=1, NOT SQLite's "bare column with MAX()" trick -- that trick lets
+  // an ungrouped column (project/pred here) come from an ARBITRARY row in the group, which is merely
+  // non-deterministic on SQLite but a hard "column must appear in the GROUP BY clause" error on Postgres.
+  // Mirrors federated-bundle.ts's LOCAL_CALIBRATION_QUERY (src/orb/federated-bundle.ts:110) and
+  // orb-collector.ts's FLEET_QUERY, both written portable for exactly this reason.
   const sql = `
     WITH cgh AS (
-      SELECT login, project, target_id, decision AS pred, MAX(created_at) AS t
+      SELECT login, project, target_id, decision AS pred, created_at,
+             ROW_NUMBER() OVER (PARTITION BY login, target_id ORDER BY created_at DESC) AS rn
       FROM contributor_gate_history WHERE created_at >= ? ${loginFilter}
-      GROUP BY login, target_id
     ),
     po AS (
-      SELECT target_id, decision AS truth, MAX(created_at) AS t
+      SELECT target_id, decision AS truth, created_at,
+             ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY created_at DESC) AS rn
       FROM review_audit WHERE event_type = 'pr_outcome' AND decision IS NOT NULL
-      GROUP BY target_id
     ),
     rev AS (
       SELECT DISTINCT target_id FROM review_audit WHERE event_type IN ('reversal_reverted', 'reversal_reopened')
@@ -100,6 +105,7 @@ async function queryContributorGateCells(env: Env, opts: { days: number; nowMs: 
            CASE WHEN rev.target_id IS NOT NULL THEN 1 ELSE 0 END AS reversed, COUNT(*) AS n
     FROM cgh JOIN po ON cgh.target_id = po.target_id
     LEFT JOIN rev ON cgh.target_id = rev.target_id
+    WHERE cgh.rn = 1 AND po.rn = 1
     GROUP BY cgh.login, cgh.project, cgh.pred, po.truth, reversed`;
 
   try {
