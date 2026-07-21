@@ -154,29 +154,43 @@ A concrete engineering task is safe to hand to a contributor when:
 When genuinely unsure, default to `maintainer-only` — a wrongly-locked issue costs one manual unlock
 later; a wrongly-unlocked one costs a contributor's wasted PR and possibly a bad precedent.
 
-## Never unlock an existing `maintainer-only` issue during routine gardening — hard rule
+## The real question behind every unlock decision (maintainer's own framing, 2026-07-21)
+
+**It's not that unlocking maintainer-only work is categorically forbidden.** The actual test is: is
+this something the maintainer (JSONbored, the sole maintainer) should be the one to do or decide, being
+handed instead to contributors who, for the most part, don't care what they implement as long as it
+scores points? Most contributors optimize for "does this satisfy the gate's literal check," not for
+whether the implementation is the right one for a still-evolving hosted product. That asymmetry — not
+some blanket rule about milestone names — is why the safety test above (precedent, no business
+decision, no security-critical touch, no undecided architecture) exists. Apply that test with real
+rigor and it already produces the right call in the overwhelming majority of cases, `#7635` included
+(a genuinely maintainer-indifferent pure type change, correctly left unlocked).
+
+## Never relabel an existing `maintainer-only` issue during routine automated gardening
 
 **What happened, 2026-07-21:** a gardening pass filed 8 issues correctly as `maintainer-only` under
 `AMS Cloud Readiness`/`ORB Cloud Readiness` (tenant dashboard/billing exposure, notification-infra
 extension, PagerDuty paging into the kill-switch trip path and into control-plane provisioning
 failures, hosted cross-service wiring for a not-yet-live hosted ORB), then — roughly an hour later,
-in the same run — flipped all 8 to `help wanted` + `gittensor:feature`, removing `maintainer-only`.
-No safety-test re-check was recorded; the flip just happened. Three contributor PRs
+in the same run — flipped all 8 to `help wanted` + `gittensor:feature`, removing `maintainer-only`,
+with no safety-test re-check recorded; the flip just happened. Three contributor PRs
 (#7706, #7718, #7719) **merged** against these issues before the maintainer caught it and the labels
 were reverted. This is real shipped code touching kill-switch alerting, tenant provisioning failure
-paging, and tenant-facing data exposure — the exact blast radius this skill's safety test exists to
-prevent — that landed without maintainer design review.
+paging, and tenant-facing data exposure — implementation calls that were the maintainer's own to make,
+handed instead to contributors who had no way to know that — that landed without maintainer design
+review.
 
-**The rule, going forward:** routine gardening (Pass 1, 2, or 3) must never remove `maintainer-only`
-from an issue that already carries it. Unlocking an existing issue is a strictly bigger decision than
-creating a new one correctly-labeled from the start, and this skill's automation does not get to make
-that call unattended. If a pass concludes an existing `maintainer-only` issue's scope has become
-genuinely safe to unlock (e.g. the blocking architecture question it depended on got resolved), leave
-the label alone and say so in the digest for the maintainer to action manually — do not edit the label.
-This applies with no exception inside `AMS Cloud Readiness`, `ORB Cloud Readiness`, and
-`Miner Wave 5 — Rent-a-Loop (maintainer)` — every issue already filed there was deliberately gated by a
-human judgment call about the hosted-product/security boundary, not by this skill's own heuristics, so
-this skill re-opening that gate is categorically out of scope regardless of how mechanical an
+**The rule, going forward:** routine automated gardening (Pass 1, 2, or 3) does not flip an existing
+issue's `maintainer-only` label off in the same unattended pass that touches it. This isn't because
+unlocking is never the right call (see the framing above) — it's because this failure mode happened
+with zero re-application of the safety test, on a batch of 8, fully unattended. If a pass concludes an
+existing `maintainer-only` issue's scope has become genuinely safe to unlock (the "would the maintainer
+want to be the one doing this" test now says no), say so explicitly in the digest — cite which prong of
+the safety test it now passes and why — for the maintainer to review and action, rather than editing
+the label as a routine side effect. This applies inside `AMS Cloud Readiness`, `ORB Cloud Readiness`,
+and `Miner Wave 5 — Rent-a-Loop (maintainer)` the same as anywhere — every issue already filed there was
+gated by a human judgment call about the hosted-product/security boundary, so re-opening that gate is
+a decision for the maintainer to make deliberately, not a side effect of how mechanical an
 individual issue's Deliverables read.
 
 The only label-removal a gardening pass may still perform on an existing issue is the ordinary
