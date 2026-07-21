@@ -2081,3 +2081,78 @@ describe("executeAgentMaintenanceActions merge-train gate (#selfhost-merge-train
     expect(mergePullRequest).not.toHaveBeenCalled();
   });
 });
+
+describe("pre-merge contributor-cap re-check (#7284-fix, TOCTOU race)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchPullRequestFreshness).mockImplementation(async (_env, args) => ({
+      status: "current",
+      liveHeadSha: args.expectedHeadSha ?? null,
+      liveState: "open",
+      liveLabels: [],
+    }));
+  });
+
+  it("absent recheck (no cap configured for this repo): merge proceeds exactly as before this field existed", async () => {
+    const env = createTestEnv({});
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99" }), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalled();
+  });
+
+  it("recheck confirms still under cap: merge proceeds", async () => {
+    const env = createTestEnv({});
+    const recheck = vi.fn(async () => true);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", contributorCapMergeRecheck: recheck }), [merge]);
+    expect(recheck).toHaveBeenCalledTimes(1);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#7284-fix, reproduces the #7284-#7289 incident): recheck confirms the author is NOW over cap -- the merge is denied, not executed", async () => {
+    const env = createTestEnv({});
+    const recheck = vi.fn(async () => false);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", contributorCapMergeRecheck: recheck }), [merge]);
+    expect(recheck).toHaveBeenCalledTimes(1);
+    expect(outcomes[0]).toMatchObject({ actionClass: "merge", outcome: "denied" });
+    expect(outcomes[0]?.detail).toMatch(/now over cap/);
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("lock contended (another pass already holds the per-author claim): the merge is denied without ever calling the recheck", async () => {
+    const env = createTestEnv({});
+    // Pre-claim the exact same lock key a concurrent sibling's cap-close/wake would hold.
+    await env.SELFHOST_TRANSIENT_CACHE?.claim?.("contributor-cap-lock:owner/repo:farmer99", "someone-else-token", 30);
+    const recheck = vi.fn(async () => true);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", contributorCapMergeRecheck: recheck }), [merge]);
+    expect(recheck).not.toHaveBeenCalled();
+    expect(outcomes[0]).toMatchObject({ actionClass: "merge", outcome: "denied" });
+    expect(outcomes[0]?.detail).toMatch(/lock contended/);
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("releases the lock after a successful recheck, so a later merge for the SAME author can still acquire it", async () => {
+    const env = createTestEnv({});
+    const recheck = vi.fn(async () => true);
+    await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", contributorCapMergeRecheck: recheck }), [merge]);
+    // If the first call's lock leaked (never released), this second claim attempt would fail.
+    const secondClaim = await env.SELFHOST_TRANSIENT_CACHE?.claim?.("contributor-cap-lock:owner/repo:farmer99", "probe-token", 30);
+    expect(secondClaim).toBe(true);
+  });
+
+  it("releases the lock after a denied (now-over-cap) recheck too, not just the success path", async () => {
+    const env = createTestEnv({});
+    const recheck = vi.fn(async () => false);
+    await executeAgentMaintenanceActions(env, ctx({ authorLogin: "farmer99", contributorCapMergeRecheck: recheck }), [merge]);
+    const secondClaim = await env.SELFHOST_TRANSIENT_CACHE?.claim?.("contributor-cap-lock:owner/repo:farmer99", "probe-token", 30);
+    expect(secondClaim).toBe(true);
+  });
+
+  it("no authorLogin on ctx: the lock key degrades to an empty-string author rather than throwing", async () => {
+    const env = createTestEnv({});
+    const recheck = vi.fn(async () => true);
+    const outcomes = await executeAgentMaintenanceActions(env, ctx({ authorLogin: undefined, contributorCapMergeRecheck: recheck }), [merge]);
+    expect(outcomes[0]?.outcome).toBe("completed");
+    expect(mergePullRequest).toHaveBeenCalled();
+  });
+});
