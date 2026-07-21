@@ -77,7 +77,10 @@ function normalizeRepoFullName(repoFullName: string): string {
 
 function normalizeCommitSha(commitSha: string): string {
   if (typeof commitSha !== "string" || !commitSha.trim()) throw new Error("invalid_commit_sha");
-  return commitSha.trim();
+  const trimmed = commitSha.trim();
+  // Same format guard as replay-task-generation.ts — reject path-traversal / non-hex values before path.join (#7796).
+  if (!/^[0-9a-f]{7,40}$/i.test(trimmed)) throw new Error("invalid_commit_sha");
+  return trimmed;
 }
 
 /** Worktree exports live under this dir inside the repo, mirroring worktree-allocator.ts's WORKTREE_SUBDIR. */
