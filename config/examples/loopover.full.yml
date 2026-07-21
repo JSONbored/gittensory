@@ -1214,6 +1214,23 @@ settings:
   # abuse pattern.
   # draftPrClosePolicy: off  # off | close. Default: off.
 
+  # One-shot synchronize-amendment close policy (#synchronize-close-policy): distinct from
+  # reviewEvasionProtection and draftPrClosePolicy above -- those enforce on closing/converting-to-draft or on
+  # draft usage; this one enforces on the contributor's OWN PR receiving an ADDITIONAL commit (a
+  # `synchronize` push) before the PR has been merged or closed, regardless of what CI/review state that push
+  # interrupts. This repo's review is one-shot: the PR must be correct as originally opened, not iterated on
+  # while the first push's CI/review is still working -- "close" closes the PR immediately on that next push
+  # rather than letting a contributor use a slow CI run as a free window to land fixups. OFF BY DEFAULT
+  # (opt-in, unlike reviewEvasionProtection's default-close): it can catch ordinary, well-intentioned
+  # contributors who simply push a follow-up commit with no gaming intent, so choose this deliberately. Never
+  # fires for a push that isn't from the PR's own author (the engine's own rebase-if-behind push never
+  # matches), nor for the repo owner/admin, a protected automation author, or anyone with write+ collaborator
+  # access. Shares reviewEvasionLabel/reviewEvasionComment and autoCloseExemptLogins with the family above.
+  # Deliberately does NOT record a moderation strike (unlike reviewEvasionProtection) -- this is a blanket
+  # policy against an otherwise-ordinary GitHub action, not a detected abuse pattern. Config-as-code only --
+  # no dashboard/DB column.
+  # synchronizeClosePolicy: off  # off | close. Default: off.
+
   # Merge-train FIFO gate (#selfhost-merge-train): without this, a PR merges the instant its OWN gate clears,
   # with zero awareness of an older sibling PR still open in the same repo -- proven live to cause out-of-order
   # merges and the conflicts that follow. "audit" logs what the gate WOULD hold, without actually holding

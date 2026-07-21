@@ -9746,6 +9746,14 @@
             "minimum": 0,
             "exclusiveMinimum": true
           },
+          "synchronizeClosePolicy": {
+            "type": "string",
+            "enum": [
+              "off",
+              "close"
+            ],
+            "description": "Off by default (opt-in, config-as-code only -- no dashboard/DB column). \"close\" closes a contributor's own PR immediately when they push an additional commit (synchronize) before it's been merged or closed -- this repo's review is one-shot, so the first push is the only push. Never fires for a push that isn't from the PR's own author (e.g. the engine's own rebase-if-behind), nor for the repo owner/admin, a protected automation author, or anyone with write+ collaborator access."
+          },
           "contentLaneDeliverableGateMode": {
             "type": "string",
             "enum": [

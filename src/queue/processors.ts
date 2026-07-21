@@ -393,6 +393,7 @@ import {
   maybeCloseRepeatedDraftCycling,
   maybeCloseReviewEvasionDraftConversion,
   maybeCloseReviewEvasionSelfClose,
+  maybeCloseSynchronizeAmendment,
   maybeRecloseDisallowedReopen,
   type ReopenRecloseOutcome,
 } from "./review-evasion";
@@ -6051,6 +6052,15 @@ async function handlePullRequestWebhookEvent(
     // Resolve settings first so the self-authored + open-reference live-fetch fallbacks only fire when their
     // respective gates are in block mode.
     const settings = await resolveRepositorySettings(env, repoFullName);
+    // One-shot synchronize-amendment close (#synchronize-close-policy, resource-waste ordering -- mirrors the
+    // #7284-fix contributor-cap-on-open short-circuit below): a cheap, opt-in check dispatched BEFORE any of
+    // the expensive work further down (automation-bot-skip's own audit write, the Promise.all fetch, CI-wait,
+    // AI review, etc.) ever runs for a PR this policy is about to close anyway. maybeCloseSynchronizeAmendment
+    // itself does the real work (config check, then author/permission/bot exemptions) -- this call site only
+    // decides WHEN to ask, same division of labor as every other guard in this file.
+    if (payload.action === "synchronize" && installationId) {
+      await maybeCloseSynchronizeAmendment(env, deliveryId, installationId, repoFullName, pr, payload, settings);
+    }
     // Waste elimination for known automation authors (settings/automation-bot-skip.ts): a PR/event genuinely
     // triggered by release-please's github-actions[bot], Renovate, or Dependabot never needs AI review, gate
     // evaluation, or a public-surface publish. Checked here (not earlier) because it needs `settings` for the

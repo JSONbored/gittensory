@@ -628,6 +628,7 @@ export type FocusManifestSettings = Partial<
     | "reviewEvasionProtection"
     | "reviewEvasionLabel"
     | "reviewEvasionComment"
+    | "synchronizeClosePolicy"
     | "mergeTrainMode"
   >
 > & {
@@ -2854,6 +2855,11 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   }
   const reviewEvasionComment = normalizeOptionalBoolean(r.reviewEvasionComment, "settings.reviewEvasionComment", warnings);
   if (reviewEvasionComment !== null) out.reviewEvasionComment = reviewEvasionComment;
+  // One-shot synchronize-amendment close policy (#synchronize-close-policy): a contributor pushing an
+  // additional commit to their own still-open PR before it's merged/closed is amending a one-shot review,
+  // not making an ordinary follow-up push.
+  const synchronizeClosePolicy = normalizeOptionalEnum(r.synchronizeClosePolicy, "settings.synchronizeClosePolicy", ["off", "close"] as const, warnings);
+  if (synchronizeClosePolicy !== null) out.synchronizeClosePolicy = synchronizeClosePolicy;
   const mergeTrainMode = normalizeOptionalEnum(r.mergeTrainMode, "settings.mergeTrainMode", ["off", "audit", "enforce"] as const, warnings);
   if (mergeTrainMode !== null) out.mergeTrainMode = mergeTrainMode;
   return out;

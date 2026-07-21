@@ -615,6 +615,13 @@ export type RepositorySettings = {
   /** Review-evasion protection: whether to post the public explanation comment before the enforcement close.
    *  Default true. */
   reviewEvasionComment?: boolean | undefined;
+  /** One-shot synchronize-amendment close policy (#synchronize-close-policy): distinct from
+   *  reviewEvasionProtection above -- that one enforces on closing/converting-to-draft; this one enforces on
+   *  the contributor's OWN PR receiving an ADDITIONAL commit before it's been merged or closed. `"off"` (the
+   *  default) disables detection entirely; `"close"` closes the PR immediately on that next push. Only fires
+   *  when the pusher is the PR's own author (never the engine's own rebase-if-behind, never a maintainer
+   *  pushing to someone else's branch). */
+  synchronizeClosePolicy?: "off" | "close" | undefined;
   /** Merge-train FIFO gate (#selfhost-merge-train): `"off"` keeps current behavior, `"audit"` logs would-hold
    *  decisions, and `"enforce"` defers a merge behind a still-viable older sibling. */
   mergeTrainMode?: "off" | "audit" | "enforce" | undefined;

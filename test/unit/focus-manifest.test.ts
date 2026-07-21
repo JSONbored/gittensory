@@ -373,6 +373,7 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
     reviewEvasionProtection: "reviewEvasionProtection:",
     reviewEvasionLabel: "reviewEvasionLabel:",
     reviewEvasionComment: "reviewEvasionComment:",
+    synchronizeClosePolicy: "synchronizeClosePolicy:",
     mergeTrainMode: "mergeTrainMode:",
     typeLabels: "typeLabels:",
     issuePlanEnabled: "issuePlanEnabled:",

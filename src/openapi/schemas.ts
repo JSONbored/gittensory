@@ -930,6 +930,12 @@ export const RepositorySettingsSchema = z
       .describe(
         "Off by default (opt-in, unlike reviewEvasionProtection's default-close). \"close\" enforces on ANY draft PR, including the very first one, before a review pass has had a chance to run -- distinct from reviewEvasionProtection's family, which only enforces after a review already ran or on the 2nd+ draft conversion.",
       ),
+    synchronizeClosePolicy: z
+      .enum(["off", "close"])
+      .optional()
+      .describe(
+        "Off by default (opt-in, config-as-code only -- no dashboard/DB column). \"close\" closes a contributor's own PR immediately when they push an additional commit (synchronize) before it's been merged or closed -- this repo's review is one-shot, so the first push is the only push. Never fires for a push that isn't from the PR's own author (e.g. the engine's own rebase-if-behind), nor for the repo owner/admin, a protected automation author, or anyone with write+ collaborator access.",
+      ),
     mergeTrainMode: z.enum(["off", "audit", "enforce"]).optional(),
     screenshotTableGate: z
       .object({

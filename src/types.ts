@@ -1354,6 +1354,28 @@ export type RepositorySettings = {
    *  label/comment conventions, no need for separate config). See `queue/review-evasion.ts`'s
    *  `maybeCloseDraftPr`. */
   draftPrClosePolicy?: "off" | "close" | undefined;
+  /** One-shot synchronize-amendment close policy (#synchronize-close-policy): distinct from {@link
+   *  reviewEvasionProtection} and {@link draftPrClosePolicy} above -- those families enforce on closing/
+   *  converting-to-draft, or on draft usage; this one enforces on the contributor's OWN PR receiving an
+   *  ADDITIONAL commit (a `synchronize` webhook) before the PR has been merged or closed, regardless of
+   *  what CI/review state that push interrupts. This repo's review is one-shot: the PR must be correct as
+   *  originally opened, not iterated on while the first push's CI/review is still working. `"close"` closes
+   *  the PR immediately on that next push instead of letting a contributor use a slow CI run as a free
+   *  window to land fixups (each restart paying the full suite duration again). `"off"` (the default) is
+   *  unchanged behavior -- like {@link draftPrClosePolicy}, this is opt-in (not default-on like
+   *  reviewEvasionProtection): it can catch ordinary, well-intentioned contributors who simply push a
+   *  follow-up commit with no gaming intent, so a maintainer chooses it deliberately per repo. Only fires
+   *  when the ACTOR who pushed is the PR's own author -- an engine-initiated rebase-if-behind push
+   *  (`prReadyForReview`'s forceUpdateBranch) is attributed to the App's own bot identity, never the
+   *  author, so it can never match; a maintainer pushing to someone else's branch is an ordinary
+   *  maintainer action, not the author amending their own PR. Deliberately does NOT record a moderation
+   *  strike (unlike the review-evasion family) -- this is a blanket repo policy against an otherwise
+   *  completely ordinary GitHub action, not a detected abuse pattern. Shares `autoCloseExemptLogins` and
+   *  `reviewEvasionLabel`/`reviewEvasionComment` with the `reviewEvasionProtection` family (same anti-abuse
+   *  label/comment conventions, no need for separate config). Config-as-code only -- no DB column; set via
+   *  `.loopover.yml settings.synchronizeClosePolicy`. See `queue/review-evasion.ts`'s
+   *  `maybeCloseSynchronizeAmendment`. */
+  synchronizeClosePolicy?: "off" | "close" | undefined;
   /** Merge-train FIFO gate (#selfhost-merge-train): without this, a PR merges the instant its OWN gate
    *  clears, with zero awareness of an older sibling PR still open in the same repo -- proven live to cause
    *  out-of-order merges and the conflicts that follow. `"off"` (the default) is unchanged behavior.

@@ -2016,7 +2016,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
     // the DB write below so a per-test `{ reviewEvasionProtection: "off" }`/`{ reviewEvasionComment: false }`/
     // `{ autoCloseExemptLogins: [...] }` still takes effect via the manifest overlay instead of being
     // silently outranked by the hardcoded default.
-    const { reviewEvasionProtection, reviewEvasionComment, autoCloseExemptLogins, ...dbOverrides } = overrides;
+    const { reviewEvasionProtection, reviewEvasionComment, autoCloseExemptLogins, synchronizeClosePolicy, ...dbOverrides } = overrides;
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autonomy: { close: "auto" },
@@ -2031,6 +2031,10 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
         reviewEvasionProtection: (reviewEvasionProtection as "off" | "close" | undefined) ?? "close",
         ...(reviewEvasionComment !== undefined ? { reviewEvasionComment: reviewEvasionComment as boolean } : {}),
         ...(autoCloseExemptLogins !== undefined ? { autoCloseExemptLogins: autoCloseExemptLogins as string[] } : {}),
+        // synchronizeClosePolicy (#synchronize-close-policy) is manifest-only too -- pulled out here for the
+        // same reason as the three fields above, so a per-test override actually reaches the manifest
+        // overlay instead of being silently dropped by the DB write (there is no column for it).
+        ...(synchronizeClosePolicy !== undefined ? { synchronizeClosePolicy: synchronizeClosePolicy as "off" | "close" } : {}),
       },
     });
   }
@@ -3862,6 +3866,264 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-third-party", eventName: "pull_request", payload });
 
       expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+  });
+
+  describe("one-shot synchronize-amendment close policy (#synchronize-close-policy)", () => {
+    function synchronizePayload(sender: string, author = sender, headSha = "def456"): any {
+      return {
+        action: "synchronize",
+        installation: { id: 123 },
+        repository: { id: 1, name: "gittensory", full_name: "JSONbored/gittensory", private: false, default_branch: "main", owner: { login: "JSONbored" } },
+        sender: { login: sender, type: "User" },
+        pull_request: {
+          id: 4242,
+          number: 42,
+          state: "open",
+          title: "Some PR",
+          body: "Body.",
+          user: { login: author },
+          head: { sha: headSha, ref: "fix", repo: { full_name: `${author}/gittensory`, owner: { login: author } } },
+          base: { sha: "base123", ref: "main", repo: { full_name: "JSONbored/gittensory", owner: { login: "JSONbored" } } },
+          draft: false,
+          merged: false,
+          mergeable_state: "clean",
+          created_at: "2026-05-27T00:00:00Z",
+          updated_at: "2026-05-27T00:00:00Z",
+        },
+      };
+    }
+
+    it("does nothing when synchronizeClosePolicy is off (the default) -- an ordinary follow-up push is unaffected", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off" }); // synchronizeClosePolicy defaults to "off"
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-off", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("closes immediately when the PR's own author pushes an additional commit", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-close", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.synchronize_amend_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("completed");
+      expect(audit?.detail).toContain("contributor");
+    });
+
+    it("does NOT record a moderation strike -- this is a blanket policy against an ordinary push, not a detected abuse pattern", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-no-strike", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("audits an error and does NOT record a strike when the close API call fails", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { onPatch: () => new Response("server error", { status: 500 }) });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-close-fail", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.synchronize_amend_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("error");
+      expect(audit?.detail).toContain("FAILED to close");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("honors settings.autoCloseExemptLogins -- the shared allowlist the review-evasion family already uses", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close", autoCloseExemptLogins: ["contributor"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-exempt", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the author holds write collaborator permission", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-maintainer", eventName: "pull_request", payload: synchronizePayload("write-collaborator") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing for a protected automation author (e.g. dependabot[bot])", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-bot-author", eventName: "pull_request", payload: synchronizePayload("dependabot[bot]") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when a THIRD PARTY pushes to someone else's PR branch -- an ordinary maintainer action, not the author amending their own PR", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      const payload = synchronizePayload("contributor");
+      payload.sender = { login: "a-maintainer", type: "User" };
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-third-party", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("REGRESSION (#synchronize-close-policy): does nothing when the push is the engine's OWN rebase-if-behind, not a genuine contributor amendment", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      const payload = synchronizePayload("contributor");
+      // prReadyForReview's forceUpdateBranch (rebase-if-behind) pushes via the installation token; GitHub
+      // attributes the resulting synchronize webhook's sender to the App's own bot identity, never the
+      // PR author -- this must never be mistaken for the author amending their own PR.
+      payload.sender = { login: "loopover-orb[bot]", type: "Bot" };
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-own-rebase", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the webhook payload has no sender", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      const payload = synchronizePayload("contributor");
+      payload.sender = undefined;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-no-sender", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the PR record has no author (a deleted-account PR)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      const payload = synchronizePayload("contributor");
+      payload.pull_request.user = null;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-no-author", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the PR record has no headSha", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+
+      const payload = synchronizePayload("contributor");
+      payload.pull_request.head = null;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-no-head-sha", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("denies enforcement when the agent is paused for this repo", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close", agentPaused: true });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-paused", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.synchronize_amend_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("paused");
+    });
+
+    it("skips the courtesy comment when reviewEvasionComment is explicitly false", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close", reviewEvasionComment: false });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-no-comment", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(false);
+    });
+
+    it("posts the courtesy comment when reviewEvasionComment is unset (undefined, not just a stored default)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionComment: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-comment-unset", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+    });
+
+    it("applies no label when reviewEvasionLabel is explicitly null (a .loopover.yml-only 'no label' override)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      const labelPostBodies: string[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return Response.json({ state: "closed" });
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+        if (method === "POST" && url.endsWith("/issues/42/labels")) {
+          labelPostBodies.push(String(init?.body ?? ""));
+          return Response.json([], { status: 200 });
+        }
+        if (url.includes("/labels")) return Response.json([]); // dedup probe: no labels on the issue yet
+        if (url.includes("/pulls/42/files")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "loopover-orb" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", synchronizeClosePolicy: "close" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionLabel: null });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "sync-policy-label-null", eventName: "pull_request", payload: synchronizePayload("contributor") });
+
+      expect(labelPostBodies.some((b) => b.includes("review-evasion"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.synchronize_amend_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
     });
   });
 });

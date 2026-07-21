@@ -1,10 +1,13 @@
 // Review-evasion / close-enforcement guards (#4013 step 5 -- extracted from processors.ts, fifth step of
 // the file's own module-split sequence, after transient-locks.ts, signal-snapshot.ts,
-// duplicate-detection.ts, and slop-detection.ts). Pure move; only the 5 top-level "maybe*" entry points are
+// duplicate-detection.ts, and slop-detection.ts). Only the top-level "maybe*" entry points are
 // exported (each called from exactly one webhook-handler call site still in processors.ts) -- every other
 // function/type/constant here (withPrActuationLock, evaluateCloseEnforcementGate, hasMaintainerOrOwnerPermission,
 // the "close*If*" implementations, ReopenRecloseOutcome, REVIEW_EVASION_CLOSED_EVENT_TYPE) is private to this
 // file, since none of them had any caller outside this cluster in the original file either.
+// maybeCloseSynchronizeAmendment (#synchronize-close-policy) is a later, 6th addition alongside the original
+// 5 extracted here -- same shape and reasoning as its siblings, added directly to this module rather than
+// growing processors.ts again.
 
 import {
   getGateBlockOutcome,
@@ -529,6 +532,12 @@ const REVIEW_EVASION_CLOSED_EVENT_TYPE = "github_app.review_evasion_closed";
 // repo POLICY enforced against ordinary, first-time draft usage, not a detected abuse PATTERN like the
 // review-evasion family -- keeping it a distinct audit category lets an operator query the two apart.
 const DRAFT_PR_CLOSED_EVENT_TYPE = "github_app.draft_pr_closed";
+
+// Separate eventType again (#synchronize-close-policy): same blanket-repo-POLICY reasoning as
+// DRAFT_PR_CLOSED_EVENT_TYPE above, not the review-evasion family's detected-abuse-PATTERN framing -- an
+// additional push is an otherwise-ordinary GitHub action this repo has chosen to forbid, not a caught
+// gaming attempt, so it gets its own audit category too.
+const SYNCHRONIZE_AMEND_CLOSED_EVENT_TYPE = "github_app.synchronize_amend_closed";
 
 // Whether `login` holds a maintainer-equivalent permission on repoFullName -- the owner, an ADMIN_GITHUB_LOGINS
 // entry, or a collaborator with admin/maintain/write access. Shared by both review-evasion guards below;
@@ -1227,4 +1236,133 @@ async function closeDraftPrIfPolicyEnabled(
   );
   /* v8 ignore next -- best-effort: the guarded CAS update never rejects against a healthy D1, and a cleanup failure here must never block the webhook. */
   await terminalizeActiveReviewTracking(env, repoFullName, pr.number, { onlyIfHeadSha: pr.headSha }).catch(() => undefined);
+}
+
+/** One-shot synchronize-amendment close policy (#synchronize-close-policy): distinct from the four review-
+ *  evasion guards above (which key off a review having ALREADY run) and from draftPrClosePolicy (which keys
+ *  off draft state) -- this guard enforces on the contributor's OWN PR receiving an ADDITIONAL commit
+ *  (synchronize) before the PR has been merged or closed, regardless of what CI/review state that push
+ *  interrupts. This repo's review is one-shot: the PR must be correct as opened. Off by default
+ *  (`settings.synchronizeClosePolicy !== "close"` bails immediately) -- unlike reviewEvasionProtection's
+ *  default-close, this is opt-in: it can catch ordinary, well-intentioned contributors who simply push a
+ *  follow-up commit with no gaming intent, so a maintainer chooses it deliberately for a specific repo.
+ *  Only fires when the ACTOR who pushed is the PR's own author -- an engine-initiated rebase-if-behind push
+ *  (prReadyForReview's forceUpdateBranch) is attributed to the App's own bot identity, never the author, so
+ *  it can never match here; a maintainer pushing to someone else's branch is an ordinary maintainer action,
+ *  not the author amending their own PR. Deliberately does NOT record a moderation strike (unlike the
+ *  review-evasion family) -- this is a blanket repo policy applied to an otherwise-completely-ordinary
+ *  GitHub action (pushing a follow-up commit), not a detected abuse pattern. Per-PR actuation-locked like
+ *  its siblings. */
+export async function maybeCloseSynchronizeAmendment(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  payload: GitHubWebhookPayload,
+  settings: RepositorySettings,
+): Promise<void> {
+  if (settings.synchronizeClosePolicy !== "close") return;
+  await withPrActuationLock(env, repoFullName, pr.number, "synchronize-close-policy", () =>
+    closeSynchronizeAmendmentIfPolicyEnabled(env, deliveryId, installationId, repoFullName, pr, payload, settings),
+  );
+}
+
+async function closeSynchronizeAmendmentIfPolicyEnabled(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  payload: GitHubWebhookPayload,
+  settings: RepositorySettings,
+): Promise<void> {
+  const actorLogin = (payload.sender?.login ?? "").toLowerCase();
+  const authorLogin = (pr.authorLogin ?? "").toLowerCase();
+  if (!actorLogin || !authorLogin || actorLogin !== authorLogin) return;
+  if (isProtectedAutomationAuthor(pr.authorLogin)) return;
+  if (isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) return;
+  if (!pr.headSha) return;
+  const headSha = pr.headSha;
+  if (await hasMaintainerOrOwnerPermission(env, installationId, repoFullName, authorLogin)) return;
+
+  const targetKey = `${repoFullName}#${pr.number}`;
+  const gateMetadata = { deliveryId, repoFullName, headSha };
+  const gate = await evaluateCloseEnforcementGate({
+    env,
+    installationId,
+    repoFullName,
+    pr,
+    settings,
+    eventType: SYNCHRONIZE_AMEND_CLOSED_EVENT_TYPE,
+    targetKey,
+    actionLabel: "synchronize close policy",
+    actor: String(pr.authorLogin),
+    metadata: gateMetadata,
+    dryRun: {
+      detail: `dry-run: would close PR amended by ${pr.authorLogin} after opening (synchronizeClosePolicy)`,
+      metadata: { ...gateMetadata, mode: "dry_run" },
+    },
+    paused: {
+      detail: `agent actions paused -- synchronize close policy not enforced for ${pr.authorLogin}`,
+      metadata: gateMetadata,
+    },
+    permissionReadiness: {
+      detail: `denied synchronize close for ${pr.authorLogin} -- pull_requests: write not granted`,
+      metadata: gateMetadata,
+    },
+    freshness: {
+      detailSuffix: " -- synchronize close not executed",
+      metadata: gateMetadata,
+    },
+  });
+  if (!gate.proceed) return;
+
+  const closeError = await closePullRequest(env, installationId, repoFullName, pr.number)
+    .then(() => null)
+    .catch((error: unknown) => error);
+  if (closeError !== null) {
+    await recordAuditEvent(env, {
+      eventType: SYNCHRONIZE_AMEND_CLOSED_EVENT_TYPE,
+      actor: "loopover",
+      targetKey,
+      outcome: "error",
+      detail: `FAILED to close PR amended by ${pr.authorLogin} -- the close API call did not succeed; the PR may still be open`,
+      metadata: { ...gateMetadata, error: errorMessage(closeError) },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler. */
+      () => undefined,
+    );
+    return;
+  }
+
+  const shouldPostComment = settings.reviewEvasionComment ?? true;
+  if (shouldPostComment) {
+    await createIssueComment(
+      env,
+      installationId,
+      repoFullName,
+      pr.number,
+      "This repository reviews pull requests one-shot: the PR must be correct as originally opened. Pushing an additional commit closes it automatically instead of restarting review — open a fresh pull request with every fix included.",
+    ).catch(
+      /* v8 ignore next -- fail-safe: a courtesy-comment failure never blocks the handler. */
+      () => undefined,
+    );
+  }
+  const label = resolveNullableLabel(settings.reviewEvasionLabel, DEFAULT_REVIEW_EVASION_LABEL);
+  if (label !== null) {
+    /* v8 ignore next -- fail-safe: a label-application failure never blocks the handler (the enforcement close already happened). */
+    await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, label, { createMissingLabel: true }).catch(() => undefined);
+  }
+  await recordAuditEvent(env, {
+    eventType: SYNCHRONIZE_AMEND_CLOSED_EVENT_TYPE,
+    actor: "loopover",
+    targetKey,
+    outcome: "completed",
+    detail: `closed PR by ${pr.authorLogin} for pushing an additional commit after opening -- synchronizeClosePolicy is "close"`,
+    metadata: gateMetadata,
+  }).catch(
+    /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler. */
+    () => undefined,
+  );
 }

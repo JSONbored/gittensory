@@ -652,6 +652,9 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
       draftPrClosePolicy: "off",
+      // Config-as-code only (#synchronize-close-policy): no DB column, matching reviewEvasionProtection's
+      // pattern above -- only .loopover.yml settings.synchronizeClosePolicy can set this.
+      synchronizeClosePolicy: "off",
       mergeTrainMode: "off",
       screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [], requireViewports: [], requireThemes: [] },
     };
@@ -756,6 +759,9 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
     reviewEvasionComment: true,
     draftPrClosePolicy: normalizeDraftPrClosePolicy(row.draftPrClosePolicy),
+    // Config-as-code only (#synchronize-close-policy): no DB column, matching reviewEvasionProtection's
+    // pattern above -- only .loopover.yml settings.synchronizeClosePolicy can set this.
+    synchronizeClosePolicy: "off",
     mergeTrainMode: "off",
     screenshotTableGate: parseScreenshotTableGateRow(row),
     createdAt: row.createdAt,
