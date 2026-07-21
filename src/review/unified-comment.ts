@@ -608,9 +608,19 @@ function nonRequiredFailingChecksBlock(readiness: MergeReadiness | undefined): s
   return lines.join("\n");
 }
 
-/** The synthetic "Code review" row -- derived from the AI reviewers' own blocker count, never from
- *  `ctx.signals` -- so it always exists and is never subject to `review.fields` visibility (matches its
- *  pre-#6067 behavior as the signal table's unconditional first row). */
+/** The synthetic "Code review" row -- its blocker count is NOT purely the AI reviewers' own findings:
+ *  `buildDualReviewNotes` (FIX D1) folds the gate's own deterministic hard blockers in too, so a non-AI
+ *  gate failure (a missing linked issue, a registry-deliverable check, a secret leak, ...) still populates
+ *  a "Why this is blocked" list even when no AI reviewer ran at all. Never routed through `ctx.signals`, so
+ *  this row always exists and is never subject to `review.fields` visibility (matches its pre-#6067
+ *  behavior as the signal table's unconditional first row).
+ *
+ *  #7491-class fix: when `reviewerCount` is 0, ANY blocker present can only have come from that deterministic
+ *  fold-in -- a fresh `ai_consensus_defect` (the other blocker source) requires an actual review pass to
+ *  exist at all. The evidence text used to read "No AI review summary" regardless, which next to a nonzero
+ *  blocker count ("1 blocker (No AI review summary)") looked self-contradictory: as if an AI pass ran,
+ *  found something, but produced no write-up -- not "AI review never ran; a separate check is what's
+ *  blocking this." */
 function codeReviewRow(input: UnifiedReviewInput): UnifiedSignalRow {
   const blockerCount = (input.blockers ?? []).length;
   const reviewerEvidence =
@@ -618,7 +628,9 @@ function codeReviewRow(input: UnifiedReviewInput): UnifiedSignalRow {
       ? `${input.reviewerCount} reviewers, synthesized`
       : input.reviewerCount === 1
         ? "1 reviewer"
-        : "No AI review summary";
+        : blockerCount > 0
+          ? "no AI review ran — blocker is from a non-AI gate check"
+          : "No AI review summary";
   return {
     label: "Code review",
     state: blockerCount ? "fail" : "ok",

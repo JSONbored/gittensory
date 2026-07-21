@@ -238,6 +238,24 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).not.toContain("readiness 93/100");
   });
 
+  // #7491-class fix: a blocker present with reviewerCount 0 can only be a deterministic gate blocker folded
+  // in by buildDualReviewNotes (a fresh ai_consensus_defect needs an actual review pass to exist) -- the old
+  // "No AI review summary" evidence text, unconditional on reviewerCount, made this read as a silent/
+  // incomplete AI review rather than "AI review never ran; something else is blocking this."
+  it("does not claim a silent/incomplete AI review when a blocker is present but no reviewer ran", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, reviewerCount: 0, recommendations: [], decision: "close", blockers: ["This PR's linked issue names a registry path it never touches."] },
+      ctx,
+    );
+    expect(md).toContain("- ❌ Code review — 1 blocker (no AI review ran — blocker is from a non-AI gate check)");
+    expect(md).not.toContain("1 blocker (No AI review summary)");
+  });
+
+  it("still reports a clean, non-contradictory 'no blockers' row when no reviewer ran and nothing is blocking", () => {
+    const md = renderUnifiedReviewComment({ ...base, reviewerCount: 0, recommendations: [] }, ctx);
+    expect(md).toContain("- ✅ Code review — No blockers (No AI review summary)");
+  });
+
   it("held state uses the warning alert and amber bar", () => {
     const md = renderUnifiedReviewComment({ ...base, decision: "manual", recommendations: ["manual_review"] }, ctx);
     expect(md).toContain("> [!WARNING]");
