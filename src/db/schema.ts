@@ -78,10 +78,6 @@ export const repositorySettings = sqliteTable("repository_settings", {
   // via this path (default). Independent of mergeableState's own "behind" signal -- enforcement lands in
   // prReadyForReview, not here.
   staleBaseAheadByThreshold: integer("stale_base_ahead_by_threshold"),
-  // Draft-PR close policy (#draft-pr-close-policy): off by default -- enforces on ANY draft (including the
-  // first one, before a review has run), so a maintainer opts in deliberately rather than getting it on by
-  // default.
-  draftPrClosePolicy: text("draft_pr_close_policy").notNull().default("off"),
   // Config-driven before/after screenshot-table gate (#2006): off by default. whenLabels/whenPaths are JSON
   // string arrays (mirrors contributorBlacklistJson's shape); screenshotTableGateMessage is nullable ("no
   // override" is a `.loopover.yml`-only concept -- null here means "use the built-in default message").

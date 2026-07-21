@@ -371,6 +371,7 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
     moderationBannedLabel: "moderationBannedLabel:",
     fairnessAnalyticsMode: "fairnessAnalyticsMode:",
     reviewEvasionProtection: "reviewEvasionProtection:",
+    draftPrClosePolicy: "draftPrClosePolicy:",
     reviewEvasionLabel: "reviewEvasionLabel:",
     reviewEvasionComment: "reviewEvasionComment:",
     synchronizeClosePolicy: "synchronizeClosePolicy:",
@@ -2954,6 +2955,21 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(invalid.settings.reviewEvasionProtection).toBeUndefined();
     expect(invalid.settings.reviewEvasionLabel).toBeUndefined();
     expect(invalid.warnings.some((w) => /settings\.reviewEvasionProtection/.test(w))).toBe(true);
+  });
+
+  it("parses + resolves draftPrClosePolicy from the settings: block, overlaying the DB (#draft-pr-close-policy)", () => {
+    const manifest = parseFocusManifest({ settings: { draftPrClosePolicy: "close" } });
+    expect(manifest.settings.draftPrClosePolicy).toBe("close");
+    // yml overlays (replaces) the DB-configured value.
+    const eff = resolveEffectiveSettings({ draftPrClosePolicy: "off" } as unknown as RepositorySettings, manifest);
+    expect(eff.draftPrClosePolicy).toBe("close");
+    // Omitted in yml ⇒ the DB-configured value survives untouched.
+    const noOverride = resolveEffectiveSettings({ draftPrClosePolicy: "close" } as unknown as RepositorySettings, parseFocusManifest({}));
+    expect(noOverride.draftPrClosePolicy).toBe("close");
+    // An invalid enum is dropped with a warning rather than silently coerced.
+    const invalid = parseFocusManifest({ settings: { draftPrClosePolicy: "sometimes" as never } });
+    expect(invalid.settings.draftPrClosePolicy).toBeUndefined();
+    expect(invalid.warnings.some((w) => /settings\.draftPrClosePolicy/.test(w))).toBe(true);
   });
 
   describe("reviewCheckMode precedence (#2852)", () => {

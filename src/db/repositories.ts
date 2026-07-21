@@ -758,7 +758,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewEvasionProtection: "close", // #4011/#6443: default-ON, always -- a repo protects itself from self-close/draft-dodge gaming unless it explicitly opts out via .loopover.yml
     reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
     reviewEvasionComment: true,
-    draftPrClosePolicy: normalizeDraftPrClosePolicy(row.draftPrClosePolicy),
+    draftPrClosePolicy: "off", // #6440/#draft-pr-close-policy: config-as-code only now, mirrors reviewEvasionProtection -- .loopover.yml is the only way to turn this on for a repo
     // Config-as-code only (#synchronize-close-policy): no DB column, matching reviewEvasionProtection's
     // pattern above -- only .loopover.yml settings.synchronizeClosePolicy can set this.
     synchronizeClosePolicy: "off",
@@ -901,7 +901,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     reviewEvasionProtection: "close" as const,
     reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
     reviewEvasionComment: true,
-    draftPrClosePolicy: normalizeDraftPrClosePolicy(settings.draftPrClosePolicy),
+    draftPrClosePolicy: "off" as const, // #6440/#draft-pr-close-policy: config-as-code only now -- any caller-supplied value is a silent no-op, configure via .loopover.yml settings.draftPrClosePolicy instead
     mergeTrainMode: "off" as const,
     screenshotTableGate: normalizeScreenshotTableGateConfig(settings.screenshotTableGate, []),
   } satisfies RepositorySettings;
@@ -929,7 +929,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
       staleBaseAheadByThreshold: resolved.staleBaseAheadByThreshold,
       skipAutomationBotAuthors: resolved.skipAutomationBotAuthors,
-      draftPrClosePolicy: resolved.draftPrClosePolicy,
       screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
       screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
       screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
@@ -964,7 +963,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         requireFreshRebaseWindowMinutes: resolved.requireFreshRebaseWindowMinutes,
         staleBaseAheadByThreshold: resolved.staleBaseAheadByThreshold,
         skipAutomationBotAuthors: resolved.skipAutomationBotAuthors,
-        draftPrClosePolicy: resolved.draftPrClosePolicy,
         screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
         screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
         screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
@@ -7887,10 +7885,6 @@ function parseCommandAuthorizationPolicy(value: string): RepositorySettings["com
 
 function parseContributorBlacklist(value: string): RepositorySettings["contributorBlacklist"] {
   return normalizeContributorBlacklist(parseJson<unknown>(value, null)).entries;
-}
-
-function normalizeDraftPrClosePolicy(value: string | null | undefined): "off" | "close" {
-  return value === "close" ? "close" : "off";
 }
 
 // Config-driven before/after screenshot-table gate (#2006): the row stores whenLabels/whenPaths as JSON string

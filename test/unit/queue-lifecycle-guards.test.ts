@@ -2011,12 +2011,13 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       },
       repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
     });
-    // reviewEvasionProtection/reviewEvasionComment (Batch B, loopover#6443) and autoCloseExemptLogins
-    // (loopover#6445) are manifest-only now; pull any test override out of `overrides` before it reaches
-    // the DB write below so a per-test `{ reviewEvasionProtection: "off" }`/`{ reviewEvasionComment: false }`/
-    // `{ autoCloseExemptLogins: [...] }` still takes effect via the manifest overlay instead of being
+    // reviewEvasionProtection/reviewEvasionComment (Batch B, loopover#6443), autoCloseExemptLogins
+    // (loopover#6445), and draftPrClosePolicy (epic #6440, #draft-pr-close-policy) are manifest-only now;
+    // pull any test override out of `overrides` before it reaches the DB write below so a per-test
+    // `{ reviewEvasionProtection: "off" }`/`{ reviewEvasionComment: false }`/`{ autoCloseExemptLogins: [...] }`/
+    // `{ draftPrClosePolicy: "close" }` still takes effect via the manifest overlay instead of being
     // silently outranked by the hardcoded default.
-    const { reviewEvasionProtection, reviewEvasionComment, autoCloseExemptLogins, synchronizeClosePolicy, ...dbOverrides } = overrides;
+    const { reviewEvasionProtection, reviewEvasionComment, autoCloseExemptLogins, draftPrClosePolicy, synchronizeClosePolicy, ...dbOverrides } = overrides;
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autonomy: { close: "auto" },
@@ -2031,6 +2032,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
         reviewEvasionProtection: (reviewEvasionProtection as "off" | "close" | undefined) ?? "close",
         ...(reviewEvasionComment !== undefined ? { reviewEvasionComment: reviewEvasionComment as boolean } : {}),
         ...(autoCloseExemptLogins !== undefined ? { autoCloseExemptLogins: autoCloseExemptLogins as string[] } : {}),
+        ...(draftPrClosePolicy !== undefined ? { draftPrClosePolicy: draftPrClosePolicy as "off" | "close" } : {}),
         // synchronizeClosePolicy (#synchronize-close-policy) is manifest-only too -- pulled out here for the
         // same reason as the three fields above, so a per-test override actually reaches the manifest
         // overlay instead of being silently dropped by the DB write (there is no column for it).

@@ -626,6 +626,7 @@ export type FocusManifestSettings = Partial<
     | "moderationBannedLabel"
     | "fairnessAnalyticsMode"
     | "reviewEvasionProtection"
+    | "draftPrClosePolicy"
     | "reviewEvasionLabel"
     | "reviewEvasionComment"
     | "synchronizeClosePolicy"
@@ -2846,6 +2847,10 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   // own PR while loopover has an active review pass running is dodging the one-shot review.
   const reviewEvasionProtection = normalizeOptionalEnum(r.reviewEvasionProtection, "settings.reviewEvasionProtection", ["off", "close"] as const, warnings);
   if (reviewEvasionProtection !== null) out.reviewEvasionProtection = reviewEvasionProtection;
+  // Draft-PR close policy (#draft-pr-close-policy): distinct from reviewEvasionProtection above -- enforces on
+  // ANY draft immediately, including the very first one, rather than only after a review pass has already run.
+  const draftPrClosePolicy = normalizeOptionalEnum(r.draftPrClosePolicy, "settings.draftPrClosePolicy", ["off", "close"] as const, warnings);
+  if (draftPrClosePolicy !== null) out.draftPrClosePolicy = draftPrClosePolicy;
   // #label-scoping: same load-bearing-null idiom as blacklistLabel above.
   if (r.reviewEvasionLabel === null) {
     out.reviewEvasionLabel = null;

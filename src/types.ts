@@ -1351,8 +1351,10 @@ export type RepositorySettings = {
    *  reviewEvasionProtection's narrower abuse-pattern detection and can catch ordinary WIP-signaling
    *  contributors, so a maintainer should choose it deliberately. Shares `autoCloseExemptLogins` and
    *  `reviewEvasionLabel`/`reviewEvasionComment` with the `reviewEvasionProtection` family (same anti-abuse
-   *  label/comment conventions, no need for separate config). See `queue/review-evasion.ts`'s
-   *  `maybeCloseDraftPr`. */
+   *  label/comment conventions, no need for separate config). Config-as-code only, same epic (#6440) as
+   *  reviewEvasionProtection's own #6443 migration -- `db/repositories.ts`'s `getRepositorySettings`/
+   *  `upsertRepositorySettings` always resolve the hardcoded `"off"` default now; only `.loopover.yml`'s
+   *  `settings.draftPrClosePolicy` can override it. See `queue/review-evasion.ts`'s `maybeCloseDraftPr`. */
   draftPrClosePolicy?: "off" | "close" | undefined;
   /** One-shot synchronize-amendment close policy (#synchronize-close-policy): distinct from {@link
    *  reviewEvasionProtection} and {@link draftPrClosePolicy} above -- those families enforce on closing/

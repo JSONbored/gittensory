@@ -608,6 +608,13 @@ export type RepositorySettings = {
    *  re-closes as the App -- a close the contributor cannot themselves reopen (#one-shot-reopen) -- applies
    *  the configured label/comment, and records a `review_evasion` moderation strike. */
   reviewEvasionProtection?: "off" | "close" | undefined;
+  /** Draft-PR close policy (#draft-pr-close-policy): distinct from {@link reviewEvasionProtection} above --
+   *  that family only enforces AFTER a review has already run against the PR's current head, or on the 2nd+
+   *  ready<->draft conversion. `"close"` enforces on ANY draft, including the very first one opened directly
+   *  as a draft or converted to draft before any review pass runs. `"off"` (the default) is unchanged
+   *  behavior -- unlike reviewEvasionProtection, this is opt-in, not default-on. Shares `autoCloseExemptLogins`
+   *  and `reviewEvasionLabel`/`reviewEvasionComment` with the reviewEvasionProtection family. */
+  draftPrClosePolicy?: "off" | "close" | undefined;
   /** Review-evasion protection: label applied alongside the enforcement close, gated on `close` autonomy
    *  like every other anti-abuse label (#label-scoping), mirroring {@link blacklistLabel}'s shape. `undefined`
    *  ⇒ the `"review-evasion"` default; explicit `null` ⇒ close without any label. */
