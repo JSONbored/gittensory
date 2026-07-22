@@ -146,6 +146,7 @@ export function routeClassForPath(path: string): RateLimitClass {
     // upsert per request.
     /\/(?:ai-(?:key|review)|linear-key)$/.test(path) ||
     /^\/v1\/installations\/[^/]+\/repair\/refresh$/.test(path) ||
+    /^\/v1\/app\/installations\/[^/]+\/repair\/refresh$/.test(path) ||
     path.includes("/upstream/") ||
     path.includes("/internal/jobs/generate-signal-snapshots") ||
     path.includes("/internal/jobs/build-contributor-decision-packs") ||
