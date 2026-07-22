@@ -17,6 +17,7 @@ import {
   setProposalStatuses,
   synthesizeDenyRuleProposals,
 } from "../../packages/loopover-miner/lib/deny-hook-synthesis.js";
+import type { DenyRuleProposal } from "../../packages/loopover-engine/src/miner/deny-hook-synthesis";
 // #7525: normalizeRepoFullName is defined in the engine and re-exported unchanged by the miner-lib module
 // above; import it from the engine source directly so the guard's src branches are the ones exercised.
 import { normalizeRepoFullName } from "../../packages/loopover-engine/src/miner/deny-hook-synthesis";
@@ -127,6 +128,33 @@ describe("resolveEffectiveDenyRules() (#4522)", () => {
     const verdict = evaluateDenyHooks({ name: "Write", input: { file_path: "CHANGELOG.md" } }, effective);
     expect(verdict.allowed).toBe(false);
     expect(verdict.blockedBy?.pathPattern).toBe("**/changelog.md");
+  });
+
+  it("#8013: keeps two rules distinct when they differ only by inputTokenPattern, including two different patterns (not just presence vs. absence)", () => {
+    const proposal = (id: string, inputTokenPattern?: RegExp): DenyRuleProposal => ({
+      id,
+      status: "approved",
+      rule: { matcher: "Bash", inputIncludesAll: ["git"], reason: "test", ...(inputTokenPattern ? { inputTokenPattern } : {}) },
+      audit: { kind: "manual", synthesizedAt: "2026-01-01T00:00:00.000Z" },
+    });
+    const noPattern = proposal("a");
+    const withFollowTags = proposal("b", /^--follow-tags$/);
+    const withF = proposal("c", /^-f$/);
+
+    const effective = resolveEffectiveDenyRules({ includeDefaults: false, approvedProposals: [noPattern, withFollowTags, withF] });
+    // All three must survive -- none of them are "the same rule" as either of the others.
+    expect(effective).toHaveLength(3);
+  });
+
+  it("#8013: still dedupes two rules whose inputTokenPattern has the identical source+flags", () => {
+    const proposal = (id: string): DenyRuleProposal => ({
+      id,
+      status: "approved",
+      rule: { matcher: "Bash", inputIncludesAll: ["git"], reason: "test", inputTokenPattern: /^-f$/ },
+      audit: { kind: "manual", synthesizedAt: "2026-01-01T00:00:00.000Z" },
+    });
+    const effective = resolveEffectiveDenyRules({ includeDefaults: false, approvedProposals: [proposal("a"), proposal("b")] });
+    expect(effective).toHaveLength(1);
   });
 });
 

@@ -130,10 +130,15 @@ export function changedPathToDenyGlob(path: string): string | null {
 }
 
 function ruleSignature(rule: DenyRule): string {
+  // `inputTokenPattern` is a RegExp: JSON.stringify serializes every RegExp instance as "{}" regardless of its
+  // actual source/flags (no enumerable own properties, no toJSON), so two rules with genuinely different
+  // patterns would still collide here if the RegExp object itself were included directly. Serialize `.source`
+  // + `.flags` instead so distinct patterns produce distinct signatures.
   return JSON.stringify({
     matcher: rule.matcher,
     pathPattern: rule.pathPattern ?? null,
     inputIncludesAll: rule.inputIncludesAll ?? null,
+    inputTokenPattern: rule.inputTokenPattern ? { source: rule.inputTokenPattern.source, flags: rule.inputTokenPattern.flags } : null,
     reason: rule.reason,
   });
 }
