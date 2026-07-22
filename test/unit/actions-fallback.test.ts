@@ -505,6 +505,70 @@ describe("fetchFallbackArtifactShots", () => {
     expect(shots.map((s) => s.fileName).sort()).toEqual(["root--desktop.png", "root--mobile.png"]);
   });
 
+  it("finds the target artifact on page 2+ of a multi-page artifacts list (#8014)", async () => {
+    const zip = buildZip([{ name: "root--desktop.png", data: pngBytes("desktop-bytes"), method: 0 }]);
+    const requestedUrls: string[] = [];
+    stubSequence([
+      (input) => {
+        requestedUrls.push(String(input));
+        // Page 1: only decoy artifacts, but a Link header advertising a next page.
+        return Response.json(
+          { artifacts: [{ id: 1, name: "some-other-artifact" }] },
+          { headers: { link: '<https://api.github.com/x?page=2>; rel="next"' } },
+        );
+      },
+      (input) => {
+        requestedUrls.push(String(input));
+        // Page 2: the target artifact -- pre-#8014 this page was never fetched and the shot was lost.
+        return Response.json({ artifacts: [{ id: 99, name: FALLBACK_ARTIFACT_NAME, expired: false, size_in_bytes: 1000 }] });
+      },
+      () => new Response(null, { status: 302, headers: { location: "https://productionresultssa1.blob.core.windows.net/x.zip" } }),
+      () => new Response(zip.buffer as ArrayBuffer, { status: 200 }),
+    ]);
+
+    const shots = await fetchFallbackArtifactShots({ token: "tok", repo: { owner: "acme", repo: "widgets" }, runId: 555 });
+    expect(shots.map((s) => s.fileName)).toEqual(["root--desktop.png"]);
+    // Page 1's request stays byte-identical to the pre-pagination read; page 2 appends the cursor.
+    expect(requestedUrls[0]).not.toContain("&page=");
+    expect(requestedUrls[1]).toContain("&page=2");
+  });
+
+  it("stops at the page bound even when every page advertises a next page (#8014)", async () => {
+    let listCalls = 0;
+    vi.stubGlobal("fetch", async () => {
+      listCalls += 1;
+      return Response.json(
+        { artifacts: [{ id: listCalls, name: "some-other-artifact" }] },
+        { headers: { link: '<https://api.github.com/x?page=next>; rel="next"' } },
+      );
+    });
+
+    const shots = await fetchFallbackArtifactShots({ token: "tok", repo: { owner: "acme", repo: "widgets" }, runId: 1 });
+    expect(shots).toEqual([]);
+    expect(listCalls).toBe(10); // ARTIFACT_LIST_MAX_PAGES -- never an unbounded fetch loop
+  });
+
+  it("does not fetch a second page when the Link header has no rel=\"next\" (#8014)", async () => {
+    let listCalls = 0;
+    vi.stubGlobal("fetch", async () => {
+      listCalls += 1;
+      return Response.json(
+        { artifacts: [{ id: 1, name: "some-other-artifact" }] },
+        { headers: { link: '<https://api.github.com/x?page=1>; rel="prev"' } },
+      );
+    });
+
+    const shots = await fetchFallbackArtifactShots({ token: "tok", repo: { owner: "acme", repo: "widgets" }, runId: 1 });
+    expect(shots).toEqual([]);
+    expect(listCalls).toBe(1);
+  });
+
+  it("returns [] when a list page parses as JSON but has no artifacts array (#8014)", async () => {
+    stubSequence([() => Response.json({})]);
+    const shots = await fetchFallbackArtifactShots({ token: "tok", repo: { owner: "acme", repo: "widgets" }, runId: 1 });
+    expect(shots).toEqual([]);
+  });
+
   it("passes a rateLimitAdmissionKey through to the list-artifacts read without changing the result", async () => {
     stubSequence([() => Response.json({ artifacts: [{ id: 1, name: "some-other-artifact" }] })]);
     const shots = await fetchFallbackArtifactShots({
