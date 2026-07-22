@@ -24,10 +24,15 @@
 // once a repo's merge precision actually drops below the floor over a real sample.
 
 import { recordAuditEvent } from "../db/repositories";
+import { createSignalStore } from "./signal-tracking-wire";
 import { tryEnqueueDecisionPackRebuild } from "../services/decision-pack";
 import { incr } from "../selfhost/metrics";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import type { GitHubWebhookPayload } from "../types";
+import {
+  CONFIGURED_GATE_BLOCKER_SIGNAL_CODES,
+  CONFIGURED_GATE_BLOCKER_SIGNAL_LOOKBACK_MS,
+} from "../rules/advisory";
 import { errorMessage, nowIso } from "../utils/json";
 import {
   applyAutoTune,
@@ -447,6 +452,33 @@ async function hasRecentOwnerReopenPendingReversal(env: Env, targetKey: string, 
   }
 }
 
+// #8104: when a reversal is recorded for a target that any configured-gate-blocker rule (except
+// linked_issue_scope_mismatch — #8101 owns that one) previously fired against, the human undoing of the bot
+// action IS the human judgment on those findings. Fixed 30-day lookback; candidate codes come from
+// CONFIGURED_GATE_BLOCKER_SIGNAL_CODES so the list cannot silently drift from isConfiguredGateBlocker.
+// Callers attach `.catch(() => undefined)`: a SignalStore failure (including a queryRuleHistory read error,
+// which deliberately propagates) must never affect whether the underlying reversal itself is recorded.
+async function recordConfiguredGateBlockerOverrides(env: Env, targetId: string): Promise<void> {
+  const store = createSignalStore(env);
+  const sinceMs = Date.now() - CONFIGURED_GATE_BLOCKER_SIGNAL_LOOKBACK_MS;
+  await Promise.all(
+    CONFIGURED_GATE_BLOCKER_SIGNAL_CODES.map(async (ruleId) => {
+      try {
+        const history = await store.queryRuleHistory(ruleId, sinceMs);
+        if (!history.fired.some((event) => event.targetKey === targetId)) return;
+        await store.recordHumanOverride({
+          ruleId,
+          targetKey: targetId,
+          verdict: "reversed",
+          occurredAt: nowIso(),
+        });
+      } catch {
+        // Fail-open per code: one SignalStore reject must not skip the rest of the candidate list.
+      }
+    }),
+  );
+}
+
 /**
  * Record a REVERSAL — a human overriding a loopover auto-action — into the eval/audit stores (the
  * ground-truth accuracy signal). Mirrors reviewbot recordReversalSignals (runtime.ts ~157/274):
@@ -510,6 +542,7 @@ export async function recordReversalSignals(
       detail: `Bot-closed PR #${pr.number} reopened by a contributor.`,
       metadata: { repoFullName, pullNumber: pr.number },
     }).catch(() => undefined);
+    await recordConfiguredGateBlockerOverrides(env, targetId).catch(() => undefined); // #8104
     return;
   }
 
@@ -533,6 +566,7 @@ export async function recordReversalSignals(
         detail: `Bot-closed PR #${pr.number} reopened and merged by the repo owner.`,
         metadata: { repoFullName, pullNumber: pr.number },
       }).catch(() => undefined);
+      await recordConfiguredGateBlockerOverrides(env, targetId).catch(() => undefined); // #8104
     }
     const reverted = parseRevertedPrNumber(pr.body);
     if (!reverted) return;

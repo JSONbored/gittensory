@@ -37,6 +37,7 @@ import { nowIso } from "../utils/json";
 import { LOOPOVER_GATE_CHECK_NAME } from "../review/check-names";
 import { CLA_CHECK_UNRESOLVED_CODE, CLA_CONSENT_MISSING_CODE } from "../review/cla-check";
 import { REVIEW_THREAD_BLOCKER_CODE } from "../review/review-thread-findings";
+import { createSignalStore } from "../review/signal-tracking-wire";
 import { labelMatchesPattern } from "../scoring/preview";
 
 export type GateCheckConclusion = "success" | "failure" | "action_required" | "neutral" | "skipped";
@@ -163,6 +164,29 @@ export type GateCheckEvaluation = {
 // green-CI refutation path is intentionally disabled, so these still block when `aiReviewGateMode` is `block`.
 // `ai_review_inconclusive` is deliberately EXCLUDED — that is a "could not review" HOLD, not a false defect.
 export const AI_JUDGMENT_BLOCKER_CODES = new Set<string>(["ai_consensus_defect", "ai_review_split"]);
+
+/**
+ * Every finding code `isConfiguredGateBlocker` can return true for, EXCEPT `linked_issue_scope_mismatch`
+ * (#8104). That one code is wired by #8101 at its own upstream push / reversal sites — including it here
+ * would double-count fired/reversed history. Keep this list in sync with `isConfiguredGateBlocker`'s body.
+ */
+export const CONFIGURED_GATE_BLOCKER_SIGNAL_CODES: readonly string[] = Object.freeze([
+  "missing_linked_issue",
+  "duplicate_pr_risk",
+  ...AI_JUDGMENT_BLOCKER_CODES,
+  REVIEW_THREAD_BLOCKER_CODE,
+  "secret_leak",
+  "pre_merge_check_required",
+  "manifest_missing_tests",
+  "manifest_linked_issue_required",
+  "self_authored_linked_issue",
+  "content_lane_deliverable_missing",
+  "lockfile_tamper_risk",
+  CLA_CONSENT_MISSING_CODE,
+]);
+
+/** Fixed lookback for reversal→HumanOverrideEvent pairing (#8104) — 30 days in milliseconds. */
+export const CONFIGURED_GATE_BLOCKER_SIGNAL_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** True when the gate FAILED *solely* because of AI-judgment blockers (every blocker is an AI-judgment code).
  *  An empty blocker list is NOT an AI-judgment-only failure. PURE. */
@@ -612,6 +636,10 @@ function evaluateGateCheckCore(advisoryResult: Advisory, policy: GateCheckPolicy
   // pass/fail. Readiness/quality stays advisory-only.
   const effective = applyMergeReadinessGate(policy);
   const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding, effective));
+  // #8104: every configured blocker except linked_issue_scope_mismatch (#8101) records a RuleFiredEvent in
+  // the shared calibration module. evaluateGateCheckCore stays sync/pure (engine parity twin); the env-bearing
+  // caller awaits {@link recordConfiguredGateBlockerSignals} with the same advisory+policy so this filter and
+  // the recording loop stay in lock-step.
   const qualityWarning = buildQualityGateWarning(effective);
   const slopBlocker = buildSlopGateBlocker(effective);
   const blockers = [...configuredBlockers, ...(slopBlocker ? [slopBlocker] : [])];
@@ -1023,6 +1051,41 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   // Defaults to off (evaluateClaCheck never even runs for an off repo, so the finding does not exist).
   if (code === CLA_CONSENT_MISSING_CODE) return gateMode(policy.claGateMode ?? "off") === "block";
   return false;
+}
+
+/**
+ * Record a {@link RuleFiredEvent} for every finding that `isConfiguredGateBlocker` would put into
+ * `configuredBlockers`, excluding `linked_issue_scope_mismatch` (#8104 / complements #8101). Call from the
+ * env-bearing gate path immediately after {@link evaluateGateCheck} with the SAME advisory + policy so the
+ * filter matches `evaluateGateCheckCore`'s own. Best-effort: a SignalStore failure never throws and never
+ * affects the gate verdict.
+ */
+export async function recordConfiguredGateBlockerSignals(
+  env: Env,
+  advisoryResult: Advisory,
+  policy: GateCheckPolicy,
+  repoFullName: string,
+  prNumber: number,
+): Promise<void> {
+  const effective = applyMergeReadinessGate(policy);
+  const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding, effective));
+  const store = createSignalStore(env);
+  const targetKey = `${repoFullName}#${prNumber}`;
+  const occurredAt = nowIso();
+  await Promise.all(
+    configuredBlockers.map((finding) => {
+      if (finding.code === "linked_issue_scope_mismatch") return Promise.resolve();
+      return store
+        .recordRuleFired({
+          ruleId: finding.code,
+          targetKey,
+          outcome: finding.severity ?? "blocker",
+          occurredAt,
+          ...(finding.confidence !== undefined ? { metadata: { confidence: finding.confidence } } : {}),
+        })
+        .catch(() => undefined);
+    }),
+  );
 }
 
 function buildQualityGateWarning(policy: GateCheckPolicy): AdvisoryFinding | null {
