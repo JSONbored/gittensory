@@ -1090,6 +1090,12 @@ const STDIO_TOOL_DESCRIPTORS = [
       "Return a repo's own persisted focus manifest (.loopover.yml policy) plus its compiled policy. Read-only; maintainer/owner/operator authenticated. Distinct from loopover_validate_config (ad-hoc string validation).",
   },
   {
+    name: "loopover_get_repo_onboarding_pack",
+    category: "maintainer",
+    description:
+      "Preview-only onboarding pack for a repository owner (contribution lanes, label policy, and public-safe guidance). Not published to GitHub. Pass `refresh` to regenerate the preview instead of serving the cached one.",
+  },
+  {
     name: "loopover_get_activation_preview",
     category: "maintainer",
     description: "Return the repo's maintainer activation preview: a deterministic run of the advisory engine over recent PRs (evaluated/with-findings counts, distinct finding codes, per-PR samples, current review-check mode, and the single recommended next action). Maintainer-authenticated; advisory only.",
@@ -1770,6 +1776,26 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver focus manifest.", await apiGet(`${prefix}/focus-manifest`));
+  },
+);
+
+// #7756: stdio mirror of the remote loopover_get_repo_onboarding_pack + the `maintain onboarding-pack` CLI.
+// Thin GET proxy of {repoBase}/onboarding-pack/preview (the same helper the CLI mirror calls); owner/repo
+// resolve from args like the sibling get-repo tools, and bare `refresh: true` forwards ?refresh=true exactly
+// as the CLI does (omit the query otherwise so the server serves the cached preview).
+registerStdioTool(
+  "loopover_get_repo_onboarding_pack",
+  {
+    description: stdioToolDescription("loopover_get_repo_onboarding_pack"),
+    inputSchema: repoOnboardingPackShape,
+  },
+  async ({ owner, repo, refresh }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const query = refresh === true ? "?refresh=true" : "";
+    return toolResult(
+      `LoopOver onboarding pack preview for ${owner}/${repo} (preview-only, not published).`,
+      await apiGet(`${prefix}/onboarding-pack/preview${query}`),
+    );
   },
 );
 
