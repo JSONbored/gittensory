@@ -7,7 +7,7 @@ import {
 } from "../github/backfill";
 import { createInstallationToken, getRepositoryCollaboratorPermission } from "../github/app";
 import { githubRateLimitAdmissionKeyForToken, type GitHubRateLimitAdmissionKey } from "../github/client";
-import { parseGitHubLoginList } from "../auth/security";
+import { isPerRepoAdminModeEnabled, parseGitHubLoginList } from "../auth/security";
 import { errorMessage } from "../utils/json";
 import type { LinkedIssueLabelPropagationMapping } from "../types";
 
@@ -56,7 +56,9 @@ async function isRepoMaintainerLogin(env: Env, installationId: number, repoFullN
   // pattern + rationale in `hasMaintainerOrOwnerPermission`, `src/queue/processors.ts`).
   /* v8 ignore next */
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase() : "";
-  if (login === repoOwner || parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login)) return "maintainer";
+  // #4889: in per-repo admin mode the global allowlist stops granting — the live collaborator check below
+  // is the sole permission source; self-host keeps the allowlist shortcut unchanged.
+  if (login === repoOwner || (!isPerRepoAdminModeEnabled(env) && parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login))) return "maintainer";
   let permission: Awaited<ReturnType<typeof getRepositoryCollaboratorPermission>>;
   try {
     permission = await getRepositoryCollaboratorPermission(env, installationId, repoFullName, login);

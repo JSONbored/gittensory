@@ -21,7 +21,7 @@ import { getRepositoryCollaboratorPermission } from "../github/app";
 import { ensurePullRequestLabel } from "../github/labels";
 import { fetchPullRequestFreshness, pullRequestFreshnessDetail, type PullRequestFreshness } from "../github/pr-freshness";
 import { closePullRequest, createIssueComment, getLastCloserLogin, getLastReopenerLogin, reopenPullRequest } from "../github/pr-actions";
-import { parseGitHubLoginList } from "../auth/security";
+import { isPerRepoAdminModeEnabled, isPerTenantAdmin, parseGitHubLoginList } from "../auth/security";
 import { isAutoCloseExempt } from "../settings/auto-close-exempt";
 import { resolveAutonomy } from "../settings/autonomy";
 import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
@@ -254,7 +254,8 @@ async function closeDraftDodgeAttemptIfBlocked(
   // actuation path's trusted-operator definition.
   const authorIsAdmin =
     draftDodgeAuthorLogin.length > 0 &&
-    parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(draftDodgeAuthorLogin);
+    // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+    (await isPerTenantAdmin(env, installationId, repoFullName, draftDodgeAuthorLogin));
   if (
     block &&
     block.headSha === pr.headSha &&
@@ -369,7 +370,11 @@ async function recloseDisallowedReopenIfNeeded(
   const repoOwner = repoFullName.includes("/")
     ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase()
     : "";
-  const admins = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS); // unified parse: whitespace OR comma (#audit-3.13)
+  // #4889: in per-repo admin mode the global allowlist stops granting — the live collaborator check below
+  // (admin/maintain/write) is the sole permission source; self-host keeps the allowlist shortcut unchanged.
+  const admins = isPerRepoAdminModeEnabled(env)
+    ? new Set<string>()
+    : parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS); // unified parse: whitespace OR comma (#audit-3.13)
   const hasMaintainerPermission = async (login: string): Promise<boolean> => {
     if (login === repoOwner || admins.has(login)) return true;
     const permission = await getRepositoryCollaboratorPermission(
@@ -549,7 +554,9 @@ async function hasMaintainerOrOwnerPermission(env: Env, installationId: number, 
   // repository match on that exact format before any review-evasion handler runs.
   /* v8 ignore next */
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")).toLowerCase() : "";
-  if (login === repoOwner || parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login)) return true;
+  // #4889: in per-repo admin mode the global allowlist stops granting — the live collaborator check below
+  // is the sole permission source; self-host keeps the allowlist shortcut unchanged.
+  if (login === repoOwner || (!isPerRepoAdminModeEnabled(env) && parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login))) return true;
   const permission = await getRepositoryCollaboratorPermission(env, installationId, repoFullName, login).catch(() => null);
   return permission === "admin" || permission === "maintain" || permission === "write";
 }

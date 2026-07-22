@@ -218,7 +218,8 @@ import {
   preparePrPacketWithAgent,
 } from "../services/agent-orchestrator";
 import {
-  isAuthorizedGitHubSessionLogin,
+  isPerRepoAdminModeEnabled,
+  isPerTenantAdmin,
   parseGitHubLoginList,
 } from "../auth/security";
 import {
@@ -2687,7 +2688,8 @@ async function maybeCloseForContributorCapOnOpen(
    * repoFullName.split("/")[0] is never undefined for any non-empty repoFullName (every real caller's). */
   const repoOwner = repoFullName.split("/")[0] ?? "";
   const authorIsOwner = pr.authorLogin.toLowerCase() === repoOwner.toLowerCase();
-  const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(pr.authorLogin.toLowerCase());
+  // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+  const authorIsAdmin = await isPerTenantAdmin(env, installationId, repoFullName, pr.authorLogin);
   const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
   if (authorIsOwner || authorIsAdmin || authorIsAutomationBot) return false;
   // #ignore-authors-parity: a manifest ignore_authors match (e.g. "release-please*") means the bot treats
@@ -2937,7 +2939,8 @@ async function runAgentMaintenancePlanAndExecute(
   // admin login (not the literal repo owner) gets the identical never-auto-closed exemption everywhere.
   const authorIsAdmin =
     authorLogin.length > 0 &&
-    parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
+    // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+    (await isPerTenantAdmin(env, installationId, repoFullName, authorLogin));
   const authorIsAutomationBot = isProtectedAutomationAuthor(pr.authorLogin);
 
   // Linked-issue HARD-RULE close (#linked-issue-hard-rules): when the repo enabled any rule, a body that links
@@ -5351,7 +5354,8 @@ async function maybeCloseIssueOverContributorCap(
 
   const repoOwner = repoOwnerLoginFromFullName(repoFullName);
   const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
-  const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
+  // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+  const authorIsAdmin = await isPerTenantAdmin(env, args.installationId, repoFullName, authorLogin);
   const authorIsAutomationBot = isProtectedAutomationAuthor(authorLogin);
   if (authorIsOwner || authorIsAdmin || authorIsAutomationBot) return;
 
@@ -6606,7 +6610,8 @@ async function handleIssueWebhookEvent(
       const repoOwner = repoOwnerLoginFromFullName(payload.repository.full_name);
       const authorLogin = issue.authorLogin;
       const authorIsOwner = authorLogin.toLowerCase() === repoOwner.toLowerCase();
-      const authorIsAdmin = parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(authorLogin.toLowerCase());
+      // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+      const authorIsAdmin = await isPerTenantAdmin(env, installationId, payload.repository.full_name, authorLogin);
       const authorIsAutomationBot = isProtectedAutomationAuthor(authorLogin);
       const accountAgeThresholdDays = issueSettings.accountAgeThresholdDays;
       if (
@@ -7947,7 +7952,14 @@ async function maybePostVisualFollowupComment(
     const visualConfig = await resolveVisualCaptureConfig(env, repoFullName);
     if (!visualConfig.bugAnalysis) return;
     const { owner } = repoParts(repoFullName);
-    const notifyLogins = resolveVisualFollowupNotifyLogins(visualConfig.bugAnalysisNotify, owner, parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS));
+    // #4889: live per-repo permissions cannot be ENUMERATED (the API answers per-login queries only), so in
+    // per-repo admin mode the notify set carries no allowlist contribution — the repo owner + the repo's own
+    // configured bugAnalysisNotify list remain the notify surface.
+    const notifyLogins = resolveVisualFollowupNotifyLogins(
+      visualConfig.bugAnalysisNotify,
+      owner,
+      isPerRepoAdminModeEnabled(env) ? new Set<string>() : parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS),
+    );
     const body = buildVisualFollowupComment(priorAdvisory.findings, notifyLogins);
     if (!body) return;
     await createOrUpdateVisualFollowupComment(env, installationId, repoFullName, pullNumber, body);
@@ -9491,7 +9503,8 @@ async function maybePublishPrPublicSurface(
     const authorIsExemptFromFreeze =
       author !== null &&
       (author.toLowerCase() === repoOwnerLoginFromFullName(repoFullName).toLowerCase() ||
-        parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(author.toLowerCase()) ||
+        // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+        (await isPerTenantAdmin(env, installationId, repoFullName, author)) ||
         isProtectedAutomationAuthor(author));
     const isFrozenForManualReview =
       webhook.forceAiReview !== true &&
@@ -13058,7 +13071,8 @@ async function maybeThrottleReviewNagPing(
   // malformed/synthetic payload from ever matching an empty commenter login as "the owner".
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
   if (commenter.toLowerCase() === repoOwner.toLowerCase()) return false;
-  if (parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(commenter.toLowerCase())) return false;
+  // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+  if (await isPerTenantAdmin(env, installationId, repoFullName, commenter)) return false;
   // NOTE: no separate isProtectedAutomationAuthor(commenter) check here — every entry in that set (e.g.
   // "dependabot[bot]") already ends in "[bot]" and was rejected by the bot-suffix guard above, so it would be
   // unreachable dead code at this point (unlike the PR-webhook maintenance path, which checks a PR's stored
@@ -13244,7 +13258,8 @@ async function maybeThrottleMonitoredMentions(
 
   const repoOwner = repoFullName.includes("/") ? repoFullName.slice(0, repoFullName.indexOf("/")) : "";
   if (commenter.toLowerCase() === repoOwner.toLowerCase()) return false;
-  if (parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(commenter.toLowerCase())) return false;
+  // #4889: per-repo admin mode swaps the global-allowlist grant for the live per-repo permission.
+  if (await isPerTenantAdmin(env, installationId, repoFullName, commenter)) return false;
   if (isAutoCloseExempt(commenter, settings.autoCloseExemptLogins)) return false;
 
   const mentionedLogin = monitoredLogins.find((login) => bodyMentionsLogin(body, login));
@@ -14331,7 +14346,8 @@ async function maybeProcessAgentCommandFeedbackReaction(
           deliveryId,
         })
       : undefined;
-  const authorization = authorizeFeedbackActor(env, {
+  const authorization = await authorizeFeedbackActor(env, {
+    installationId: getInstallationId(payload),
     actor,
     repoFullName,
     pullRequestAuthor,
@@ -14388,15 +14404,16 @@ function reactionVote(
   return null;
 }
 
-function authorizeFeedbackActor(
+async function authorizeFeedbackActor(
   env: Env,
   args: {
     actor: string;
     repoFullName: string;
+    installationId: number | null;
     pullRequestAuthor?: string | null | undefined;
     officialAuthorDetection?: OfficialGittensorMinerDetection | undefined;
   },
-): { authorized: boolean; reason: string; actorKind: "maintainer" | "author" } {
+): Promise<{ authorized: boolean; reason: string; actorKind: "maintainer" | "author" }> {
   const [owner] = args.repoFullName.split("/");
   if (owner && owner.toLowerCase() === args.actor.toLowerCase()) {
     return {
@@ -14405,7 +14422,8 @@ function authorizeFeedbackActor(
       actorKind: "maintainer",
     };
   }
-  if (isAuthorizedGitHubSessionLogin(env, args.actor)) {
+  // #4889: per-repo admin mode swaps the global-allowlist operator grant for the live per-repo permission.
+  if (await isPerTenantAdmin(env, args.installationId, args.repoFullName, args.actor)) {
     return {
       authorized: true,
       reason: "operator_feedback",

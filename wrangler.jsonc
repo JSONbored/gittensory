@@ -96,6 +96,7 @@
     // aggregate. Read-only observability; the auto-tune/config-mutation self-improve loop is NOT wired here.
     // Default OFF — flag-OFF the cron enqueues no ops job and the endpoint 404s, byte-identical to today.
     "LOOPOVER_REVIEW_OPS": "false",
+    "LOOPOVER_PER_REPO_ADMIN": "false",
     // Self-heal (#audit-sweep-fanout-isolation follow-up): an hourly watchdog over the SAME acting-autonomy repo
     // set the scheduled regate sweep covers — a repo with open PRs whose last-regated marker hasn't advanced in
     // over the staleness window gets a structured `sweep_liveness_stale` log (Sentry-visible) AND a single

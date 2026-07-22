@@ -381,6 +381,11 @@ declare global {
      *  byte-identical to today. NOTE: this is read-only OBSERVABILITY only; the auto-tune / config-mutation
      *  self-improve loop (src/review/auto-apply.ts) is deliberately NOT wired here — see ops-wire.ts. */
     LOOPOVER_REVIEW_OPS?: string;
+    /** #4889 hosted per-repo admin mode: when truthy, the global ADMIN_GITHUB_LOGINS allowlist stops granting
+     *  fleet-wide maintainer trust at the review/queue exemption sites — each consults GitHub's real-time
+     *  per-repo collaborator permission instead (isPerTenantAdmin, src/auth/security.ts), failing CLOSED on
+     *  any API error. Default OFF — unset/false keeps self-host's global-allowlist behavior byte-identical. */
+    LOOPOVER_PER_REPO_ADMIN?: string;
     /** Self-heal: when truthy, an hourly watchdog scans the SAME acting-autonomy repo set the scheduled regate
      *  sweep covers for a repo whose sweep marker hasn't advanced despite having open PRs to regate, emits a
      *  structured `sweep_liveness_stale` log (Sentry-visible), and re-enqueues a targeted `agent-regate-sweep`

@@ -674,6 +674,31 @@ describe("fetchLinkedIssueLabelsForPropagation (#priority-linked-issue-gate)", (
       expectPropagation(result, ["gittensor:feature"]);
     });
 
+    it("stops trusting the global allowlist in per-repo admin mode (#4889): a fleet-operator author with only read access no longer propagates", async () => {
+      stubFetch((url) => {
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.endsWith("/issues/11"))
+          return Response.json({ number: 11, state: "open", user: { login: "fleetop" }, assignees: [], labels: ["gittensor:feature"] });
+        // The live per-repo answer now decides where the allowlist used to shortcut.
+        if (url.includes("/collaborators/fleetop/permission")) return Response.json({ permission: "read" });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({
+        ADMIN_GITHUB_LOGINS: "fleetop",
+        LOOPOVER_PER_REPO_ADMIN: "true",
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+      });
+      const result = await fetchLinkedIssueLabelsForPropagation({
+        env,
+        repoFullName: "owner/repo",
+        linkedIssues: [11],
+        installationId: 123,
+        prAuthorLogin: "contrib",
+        mappings: RELAXABLE_MAPPINGS,
+      });
+      expectPropagation(result, []);
+    });
+
     it("propagates a relaxable label from an issue authored by a live write-collaborator (not the owner, not in the admin allowlist)", async () => {
       stubFetch((url) => {
         if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });

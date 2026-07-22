@@ -136,6 +136,63 @@ export function isAuthorizedGitHubSessionLogin(env: Env, login: string): boolean
   return allowedLogins.has(login.toLowerCase());
 }
 
+/** #4889 hosted per-repo admin mode. When ON, the global ADMIN_GITHUB_LOGINS allowlist stops granting
+ *  fleet-wide maintainer trust at the review/queue exemption sites — each consults the live per-repo GitHub
+ *  permission instead ({@link isPerTenantAdmin}). OFF (the default) keeps self-host's existing
+ *  global-allowlist behavior byte-identical. Truthy convention matches isOpsEnabled (ops-wire.ts). */
+export function isPerRepoAdminModeEnabled(env: { LOOPOVER_PER_REPO_ADMIN?: string | undefined }): boolean {
+  return /^(1|true|yes|on)$/i.test((env.LOOPOVER_PER_REPO_ADMIN ?? "").trim());
+}
+
+/** Injectable seam for {@link isPerTenantAdmin}'s live lookup (tests; production callers omit it). Matches
+ *  getRepositoryCollaboratorPermission's shape (src/github/app.ts). */
+export type PerTenantAdminPermissionFetch = (
+  env: Env,
+  installationId: number,
+  repoFullName: string,
+  login: string,
+) => Promise<string | null>;
+
+/**
+ * #4889: whether `login` holds admin trust for THIS repo — the hosted replacement for a bare
+ * `parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(login)` at the exemption sites.
+ *
+ * - Per-repo admin mode OFF (self-host default): exact ADMIN_GITHUB_LOGINS membership, unchanged semantics.
+ * - Mode ON (hosted): GitHub's real-time collaborator permission on `repoFullName` — `admin`/`maintain`
+ *   passes, anything else denies. Fail-CLOSED: no installation to ask through, a lookup error, or an
+ *   unknown collaborator all deny — an API blip must never silently grant fleet-operator trust (#4889's
+ *   explicit safety guardrail). The repo-owner shortcut stays at the call sites (it predates and is
+ *   independent of the allowlist this replaces).
+ */
+export async function isPerTenantAdmin(
+  env: Env,
+  installationId: number | null,
+  repoFullName: string,
+  login: string,
+  getPermission?: PerTenantAdminPermissionFetch,
+): Promise<boolean> {
+  const normalized = login.trim().toLowerCase();
+  if (!normalized) return false;
+  if (!isPerRepoAdminModeEnabled(env)) return parseGitHubLoginList(env.ADMIN_GITHUB_LOGINS).has(normalized);
+  if (installationId === null) return false;
+  let permission: string | null;
+  try {
+    const fetchPermission = getPermission ?? (await import("../github/app")).getRepositoryCollaboratorPermission;
+    permission = await fetchPermission(env, installationId, repoFullName, normalized);
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        event: "per_tenant_admin_check_failed",
+        repoFullName,
+        login: normalized,
+        message: error instanceof Error ? error.message.slice(0, 150) : String(error).slice(0, 150),
+      }),
+    );
+    return false;
+  }
+  return permission === "admin" || permission === "maintain";
+}
+
 /** Parse a GitHub-login allowlist env (e.g. ADMIN_GITHUB_LOGINS) into a lowercased Set. Splits on whitespace OR
  *  commas so every caller agrees on the same parse (#audit-3.13). */
 export function parseGitHubLoginList(value: string | undefined): Set<string> {

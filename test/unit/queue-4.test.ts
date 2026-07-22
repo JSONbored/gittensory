@@ -3987,6 +3987,80 @@ describe("queue processors", () => {
     expect(followupCommentBody).toContain("<!-- loopover:visual-unrelated-followup -->");
   });
 
+  // #4889: the follow-up's notify set draws on ADMIN_GITHUB_LOGINS only outside per-repo admin mode. Live
+  // per-repo permissions cannot be ENUMERATED (the API answers per-login queries only), so in per-repo admin
+  // mode the allowlist contributes nothing — the owner (and any configured bug_analysis_notify list) remains
+  // the notify surface.
+  it.each([
+    ["off", undefined, true],
+    ["on", "true", false],
+  ] as const)(
+    "visual follow-up notify set: per-repo admin mode %s — fleet-operator allowlist mention expected=%s (#4889)",
+    async (_label, perRepoAdmin, expectFleetOpMention) => {
+      const env = createTestEnv({
+        GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
+        LOOPOVER_REVIEW_SCREENSHOTS: "true",
+        ADMIN_GITHUB_LOGINS: "fleetop",
+        ...(perRepoAdmin !== undefined ? { LOOPOVER_PER_REPO_ADMIN: perRepoAdmin } : {}),
+      });
+      await persistRegistrySnapshot(
+        asCloudEnv(env),
+        normalizeRegistryPayload(
+          { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+          { kind: "raw-github", url: "https://example.test" },
+          "2026-05-23T00:00:00.000Z",
+        ),
+      );
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autoLabelEnabled: false, autonomy: { update_branch: "auto" } });
+      await persistAdvisory(env, {
+        id: crypto.randomUUID(),
+        targetType: "pull_request",
+        targetKey: "JSONbored/gittensory#45",
+        repoFullName: "JSONbored/gittensory",
+        pullNumber: 45,
+        headSha: "closed125",
+        conclusion: "neutral",
+        severity: "warning",
+        title: "LoopOver advisory available",
+        summary: "1 advisory finding generated.",
+        findings: [{ code: "visual_unrelated_issue_finding", severity: "warning", title: "Possible unrelated visual issue: /footer", detail: "Notify-set fixture." }],
+        generatedAt: "2026-05-23T00:00:00.000Z",
+      });
+      let followupCommentBody = "";
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url === "https://raw.githubusercontent.com/JSONbored/gittensory/HEAD/.loopover.yml") {
+          return new Response("review:\n  visual:\n    bug_analysis: true\n");
+        }
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token", expires_at: "2026-05-28T00:04:00.000Z" });
+        if (url.includes("/issues/45/comments") && method === "GET") return Response.json([]);
+        if (url.includes("/issues/45/comments") && method === "POST") {
+          followupCommentBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+          return Response.json({ id: 910, html_url: "https://github.com/comment/910" }, { status: 201 });
+        }
+        if (url.includes("/check-runs") && method === "GET") return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 902 }, { status: 201 });
+        return new Response("not found", { status: 404 });
+      });
+
+      await processJob(env, {
+        type: "github-webhook",
+        deliveryId: `pr-visual-followup-notify-${perRepoAdmin ?? "unset"}`,
+        eventName: "pull_request",
+        payload: {
+          action: "closed",
+          installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+          repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+          pull_request: { number: 45, title: "Footer tweak", state: "closed", user: { login: "contributor" }, head: { sha: "closed125" }, labels: [], body: "Fixes #1" },
+        },
+      });
+
+      expect(followupCommentBody).toContain("@jsonbored");
+      expect(followupCommentBody.includes("@fleetop")).toBe(expectFleetOpMention);
+    },
+  );
+
   it("does NOT post a follow-up comment on close when review.visual.bugAnalysis is off, even with a recorded unrelated finding (stale from before the operator turned it off)", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_SCREENSHOTS: "true" });
     await persistRegistrySnapshot(
