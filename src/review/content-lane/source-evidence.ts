@@ -162,7 +162,23 @@ function parseSimpleFrontmatter(source: string): Record<string, string> {
         i += 1;
       }
       fields[key] = block.join(inline.startsWith(">") ? " " : "\n").trim();
-    } else if (inline !== "") {
+    } else if (inline === "") {
+      // Block/flow sequence (or nested map) on the following indented lines: gather each `- item` so a
+      // scalar-only field authored as a YAML sequence is still captured, matching duplicates.ts's parser
+      // (#8016; this branch existed only there, so such a field was invisible to the source-evidence gate).
+      const items: string[] = [];
+      // `lines[i]` is bounded by the `i < lines.length` loop guard; the `?? ""` is an unreachable
+      // noUncheckedIndexedAccess fallback (same guard as the block-scalar loop above).
+      /* v8 ignore next */
+      while (i < lines.length && /^\s/.test(lines[i] ?? "") && (lines[i] ?? "").trim() !== "") {
+        // `lines[i]` reuses the same in-bounds index already validated by `/^\s/.test` above; `?? ""`
+        // cannot fire (unreachable noUncheckedIndexedAccess fallback).
+        /* v8 ignore next */
+        items.push((lines[i] ?? "").replace(/^\s*-\s*/, "").trim());
+        i += 1;
+      }
+      fields[key] = items.join(", ");
+    } else {
       fields[key] = unquoteYamlScalar(inline);
     }
   }
