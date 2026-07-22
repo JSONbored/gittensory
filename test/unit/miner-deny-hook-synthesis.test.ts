@@ -128,6 +128,31 @@ describe("resolveEffectiveDenyRules() (#4522)", () => {
     expect(verdict.allowed).toBe(false);
     expect(verdict.blockedBy?.pathPattern).toBe("**/changelog.md");
   });
+
+  // #8013: ruleSignature (the identity function resolveEffectiveDenyRules dedupes with) used to omit
+  // inputTokenPattern entirely, so two rules identical in every OTHER field but a different inputTokenPattern
+  // collapsed onto the same signature and the second was silently dropped as a "duplicate".
+  it("does NOT dedupe two approved rules that differ only by inputTokenPattern (#8013)", () => {
+    const now = new Date(0).toISOString();
+    const baseProposal = (inputTokenPattern: RegExp, id: string) => ({
+      id,
+      status: "approved" as const,
+      rule: { matcher: "*", inputIncludesAll: ["push"], inputTokenPattern, reason: "custom force-push guard" },
+      audit: { kind: "manual", synthesizedAt: now },
+    });
+    const approved = [
+      baseProposal(/^-[a-z]*f[a-z]*$/i, "custom:1"),
+      baseProposal(/^--force$/i, "custom:2"),
+    ];
+    const effective = resolveEffectiveDenyRules({ approvedProposals: approved });
+    // Both survive: a real bug here collapses the second one away, leaving only DEFAULT_DENY_RULES.length + 1.
+    expect(effective.length).toBe(DEFAULT_DENY_RULES.length + 2);
+    // And each one's OWN pattern is still the one that's actually enforced (not silently replaced by the other).
+    const longFlagVerdict = evaluateDenyHooks({ name: "Bash", input: { command: "git push --force" } }, effective);
+    expect(longFlagVerdict.allowed).toBe(false);
+    const shortFlagVerdict = evaluateDenyHooks({ name: "Bash", input: { command: "git push -f" } }, effective);
+    expect(shortFlagVerdict.allowed).toBe(false);
+  });
 });
 
 describe("initDenyHookSynthesisStore() (#4522)", () => {

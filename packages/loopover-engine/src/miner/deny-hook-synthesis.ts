@@ -134,6 +134,11 @@ function ruleSignature(rule: DenyRule): string {
     matcher: rule.matcher,
     pathPattern: rule.pathPattern ?? null,
     inputIncludesAll: rule.inputIncludesAll ?? null,
+    // RegExp doesn't survive JSON.stringify (it serializes to `{}`), so two rules differing only by
+    // inputTokenPattern would otherwise collapse to the same signature. .toString() (e.g. "/^-[a-z]*f[a-z]*$/i")
+    // captures both source and flags, matching this function's own "identical = same effective match behavior"
+    // contract for the other optional fields.
+    inputTokenPattern: rule.inputTokenPattern ? rule.inputTokenPattern.toString() : null,
     reason: rule.reason,
   });
 }
