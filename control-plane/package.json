@@ -30,5 +30,8 @@
     "prettier": "3.9.4",
     "typescript": "^5.9.3",
     "wrangler": "^4.112.0"
+  },
+  "overrides": {
+    "sharp": "^0.35.0"
   }
 }

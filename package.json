@@ -179,6 +179,9 @@
     "tar": "^7.5.19",
     "js-yaml": "^4.3.0",
     "adm-zip": "^0.6.0",
+    "fast-uri": "^3.1.4",
+    "@hono/node-server": "^2.0.8",
+    "sharp": "^0.35.0",
     "lovable-tagger@1.2.0": {
       "esbuild": "^0.28.1"
     },
