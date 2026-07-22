@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { buildOpenApiSpec } from "../../src/openapi/spec";
 
 // @ts-expect-error The extension runtime files are plain MV3 JavaScript, intentionally unbundled.
 import * as extensionAuth from "../../apps/loopover-extension/auth.js";
@@ -146,3 +148,17 @@ function fakeStorageArea(seed: Record<string, unknown> = {}) {
     },
   };
 }
+
+// Extension ↔ backend drift guard (#8023): auth.js hard-codes the backend paths it fetches.
+// Pin them to the served API contract so a route rename breaks this suite instead of installed
+// extensions. Executing buildOpenApiSpec also gives scoped CI shards graded src/** coverage.
+describe("extension auth ↔ backend contract parity (#8023)", () => {
+  it("every endpoint auth.js fetches is served by the backend contract", () => {
+    const authSource = readFileSync("apps/loopover-extension/auth.js", "utf8");
+    const spec = buildOpenApiSpec();
+    for (const path of ["/v1/extension/pull-context", "/v1/auth/logout"]) {
+      expect(authSource).toContain(`"${path}"`);
+      expect(spec.paths[path]).toBeDefined();
+    }
+  });
+});

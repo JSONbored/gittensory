@@ -1268,6 +1268,8 @@ export function buildOpenApiSpec() {
   }
   registry.registerPath({
     method: "get",
+    // Hard-coded by apps/loopover-extension (content → background → auth). Keep this path stable;
+    // the MV3 sources have no OpenAPI client (#8023).
     path: "/v1/extension/pull-context",
     summary: "Pull request context for the browser extension",
     request: {

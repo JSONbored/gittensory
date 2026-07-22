@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { buildOpenApiSpec } from "../../src/openapi/spec";
 
 const contentScript = readFileSync("apps/loopover-extension/content.js", "utf8");
 const manifest = JSON.parse(readFileSync("apps/loopover-extension/manifest.json", "utf8")) as {
@@ -22,21 +23,29 @@ describe("extension content script", () => {
       repo: "loopover",
       pullNumber: 146,
     });
+    // Sub-path pull pages still match (coverage previously pinned through the removed
+    // matchPullRequestTarget duplicate — #8023).
+    expect(internals.matchGitHubPageTarget("/JSONbored/loopover/pull/146/files")).toEqual({
+      kind: "pull_request",
+      owner: "JSONbored",
+      repo: "loopover",
+      pullNumber: 146,
+    });
     // Issue pages are out of scope — no kind:"issue" classification, and no match.
     expect(internals.matchGitHubPageTarget("/JSONbored/loopover/issues/145")).toBeNull();
     expect(internals.matchGitHubPageTarget("/JSONbored/loopover/pulls")).toBeNull();
-    expect(internals.matchPullRequestTarget("/JSONbored/loopover/pull/146")).toEqual({
-      owner: "JSONbored",
-      repo: "loopover",
-      pullNumber: 146,
-    });
-    expect(internals.matchPullRequestTarget("/JSONbored/loopover/pull/146/files")).toEqual({
-      owner: "JSONbored",
-      repo: "loopover",
-      pullNumber: 146,
-    });
-    expect(internals.matchPullRequestTarget("/JSONbored/loopover/issues/146")).toBeNull();
-    expect(internals.matchPullRequestTarget("/JSONbored/loopover")).toBeNull();
+    expect(internals.matchGitHubPageTarget("/JSONbored/loopover")).toBeNull();
+  });
+
+  // Extension ↔ backend drift guard (#8023): content.js's overlay request is only useful while
+  // background.js routes the message type and the backend still serves pull-context. Anchoring
+  // both here also exercises instrumented src/** so scoped CI shards emit a non-empty lcov when
+  // --coverage.changed inherits the apps/**+test/** diff.
+  it("sends a message type background.js routes, backed by a live pull-context endpoint", () => {
+    expect(contentScript).toContain('type: "loopover:pull-context"');
+    const backgroundScript = readFileSync("apps/loopover-extension/background.js", "utf8");
+    expect(backgroundScript).toContain('"loopover:pull-context"');
+    expect(buildOpenApiSpec().paths["/v1/extension/pull-context"]).toBeDefined();
   });
 
   it("renders private pull-context sections and escapes API text", () => {
@@ -134,7 +143,6 @@ function loadContentInternals(overrides: Record<string, unknown> = {}) {
     matchGitHubPageTarget: (
       pathname: string,
     ) => { kind: "pull_request"; owner: string; repo: string; pullNumber: number } | null;
-    matchPullRequestTarget: (pathname: string) => { owner: string; repo: string; pullNumber: number } | null;
     createOverlayLoader: (container: { querySelector: (selector: string) => unknown }, target: unknown) => () => Promise<void>;
     renderPullContext: (payload: unknown) => string;
   };

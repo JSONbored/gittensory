@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { buildOpenApiSpec } from "../../src/openapi/spec";
 
 // background.js statically imports its two handlers from ./auth.js. The vm `Script` runner cannot
 // execute a top-level ESM `import`, so we strip that line and inject stubbed handlers as context
@@ -167,3 +168,16 @@ function loadBackground(handlers: {
     throw new Error("background.js did not register an onMessage listener");
   return { listener };
 }
+
+// Extension ↔ backend drift guard (#8023): the message types background.js routes resolve to
+// real backend capabilities. Pin those endpoints to the served API contract. Executing
+// buildOpenApiSpec also gives scoped CI shards graded src/** coverage.
+describe("extension background ↔ backend contract parity (#8023)", () => {
+  it("both routed message types are backed by served endpoints", () => {
+    expect(backgroundSource).toContain('"loopover:pull-context"');
+    expect(backgroundSource).toContain('"loopover:logout"');
+    const spec = buildOpenApiSpec();
+    expect(spec.paths["/v1/extension/pull-context"]).toBeDefined();
+    expect(spec.paths["/v1/auth/logout"]).toBeDefined();
+  });
+});
