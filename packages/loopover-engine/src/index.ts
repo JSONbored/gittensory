@@ -164,6 +164,7 @@ export * from "./governor/action-mode.js";
 export * from "./governor/chokepoint.js";
 export * from "./calibration/signal-tracking.js";
 export * from "./calibration/backtest-corpus.js";
+export * from "./calibration/backtest-score.js";
 export {
   GOVERNOR_LEDGER_EVENT_TYPES,
   normalizeGovernorLedgerEvent,
