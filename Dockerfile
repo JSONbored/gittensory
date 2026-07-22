@@ -75,7 +75,14 @@ RUN if [ "$INSTALL_VISUAL_REVIEW" = "true" ]; then npm install puppeteer-core@22
 # is safe here: sharp's own platform binary ships as an npm `optionalDependencies` entry
 # (@img/sharp-<platform>-<arch>) that npm's normal os/cpu-matched install resolves on its own, not via
 # sharp's postinstall script.
-RUN npm install sharp@0.34.5 --ignore-scripts
+# UNVERSIONED deliberately (#8112): an explicit `sharp@<version>` here — even one that matches package.json's
+# own `overrides.sharp` entry exactly — makes npm refuse with EOVERRIDE ("Override for sharp@X conflicts with
+# direct dependency"), since an explicit CLI version and an `overrides` entry for the SAME package are treated
+# as two competing authorities npm won't silently pick between. Letting npm resolve from `overrides` (the
+# repo's actual source of truth for this version, kept in sync by Dependabot/Renovate) is what a hardcoded pin
+# here can never be — this broke the release pipeline (#8112) exactly when `overrides.sharp` moved to ^0.35.0
+# and this line's own pin didn't move with it.
+RUN npm install sharp --ignore-scripts
 # Data dir (the SQLite file) — owned by the unprivileged node user; mount a volume here to persist.
 RUN mkdir -p /data && chown -R node:node /data /app
 # Expose the optional user-installed CLIs only after all root build steps have completed, so a
