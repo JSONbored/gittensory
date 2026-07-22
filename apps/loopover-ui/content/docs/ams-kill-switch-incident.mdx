@@ -39,7 +39,11 @@ nothing should hold a stale lock.
 
 ## 1. Detection
 
-Flag a misbehaving loop from any of:
+Since #7666, a kill-switch **trip** (not a resume) also pages PagerDuty automatically — the same
+opt-in `LOOPOVER_ENABLE_PAGERDUTY` / `PAGERDUTY_ROUTING_KEY` contract as ORB's own alerting
+(`src/services/notify-pagerduty.ts`) — so the operator "on the page" below no longer has to already
+be watching a dashboard to notice the halt. Absent that, or as a second signal, flag a misbehaving
+loop from any of:
 
 1. Direct observation — destructive/off-scope file changes, a PR touching the wrong surface, repeated nonsensical commits.
 2. Soft-claim inventory — confirm what is in flight before you act:

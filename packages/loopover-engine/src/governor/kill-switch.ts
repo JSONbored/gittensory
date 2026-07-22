@@ -73,3 +73,51 @@ export function buildMinerKillSwitchTransitionGovernorLedgerEvent(input: {
     payload: { previousScope: input.previousScope, scope: input.scope },
   };
 }
+
+/** Same literal set as ORB's hosted `PagerDutySeverity` (`src/services/notify-pagerduty.ts`) — kept as a local
+ *  literal union rather than importing that module, since it lives in the main app, not this shared package. */
+export type MinerKillSwitchPagerDutySeverity = "critical" | "error" | "warning" | "info";
+
+/** Pure PagerDuty alert payload for a kill-switch TRIP (#7666). Never built for a resume — clearing a halt is
+ *  relief, not an incident. */
+export type MinerKillSwitchPagerDutyAlert = {
+  repoFullName: string | null;
+  scope: MinerKillSwitchScope;
+  actionClass: string;
+  summary: string;
+  severity: MinerKillSwitchPagerDutySeverity;
+  dedupKey: string;
+  customDetails: Record<string, unknown>;
+};
+
+/**
+ * Build the PagerDuty alert payload for a kill-switch TRIP transition (#7666) — the paging counterpart to
+ * {@link buildMinerKillSwitchTransitionGovernorLedgerEvent}, sharing its exact "no-op unless the scope actually
+ * changed" gate, but narrower: it additionally returns `null` on a transition INTO `"none"` (a resume), since
+ * paging on "the halt cleared" would be noise, not an incident that needs a human. DETECTOR ONLY — no IO, same
+ * as this whole module: `packages/loopover-miner/lib/governor-kill-switch.ts` performs the actual PagerDuty
+ * Events API v2 call, mirroring how it (not this module) also performs the ledger IO for the sibling ledger-event
+ * builder above. `dedupKey` intentionally omits `actionClass` — a repo/scope kill-switch trip is one incident
+ * regardless of which action class first observed it, so PagerDuty's own dedup_key coalescing collapses repeats
+ * into the same incident instead of opening a new one per action class.
+ */
+export function buildMinerKillSwitchPagerDutyAlert(input: {
+  repoFullName?: string | null | undefined;
+  actionClass: string;
+  previousScope: MinerKillSwitchScope;
+  scope: MinerKillSwitchScope;
+}): MinerKillSwitchPagerDutyAlert | null {
+  if (input.previousScope === input.scope) return null;
+  if (!isMinerKillSwitchActive(input.scope)) return null;
+  const repoFullName = input.repoFullName ?? null;
+  const target = repoFullName ?? "global";
+  return {
+    repoFullName,
+    scope: input.scope,
+    actionClass: input.actionClass,
+    summary: `AMS miner kill-switch tripped (${input.scope}) — ${input.actionClass} halted for ${target}`,
+    severity: "critical",
+    dedupKey: `miner_kill_switch_tripped:${input.scope}:${target}`,
+    customDetails: { scope: input.scope, previousScope: input.previousScope, repoFullName, actionClass: input.actionClass },
+  };
+}

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   MINER_KILL_SWITCH_ENV_VAR,
+  buildMinerKillSwitchPagerDutyAlert,
   buildMinerKillSwitchTransitionGovernorLedgerEvent,
   isGlobalMinerKillSwitch,
   isMinerKillSwitchActive,
@@ -14,6 +15,7 @@ test("barrel: the public entrypoint re-exports the kill-switch primitive (#2341)
   assert.equal(typeof resolveMinerKillSwitch, "function");
   assert.equal(typeof isMinerKillSwitchActive, "function");
   assert.equal(typeof buildMinerKillSwitchTransitionGovernorLedgerEvent, "function");
+  assert.equal(typeof buildMinerKillSwitchPagerDutyAlert, "function");
   assert.equal(MINER_KILL_SWITCH_ENV_VAR, "LOOPOVER_MINER_KILL_SWITCH");
 });
 
@@ -103,5 +105,67 @@ test("buildMinerKillSwitchTransitionGovernorLedgerEvent: clearing the switch rec
     decision: "resumed",
     reason: "global_kill_switch_cleared",
     payload: { previousScope: "global", scope: "none" },
+  });
+});
+
+test("buildMinerKillSwitchPagerDutyAlert: no-op when the scope has not changed (#7666)", () => {
+  assert.equal(
+    buildMinerKillSwitchPagerDutyAlert({ actionClass: "open_pr", previousScope: "none", scope: "none" }),
+    null,
+  );
+  assert.equal(
+    buildMinerKillSwitchPagerDutyAlert({ actionClass: "open_pr", previousScope: "repo", scope: "repo" }),
+    null,
+  );
+});
+
+test("buildMinerKillSwitchPagerDutyAlert: no-op on a resume transition -- only a trip pages (#7666)", () => {
+  assert.equal(
+    buildMinerKillSwitchPagerDutyAlert({
+      repoFullName: "acme/widgets",
+      actionClass: "open_pr",
+      previousScope: "repo",
+      scope: "none",
+    }),
+    null,
+  );
+  assert.equal(
+    buildMinerKillSwitchPagerDutyAlert({ actionClass: "open_pr", previousScope: "global", scope: "none" }),
+    null,
+  );
+});
+
+test("buildMinerKillSwitchPagerDutyAlert: a repo trip builds a critical alert with a repo-scoped dedup key (#7666)", () => {
+  const alert = buildMinerKillSwitchPagerDutyAlert({
+    repoFullName: "acme/widgets",
+    actionClass: "open_pr",
+    previousScope: "none",
+    scope: "repo",
+  });
+  assert.deepEqual(alert, {
+    repoFullName: "acme/widgets",
+    scope: "repo",
+    actionClass: "open_pr",
+    summary: "AMS miner kill-switch tripped (repo) — open_pr halted for acme/widgets",
+    severity: "critical",
+    dedupKey: "miner_kill_switch_tripped:repo:acme/widgets",
+    customDetails: { scope: "repo", previousScope: "none", repoFullName: "acme/widgets", actionClass: "open_pr" },
+  });
+});
+
+test("buildMinerKillSwitchPagerDutyAlert: a global trip with no repoFullName dedups on 'global', not null (#7666)", () => {
+  const alert = buildMinerKillSwitchPagerDutyAlert({
+    actionClass: "open_pr",
+    previousScope: "none",
+    scope: "global",
+  });
+  assert.deepEqual(alert, {
+    repoFullName: null,
+    scope: "global",
+    actionClass: "open_pr",
+    summary: "AMS miner kill-switch tripped (global) — open_pr halted for global",
+    severity: "critical",
+    dedupKey: "miner_kill_switch_tripped:global:global",
+    customDetails: { scope: "global", previousScope: "none", repoFullName: null, actionClass: "open_pr" },
   });
 });
