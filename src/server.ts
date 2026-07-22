@@ -60,6 +60,7 @@ import {
 import { clockSkewSampleAgeSeconds, clockSkewSecondsSample } from "./selfhost/clock-skew";
 import { d1DatabaseSizeBytesSample, d1SignalSnapshotsRowsPerKeySample, d1TableRowCountSamples, isD1SizeProbeEnabled, runD1SizeProbe } from "./selfhost/d1-size-probe";
 import { gauge, gaugeVector, incr, observe, renderMetrics, setSelfHostedMetricsMode } from "./selfhost/metrics";
+import { delayToNextWallClockBoundaryMs } from "./selfhost/cron-alignment";
 import { runSelfHostMigrations } from "./selfhost/migrate";
 import { createPgAdapter, tuneGithubRateLimitObservationsAutovacuum, widenGithubIdColumnsToBigint } from "./selfhost/pg-adapter";
 import { createPgQueue } from "./selfhost/pg-queue";
@@ -1090,10 +1091,23 @@ async function main(): Promise<void> {
 
   backend.queue.start();
 
-  // Cron — loopover ticks ~every 2 minutes; drive the SAME scheduled handler.
+  // Cron — loopover ticks ~every 2 minutes; drive the SAME scheduled handler. Cloudflare's own `*/2 * * * *`
+  // trigger fires exactly on wall-clock 2-minute boundaries (:00, :02, :04, …), which is what
+  // enqueueScheduledJobs's minute-gated jobs (`minute % 10 === 0`, `minute === 0`, `minute % 30 === 0` — all
+  // even) rely on to ever run. A plain `setInterval(fn, intervalMs)` instead ticks every intervalMs FROM
+  // WHATEVER MOMENT THE CONTAINER BOOTED, with no relation to wall-clock boundaries — and since intervalMs
+  // evenly divides an hour, that locks the tick's minute value to a FIXED parity for the container's entire
+  // lifetime. A container that happens to boot in an odd minute then ticks ONLY on odd minutes forever, so
+  // every minute-gated job above silently NEVER fires — confirmed live on edge-nl-01 (booted at an odd
+  // minute: 3+ hours of ~2-min ticks with zero refresh-registry/ops-alerts/sweep-watchdog/reconciliation
+  // dispatches, while the unconditional every-tick sweep ran normally). Phase-align the FIRST tick to the
+  // next true wall-clock boundary — computed from epoch, which is itself minute-aligned, so `Date.now() %
+  // intervalMs` lands on the same boundaries Cloudflare's cron would for any intervalMs that evenly divides
+  // an hour (the default 120_000 included) — with a one-shot setTimeout, then hand off to setInterval from
+  // that aligned moment so every subsequent tick keeps landing on those boundaries.
   const intervalMs = Number(process.env.CRON_INTERVAL_MS ?? 120_000);
   /* v8 ignore start -- self-host entrypoint timers start a live server; monitor semantics are covered in selfhost tests. */
-  const cron = setInterval(() => {
+  const runCronTick = (): void => {
     const controller = {
       scheduledTime: Date.now(),
       cron: "*/2 * * * *",
@@ -1110,7 +1124,11 @@ async function main(): Promise<void> {
         }),
       ),
     );
-  }, intervalMs);
+  };
+  let cron: NodeJS.Timeout = setTimeout(() => {
+    runCronTick();
+    cron = setInterval(runCronTick, intervalMs);
+  }, delayToNextWallClockBoundaryMs(Date.now(), intervalMs));
   /* v8 ignore stop */
 
   // Orb fleet-telemetry export — ALWAYS ON (the fleet-calibration contract of self-hosting). Self-gates
