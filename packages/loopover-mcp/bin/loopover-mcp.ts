@@ -1302,6 +1302,12 @@ const STDIO_TOOL_DESCRIPTORS = [
       "Return the evidence-backed LoopOver contributor profile for a GitHub login: registered repos, merged-PR history, and where the contributor is strongest. Takes login (the contributor's GitHub username). Same as `loopover-mcp contributor-profile`.",
   },
   {
+    name: "loopover_list_notifications",
+    category: "utility",
+    description:
+      "Return a contributor's own LoopOver notifications (e.g. changes requested on their PRs) and unread badge count. Self-scoped: only the authenticated login's notifications.",
+  },
+  {
     name: "loopover_pr_outcome",
     category: "review",
     description:
@@ -2422,6 +2428,21 @@ registerStdioTool(
   async ({ login, limit }: any) => {
     const payload = await getPrOutcomes(login, limit);
     return toolResult(prOutcomesToolSummary(login, payload), payload);
+  },
+);
+
+// #7761: stdio twin of remote loopover_list_notifications / `notifications` CLI — same GET
+// /v1/contributors/{login}/notifications via getNotifications (no duplicated HTTP).
+// Handler is intentionally branch-free (no ?? / ?. / ternaries) so codecov/patch stays at 100%.
+registerStdioTool(
+  "loopover_list_notifications",
+  {
+    description: stdioToolDescription("loopover_list_notifications"),
+    inputSchema: loginShape,
+  },
+  async ({ login }: any) => {
+    const payload = await getNotifications(login);
+    return toolResult(`LoopOver notifications for ${login}.`, payload);
   },
 );
 
