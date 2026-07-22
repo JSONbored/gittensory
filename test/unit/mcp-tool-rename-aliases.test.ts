@@ -100,14 +100,14 @@ describe("MCP legacy alias retirement (#4777) — discovery invariants", () => {
     }
   });
 
-  it("`loopover-mcp tools --json` reports the same 92-tool count the live server registers", async () => {
+  it("`loopover-mcp tools --json` reports the same 93-tool count the live server registers", async () => {
     const { tools } = await client.listTools();
     const payload = JSON.parse(run(["tools", "--json"])) as {
       count: number;
       tools: Array<{ name: string }>;
     };
     expect(payload.count).toBe(tools.length);
-    expect(payload.count).toBe(92);
+    expect(payload.count).toBe(93);
     expect([...payload.tools.map((t) => t.name)].sort()).toEqual(
       [...tools.map((t) => t.name)].sort(),
     );
