@@ -28,13 +28,16 @@ import type {
 /** Result of a successful provision — terminal lifecycle state `"active"` (the vocabulary tenant-client.ts
  *  passes through from this API). Carries `database` (#7653) so a freshly created role's connection details --
  *  often retrievable from the provider only at creation time -- aren't silently discarded by this orchestration
- *  before any caller gets a chance to persist them. What a caller DOES with them (e.g. routing into
- *  `injectSecrets` via #7852's secret-injection driver) is that driver's own job, not this orchestration's. */
+ *  before any caller gets a chance to persist them. Also carries `secretRef` (#8066) when the configured driver
+ *  returned one from `injectSecrets` -- an opaque reference a caller (e.g. http-app.ts's tenant registry) must
+ *  persist so a later `deprovisionTenant` can thread it back in for `revokeSecrets`; absent when the composed
+ *  driver has nothing to track (e.g. the fake, or before a real secret driver is configured). */
 export type TenantProvisioningResult = {
   tenant: Tenant;
   product: Product;
   state: Extract<TenantLifecycleState, "active">;
   database: DatabaseConnectionDetails;
+  secretRef?: string;
 };
 
 /** Result of a successful deprovision — terminal lifecycle state `"torn down"`. */
@@ -79,8 +82,10 @@ function pageAndRethrow(
 }
 
 /** Provision a tenant by running #7180's three steps in order against the injected driver. Product-agnostic:
- *  `product` is forwarded to every step, never branched on, so ORB and AMS share one call shape. A step failure
- *  pages (#7667) and always rethrows — provisioning never fails silently. */
+ *  `product` is forwarded to every step, never branched on, so ORB and AMS share one call shape. `injectSecrets`
+ *  is called with `database` already attached to the request (#8066) -- a real secret driver needs the
+ *  connection details to actually store, not just the tenant identity every other step operates on. A step
+ *  failure pages (#7667) and always rethrows — provisioning never fails silently. */
 export async function provisionTenant(
   tenant: Tenant,
   product: Product,
@@ -89,26 +94,31 @@ export async function provisionTenant(
 ): Promise<TenantProvisioningResult> {
   const request: TenantProvisioningRequest = { tenant, product };
   let database: DatabaseConnectionDetails;
+  let secretRef: string | undefined;
   try {
     await driver.createContainer(request);
     database = await driver.provisionDatabase(request);
-    await driver.injectSecrets(request);
+    ({ secretRef } = await driver.injectSecrets({ ...request, database }));
   } catch (error) {
     pageAndRethrow(tenant, product, "provision", error, pagerDuty);
   }
-  return { tenant, product, state: "active", database };
+  return { tenant, product, state: "active", database, ...(secretRef !== undefined ? { secretRef } : {}) };
 }
 
 /** Deprovision a tenant by tearing #7180's three steps down in REVERSE order. Same product-agnostic call shape
- *  as provisionTenant. Idempotent by driver contract: deprovisioning a tenant that was never provisioned is a
- *  safe no-op, never a throw. A step failure pages (#7667) and always rethrows. */
+ *  as provisionTenant. `secretRef` (#8066, optional -- a caller with no real secret driver configured, or a
+ *  tenant provisioned before one was, has none to pass) is attached to the request so `revokeSecrets` knows
+ *  what to revoke; omitted entirely, it's the same as the pre-#8066 behavior. Idempotent by driver contract:
+ *  deprovisioning a tenant that was never provisioned is a safe no-op, never a throw. A step failure pages
+ *  (#7667) and always rethrows. */
 export async function deprovisionTenant(
   tenant: Tenant,
   product: Product,
   driver: TenantProvisioningDriver,
   pagerDuty: ProvisioningPagerDutyOptions = {},
+  secretRef?: string,
 ): Promise<TenantDeprovisioningResult> {
-  const request: TenantProvisioningRequest = { tenant, product };
+  const request: TenantProvisioningRequest = { tenant, product, ...(secretRef !== undefined ? { secretRef } : {}) };
   try {
     await driver.revokeSecrets(request);
     await driver.dropDatabase(request);

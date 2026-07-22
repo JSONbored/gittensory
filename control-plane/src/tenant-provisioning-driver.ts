@@ -3,11 +3,12 @@
 // contract plus a minimal in-memory fake, with the orchestration (provisionTenant/deprovisionTenant) living in
 // a sibling module. Implementations MAY perform real IO; this file defines only the contract and the fake.
 //
-// The interface names the three provisioning steps #7180's provisioning API is specified around:
-// create-container, provision-DB, inject-secrets. Real drivers are OUT OF SCOPE for #7524 (blocked on an
-// unmade Postgres-provider decision): a real create-container would call the Cloudflare Containers API, a real
-// provision-DB the chosen Postgres provider, and a real inject-secrets would delegate to #7174's generalized
-// secret broker (src/orb/broker.ts). NONE of those live paths are imported here — only the fake is.
+// The interface names the three provisioning steps #7180's provisioning API is specified around: create-
+// container, provision-DB, inject-secrets. Real drivers were out of scope for #7524 itself but have since
+// landed as separate, independently-composable pieces (container-driver.ts/#7851, neon-database-driver.ts/
+// #7653, secret-driver.ts/#8066 delegating to #7174's generalized broker via #8064's stored-secret type) --
+// see driver-factory.ts for how they compose onto this file's fake. NONE of those live paths are imported here
+// — only the fake is.
 
 /** Product a tenant belongs to (e.g. `"orb"` / `"ams"`). Opaque to the orchestration and forwarded verbatim to
  *  every driver step — an ORB tenant and an AMS tenant take the identical call shape (#7524's product-agnostic
@@ -37,6 +38,15 @@ export type TenantLifecycleState =
 export type TenantProvisioningRequest = {
   tenant: Tenant;
   product: Product;
+  /** The tenant's already-provisioned database connection details (#7653) -- populated ONLY for the
+   *  `injectSecrets` call, by `provisionTenant`'s own orchestration right after `provisionDatabase` resolves
+   *  (#8066). Every other step (createContainer, destroyContainer, etc.) never sees this field. */
+  database?: DatabaseConnectionDetails;
+  /** An opaque, driver-specific reference to a previously injected secret (#8066) -- whatever `injectSecrets`
+   *  returned as `secretRef`, threaded back in by `deprovisionTenant` so `revokeSecrets` knows what to revoke.
+   *  Absent when a tenant was never provisioned with a real secret driver configured (idempotent revoke of an
+   *  unconfigured tenant, matching every other driver's teardown contract). */
+  secretRef?: string;
 };
 
 /** What `provisionDatabase` hands back (#7653): everything a caller needs to actually reach the tenant's
@@ -63,15 +73,20 @@ export interface TenantProvisioningDriver {
    *  must capture this return value rather than re-deriving it later. Real driver → the chosen Postgres
    *  provider (Neon + Hyperdrive, decided on #7180; see neon-database-driver.ts). */
   provisionDatabase(request: TenantProvisioningRequest): Promise<DatabaseConnectionDetails>;
-  /** Step 3 (#7180): inject the tenant's secrets. A real driver delegates to #7174's generalized broker
-   *  (src/orb/broker.ts); the fake only records the call. No real secrets path is imported by this package. */
-  injectSecrets(request: TenantProvisioningRequest): Promise<void>;
+  /** Step 3 (#7180): inject the tenant's secrets, given its database connection details (`request.database`,
+   *  #8066). Returns an opaque `secretRef` the caller must persist and thread back into a later `revokeSecrets`
+   *  call via `request.secretRef` -- `undefined` when the driver has nothing to track (e.g. the fake). A real
+   *  driver delegates to #7174's generalized broker (src/orb/broker.ts, via #8064's stored-secret type); the
+   *  fake only records the call. */
+  injectSecrets(request: TenantProvisioningRequest): Promise<{ secretRef?: string }>;
   /** Teardown inverse of createContainer. MUST be idempotent — safe to call when the container was never
    *  created — so deprovisioning a nonexistent tenant is a no-op, never a throw. */
   destroyContainer(request: TenantProvisioningRequest): Promise<void>;
   /** Teardown inverse of provisionDatabase. Idempotent, like destroyContainer. */
   dropDatabase(request: TenantProvisioningRequest): Promise<void>;
-  /** Teardown inverse of injectSecrets. Idempotent, like destroyContainer. */
+  /** Teardown inverse of injectSecrets. `request.secretRef` (set by the caller from whatever `injectSecrets`
+   *  previously returned) tells the driver what to revoke; absent/unrecognized is a safe no-op, matching this
+   *  driver contract's existing idempotent-teardown convention. */
   revokeSecrets(request: TenantProvisioningRequest): Promise<void>;
   /** Reachability probe: is the tenant's container currently provisioned? A real driver health-checks the
    *  container; the fake checks its in-memory map. Lets callers/tests assert "exists" after provision and
@@ -166,6 +181,9 @@ export function createFakeTenantProvisioningDriver(): FakeTenantProvisioningDriv
     async injectSecrets(request) {
       record("injectSecrets", request);
       injectedSecrets.add(instanceKeyFor(request));
+      // The fake tracks "injected" via its own `injectedSecrets` set (keyed by tenant), not by a real opaque
+      // reference -- it has nothing for a caller to persist and thread back into revokeSecrets later.
+      return {};
     },
     async destroyContainer(request) {
       record("destroyContainer", request);

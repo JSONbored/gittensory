@@ -54,7 +54,9 @@ export class AmsTenantContainer extends ProvisionedContainer {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const driver = createTenantProvisioningDriver(
-      { NEON_API_KEY: env.NEON_API_KEY, NEON_PROJECT_ID: env.NEON_PROJECT_ID },
+      // #8066: MAIN_APP_BASE_URL/INTERNAL_JOB_TOKEN select the real secret driver (against the main app's
+      // token broker) once both are configured, same opt-in-per-piece shape as NEON_API_KEY/NEON_PROJECT_ID.
+      { NEON_API_KEY: env.NEON_API_KEY, NEON_PROJECT_ID: env.NEON_PROJECT_ID, MAIN_APP_BASE_URL: env.MAIN_APP_BASE_URL, INTERNAL_JOB_TOKEN: env.INTERNAL_JOB_TOKEN },
       { orb: env.ORB_TENANT_CONTAINER, ams: env.AMS_TENANT_CONTAINER },
     );
     const app = createTenantHttpApp({

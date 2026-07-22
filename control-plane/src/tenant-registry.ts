@@ -1,9 +1,10 @@
 // Tenant registry for control-plane's real HTTP transport (#7654). `TenantProvisioningDriver` has no
 // enumeration concept by design (create/destroy/exists are all per-tenant) -- `GET /v1/tenants` needs a
 // distinct, durable list of every tenant this service has been asked to create, independent of whatever a
-// given driver internally tracks. Deliberately stores ONLY name/product/lifecycle state/timestamps, never a
-// tenant's database connection details or any other secret -- this is an admin-visible inventory, not a
-// credential store (that's #7852's job, via the generalized broker).
+// given driver internally tracks. Deliberately stores ONLY name/product/lifecycle state/timestamps (plus an
+// opaque broker `secretRef`, #8066) -- never a tenant's actual database connection details or any other
+// secret VALUE. This is an admin-visible inventory, not a credential store; the generalized broker (#7174's
+// src/orb/broker.ts, via #8064/#8066) holds custody of the real secret, addressed by this opaque reference.
 import type { Product, Tenant, TenantLifecycleState } from "./tenant-provisioning-driver.js";
 
 /** One AMS tenant's cron-wake configuration (#7182) -- ORB tenants never have this (they're woken by
@@ -38,6 +39,13 @@ export type TenantRegistryRecord = {
    *  `POST /v1/tenants`); `orb-webhook-router.ts`'s request-time routing looks up a tenant by this ID to know
    *  which container an incoming webhook belongs to. */
   orbInstallationId?: number;
+  /** Opaque broker reference to this tenant's injected secrets (#8066) -- whatever `provisionTenant`'s own
+   *  result carried back as `secretRef` from `injectSecrets`. Product-agnostic (unlike `amsSchedule`/
+   *  `orbInstallationId`): either product can have a real secret driver configured. Persisted here so a later
+   *  `DELETE /v1/tenants/:name` can thread it back into `deprovisionTenant`'s `revokeSecrets` call -- without
+   *  it, a torn-down tenant's stored broker secret would never be revoked. Not itself sensitive (an enrollment
+   *  ID, not a credential), so it's safe to surface via `GET /v1/tenants` like every other field here. */
+  secretRef?: string;
 };
 
 export interface TenantRegistry {

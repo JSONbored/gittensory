@@ -15,6 +15,10 @@
   //                                                 a separate value from the main app's ORB_GITHUB_WEBHOOK_SECRET,
   //                                                 even though both verify the same HMAC-SHA256 shape. Omit to
   //                                                 leave POST /v1/orb/webhook fail-closed on every delivery.)
+  //   npx wrangler secret put INTERNAL_JOB_TOKEN   (#8066: the SAME shared Bearer secret the main app's own
+  //                                                 /v1/internal/* middleware expects -- selects the real secret
+  //                                                 driver (src/secret-driver.ts) once MAIN_APP_BASE_URL below is
+  //                                                 also set. Omit to keep injectSecrets/revokeSecrets on the fake.)
   //
   // Both container images below build from the REPO ROOT context (image_build_context: ".."), one level up
   // from this file -- same npm-workspaces reasoning as packages/discovery-index/wrangler.jsonc's identical
@@ -38,7 +42,11 @@
     // database driver; grants no access on its own. See src/driver-factory.ts's own env-selection logic.
     "NEON_PROJECT_ID": "REPLACE_WITH_REAL_NEON_PROJECT_ID",
     // Same flag name/shape as the main app's own PagerDuty wiring (#7667) -- off by default.
-    "LOOPOVER_ENABLE_PAGERDUTY": "false"
+    "LOOPOVER_ENABLE_PAGERDUTY": "false",
+    // Non-sensitive main-app base URL -- pairs with the INTERNAL_JOB_TOKEN secret above to select the real
+    // secret driver (#8066); the same host self-hosted containers already call for /v1/orb/token exchanges
+    // (src/orb/broker-client.ts's own default). Grants no access on its own.
+    "MAIN_APP_BASE_URL": "https://api.loopover.ai"
   },
   "kv_namespaces": [
     {

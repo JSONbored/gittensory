@@ -18,6 +18,12 @@ declare global {
      *  ORB_GITHUB_WEBHOOK_SECRET (a different physical service). Unset ⇒ POST /v1/orb/webhook fails every
      *  delivery closed (orb-webhook-router.ts). Genuinely sensitive: whoever holds it can forge a webhook. */
     ORB_WEBHOOK_SECRET?: string;
+    /** Bearer-gates the main app's own `/v1/internal/*` routes (#8066) -- the SAME shared secret value as that
+     *  deployment's own INTERNAL_JOB_TOKEN, since this driver is calling those routes as an authenticated
+     *  internal caller. Selects the real secret driver (src/secret-driver.ts) together with MAIN_APP_BASE_URL
+     *  (a plain var, see wrangler.jsonc); createTenantProvisioningDriver falls back to the fake otherwise.
+     *  Genuinely sensitive: whoever holds it can call every internal admin route in the main app. */
+    INTERNAL_JOB_TOKEN?: string;
   }
 }
 

@@ -9,6 +9,8 @@ import {
   deprovisionTenant,
   provisionTenant,
   type Tenant,
+  type TenantProvisioningDriver,
+  type TenantProvisioningRequest,
 } from "../dist/index.js";
 
 test("provisionTenant runs the three #7180 steps in order and reports the tenant active", async () => {
@@ -84,6 +86,65 @@ test("deprovisionTenant on a never-provisioned tenant is a safe no-op that still
   assert.deepEqual(result, { tenant, product: "ams", state: "torn down" });
   assert.equal(await driver.containerExists({ tenant, product: "ams" }), false);
   assert.equal(driver.containers.has("ams:ghost"), false);
+});
+
+test("#8066: provisionTenant attaches the freshly provisioned database to the injectSecrets request", async () => {
+  const fake = createFakeTenantProvisioningDriver();
+  let seenRequest: TenantProvisioningRequest | undefined;
+  const driver: TenantProvisioningDriver = {
+    ...fake,
+    injectSecrets: async (request) => {
+      seenRequest = request;
+      return { secretRef: "orbenr_abc" };
+    },
+  };
+  const tenant: Tenant = { name: "acme" };
+
+  const result = await provisionTenant(tenant, "orb", driver);
+
+  assert.deepEqual(seenRequest?.database, result.database);
+  assert.equal(result.secretRef, "orbenr_abc");
+});
+
+test("#8066: provisionTenant's result omits secretRef entirely when the driver returns none (the fake's own behavior)", async () => {
+  const driver = createFakeTenantProvisioningDriver();
+  const tenant: Tenant = { name: "acme" };
+
+  const result = await provisionTenant(tenant, "orb", driver);
+
+  assert.equal("secretRef" in result, false);
+});
+
+test("#8066: deprovisionTenant threads secretRef into the revokeSecrets request", async () => {
+  const fake = createFakeTenantProvisioningDriver();
+  let seenRequest: TenantProvisioningRequest | undefined;
+  const driver: TenantProvisioningDriver = {
+    ...fake,
+    revokeSecrets: async (request) => {
+      seenRequest = request;
+    },
+  };
+  const tenant: Tenant = { name: "acme" };
+
+  await deprovisionTenant(tenant, "orb", driver, {}, "orbenr_abc");
+
+  assert.equal(seenRequest?.secretRef, "orbenr_abc");
+});
+
+test("#8066: deprovisionTenant omits secretRef from the request entirely when none is passed", async () => {
+  const fake = createFakeTenantProvisioningDriver();
+  let seenRequest: TenantProvisioningRequest | undefined;
+  const driver: TenantProvisioningDriver = {
+    ...fake,
+    revokeSecrets: async (request) => {
+      seenRequest = request;
+    },
+  };
+  const tenant: Tenant = { name: "acme" };
+
+  await deprovisionTenant(tenant, "orb", driver);
+
+  assert.equal("secretRef" in (seenRequest ?? {}), false);
 });
 
 test("the call shape is identical for an ORB tenant and an AMS tenant (product-agnostic)", async () => {

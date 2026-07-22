@@ -50,7 +50,15 @@ export {
   createTenantProvisioningDriver,
   withRealContainerDriver,
   withRealDatabaseDriver,
+  withRealSecretDriver,
 } from "./driver-factory.js";
+export {
+  createSecretDriver,
+  injectTenantSecrets,
+  revokeTenantSecrets,
+  type SecretDriver,
+  type SecretDriverConfig,
+} from "./secret-driver.js";
 export {
   createContainerDriver,
   createTenantContainer,

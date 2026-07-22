@@ -8,10 +8,12 @@ import {
   createTenantProvisioningDriver,
   withRealContainerDriver,
   withRealDatabaseDriver,
+  withRealSecretDriver,
   type ContainerDriver,
   type ContainerNamespaceLike,
   type ContainerStubLike,
   type DatabaseDriver,
+  type SecretDriver,
   type TenantProvisioningRequest,
 } from "../dist/index.js";
 
@@ -119,6 +121,36 @@ test("withRealContainerDriver: overrides createContainer/destroyContainer/contai
   assert.ok(base.injectedSecrets.has("orb:acme"));
 });
 
+test("withRealSecretDriver: overrides injectSecrets/revokeSecrets, forwards every other step to base", async () => {
+  const base = createFakeTenantProvisioningDriver();
+  const calls: string[] = [];
+  const secretDriver: SecretDriver = {
+    injectSecrets: async () => {
+      calls.push("real-inject");
+      return { secretRef: "real-secret-ref" };
+    },
+    revokeSecrets: async () => {
+      calls.push("real-revoke");
+    },
+  };
+
+  const composed = withRealSecretDriver(base, secretDriver);
+
+  const injected = await composed.injectSecrets(REQUEST);
+  assert.deepEqual(injected, { secretRef: "real-secret-ref" });
+  await composed.revokeSecrets({ ...REQUEST, secretRef: injected.secretRef });
+  assert.deepEqual(calls, ["real-inject", "real-revoke"]);
+  // The fake's own injectSecrets never ran -- its `injectedSecrets` set stays empty even though the composed
+  // driver's own calls all resolved successfully.
+  assert.equal(base.injectedSecrets.has("orb:acme"), false);
+
+  // Every non-secret step still runs against `base` exactly as before composition.
+  await composed.createContainer(REQUEST);
+  assert.ok(base.containers.has("orb:acme"));
+  const details = await composed.provisionDatabase(REQUEST);
+  assert.equal(details.host, "fake-acme.control-plane.invalid");
+});
+
 test("createTenantProvisioningDriver: falls back to the fake container behavior when containerBindings is omitted or empty", async () => {
   const noBindings = createTenantProvisioningDriver({}, undefined);
   const emptyBindings = createTenantProvisioningDriver({}, {});
@@ -195,6 +227,50 @@ test("createTenantProvisioningDriver: selects the real Neon-backed driver when b
   await assert.rejects(driver.provisionDatabase(REQUEST));
   assert.ok(calls.length >= 1);
   assert.ok(calls.every((url) => url.includes("real-project")));
+});
+
+test("createTenantProvisioningDriver: falls back to the fake secret behavior when MAIN_APP_BASE_URL/INTERNAL_JOB_TOKEN are unset", async () => {
+  const neither = createTenantProvisioningDriver({});
+  const urlOnly = createTenantProvisioningDriver({ MAIN_APP_BASE_URL: "https://api.loopover.test" });
+  const tokenOnly = createTenantProvisioningDriver({ INTERNAL_JOB_TOKEN: "internal-test-token" });
+
+  // The fake's own injectSecrets never calls fetch -- if the real secret driver were selected in any of these,
+  // this would attempt a real network call and reject instead of resolving.
+  await neither.injectSecrets(REQUEST);
+  await urlOnly.injectSecrets(REQUEST);
+  await tokenOnly.injectSecrets(REQUEST);
+});
+
+test("createTenantProvisioningDriver: selects the real secret driver when both MAIN_APP_BASE_URL and INTERNAL_JOB_TOKEN are configured", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    calls.push(url);
+    return new Response(JSON.stringify({ enrollId: "orbenr_abc", secret: "orbsec_xyz" }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const driver = createTenantProvisioningDriver({ MAIN_APP_BASE_URL: "https://api.loopover.test", INTERNAL_JOB_TOKEN: "internal-test-token" });
+
+  const result = await driver.injectSecrets({ ...REQUEST, database: { host: "h", port: 5432, database: "d", user: "u", password: "p", connectionString: "postgres://u:p@h:5432/d" } });
+  assert.deepEqual(result, { secretRef: "orbenr_abc" });
+  assert.ok(calls.some((url) => url.includes("api.loopover.test")));
+});
+
+test("createTenantProvisioningDriver: composes the real database, container, AND secret drivers all together", async () => {
+  globalThis.fetch = (async (url: string) => {
+    if (url.includes("api.loopover.test")) return new Response(JSON.stringify({ enrollId: "orbenr_abc", secret: "orbsec_xyz" }), { status: 200 });
+    return new Response(JSON.stringify({ branches: [] }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const driver = createTenantProvisioningDriver(
+    { NEON_API_KEY: "real-key", NEON_PROJECT_ID: "real-project", MAIN_APP_BASE_URL: "https://api.loopover.test", INTERNAL_JOB_TOKEN: "internal-test-token" },
+    { orb: fakeContainerNamespace() },
+  );
+
+  await driver.createContainer(REQUEST);
+  assert.equal(await driver.containerExists(REQUEST), true);
+  await assert.rejects(driver.provisionDatabase(REQUEST));
+  const injected = await driver.injectSecrets({ ...REQUEST, database: { host: "h", port: 5432, database: "d", user: "u", password: "p", connectionString: "postgres://u:p@h:5432/d" } });
+  assert.deepEqual(injected, { secretRef: "orbenr_abc" });
 });
 
 test("createTenantProvisioningDriver: defaults env to process.env when no override is passed", async () => {

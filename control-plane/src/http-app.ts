@@ -9,9 +9,10 @@
 // Deliberately never echoes a tenant's database connection details (host/user/password/connectionString) in
 // any response: `provisionTenant`'s result carries them (#7653) so a caller doesn't lose them, but this admin
 // HTTP surface only returns the safe `{tenant, product, state}` triple (plus `amsSchedule` when set, #7182 --
-// a cron cadence and command name, never a secret). Properly storing/distributing credentials is #7852's job
-// (the generalized secret broker) -- until it lands, this transport intentionally does not create a new
-// place for them to leak.
+// a cron cadence and command name; `orbInstallationId`, #7181; `secretRef`, #8066 -- an opaque broker
+// enrollment ID, never a secret value itself). The generalized broker (#7174's src/orb/broker.ts, via #8064's
+// stored-secret type and #8066's secret-driver.ts) holds actual custody of a tenant's real credentials --
+// this transport never has them to leak in the first place once a real secret driver is configured.
 //
 // `POST /v1/tenants` also accepts an optional `schedule` field (#7182), valid only for `product: "ams"`:
 // configures the new tenant's cron-wake cadence at creation time. ams-wake.ts's `scheduled()`-triggered
@@ -21,6 +22,10 @@
 // `product: "orb"`: the GitHub App installation this tenant's hosted container answers webhooks for.
 // `POST /v1/orb/webhook` (below) is the actual routing endpoint that reads it back via the registry's
 // installation-ID index -- this route only validates, checks for a conflicting claim, and stores it.
+//
+// `DELETE /v1/tenants/:name` threads the stored `secretRef` (#8066) back into `deprovisionTenant`, so a real
+// secret driver's `revokeSecrets` knows which broker enrollment to revoke on teardown -- without it, a torn-
+// down tenant's stored credential would stay valid in the broker forever.
 import { Hono } from "hono";
 import { normalizeSharedSecret, verifyBearer } from "./auth.js";
 import { routeOrbWebhook, type RouterNamespaceLike } from "./orb-webhook-router.js";
@@ -48,13 +53,14 @@ export type TenantHttpAppDeps = {
   orbWebhookSecret?: string;
 };
 
-function safeRecord(record: Pick<TenantRegistryRecord, "tenant" | "product" | "state" | "amsSchedule" | "orbInstallationId">): Record<string, unknown> {
+function safeRecord(record: Pick<TenantRegistryRecord, "tenant" | "product" | "state" | "amsSchedule" | "orbInstallationId" | "secretRef">): Record<string, unknown> {
   return {
     tenant: record.tenant,
     product: record.product,
     state: record.state,
     ...(record.amsSchedule ? { amsSchedule: record.amsSchedule } : {}),
     ...(record.orbInstallationId !== undefined ? { orbInstallationId: record.orbInstallationId } : {}),
+    ...(record.secretRef !== undefined ? { secretRef: record.secretRef } : {}),
   };
 }
 
@@ -186,6 +192,7 @@ export function createTenantHttpApp(deps: TenantHttpAppDeps): Hono {
       updatedAt: now,
       ...(schedule ? { amsSchedule: schedule } : {}),
       ...(orbInstallationId !== undefined ? { orbInstallationId } : {}),
+      ...(result.secretRef !== undefined ? { secretRef: result.secretRef } : {}),
     };
     await deps.registry.upsert(record);
     return c.json(safeRecord(record), 201);
@@ -243,7 +250,7 @@ export function createTenantHttpApp(deps: TenantHttpAppDeps): Hono {
     const existing = await deps.registry.get(name, product);
     if (!existing) return c.json({ error: "tenant_not_found" }, 404);
 
-    const result = await deprovisionTenant(existing.tenant, existing.product, deps.driver, deps.pagerDuty ?? {});
+    const result = await deprovisionTenant(existing.tenant, existing.product, deps.driver, deps.pagerDuty ?? {}, existing.secretRef);
     await deps.registry.upsert({ tenant: result.tenant, product: result.product, state: result.state, createdAt: existing.createdAt, updatedAt: new Date().toISOString() });
     return c.json(safeRecord(result));
   });

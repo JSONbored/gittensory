@@ -319,6 +319,85 @@ test("GET /v1/tenants surfaces an ORB tenant's orbInstallationId when set", asyn
   assert.equal(payload.tenants[0]?.orbInstallationId, 555);
 });
 
+test("#8066: POST /v1/tenants persists and surfaces the secretRef a real secret driver returns from injectSecrets", async () => {
+  const registry = createFakeTenantRegistry();
+  const fake = createFakeTenantProvisioningDriver();
+  const driver: TenantProvisioningDriver = { ...fake, injectSecrets: async () => ({ secretRef: "orbenr_abc" }) };
+  const app = createTenantHttpApp(baseDeps({ registry, driver }));
+
+  const res = await app.request(
+    "/v1/tenants",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "acme", product: "orb" }) }),
+  );
+
+  assert.equal(res.status, 201);
+  const payload = (await res.json()) as { secretRef?: string };
+  assert.equal(payload.secretRef, "orbenr_abc");
+  assert.equal((await registry.get("acme", "orb"))?.secretRef, "orbenr_abc");
+});
+
+test("#8066: POST /v1/tenants against the plain fake driver creates a tenant with no secretRef at all", async () => {
+  const registry = createFakeTenantRegistry();
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await app.request(
+    "/v1/tenants",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "acme", product: "orb" }) }),
+  );
+
+  const payload = (await res.json()) as Record<string, unknown>;
+  assert.equal("secretRef" in payload, false);
+  assert.equal((await registry.get("acme", "orb"))?.secretRef, undefined);
+});
+
+test("#8066: GET /v1/tenants surfaces a tenant's secretRef when set", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0", secretRef: "orbenr_abc" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await app.request("/v1/tenants", authed());
+
+  const payload = (await res.json()) as { tenants: Array<{ secretRef?: string }> };
+  assert.equal(payload.tenants[0]?.secretRef, "orbenr_abc");
+});
+
+test("#8066: DELETE /v1/tenants/:name threads the stored secretRef into deprovisionTenant's revokeSecrets call", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0", secretRef: "orbenr_abc" });
+  const fake = createFakeTenantProvisioningDriver();
+  let seenSecretRef: string | undefined;
+  const driver: TenantProvisioningDriver = {
+    ...fake,
+    revokeSecrets: async (request) => {
+      seenSecretRef = request.secretRef;
+    },
+  };
+  const app = createTenantHttpApp(baseDeps({ registry, driver }));
+
+  const res = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
+
+  assert.equal(res.status, 200);
+  assert.equal(seenSecretRef, "orbenr_abc");
+});
+
+test("#8066: DELETE /v1/tenants/:name on a tenant with no secretRef threads undefined through (no stale value leaks in)", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const fake = createFakeTenantProvisioningDriver();
+  let seenSecretRef: string | undefined | "unset" = "unset";
+  const driver: TenantProvisioningDriver = {
+    ...fake,
+    revokeSecrets: async (request) => {
+      seenSecretRef = request.secretRef;
+    },
+  };
+  const app = createTenantHttpApp(baseDeps({ registry, driver }));
+
+  await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
+
+  assert.equal(seenSecretRef, undefined);
+});
+
 test("GET /v1/tenants surfaces an AMS tenant's amsSchedule when set", async () => {
   const registry = createFakeTenantRegistry();
   await registry.upsert({
