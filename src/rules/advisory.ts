@@ -511,7 +511,10 @@ export function formatCheckRunOutput(
     const publicLines = advisoryResult.findings.flatMap((f) => {
       if (!f.publicText) return [];
       const label = f.severity === "warning" ? "⚠️" : "ℹ️";
-      return [`${label} ${sanitizeForCheckRun(f.publicText)}`];
+      // `alreadyPublicSafe` (#7981): a fixed, engineer-authored message with no interpolated contributor/AI
+      // content skips the scrub — see AdvisoryFinding's own doc comment for why (the same reasoning
+      // unified-comment-bridge.ts's gateBlockerLines applies to the PR-comment rendering of this same finding).
+      return [`${label} ${f.alreadyPublicSafe ? f.publicText : sanitizeForCheckRun(f.publicText)}`];
     });
     text = publicLines.length === 0 ? "No detailed findings are published in check runs." : publicLines.join("\n");
   }

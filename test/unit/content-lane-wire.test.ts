@@ -41,6 +41,11 @@ describe("surfaceVerdictToGate", () => {
     expect(finding?.code).toBe("surface_lane_reject");
     // Regression guard: deterministic surface blockers remain outside AI-judgment telemetry.
     expect(AI_JUDGMENT_BLOCKER_CODES.has(evaluation.blockers[0]!.code)).toBe(false);
+    // #7981: the assessment summary is fixed, engineer-authored text (never interpolated contributor/AI
+    // content) -- it must opt out of the public-text privacy scrub so a static word like "wallet" in the
+    // secret-detection message never gets mangled into the confusing "[context]" placeholder.
+    expect(finding?.alreadyPublicSafe).toBe(true);
+    expect(evaluation.blockers[0]?.alreadyPublicSafe).toBe(true);
   });
 
   it("manual → neutral with a warning (not a failing required check)", () => {
@@ -49,6 +54,7 @@ describe("surfaceVerdictToGate", () => {
     expect(evaluation.blockers).toEqual([]);
     expect(evaluation.warnings).toHaveLength(1);
     expect(finding?.code).toBe("surface_lane_manual");
+    expect(finding?.alreadyPublicSafe).toBe(true);
   });
 
   it("falls back to a default summary when the verdict carries none", () => {

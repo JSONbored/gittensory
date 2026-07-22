@@ -870,6 +870,29 @@ describe("advisory rules", () => {
     }
   });
 
+  // #7981: a fixed, engineer-authored finding message (e.g. the content lane's deterministic secret-detection
+  // text) must render verbatim in the check-run output when it declares alreadyPublicSafe, instead of having a
+  // static word like "wallet" mangled into the confusing "[context]" placeholder.
+  it("formatCheckRunOutput does NOT sanitize a finding's publicText when alreadyPublicSafe is set", () => {
+    const advisory = buildPullRequestAdvisory(repo, null);
+    const alreadySafe = {
+      ...advisory,
+      findings: [
+        {
+          code: "surface_lane_reject",
+          title: "Registry surface review",
+          severity: "critical" as const,
+          detail: "Subnet document appears to include secret, wallet, PAT, or private-key material.",
+          publicText: "Subnet document appears to include secret, wallet, PAT, or private-key material.",
+          alreadyPublicSafe: true,
+        },
+      ],
+    };
+    const out = formatCheckRunOutput(alreadySafe, "standard");
+    expect(out.text).toContain("Subnet document appears to include secret, wallet, PAT, or private-key material.");
+    expect(out.text).not.toContain("[context]");
+  });
+
   it("formatCheckRunOutput publishes only explicit public finding text", () => {
     const advisory = buildPullRequestAdvisory(repo, null);
     const output = formatCheckRunOutput(

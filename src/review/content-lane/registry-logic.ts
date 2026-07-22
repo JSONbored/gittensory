@@ -97,11 +97,22 @@ export interface Assessment {
   reason?: string;
 }
 
-/** Exact port of containsSecretLikeText — runs on JSON.stringify(candidate). */
+// #7981: `hotkey`/`coldkey` used to be bare, unqualified alternatives (unlike `wallet`, already scoped to the
+// phrase "wallet path") -- but a Bittensor/Gittensor "hotkey" is the standard PUBLIC miner identifier (an SS58
+// address), not secret material, and appears routinely in ordinary registry content: API paths
+// (`/miners/hotkey/{hotkey}`), field names (`miner_hotkey`), even a note explicitly DENYING any such data ("No
+// wallet/hotkey data" -- the literal trigger for metagraphed #7589/#7591). Because `assessSubnetDocument` scans
+// the WHOLE document, not just the diff, one such mention anywhere in a file permanently blocks every future PR
+// touching it. Scope hot/coldkey the same way `wallet path` already is: require adjacency to something that
+// actually indicates key material (a keystore file path, a private-key/password/mnemonic/seed qualifier)
+// rather than a bare word match.
+const SECRET_LIKE_TEXT_PATTERN =
+  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|BEGIN [A-Z ]*PRIVATE KEY|seed phrase|mnemonic|wallet path|(?:hot|cold)key[ _-]?(?:path|private[ _-]?key|password|mnemonic|seed)|private[ _-]?(?:hot|cold)key/i;
+
+/** Runs on JSON.stringify(candidate). See SECRET_LIKE_TEXT_PATTERN's own comment for the hotkey/coldkey scoping
+ *  fix (#7981) -- every other alternative is unchanged from the original port. */
 export function containsSecretLikeText(value: string): boolean {
-  return /\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|BEGIN [A-Z ]*PRIVATE KEY|seed phrase|mnemonic|wallet path|hotkey|coldkey/i.test(
-    String(value || ""),
-  );
+  return SECRET_LIKE_TEXT_PATTERN.test(String(value || ""));
 }
 
 const TRACKING_PARAMS = new Set([

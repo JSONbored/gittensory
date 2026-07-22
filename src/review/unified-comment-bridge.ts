@@ -257,12 +257,17 @@ export function buildDualReviewNotes(args: {
     : [];
   // FIX D1: fold the gate's own hard blockers into the reviewer blockers (so a non-AI gate failure populates
   // "Why this is blocked"). Exclude `ai_consensus_defect` (already surfaced via consensusDefect → appears once)
-  // and scrub each through the same public-safe boundary as Nits, DROPPING any that still leaks a private term.
+  // and scrub each through the same public-safe boundary as Nits, DROPPING any that still leaks a private term
+  // -- UNLESS the finding declares itself `alreadyPublicSafe` (a fixed, engineer-authored message with no
+  // interpolated contributor/AI content, e.g. the content lane's deterministic surface-review findings): the
+  // scrub exists to catch a private rubric term LEAKING into dynamically assembled text, not to mangle a static
+  // string an engineer already reviewed into the uninformative "[context]" placeholder (#7981).
   const gateBlockerLines = (args.gateBlockers ?? [])
     .filter((finding) => finding.code !== "ai_consensus_defect")
-    .map(gateBlockerLine)
-    .filter(Boolean)
-    .map((line) => publicSafeNit(line))
+    .map((finding) => {
+      const line = gateBlockerLine(finding);
+      return line && finding.alreadyPublicSafe ? line : publicSafeNit(line);
+    })
     .filter((line): line is string => line !== null);
   const blockers = [...consensusBlocker, ...gateBlockerLines];
   // Nits are the only renderer input not already routed through an existing public-safe filter (the gate's

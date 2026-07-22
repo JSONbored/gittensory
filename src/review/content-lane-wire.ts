@@ -54,8 +54,13 @@ const SURFACE_MANUAL_CODE = "surface_lane_manual";
 const SURFACE_UNKNOWN_VALIDATOR_CODE = "surface_lane_unknown_validator_id";
 const SURFACE_TITLE = "Registry surface review";
 
-function surfaceFinding(code: string, severity: AdvisorySeverity, summary: string): AdvisoryFinding {
-  return { code, title: SURFACE_TITLE, severity, detail: summary, publicText: summary };
+// `alreadyPublicSafe` defaults to false: `unregisteredValidatorIdFinding` below also calls this helper with a
+// summary that interpolates an OPERATOR-supplied `.loopover.yml` validatorId string, which -- unlike the fixed,
+// engineer-authored assessment messages `runSurfaceReview` produces (registry-logic.ts) -- is external content
+// this function has no way to vouch for. Only `surfaceVerdictToGate` below, whose `summary` comes solely from
+// that fixed assessment vocabulary, opts in explicitly.
+function surfaceFinding(code: string, severity: AdvisorySeverity, summary: string, alreadyPublicSafe = false): AdvisoryFinding {
+  return { code, title: SURFACE_TITLE, severity, detail: summary, publicText: summary, alreadyPublicSafe };
 }
 
 /** A diagnostic (non-blocking) finding for a `.loopover.yml` `contentLane.validatorId` that doesn't match any
@@ -82,10 +87,10 @@ export function surfaceVerdictToGate(result: SurfaceReviewResult): {
     return { evaluation: { enabled: true, conclusion: "success", title: SURFACE_TITLE, summary, blockers: [], warnings: [] }, finding: null };
   }
   if (result.verdict === "manual") {
-    const finding = surfaceFinding(SURFACE_MANUAL_CODE, "warning", summary);
+    const finding = surfaceFinding(SURFACE_MANUAL_CODE, "warning", summary, true);
     return { evaluation: { enabled: true, conclusion: "neutral", title: SURFACE_TITLE, summary, blockers: [], warnings: [finding] }, finding };
   }
-  const finding = surfaceFinding(SURFACE_REJECT_CODE, "critical", summary);
+  const finding = surfaceFinding(SURFACE_REJECT_CODE, "critical", summary, true);
   return { evaluation: { enabled: true, conclusion: "failure", title: SURFACE_TITLE, summary, blockers: [finding], warnings: [] }, finding };
 }
 

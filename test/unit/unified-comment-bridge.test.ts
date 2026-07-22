@@ -1005,6 +1005,58 @@ describe("gate blockers render in 'Why this is blocked' (FIX D1)", () => {
     expect(body).toContain("[context]");
   });
 
+  // #7981: metagraphed #7469/#7589/#7591/#7594 showed the reviewer's OWN static secret-detection message
+  // ("...include secret, wallet, PAT, or private-key material.") scrubbed into the confusing "...secret,
+  // [context], PAT..." — the privacy scrub above exists to catch a private term LEAKING into dynamically
+  // assembled/AI-generated text, not to mangle a fixed, engineer-authored string nobody ever leaked anything
+  // into. A finding that declares `alreadyPublicSafe: true` must render verbatim.
+  it("does NOT scrub a gate blocker's own static message when the finding declares alreadyPublicSafe (#7981)", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "failure",
+        summary: "A hard blocker was found.",
+        blockers: [
+          {
+            code: "surface_lane_reject",
+            severity: "critical",
+            title: "Registry surface review",
+            detail: "Subnet document appears to include secret, wallet, PAT, or private-key material.",
+            alreadyPublicSafe: true,
+          },
+        ],
+      }),
+      panelRows,
+      readinessTotal: 10,
+      changedFiles: 1,
+      footerMarkdown: footer,
+    });
+    expect(body).toContain("Subnet document appears to include secret, wallet, PAT, or private-key material.");
+    expect(body).not.toContain("[context]");
+  });
+
+  it("still scrubs the SAME blocker text when alreadyPublicSafe is absent (default stays scrub-everything)", () => {
+    const body = buildUnifiedCommentBody({
+      gate: gate({
+        conclusion: "failure",
+        summary: "A hard blocker was found.",
+        blockers: [
+          {
+            code: "surface_lane_reject",
+            severity: "critical",
+            title: "Registry surface review",
+            detail: "Subnet document appears to include secret, wallet, PAT, or private-key material.",
+          },
+        ],
+      }),
+      panelRows,
+      readinessTotal: 10,
+      changedFiles: 1,
+      footerMarkdown: footer,
+    });
+    expect(body).not.toContain("Subnet document appears to include secret, wallet, PAT, or private-key material.");
+    expect(body).toContain("[context]");
+  });
+
   // gittensory PR #5347: the real-world `summary` evaluateGateCheckCore produces for a "failure" conclusion is
   // LITERALLY `blockers.map(f => title + action).join("; ")` -- not the short hand-authored string the tests
   // above use. The earlier tests in this describe block never exercise that realistic value, so they never

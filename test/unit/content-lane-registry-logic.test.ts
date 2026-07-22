@@ -38,11 +38,40 @@ describe("toCoreVerdict", () => {
 });
 
 describe("containsSecretLikeText", () => {
-  it("detects PATs / private keys / wallet terms", () => {
+  it("detects PATs / private keys / wallet-path / mnemonic terms", () => {
     expect(containsSecretLikeText("ghp_" + "a".repeat(25))).toBe(true);
+    expect(containsSecretLikeText("github_pat_" + "a".repeat(25))).toBe(true);
     expect(containsSecretLikeText("BEGIN PRIVATE KEY")).toBe(true);
-    expect(containsSecretLikeText("my coldkey is ...")).toBe(true);
+    expect(containsSecretLikeText("BEGIN RSA PRIVATE KEY")).toBe(true);
+    expect(containsSecretLikeText("here is the seed phrase")).toBe(true);
+    expect(containsSecretLikeText("the mnemonic is ...")).toBe(true);
+    expect(containsSecretLikeText("wallet path: ~/.bittensor/wallets")).toBe(true);
     expect(containsSecretLikeText("totally benign text")).toBe(false);
+  });
+
+  // #7981: hotkey/coldkey used to be bare, unqualified matches -- confirmed root cause of 4 mis-closed
+  // metagraphed PRs (#7469, #7589, #7591, #7594) in one day. A Bittensor "hotkey" is a PUBLIC miner
+  // identifier, not secret material, and shows up routinely in ordinary registry content.
+  it("still flags genuine hotkey/coldkey key-material leaks (path/private-key/password/mnemonic/seed adjacency)", () => {
+    expect(containsSecretLikeText("hotkey path: ~/.bittensor/wallets/default/hotkeys/default")).toBe(true);
+    expect(containsSecretLikeText("coldkey path: ~/.bittensor/wallets/default/coldkey")).toBe(true);
+    expect(containsSecretLikeText("hotkey private key: 0xabc123")).toBe(true);
+    expect(containsSecretLikeText("hotkey_private_key=0xabc123")).toBe(true);
+    expect(containsSecretLikeText("coldkey password: hunter2")).toBe(true);
+    expect(containsSecretLikeText("hotkey mnemonic: abandon abandon...")).toBe(true);
+    expect(containsSecretLikeText("coldkey seed: abandon abandon...")).toBe(true);
+    expect(containsSecretLikeText("private hotkey: 0xabc123")).toBe(true);
+    expect(containsSecretLikeText("private coldkey: 0xabc123")).toBe(true);
+  });
+
+  it("no longer flags a bare hotkey/coldkey mention with no key-material qualifier (#7981 regression)", () => {
+    // The exact 4 incident payloads (or the substrings that actually tripped the old bare-word match).
+    expect(containsSecretLikeText("GET /api/v1/miners/hotkey/{hotkey} on api.affine.io")).toBe(false);
+    expect(containsSecretLikeText('{"id":"sn-120-affine-miner-by-hotkey","name":"Affine miner detail by hotkey"}')).toBe(false);
+    expect(containsSecretLikeText('{"notes":"block_number, miner_hotkey, uid, model_revision"}')).toBe(false);
+    expect(containsSecretLikeText("The /api/v1/benchmark/chunks route requires a sourceDate parameter. No wallet/hotkey data.")).toBe(false);
+    expect(containsSecretLikeText("my coldkey is a public SS58 address")).toBe(false);
+    expect(containsSecretLikeText("this endpoint returns the coldkey balance")).toBe(false);
   });
 });
 
