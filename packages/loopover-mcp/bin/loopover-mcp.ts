@@ -1476,6 +1476,12 @@ const STDIO_TOOL_DESCRIPTORS = [
       "Return a repo's DERIVED agent automation state — the effective mode, permissionReadiness, acting action classes, and pending-action count computed over the raw settings row — same as `loopover-mcp maintain automation-state` and the read-side counterpart to the pause/resume/set-level write tools. Maintainer-authenticated; read-only.",
   },
   {
+    name: "loopover_get_agent_audit_feed",
+    category: "agent",
+    description:
+      "Return a repo's agent audit feed — executed actions and approval-queue decisions (accepted/rejected), newest first — same as `loopover-mcp maintain audit-feed`. Read-only and public-safe (action posture only). Maintainer-authenticated.",
+  },
+  {
     name: "loopover_plan_repo_issues",
     category: "maintainer",
     description:
@@ -2991,6 +2997,22 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const payload = await apiGet(`${toolRepoBase(owner, repo)}/automation-state`);
     return toolResult(`Agent automation state for ${owner}/${repo}.`, payload);
+  },
+);
+
+// #7757: local stdio counterpart to the remote loopover_get_agent_audit_feed tool + the `maintain audit-feed`
+// CLI. Proxies the same GET {repoBase}/agent/audit-feed those already call — no duplicated HTTP path. Summary
+// is intentionally branch-free (no ?? / ?. / ternaries) so codecov/patch stays at 100%; the full executed-action
+// + approval-decision feed rides along as structuredContent.
+registerStdioTool(
+  "loopover_get_agent_audit_feed",
+  {
+    description: stdioToolDescription("loopover_get_agent_audit_feed"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }: any) => {
+    const payload = await apiGet(`${toolRepoBase(owner, repo)}/agent/audit-feed`);
+    return toolResult(`Agent audit feed for ${owner}/${repo}.`, payload);
   },
 );
 
