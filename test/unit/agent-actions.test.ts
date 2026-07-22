@@ -1785,6 +1785,115 @@ describe("closeConcreteEvidence — concrete-evidence exemption from the close-p
     expect(held.some((a) => a === ambiguousClose)).toBe(false);
     expect(held.some((a) => a.actionClass === "label" && a.label === AGENT_LABEL_NEEDS_REVIEW)).toBe(true);
   });
+
+  // #7986: closeConcreteEvidenceCodes preserves the SPECIFIC justifying code(s) alongside the collapsed
+  // closeConcreteEvidence boolean, so downgradeCloseToHold can check a close's justification against a live
+  // per-rule precision track record.
+  it("closeConcreteEvidenceCodes carries the specific blocker code(s) that justified a blocker-code-based concrete close", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", gateBlockerCodes: ["secret_leak"], blockerTitles: ["Possible leaked secret"], pr: { labels: [] } }));
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidence: true, closeConcreteEvidenceCodes: ["secret_leak"] });
+  });
+
+  it("closeConcreteEvidenceCodes is EMPTY for CI-failure-justified concrete evidence -- CI is not a 'rule' with a per-code track record", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "failed", failingCheckNames: ["ci"], pr: { labels: [] } }));
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidence: true, closeConcreteEvidenceCodes: [] });
+  });
+
+  it("closeConcreteEvidenceCodes is EMPTY for a base-conflict-justified concrete evidence", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], mergeableState: "dirty" } }));
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidence: true, closeConcreteEvidenceCodes: [] });
+  });
+
+  it("closeConcreteEvidenceCodes is EMPTY for a duplicate-link-justified concrete evidence", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", pr: { labels: [], linkedDuplicateCount: 1 } }));
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidence: true, closeConcreteEvidenceCodes: [] });
+  });
+
+  it("closeConcreteEvidenceCodes excludes an AI-judgment code even when a real concrete code is also present", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto" }, ciState: "passed", gateBlockerCodes: ["ai_review_split", "secret_leak"], blockerTitles: ["x", "y"], pr: { labels: [] } }));
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidenceCodes: ["secret_leak"] });
+  });
+});
+
+describe("downgradeCloseToHold — per-rule track record overrides the blanket exemption (#7986)", () => {
+  const closeOf = (plan: ReturnType<typeof planAgentMaintenanceActions>) => plan.find((a) => a.actionClass === "close");
+  const concreteClosePlan = (codes: string[]) =>
+    planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", gateBlockerCodes: codes, blockerTitles: codes.map(() => "x"), pr: { labels: [] } }));
+  const linkedIssueClosePlan = () =>
+    planAgentMaintenanceActions(
+      input({
+        conclusion: "success",
+        autonomy: { close: "auto", review_state_label: "auto" },
+        ciState: "passed",
+        linkedIssueHardRule: { violated: true, reason: "Linked issue #5 is labeled `maintainer-only` — it is not open for community PRs." },
+        linkedIssueVerify: { verifyBeforeClose: false, closeDelaySeconds: 0 },
+        pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" },
+      }),
+    );
+
+  it("INCIDENT REPLAY: a concrete-evidence code with 0% measured precision over a real sample loses its exemption, even with closeHoldOnly FALSE", () => {
+    const plan = concreteClosePlan(["surface_lane_reject"]);
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidence: true, closeConcreteEvidenceCodes: ["surface_lane_reject"] });
+    // closeHoldOnly is FALSE here -- the PROJECT aggregate looks fine (this is exactly the #7984 dilution
+    // scenario: one bad rule hiding inside an otherwise-healthy project). The per-rule track record alone
+    // must still catch it.
+    const held = downgradeCloseToHold(plan, false, {}, new Set(["surface_lane_reject"]));
+    expect(held.some((a) => a.actionClass === "close")).toBe(false);
+    expect(held.some((a) => a.actionClass === "label" && a.label === AGENT_LABEL_NEEDS_REVIEW && a.labelOp === "add")).toBe(true);
+  });
+
+  it("a healthy concrete-evidence rule (not in untrustworthyRuleCodes) is NEVER spuriously held, even with closeHoldOnly true", () => {
+    const plan = concreteClosePlan(["secret_leak"]);
+    const held = downgradeCloseToHold(plan, true, {}, new Set(["surface_lane_reject"])); // a DIFFERENT code is untrustworthy
+    expect(held).toBe(plan); // fully unchanged -- secret_leak is not in the untrustworthy set
+    expect(held.some((a) => a.actionClass === "close")).toBe(true);
+  });
+
+  it("an untrustworthy code with an EMPTY set (the default) never triggers the per-rule path -- byte-identical to pre-#7986 behavior", () => {
+    const plan = concreteClosePlan(["surface_lane_reject"]);
+    expect(downgradeCloseToHold(plan, false)).toBe(plan); // no 4th arg at all
+    expect(downgradeCloseToHold(plan, false, {}, new Set())).toBe(plan); // explicit empty set
+  });
+
+  it("a close backed by a MIX of a trustworthy and an untrustworthy code KEEPS its exemption (only ALL-untrustworthy loses it)", () => {
+    const plan = concreteClosePlan(["secret_leak", "surface_lane_reject"]);
+    expect(closeOf(plan)?.closeConcreteEvidenceCodes).toEqual(["secret_leak", "surface_lane_reject"]);
+    const held = downgradeCloseToHold(plan, false, {}, new Set(["surface_lane_reject"]));
+    expect(held).toBe(plan); // secret_leak alone still justifies the exemption
+    expect(held.some((a) => a.actionClass === "close")).toBe(true);
+  });
+
+  it("downgrades once BOTH justifying codes are untrustworthy", () => {
+    const plan = concreteClosePlan(["secret_leak", "surface_lane_reject"]);
+    const held = downgradeCloseToHold(plan, false, {}, new Set(["secret_leak", "surface_lane_reject"]));
+    expect(held.some((a) => a.actionClass === "close")).toBe(false);
+  });
+
+  it("CI-failure-justified concrete evidence (empty closeConcreteEvidenceCodes) is NEVER downgraded via the per-rule path, no matter what's in untrustworthyRuleCodes", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "failed", failingCheckNames: ["ci"], pr: { labels: [] } }));
+    expect(closeOf(plan)?.closeConcreteEvidenceCodes).toEqual([]);
+    // A pathological untrustworthyRuleCodes set containing every string imaginable still must not match an
+    // EMPTY justifying-codes array -- codes.length > 0 is a hard guard, not just an optimization.
+    const held = downgradeCloseToHold(plan, false, {}, new Set(["ci", ""]));
+    expect(held).toBe(plan);
+    expect(held.some((a) => a.actionClass === "close")).toBe(true);
+  });
+
+  it("a non-concrete (ambiguous) heuristic close is unaffected by untrustworthyRuleCodes -- it already has no exemption to lose, and the project-level closeHoldOnly path still governs it", () => {
+    const plan = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", blockerTitles: ["readiness score too low"], pr: { labels: [] } }));
+    expect(closeOf(plan)).toMatchObject({ closeConcreteEvidence: false });
+    // closeHoldOnly false + no untrustworthy match -> unchanged (Reason A requires closeHoldOnly).
+    expect(downgradeCloseToHold(plan, false, {}, new Set(["some_code"]))).toBe(plan);
+    // closeHoldOnly true -> still downgraded via the EXISTING project-level path, untouched by #7986.
+    const held = downgradeCloseToHold(plan, true, {}, new Set());
+    expect(held.some((a) => a.actionClass === "close")).toBe(false);
+  });
+
+  it("the deterministic linked-issue-hard-rule close stays exempt from the per-rule path too (it never carries closeConcreteEvidenceCodes)", () => {
+    const plan = linkedIssueClosePlan();
+    const held = downgradeCloseToHold(plan, false, {}, new Set(["anything"]));
+    expect(held).toBe(plan);
+  });
 });
 
 // #module-cycle-regression: agent-actions.ts imports AI_JUDGMENT_BLOCKER_CODES from rules/advisory.ts, which

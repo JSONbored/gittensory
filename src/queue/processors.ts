@@ -631,6 +631,7 @@ import {
 import {
   isCloseHoldOnly,
   isHoldOnly,
+  readUntrustworthyRuleCodes,
   recordPrOutcome,
   recordReversalSignals,
 } from "../review/outcomes-wire";
@@ -2131,18 +2132,23 @@ async function resolveLiveMigrationCollisionHold(
  * downgrades), in order. PURE — the live flag reads happen at the call site (each fail-open), so this composes
  * only the transforms:
  *   • holdOnly      → downgradeMergeToHold (would-MERGE → human HOLD), else passthrough.
- *   • closeHoldOnly → downgradeCloseToHold (HEURISTIC would-CLOSE → human HOLD; deterministic close exempt), else passthrough.
- * Both off (the common path) returns the plan byte-identically. The breakers don't interfere: the merge
- * downgrade only touches `merge`/ready-label, the close downgrade only touches a heuristic `close`.
+ *   • closeHoldOnly → downgradeCloseToHold (HEURISTIC would-CLOSE → human HOLD; deterministic close exempt).
+ * `untrustworthyRuleCodes` (#7986) is ALWAYS passed to downgradeCloseToHold, even when `closeHoldOnly` is
+ * false — that function is internally self-gating (a no-op unless something is actually downgradable either
+ * via the project flag or a per-rule match), so this stays byte-identical to before #7986 whenever the set is
+ * empty (the default) or nothing matches. Both `holdOnly`/`closeHoldOnly` off AND an empty
+ * `untrustworthyRuleCodes` (the common path) returns the plan byte-identically. The breakers don't interfere:
+ * the merge downgrade only touches `merge`/ready-label, the close downgrade only touches a heuristic `close`.
  */
 export function applyPrecisionBreakers(
   planned: PlannedAgentAction[],
   holdOnly: boolean,
   closeHoldOnly: boolean,
   labelSettings: AgentDispositionLabelSettings = {},
+  untrustworthyRuleCodes: ReadonlySet<string> = new Set(),
 ): PlannedAgentAction[] {
   const afterMerge = holdOnly ? downgradeMergeToHold(planned, true, labelSettings) : planned;
-  return closeHoldOnly ? downgradeCloseToHold(afterMerge, true, labelSettings) : afterMerge;
+  return downgradeCloseToHold(afterMerge, closeHoldOnly, labelSettings, untrustworthyRuleCodes);
 }
 
 /** PURE: which precision-breaker directions actually rewrote the plan — i.e. `planned` had a merge/close that
@@ -3182,6 +3188,9 @@ async function runAgentMaintenancePlanAndExecute(
       migrationCollisionLabel: settings.migrationCollisionLabel,
       pendingClosureLabel: settings.pendingClosureLabel,
     },
+    // #7986: a cheap, cron-refreshed single-row read (readUntrustworthyRuleCodes) — never a fresh aggregate
+    // query on the hot webhook path. Fail-open (empty set) on any read error, same as isHoldOnly/isCloseHoldOnly.
+    await readUntrustworthyRuleCodes(env),
   );
   // Observability (#terminal-outcome-audit): a bounded-cardinality counter (direction only — no repo/PR/reason
   // text) so an operator can see, at a glance, how much of the plan a breaker is currently rewriting, without

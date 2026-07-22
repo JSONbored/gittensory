@@ -41,6 +41,7 @@ import {
 } from "./auto-tune";
 import { computeGateEval } from "./parity";
 import { LOOPOVER_NATIVE_SOURCE } from "./parity-wire";
+import { computeBlendedRuleGateEval, rulesBelowClosePrecisionFloor } from "./rule-gate-eval";
 
 /** PURE: parse the PR number an "Reverts #N / Reverts owner/repo#N" body refers to (GitHub's revert PRs).
  *  Mirrors reviewbot runtime.ts parseRevertedPrNumber. Returns undefined when the body isn't a revert. */
@@ -217,6 +218,46 @@ export function createFlagStore(env: Env): FlagStore {
       }
     },
   };
+}
+
+// #7986: which deterministic rule codes currently sit below their OWN measured close-precision floor
+// (rulesBelowClosePrecisionFloor over computeBlendedRuleGateEval, #7984) — a cheap, cron-refreshed cache of an
+// otherwise-expensive fleet-wide aggregate, reusing system_flags (a generic key/value table, not booleans-only
+// despite its FlagStore-facing name above) so no schema change is needed. Mirrors the SAME "expensive compute
+// on a cron tick, cheap single-row read at decision time" split isHoldOnly/isCloseHoldOnly already use for the
+// project-level breaker flags. FAIL-SAFE: a read error, missing row, or unparseable value degrades to an EMPTY
+// set — exactly #7986's own "insufficient/unavailable data defaults to keeping the exemption" rule, never the
+// opposite direction (a read failure must never spuriously revoke every rule's exemption at once).
+const UNTRUSTWORTHY_RULE_CODES_FLAG_KEY = "rule_untrustworthy_codes:global";
+
+/** Read the cron-cached set of rule codes currently below their close-precision floor. See this constant's own
+ *  doc comment above for the fail-safe contract. */
+export async function readUntrustworthyRuleCodes(env: Env): Promise<ReadonlySet<string>> {
+  try {
+    const row = await env.DB.prepare("SELECT value FROM system_flags WHERE key = ?")
+      .bind(UNTRUSTWORTHY_RULE_CODES_FLAG_KEY)
+      .first<{ value: string }>();
+    if (!row?.value) return new Set();
+    const parsed: unknown = JSON.parse(row.value);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((code): code is string => typeof code === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Write the cron-computed set of rule codes currently below their close-precision floor, replacing whatever
+ *  was cached before (this is a SNAPSHOT, not an append-only log — a code that recovers or that no longer has
+ *  a large enough sample must disappear from the set on the next tick, not linger). Best-effort: a write
+ *  failure is swallowed, matching every other cron-tick cache write in this module — the NEXT tick will retry,
+ *  and until then {@link readUntrustworthyRuleCodes} keeps serving the last successfully-written snapshot. */
+async function writeUntrustworthyRuleCodes(env: Env, codes: readonly string[]): Promise<void> {
+  await env.DB.prepare(
+    "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+  )
+    .bind(UNTRUSTWORTHY_RULE_CODES_FLAG_KEY, JSON.stringify([...codes]))
+    .run()
+    .catch(() => undefined);
 }
 
 // ── review_audit append (the canonical eval/parity store) ───────────────────────────────────────────────────
@@ -766,6 +807,16 @@ export async function runSelfTuneBreaker(env: Env): Promise<void> {
 
     await runBreakerPassForReport(flags, plainPass.report, plainPass.engagedHoldonly, plainPass.engagedClosehold, nowMs, "");
     await runBreakerPassForReport(flags, minerPass.report, minerPass.engagedHoldonly, minerPass.engagedClosehold, nowMs, "miner_");
+
+    // #7986: refresh the per-rule track-record cache the concrete-evidence breaker exemption reads
+    // (readUntrustworthyRuleCodes) -- SAME window, pooled cross-project (a rule's trustworthiness is a
+    // property of the rule, not of any one repo it happened to trip). Independent of the two passes above:
+    // a failure here must not prevent (and does not roll back) the merge/close breaker engagement that just
+    // completed -- computeBlendedRuleGateEval and writeUntrustworthyRuleCodes are both already fail-safe on
+    // their own, so no extra try/catch is needed beyond this function's own outer one.
+    const ruleReport = await computeBlendedRuleGateEval(env, { days: BREAKER_EVAL_WINDOW_DAYS, nowMs, source: LOOPOVER_NATIVE_SOURCE });
+    const untrustworthyCodes = rulesBelowClosePrecisionFloor(ruleReport.rows).map((row) => row.ruleCode);
+    await writeUntrustworthyRuleCodes(env, untrustworthyCodes);
   } catch (error) {
     console.warn(
       JSON.stringify({

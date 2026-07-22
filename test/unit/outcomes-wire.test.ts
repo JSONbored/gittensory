@@ -5,6 +5,7 @@ import {
   isCloseHoldOnly,
   isHoldOnly,
   parseRevertedPrNumber,
+  readUntrustworthyRuleCodes,
   recordPrOutcome,
   recordReversalSignals,
   resolveDispositionReason,
@@ -619,6 +620,123 @@ describe("isHoldOnly + createFlagStore (system_flags, migration 0054)", () => {
     expect(await flags.flagSetAt("holdonly:owner/repo")).toBeNull();
     await flags.setFlag("holdonly:owner/repo", true);
     expect(await flags.flagSetAt("holdonly:owner/repo")).toBeTruthy();
+  });
+});
+
+describe("readUntrustworthyRuleCodes (#7986, same system_flags table)", () => {
+  it("returns an empty set when nothing has ever been written", async () => {
+    const env = createTestEnv();
+    const codes = await readUntrustworthyRuleCodes(env);
+    expect(codes.size).toBe(0);
+  });
+
+  it("round-trips a written snapshot via runSelfTuneBreaker's own cache write", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('rule_untrustworthy_codes:global', ?, CURRENT_TIMESTAMP)",
+    )
+      .bind(JSON.stringify(["surface_lane_reject", "missing_linked_issue"]))
+      .run();
+    const codes = await readUntrustworthyRuleCodes(env);
+    expect([...codes].sort()).toEqual(["missing_linked_issue", "surface_lane_reject"]);
+  });
+
+  it("degrades to an empty set (fail-open) when the stored value is invalid JSON", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('rule_untrustworthy_codes:global', ?, CURRENT_TIMESTAMP)",
+    )
+      .bind("{not valid json")
+      .run();
+    expect((await readUntrustworthyRuleCodes(env)).size).toBe(0);
+  });
+
+  it("degrades to an empty set when the stored value parses but isn't an array", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('rule_untrustworthy_codes:global', ?, CURRENT_TIMESTAMP)",
+    )
+      .bind(JSON.stringify({ not: "an array" }))
+      .run();
+    expect((await readUntrustworthyRuleCodes(env)).size).toBe(0);
+  });
+
+  it("filters out any non-string element rather than throwing", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('rule_untrustworthy_codes:global', ?, CURRENT_TIMESTAMP)",
+    )
+      .bind(JSON.stringify(["surface_lane_reject", 42, null, "missing_linked_issue"]))
+      .run();
+    const codes = await readUntrustworthyRuleCodes(env);
+    expect([...codes].sort()).toEqual(["missing_linked_issue", "surface_lane_reject"]);
+  });
+
+  it("fails open (empty set) when the DB read throws", async () => {
+    const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => { throw new Error("d1 down"); } }) }) } } as unknown as Env;
+    expect((await readUntrustworthyRuleCodes(env)).size).toBe(0);
+  });
+
+  it("treats an empty-string stored value the same as no row at all", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('rule_untrustworthy_codes:global', '', CURRENT_TIMESTAMP)",
+    ).run();
+    expect((await readUntrustworthyRuleCodes(env)).size).toBe(0);
+  });
+});
+
+describe("runSelfTuneBreaker — also refreshes the per-rule track-record cache (#7986)", () => {
+  it("INCIDENT REPLAY: writes an isolated 0%-precision rule to the cache even while its project's own close-precision aggregate looks healthy", async () => {
+    const env = createTestEnv();
+    const seedClose = async (id: string, ruleCode: string, truth: "closed" | "merged"): Promise<void> => {
+      await env.DB.prepare(
+        `INSERT INTO review_audit (id, project, target_id, event_type, decision, summary, source, created_at) VALUES (?, 'metagraphed/metagraphed', ?, 'gate_decision', 'close', ?, 'gittensory-native', ?)`,
+      )
+        .bind(`gd-${id}`, `metagraphed/metagraphed#${id}`, ruleCode, new Date().toISOString())
+        .run();
+      await env.DB.prepare(
+        `INSERT INTO review_audit (id, project, target_id, event_type, decision, source, created_at) VALUES (?, 'metagraphed/metagraphed', ?, 'pr_outcome', ?, 'github', ?)`,
+      )
+        .bind(`po-${id}`, `metagraphed/metagraphed#${id}`, truth, new Date().toISOString())
+        .run();
+    };
+    // The buggy rule: 12 closes (clears AUTOTUNE_MIN_DECIDED), every single one later merged -- 0% precision.
+    for (let i = 1; i <= 12; i++) await seedClose(`bad-${i}`, "surface_lane_reject", "merged");
+    // The SAME project's every OTHER close reason: perfectly healthy -- would dilute a project-wide number,
+    // exactly the scenario #7984/#7986 exist to catch.
+    for (let i = 1; i <= 20; i++) await seedClose(`good-${i}`, "missing_linked_issue", "closed");
+
+    await runSelfTuneBreaker(env);
+    const codes = await readUntrustworthyRuleCodes(env);
+    expect(codes.has("surface_lane_reject")).toBe(true);
+    expect(codes.has("missing_linked_issue")).toBe(false);
+  });
+
+  it("writes an empty set (not a stale one) once every previously-bad rule recovers on a later tick", async () => {
+    const env = createTestEnv();
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO system_flags (key, value, updated_at) VALUES ('rule_untrustworthy_codes:global', ?, CURRENT_TIMESTAMP)",
+    )
+      .bind(JSON.stringify(["stale_code"]))
+      .run();
+    await runSelfTuneBreaker(env); // no review_audit rows at all -> nothing below any floor
+    const codes = await readUntrustworthyRuleCodes(env);
+    expect(codes.has("stale_code")).toBe(false);
+  });
+
+  it("swallows a write failure on the rule-code cache without throwing or rolling back the breaker passes that already ran", async () => {
+    const env = createTestEnv();
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = ((sql: string) => {
+      if (/INSERT OR REPLACE INTO system_flags/i.test(sql)) {
+        return {
+          bind: () => ({ run: async () => { throw new Error("d1 down"); } }),
+        } as unknown as ReturnType<typeof realPrepare>;
+      }
+      return realPrepare(sql);
+    }) as typeof env.DB.prepare;
+    await expect(runSelfTuneBreaker(env)).resolves.toBeUndefined();
   });
 });
 

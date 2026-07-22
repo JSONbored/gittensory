@@ -165,6 +165,14 @@ export type PlannedAgentAction = {
   // finding, round 2 — an AI-only blocker must not bypass its own precision safety net). Absent/false ⇒ the
   // close stays subject to the breaker like any other heuristic close (the conservative default).
   closeConcreteEvidence?: boolean;
+  // #7986: the specific gate-blocker code(s) (a subset of CONCRETE_EVIDENCE_BLOCKER_CODES) that justify
+  // `closeConcreteEvidence: true` via the blocker-code path specifically -- empty/absent when the evidence is
+  // CI-failure/base-conflict/duplicate-link based instead (those are not "rules" with a measurable per-code
+  // track record the same way a blocker code is, so they are never subject to the per-rule downgrade
+  // downgradeCloseToHold now also applies). Lets downgradeCloseToHold check a close's justification against a
+  // live per-rule precision track record, instead of trusting blanket CONCRETE_EVIDENCE_BLOCKER_CODES
+  // membership forever regardless of that specific code's own real-world accuracy.
+  closeConcreteEvidenceCodes?: string[];
   expectedHeadSha?: string;
   // For an `approve` action: retract the bot's own prior approval instead of posting a new one — a later commit
   // no longer qualifies for approval, but the PR isn't merging or closing this pass, so the stale APPROVE
@@ -216,13 +224,21 @@ const CONCRETE_EVIDENCE_BLOCKER_CODES = new Set<string>([
   "content_lane_deliverable_missing",
 ]);
 
+/** The specific gate-blocker code(s) that justify concrete evidence via the {@link CONCRETE_EVIDENCE_BLOCKER_CODES}
+ *  path specifically (#7986) — a subset of `input.gateBlockerCodes`, excluding advisory.ts's own
+ *  {@link AI_JUDGMENT_BLOCKER_CODES} (belt-and-suspenders, same guard {@link hasConcreteCloseEvidence} always
+ *  had). Empty when the close's ONLY concrete evidence is CI-failure/base-conflict/duplicate-link based
+ *  (`hasConcreteCloseEvidence` returns true via one of those without ever reaching this) — those are not
+ *  "rules" with a measurable per-code track record the same way a blocker code is, so `downgradeCloseToHold`'s
+ *  per-rule check must never apply to them. */
+function concreteCloseEvidenceCodes(input: AgentActionPlanInput): string[] {
+  return (input.gateBlockerCodes ?? []).filter((code) => CONCRETE_EVIDENCE_BLOCKER_CODES.has(code) && !AI_JUDGMENT_BLOCKER_CODES.has(code));
+}
+
 /** True when a would-CLOSE is justified by at least one piece of concrete, non-judgment evidence: red CI, a
- *  base conflict, a deterministic duplicate-PR link, or a gate-blocker code in {@link CONCRETE_EVIDENCE_BLOCKER_CODES}.
- *  Mixed blockers (one concrete + one ambiguous) still count as concrete — the concrete signal alone already
- *  justifies the close regardless of what else is present. Defensively excludes advisory.ts's own
- *  {@link AI_JUDGMENT_BLOCKER_CODES} even though none should ever land in CONCRETE_EVIDENCE_BLOCKER_CODES — a
- *  belt-and-suspenders guard against exactly the regression a gate review already caught once (`ai_consensus_defect`
- *  wrongly classified as concrete). */
+ *  base conflict, a deterministic duplicate-PR link, or a gate-blocker code in {@link CONCRETE_EVIDENCE_BLOCKER_CODES}
+ *  (via {@link concreteCloseEvidenceCodes}). Mixed blockers (one concrete + one ambiguous) still count as
+ *  concrete — the concrete signal alone already justifies the close regardless of what else is present. */
 function hasConcreteCloseEvidence(input: AgentActionPlanInput, ciFailed: boolean, isConflict: boolean): boolean {
   if (ciFailed || isConflict) return true;
   // A duplicate-PR link stays concrete evidence even now that the close has its own live staleness recheck
@@ -233,7 +249,7 @@ function hasConcreteCloseEvidence(input: AgentActionPlanInput, ciFailed: boolean
   // itself closes. A duplicate-issue-link, like a base conflict, is still a deterministic, zero-hallucination
   // fact about the linked-issue graph; it just needs to be re-verified fresh, which it now is.
   if ((input.pr.linkedDuplicateCount ?? 0) > 0) return true;
-  return (input.gateBlockerCodes ?? []).some((code) => CONCRETE_EVIDENCE_BLOCKER_CODES.has(code) && !AI_JUDGMENT_BLOCKER_CODES.has(code));
+  return concreteCloseEvidenceCodes(input).length > 0;
 }
 
 export type AgentActionPlanInput = {
@@ -554,20 +570,51 @@ export function downgradeMergeToHold(planned: PlannedAgentAction[], holdOnly: bo
  * class of error it is watching for. A heuristic close with no concrete evidence (an unconfirmed AI verdict,
  * a bare gate-verdict=failure, or a slop-score threshold) stays fully subject to the breaker.
  *
+ * #7986: the concrete-evidence exemption above is no longer UNCONDITIONAL. `untrustworthyRuleCodes` — the
+ * set of blocker codes whose OWN measured close-precision has dropped below its floor over a real sample
+ * (`rulesBelowClosePrecisionFloor` over `computeBlendedRuleGateEval`, #7984) — makes a close's concrete
+ * evidence STOP counting as an exemption when EVERY code that justified it (`closeConcreteEvidenceCodes`) is
+ * in that set. This fires INDEPENDENTLY of `closeHoldOnly` (the PROJECT-level flag): a single systematically
+ * wrong rule can sit at 0% precision while diluted into an otherwise-healthy project aggregate (exactly the
+ * class of bug #7984 exists to surface), so this rule-level check must not wait for the project flag to
+ * engage. A code with an insufficient sample, or one that isn't in the set at all, keeps its exemption --
+ * `rulesBelowClosePrecisionFloor`'s own "insufficient sample defaults to keeping the exemption" contract.
+ * `untrustworthyRuleCodes` defaults to empty (byte-identical to pre-#7986 behavior when omitted).
+ *
  * The existing changes-requested label is KEPT (it correctly says the PR is not mergeable). PURE + idempotent:
- * with `closeHoldOnly` false this returns the plan UNCHANGED (the common path); with no downgradable close
- * planned it is also a no-op. Only ever makes the system MORE cautious.
+ * with `closeHoldOnly` false AND no untrustworthy-rule match, this returns the plan UNCHANGED (the common
+ * path); with no downgradable close planned it is also a no-op. Only ever makes the system MORE cautious.
  */
-export function downgradeCloseToHold(planned: PlannedAgentAction[], closeHoldOnly: boolean, labelSettings: AgentDispositionLabelSettings = {}): PlannedAgentAction[] {
-  const isHeuristicClose = (action: PlannedAgentAction): boolean => action.actionClass === "close" && action.closeKind === "heuristic" && action.closeConcreteEvidence !== true;
-  if (!closeHoldOnly || !planned.some(isHeuristicClose)) return planned;
+export function downgradeCloseToHold(
+  planned: PlannedAgentAction[],
+  closeHoldOnly: boolean,
+  labelSettings: AgentDispositionLabelSettings = {},
+  untrustworthyRuleCodes: ReadonlySet<string> = new Set(),
+): PlannedAgentAction[] {
+  // Reason A (project-level, unchanged from before #7986): no concrete evidence at all, AND the project's
+  // close-precision breaker has engaged.
+  const noConcreteEvidenceUnderProjectBreaker = (action: PlannedAgentAction): boolean =>
+    action.actionClass === "close" && action.closeKind === "heuristic" && action.closeConcreteEvidence !== true && closeHoldOnly;
+  // Reason B (#7986, per-rule, independent of closeHoldOnly): HAS concrete evidence, but every code that
+  // justified it has its own bad track record. `.every` (not `.some`) so a close backed by a MIX of a
+  // trustworthy code and an untrustworthy one keeps its exemption via the trustworthy code -- only a close
+  // whose EVERY justifying code is known-bad loses it.
+  const everyJustifyingCodeUntrustworthy = (action: PlannedAgentAction): boolean => {
+    const codes = action.closeConcreteEvidenceCodes ?? [];
+    return codes.length > 0 && codes.every((code) => untrustworthyRuleCodes.has(code));
+  };
+  const isDowngradableClose = (action: PlannedAgentAction): boolean =>
+    action.actionClass === "close" &&
+    action.closeKind === "heuristic" &&
+    (noConcreteEvidenceUnderProjectBreaker(action) || (action.closeConcreteEvidence === true && everyJustifyingCodeUntrustworthy(action)));
+  if (!planned.some(isDowngradableClose)) return planned;
   const labels = resolveAgentDispositionLabels(labelSettings);
-  // Drop ONLY the heuristic close(s); a deterministic linked-issue-hard-rule close (if any) is left intact.
-  const next = planned.filter((action) => !isHeuristicClose(action));
+  // Drop ONLY the downgradable close(s); a deterministic linked-issue-hard-rule close (if any) is left intact.
+  const next = planned.filter((action) => !isDowngradableClose(action));
   // The dropped close means the PR is held for a person — surface the manual-review label. Idempotent: only add when
   // absent (e.g. a guarded-but-passing plan may already carry it). NEVER adds a merge/approve.
   const alreadyNeedsReview = labels.manualReview !== null && next.some((action) => action.actionClass === "label" && action.label === labels.manualReview && action.labelOp !== "remove");
-  const droppedClose = planned.find(isHeuristicClose);
+  const droppedClose = planned.find(isDowngradableClose);
   if (labels.manualReview !== null && !alreadyNeedsReview) {
     next.push({
       actionClass: "label",
@@ -1365,6 +1412,10 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       closeComment: closeMessage(closeReasons),
       closeKind: "heuristic",
       closeConcreteEvidence: hasConcreteCloseEvidence(input, ciFailed, isConflict),
+      // #7986: preserved alongside the collapsed boolean above so downgradeCloseToHold can check this specific
+      // close's justification against a live per-rule precision track record. Empty when the evidence above
+      // came from ciFailed/isConflict/linkedDuplicateCount instead of a blocker code.
+      closeConcreteEvidenceCodes: concreteCloseEvidenceCodes(input),
       // Pin like merge/approve (#2452): lets the accept-time supersede check detect a force-push after staging;
       // the executor's own step-6 live-CI re-check (#2128) separately covers the CI-driven reason above.
       ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),

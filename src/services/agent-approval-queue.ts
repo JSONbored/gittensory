@@ -5,7 +5,7 @@ import { loadLinkedIssueHardRules, resolveLinkedIssueHardRule } from "../review/
 import { executeAgentMaintenanceActions, pendingActionToPlanned } from "./agent-action-executor";
 import { downgradeCloseToHold, downgradeMergeToHold, isProtectedAutomationAuthor, type PlannedAgentAction } from "../settings/agent-actions";
 import { findBlacklistEntry } from "../settings/contributor-blacklist";
-import { isCloseHoldOnly, isHoldOnly } from "../review/outcomes-wire";
+import { isCloseHoldOnly, isHoldOnly, readUntrustworthyRuleCodes } from "../review/outcomes-wire";
 import { fetchLiveCiAggregate, fetchLivePullRequestMergeState, fetchLivePullRequestReviewDecision, fetchLivePullRequestState, fetchLiveReviewThreadBlockers, fetchRequiredStatusContexts, mergeRequiredCiContexts } from "../github/backfill";
 import { githubRateLimitAdmissionKeyForToken } from "../github/client";
 import type { AgentPendingActionParams, AgentPendingActionRecord } from "../types";
@@ -325,7 +325,14 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
   // Re-apply the SAME merge/close precision circuit-breakers the live webhook path applies before executing, so
   // a breaker engaged AFTER staging (an operator halting a runaway auto-merge, or the auto-tuner tripping on a
   // precision drop) still holds this sticky pending row instead of executing it unmodified. (#2127)
-  const [holdOnly, closeHoldOnly] = await Promise.all([isHoldOnly(env, pending.repoFullName), isCloseHoldOnly(env, pending.repoFullName)]);
+  // #7986: the same per-rule track-record read the live webhook path uses -- a staged close backed ONLY by a
+  // now-untrustworthy code must not slip through just because it was accepted from the approval queue instead
+  // of the live path.
+  const [holdOnly, closeHoldOnly, untrustworthyRuleCodes] = await Promise.all([
+    isHoldOnly(env, pending.repoFullName),
+    isCloseHoldOnly(env, pending.repoFullName),
+    readUntrustworthyRuleCodes(env),
+  ]);
   let plan: PlannedAgentAction[] = [pendingActionToPlanned({ actionClass: pending.actionClass, params: liveParams, reason: pending.reason })];
   const labelSettings = {
     manualReviewLabel: settings.manualReviewLabel,
@@ -335,7 +342,7 @@ export async function decidePendingAgentAction(env: Env, input: { id: string; de
     pendingClosureLabel: settings.pendingClosureLabel,
   };
   if (holdOnly) plan = downgradeMergeToHold(plan, true, labelSettings);
-  if (closeHoldOnly) plan = downgradeCloseToHold(plan, true, labelSettings);
+  plan = downgradeCloseToHold(plan, closeHoldOnly, labelSettings, untrustworthyRuleCodes);
 
   // Re-validate a staged MERGE against the CURRENT linked-issue hard-rule state (#2132). The hard rule is
   // evaluated fresh on every planning pass and takes precedence over merge (see planAgentMaintenanceActions),
