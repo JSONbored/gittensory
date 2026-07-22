@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { computeRulePrecision, computeRuleRepeatCount, type HumanOverrideEvent, type RuleFiredEvent } from "../dist/index.js";
+import {
+  computeRulePrecision,
+  computeRuleRepeatCount,
+  evaluateRuleRepeatAlarm,
+  type HumanOverrideEvent,
+  type RuleFiredEvent,
+} from "../dist/index.js";
 
 function fired(ruleId: string, targetKey: string, overrides: Partial<RuleFiredEvent> = {}): RuleFiredEvent {
   return { ruleId, targetKey, outcome: "block", occurredAt: "2026-07-22T00:00:00.000Z", ...overrides };
@@ -89,4 +95,62 @@ test("computeRuleRepeatCount: counts only fires matching BOTH ruleId and targetK
 
 test("computeRuleRepeatCount: zero fired events yields 0, not an error", () => {
   assert.equal(computeRuleRepeatCount("rule_a", "a#1", []), 0);
+});
+
+test("barrel: the public entrypoint re-exports evaluateRuleRepeatAlarm (#7983)", () => {
+  assert.equal(typeof evaluateRuleRepeatAlarm, "function");
+});
+
+test("evaluateRuleRepeatAlarm: not triggered below the threshold", () => {
+  const verdict = evaluateRuleRepeatAlarm("rule_a", [fired("rule_a", "a#1"), fired("rule_a", "a#2")], 3);
+  assert.equal(verdict.triggered, false);
+  assert.deepEqual(verdict.affectedTargets, ["a#1", "a#2"]);
+  assert.equal(verdict.threshold, 3);
+});
+
+test("evaluateRuleRepeatAlarm: triggers once distinct targets reach the threshold", () => {
+  const verdict = evaluateRuleRepeatAlarm("rule_a", [fired("rule_a", "a#1"), fired("rule_a", "a#2"), fired("rule_a", "a#3")], 3);
+  assert.equal(verdict.triggered, true);
+  assert.deepEqual(verdict.affectedTargets, ["a#1", "a#2", "a#3"]);
+});
+
+test("evaluateRuleRepeatAlarm: replays the #7469/#7589/#7591/#7594 incident shape -- triggers on the 3rd distinct PR", () => {
+  const incidentEvents = [
+    fired("rule_a", "metagraphed/metagraphed#7469"),
+    fired("rule_a", "metagraphed/metagraphed#7589"),
+  ];
+  // Should NOT have triggered yet after only 2 distinct PRs (threshold 3).
+  assert.equal(evaluateRuleRepeatAlarm("rule_a", incidentEvents, 3).triggered, false);
+  incidentEvents.push(fired("rule_a", "metagraphed/metagraphed#7591"));
+  // The 3rd distinct PR crosses the threshold -- exactly the "should have alerted after the 2nd or 3rd
+  // occurrence" bar #7983 itself sets.
+  const thirdVerdict = evaluateRuleRepeatAlarm("rule_a", incidentEvents, 3);
+  assert.equal(thirdVerdict.triggered, true);
+  assert.deepEqual(thirdVerdict.affectedTargets, [
+    "metagraphed/metagraphed#7469",
+    "metagraphed/metagraphed#7589",
+    "metagraphed/metagraphed#7591",
+  ]);
+});
+
+test("evaluateRuleRepeatAlarm: the SAME target firing repeatedly counts once, not once per fire -- only a DISTINCT target grows the count", () => {
+  const verdict = evaluateRuleRepeatAlarm(
+    "rule_a",
+    [fired("rule_a", "a#1"), fired("rule_a", "a#1"), fired("rule_a", "a#1")],
+    2,
+  );
+  assert.equal(verdict.affectedTargets.length, 1);
+  assert.equal(verdict.triggered, false);
+});
+
+test("evaluateRuleRepeatAlarm: ignores fired events for a DIFFERENT ruleId entirely", () => {
+  const verdict = evaluateRuleRepeatAlarm("rule_a", [fired("rule_a", "a#1"), fired("rule_b", "a#2"), fired("rule_b", "a#3")], 2);
+  assert.equal(verdict.affectedTargets.length, 1);
+  assert.equal(verdict.triggered, false);
+});
+
+test("evaluateRuleRepeatAlarm: zero fired events never triggers", () => {
+  const verdict = evaluateRuleRepeatAlarm("rule_a", [], 1);
+  assert.equal(verdict.triggered, false);
+  assert.deepEqual(verdict.affectedTargets, []);
 });

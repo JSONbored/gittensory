@@ -636,6 +636,7 @@ import {
 } from "../review/outcomes-wire";
 import { neutralHoldReasonCode, nativeGateActionFromConclusion, recordNativeGateDecision } from "../review/parity-wire";
 import { recordContributorGateDecision } from "../review/contributor-calibration";
+import { recordGateBlockersAndCheckRepeatAlarm } from "../review/rule-repeat-alarm-wire";
 import { recordPredictedGateCalibration } from "../review/predicted-gate-calibration-ledger";
 import type { SubmissionOutcome } from "../review/submitter-reputation";
 import type {
@@ -10326,6 +10327,13 @@ async function maybePublishPrPublicSurface(
         outcome: "completed",
         metadata: { blockerCodes },
       });
+      // #7983: same-rule repeat alarm — detection + alert only, never adjusts the gate. See
+      // rule-repeat-alarm-wire.ts's own header comment.
+      await recordGateBlockersAndCheckRepeatAlarm(env, {
+        repoFullName,
+        pullNumber: pr.number,
+        blockerCodes,
+      }).catch(() => undefined);
     }
     // #preconv-parity (convergence prep): SHADOW-record the gittensory-native gate decision (source=
     // 'gittensory-native') into review_audit so the pre-cutover parity harness has data to read. RECORD-ONLY,

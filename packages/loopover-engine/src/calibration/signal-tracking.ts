@@ -102,12 +102,46 @@ export function computeRulePrecision(ruleId: string, fired: readonly RuleFiredEv
 }
 
 /**
- * Count how many times `ruleId` fired against the exact same `targetKey` within `fired` -- the #7983
- * "same-rule repeat alarm" primitive (a rule re-firing against a target it already fired against once is a
- * stronger signal than a bare one-off fire, independent of whether either fire has been overridden yet).
- * Pure counting, no time-windowing here -- a caller windows `fired` itself before calling this (e.g. via
- * `queryRuleHistory`'s own `sinceMs`), matching how this whole module leaves all storage/scoping to the host.
+ * Count how many times `ruleId` fired against the exact same `targetKey` within `fired` (a rule re-firing
+ * against a target it already fired against once -- e.g. an unresolved contributor PR re-triggering the same
+ * blocker on every push -- is a different signal than a fresh one-off fire, independent of whether either fire
+ * has been overridden yet). Pure counting, no time-windowing here -- a caller windows `fired` itself before
+ * calling this (e.g. via `queryRuleHistory`'s own `sinceMs`), matching how this whole module leaves all
+ * storage/scoping to the host. See {@link evaluateRuleRepeatAlarm} for the DIFFERENT #7983 signal: the same
+ * rule firing against several DIFFERENT targets, not the same one repeatedly.
  */
 export function computeRuleRepeatCount(ruleId: string, targetKey: string, fired: readonly RuleFiredEvent[]): number {
   return fired.reduce((count, event) => (event.ruleId === ruleId && event.targetKey === targetKey ? count + 1 : count), 0);
+}
+
+/** A same-rule repeat-alarm verdict (#7983): whether `ruleId` has fired against enough DISTINCT targets within
+ *  the caller's already-windowed `fired` list to be a "something is systematically broken" signal --
+ *  independent of whether any of those firings has been confirmed or reversed by a human yet (unlike
+ *  {@link computeRulePrecision}, this needs no ground truth at all, which is exactly why it can fire fast: the
+ *  2026-07-21/22 metagraphed incident mis-closed 4 DISTINCT PRs within ~3 hours on the same rule, far faster
+ *  than a precision-over-time breaker's `AUTOTUNE_MIN_DECIDED` sample could ever accumulate real outcomes). */
+export type RuleRepeatAlarmVerdict = {
+  ruleId: string;
+  /** Every distinct targetKey `ruleId` fired against, in first-seen order. */
+  affectedTargets: string[];
+  threshold: number;
+  triggered: boolean;
+};
+
+/**
+ * Evaluate the #7983 same-rule repeat alarm for `ruleId` over an already-windowed `fired` list: `triggered` is
+ * true once the rule has fired against at least `threshold` DISTINCT targets. Deliberately returns a
+ * detection-only verdict -- no action, no severity beyond the boolean -- mirroring `src/orb/analytics.ts`'s
+ * `gamingPatternFlags` precedent ("Detection only — never an automatic action") and this module's own
+ * "no autonomous behavior" boundary; the host decides how (or whether) to surface a triggered verdict.
+ */
+export function evaluateRuleRepeatAlarm(ruleId: string, fired: readonly RuleFiredEvent[], threshold: number): RuleRepeatAlarmVerdict {
+  const affectedTargets: string[] = [];
+  const seen = new Set<string>();
+  for (const event of fired) {
+    if (event.ruleId !== ruleId || seen.has(event.targetKey)) continue;
+    seen.add(event.targetKey);
+    affectedTargets.push(event.targetKey);
+  }
+  return { ruleId, affectedTargets, threshold, triggered: affectedTargets.length >= threshold };
 }
