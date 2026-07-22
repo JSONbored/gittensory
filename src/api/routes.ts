@@ -150,6 +150,7 @@ import {
   type LoopOverMentionCommandName,
 } from "../github/commands";
 import { handleGitHubWebhook, handleOrbRelay } from "../github/webhook";
+import { requestAprRepoTransfer } from "../orb/apr-repo-transfer";
 import { handleOrbIngest, readOrbIngestBody } from "../orb/ingest";
 import { handleAmsIngest } from "../ams/ingest";
 import { handleOrbWebhook } from "../orb/webhook";
@@ -240,7 +241,7 @@ import { generateAndSendReviewRecap } from "../services/review-recap";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadMaintainerNoiseReport } from "../services/maintainer-noise";
 import { buildAmsMinerCohortComparison } from "../review/ams-miner-cohort";
-import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
+import { loadCachedBurdenForecastResponse } from "../services/burden-forecast";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
 import { PREFLIGHT_LIMITS } from "../signals/preflight-limits";
@@ -531,6 +532,18 @@ const evaluateEscalationSchema = z.object({
   customerFlagged: z.boolean().optional(),
   killRequested: z.boolean().optional(),
 });
+
+// #7742: customer-facing APR transfer request. Completion is resolved SERVER-SIDE via loadAprIdeaCompletion —
+// never accepted from the body (that was the #8000 Superagent P1). `.strict()` rejects any attempt to smuggle
+// `ideaComplete` (or other unknown keys). Plan/payment fields are deliberately absent.
+const requestAprTransferSchema = z
+  .object({
+    installationId: z.number().int().positive(),
+    repoFullName: z.string().min(1).max(200),
+    newOwner: z.string().min(1).max(100),
+    ideaId: z.string().min(1).max(200).optional(),
+  })
+  .strict();
 
 // #6744: mirrors proposeActionShape in src/mcp/server.ts VERBATIM, minus owner/repo (they are path params), so
 // POST /v1/repos/:owner/:repo/agent/pending-actions can never stage an action the loopover_propose_action MCP
@@ -3727,6 +3740,21 @@ export function createApp() {
     return c.json(evaluateEscalation(parsed.data));
   });
 
+  // #7742: customer-facing "request transfer" for an APR repo. Request-only (nothing auto-offers). Completion is
+  // resolved SERVER-SIDE by requestAprRepoTransfer → loadAprIdeaCompletion (fail-closed until #7591/#7664 persist
+  // a record) — the body must NOT carry ideaComplete (`.strict()` schema rejects smuggling attempts; that was
+  // the #8000 Superagent P1). Rejected gate → 409 without touching GitHub; initiation is still pending-acceptance
+  // (202), never "transfer done".
+  app.post("/v1/loop/request-apr-transfer", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = requestAprTransferSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_request_apr_transfer_request", issues: parsed.error.issues }, 400);
+    const result = await requestAprRepoTransfer(c.env, parsed.data);
+    if (result.status === "rejected") return c.json(result, 409);
+    if (result.status === "failed") return c.json(result, 502);
+    return c.json(result, 202);
+  });
+
   // #6752: REST mirror of the loopover_build_results_payload MCP tool, bringing it to the same REST/CLI parity
   // its same-tier sibling loopover_check_slop_risk (/v1/lint/slop-risk) already has. Both are pure, source-free
   // composers over caller-supplied, already-computed iteration metadata, so this route delegates to the same
@@ -5691,7 +5719,7 @@ async function buildRepoIntelligenceResponse(env: Env, fullName: string) {
       ]),
     ),
     loadRepoDataQuality(env, fullName),
-    loadOrComputeBurdenForecastResponse(env, fullName).catch((error) => {
+    loadCachedBurdenForecastResponse(env, fullName).catch((error) => {
       burdenForecastError = error;
       return null;
     }),

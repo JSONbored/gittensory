@@ -37,8 +37,8 @@ test("provisionTenant runs the three #7180 steps in order and reports the tenant
   );
   // Container "exists"/reachable via the fake after provision.
   assert.equal(await driver.containerExists({ tenant, product: "orb" }), true);
-  assert.ok(driver.databases.has("acme"));
-  assert.ok(driver.injectedSecrets.has("acme"));
+  assert.ok(driver.databases.has("orb:acme"));
+  assert.ok(driver.injectedSecrets.has("orb:acme"));
 });
 
 test("full lifecycle: provision → container exists → deprovision → container gone", async () => {
@@ -52,8 +52,8 @@ test("full lifecycle: provision → container exists → deprovision → contain
 
   assert.deepEqual(result, { tenant, product: "ams", state: "torn down" });
   assert.equal(await driver.containerExists({ tenant, product: "ams" }), false);
-  assert.equal(driver.databases.has("acme"), false);
-  assert.equal(driver.injectedSecrets.has("acme"), false);
+  assert.equal(driver.databases.has("ams:acme"), false);
+  assert.equal(driver.injectedSecrets.has("ams:acme"), false);
 });
 
 test("deprovisionTenant tears the steps down in reverse order", async () => {
@@ -83,7 +83,7 @@ test("deprovisionTenant on a never-provisioned tenant is a safe no-op that still
 
   assert.deepEqual(result, { tenant, product: "ams", state: "torn down" });
   assert.equal(await driver.containerExists({ tenant, product: "ams" }), false);
-  assert.equal(driver.containers.has("ghost"), false);
+  assert.equal(driver.containers.has("ams:ghost"), false);
 });
 
 test("the call shape is identical for an ORB tenant and an AMS tenant (product-agnostic)", async () => {

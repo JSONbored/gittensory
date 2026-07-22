@@ -89,6 +89,17 @@ describe("checkSubmittedSourceEvidence", () => {
     expect(report.status).toBe("failed");
   });
 
+  it("fetch-verifies a scalar-only source authored as a YAML sequence, not just a scalar (#8016)", async () => {
+    // documentationUrl is a scalar-only field (NOT in the list-field set that listSourceUrlValues rescues),
+    // so before the ported sequence branch this URL was dropped by the parser and the gate could never
+    // verify it. It must now be captured and fetch-checked exactly like a scalar value.
+    const url = "https://docs.acme.example/seq-guide";
+    const src = ["---", "documentationUrl:", `  - ${url}`, "---", "", "body"].join("\n");
+    const report = await checkSubmittedSourceEvidence(src, fakeFetch({ [url]: 200 }));
+    expect(report.urls.map((u) => u.url)).toContain(url);
+    expect(report.status).toBe("passed");
+  });
+
   it("is retryable (not hard) on a 403/429/5xx canonical source", async () => {
     const src = mdx({ githubUrl: "https://github.com/acme/x" });
     const report = await checkSubmittedSourceEvidence(src, fakeFetch({ "https://github.com/acme/x": 403 }));
@@ -307,6 +318,18 @@ describe("extractSubmittedSourceUrls — frontmatter parsing edge cases", () => 
     const src = ["---", "documentationUrl: >", "  https://docs.acme.example/guide", "---", "", "body"].join("\n");
     const urls = extractSubmittedSourceUrls(src);
     // The folded form joins block lines with a space; a single line stays intact.
+    expect(urls.map((u) => `${u.field}:${u.url}`)).toContain(
+      "documentationUrl:https://docs.acme.example/guide",
+    );
+  });
+
+  it("captures a scalar-only source field authored as a YAML block sequence (#8016)", () => {
+    // A scalar field (documentationUrl) written as a sequence was silently dropped here — the sequence
+    // branch existed only in duplicates.ts — so the URL never reached the fetch-reachability gate.
+    // documentationUrl is NOT a list field, so listSourceUrlValues does not rescue it; only the ported
+    // parser branch captures it.
+    const src = ["---", "documentationUrl:", "  - https://docs.acme.example/guide", "---", "", "body"].join("\n");
+    const urls = extractSubmittedSourceUrls(src);
     expect(urls.map((u) => `${u.field}:${u.url}`)).toContain(
       "documentationUrl:https://docs.acme.example/guide",
     );

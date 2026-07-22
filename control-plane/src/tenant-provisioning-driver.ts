@@ -92,15 +92,23 @@ export type FakeDriverCall = {
 
 /** A fake `TenantProvisioningDriver` plus the recorded state a test inspects. */
 export type FakeTenantProvisioningDriver = TenantProvisioningDriver & {
-  /** Tenant names whose container currently "exists" (an in-memory stand-in for real infrastructure). */
+  /** Product-scoped keys (`${product}:${tenant.name}`, same as container-driver.ts's `instanceNameFor`)
+   *  whose container currently "exists" (an in-memory stand-in for real infrastructure). */
   readonly containers: ReadonlySet<string>;
-  /** Tenant names whose database currently "exists". */
+  /** Product-scoped keys whose database currently "exists". */
   readonly databases: ReadonlySet<string>;
-  /** Tenant names whose secrets are currently injected. */
+  /** Product-scoped keys whose secrets are currently injected. */
   readonly injectedSecrets: ReadonlySet<string>;
   /** Every driver step this fake has run, in call order. */
   readonly calls: readonly FakeDriverCall[];
 };
+
+/** Same composite key as container-driver.ts's `instanceNameFor` (#8025) — ORB and AMS tenants that share a
+ *  name must not collide in the fake's in-memory maps (production composes this fake for any step without a
+ *  real backend yet). */
+function instanceKeyFor(request: TenantProvisioningRequest): string {
+  return `${request.product}:${request.tenant.name}`;
+}
 
 /** Minimal in-memory fake for orchestration/contract tests — three in-memory maps stand in for real infra
  *  ("a container exists" / "a DB exists" / "secrets injected"), toggled by the create/destroy steps, plus an
@@ -135,11 +143,11 @@ export function createFakeTenantProvisioningDriver(): FakeTenantProvisioningDriv
     },
     async createContainer(request) {
       record("createContainer", request);
-      containers.add(request.tenant.name);
+      containers.add(instanceKeyFor(request));
     },
     async provisionDatabase(request) {
       record("provisionDatabase", request);
-      databases.add(request.tenant.name);
+      databases.add(instanceKeyFor(request));
       // Deterministic per-tenant fake connection details -- no real IO, no state beyond the existing
       // `databases` set, just enough shape for callers/tests exercising the widened (#7653) return contract.
       const host = `fake-${request.tenant.name}.control-plane.invalid`;
@@ -151,30 +159,33 @@ export function createFakeTenantProvisioningDriver(): FakeTenantProvisioningDriv
     },
     async injectSecrets(request) {
       record("injectSecrets", request);
-      injectedSecrets.add(request.tenant.name);
+      injectedSecrets.add(instanceKeyFor(request));
     },
     async destroyContainer(request) {
       record("destroyContainer", request);
       // Idempotent teardown: the else-branch (nothing to remove) is the "destroy-of-a-nonexistent-tenant"
       // lifecycle path — a no-op, never a throw.
-      if (containers.has(request.tenant.name)) {
-        containers.delete(request.tenant.name);
+      const key = instanceKeyFor(request);
+      if (containers.has(key)) {
+        containers.delete(key);
       }
     },
     async dropDatabase(request) {
       record("dropDatabase", request);
-      if (databases.has(request.tenant.name)) {
-        databases.delete(request.tenant.name);
+      const key = instanceKeyFor(request);
+      if (databases.has(key)) {
+        databases.delete(key);
       }
     },
     async revokeSecrets(request) {
       record("revokeSecrets", request);
-      if (injectedSecrets.has(request.tenant.name)) {
-        injectedSecrets.delete(request.tenant.name);
+      const key = instanceKeyFor(request);
+      if (injectedSecrets.has(key)) {
+        injectedSecrets.delete(key);
       }
     },
     async containerExists(request) {
-      return containers.has(request.tenant.name);
+      return containers.has(instanceKeyFor(request));
     },
   };
 }

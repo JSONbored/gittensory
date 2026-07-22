@@ -129,7 +129,7 @@ const CLI_COMMAND_SPEC = {
   profile: ["list", "create", "switch", "remove"],
   cache: ["status", "clear", "list"],
   agent: ["plan", "status", "explain", "packet"],
-  maintain: ["status", "queue", "propose", "approve", "reject", "pause", "resume", "set-level", "precision", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state", "refresh-docs", "generate-issue-drafts", "plan-issues"],
+  maintain: ["status", "queue", "propose", "approve", "reject", "pause", "resume", "set-level", "precision", "selftune-audit", "outcome-calibration", "onboarding-pack", "audit-feed", "automation-state", "refresh-docs", "generate-issue-drafts", "plan-issues"],
 };
 const COMPLETION_SHELLS = ["bash", "zsh", "fish", "powershell"];
 const AGENT_PROFILE_IDS = ["miner-planner", "miner-auto-dev", "maintainer-triage", "repo-owner-intake"];
@@ -358,6 +358,31 @@ const apiUrl = (process.env.LOOPOVER_API_URL ?? (configuredApiUrl && !legacyDefa
 const ownerRepoShape = {
   owner: z.string().min(1),
   repo: z.string().min(1),
+};
+
+// #7756: stdio mirror of the remote loopover_get_repo_onboarding_pack shape (src/mcp/server.ts) + the
+// `maintain onboarding-pack` CLI. owner/repo are required like the sibling get-repo tools; `refresh` is
+// optional and, when true, forwards ?refresh=true (the server treats only the exact string "true" as a
+// refresh) so the preview is regenerated rather than served from cache.
+const repoOnboardingPackShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  refresh: z.boolean().optional(),
+};
+
+// #7753: mirrors the remote loopover_propose_action input (src/mcp/server.ts's proposeActionShape) so the local
+// stdio tool validates identically. actionClass reuses PROPOSE_ACTION_CLASSES (same enum the route +
+// `maintain propose` accept); the optional fields carry per-action-class detail and are stripped when absent.
+const proposeActionShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  pullNumber: z.number().int().positive(),
+  actionClass: z.enum(PROPOSE_ACTION_CLASSES),
+  reason: z.string().max(500).optional(),
+  label: z.string().min(1).max(100).optional(),
+  reviewBody: z.string().max(60000).optional(),
+  mergeMethod: z.enum(["merge", "squash", "rebase"]).optional(),
+  closeComment: z.string().max(60000).optional(),
 };
 
 const skippedPrAuditShape = {
@@ -1006,6 +1031,13 @@ const gatePrecisionShape = {
   windowDays: z.number().int().positive().optional(),
 };
 
+// #7798: owner/repo plus the optional row cap the audit route's ?limit query accepts.
+const selftuneOverrideAuditShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  limit: z.number().int().positive().optional(),
+};
+
 // #7764: mirrors the remote loopover_plan_repo_issues tool's input (src/mcp/server.ts's planRepoIssuesShape),
 // minus the create-only `milestone` which this proxy (and the `maintain plan-issues` CLI) does not expose --
 // forwarded to POST /v1/repos/:owner/:repo/issue-plan-drafts/generate. `goal` is the required maintainer
@@ -1018,6 +1050,17 @@ const planRepoIssuesShape = {
   dryRun: z.boolean().optional().default(true),
   create: z.boolean().optional().default(false),
   limit: z.number().int().min(1).max(10).optional().default(5),
+};
+
+// #7755: mirrors the remote loopover_generate_contributor_issue_drafts input (src/mcp/server.ts's
+// generateContributorIssueDraftsShape) -- dryRun/create carry the route's create-safety (create alone is
+// rejected there); `limit` is capped at 20, matching the route.
+const generateContributorIssueDraftsShape = {
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  dryRun: z.boolean().optional().default(true),
+  create: z.boolean().optional().default(false),
+  limit: z.number().int().min(1).max(20).optional().default(5),
 };
 
 // Single source of truth for stdio tool name + one-line description (#2233).
@@ -1073,6 +1116,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "maintainer",
     description:
       "Return a repo's own persisted focus manifest (.loopover.yml policy) plus its compiled policy. Read-only; maintainer/owner/operator authenticated. Distinct from loopover_validate_config (ad-hoc string validation).",
+  },
+  {
+    name: "loopover_get_repo_onboarding_pack",
+    category: "maintainer",
+    description:
+      "Preview-only onboarding pack for a repository owner (contribution lanes, label policy, and public-safe guidance). Not published to GitHub. Pass `refresh` to regenerate the preview instead of serving the cached one.",
   },
   {
     name: "loopover_get_activation_preview",
@@ -1466,6 +1515,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "List the agent actions currently staged and awaiting a decision in a repo's approval queue, so a maintainer can review what is pending. Returns the pending queue only — the same list as `loopover-mcp maintain queue`. Maintainer access required.",
   },
   {
+    name: "loopover_propose_action",
+    category: "agent",
+    description:
+      "Stage a PR action (label / request_changes / approve / merge / close) into the repo's approval queue for a maintainer to accept or reject. Maintainer access required; the action is NOT executed until approved.",
+  },
+  {
     name: "loopover_decide_pending_action",
     category: "agent",
     description: "Accept (execute) or reject a staged approval-queue action by id. Accept runs it through the live executor gates; reject cancels it. Scoped to this repo, same as `loopover-mcp maintain approve|reject <id>`. Maintainer access required.",
@@ -1491,6 +1546,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return per-gate-type false-positive precision for a repo's recorded gate blocks — blocked / blocked-then-merged counts and false-positive rates with low-sample guards. Optionally bounded by windowDays. Maintainer-authenticated; measurement only.",
   },
   {
+    name: "loopover_get_selftune_override_audit",
+    category: "maintainer",
+    description:
+      "Return the self-tune override audit trail for a repo — why the self-tune loop promoted, shadowed, or cleared a live gate override, newest first. Optionally capped by limit. Maintainer-authenticated; read-only measurement.",
+  },
+  {
     name: "loopover_get_automation_state",
     category: "agent",
     description:
@@ -1501,6 +1562,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "maintainer",
     description:
       "AI-plan a small set of concrete GitHub issue drafts for a repo from a maintainer-supplied free-form goal, same as `loopover-mcp maintain plan-issues --goal ...`. Dry-run BY DEFAULT: only previews the drafted title/body/labels unless the caller passes BOTH create:true and dryRun:false, so it can never silently open issues. Maintainer access required.",
+  },
+  {
+    name: "loopover_generate_contributor_issue_drafts",
+    category: "maintainer",
+    description:
+      "Generate contributor-facing issue drafts for one repo from its lane/config/queue signals. Dry-run BY DEFAULT: it only PREVIEWS drafts unless the caller passes BOTH create:true and dryRun:false, so it can never silently open issues; the write path additionally requires repo write access and is suppressed while the agent is globally paused/frozen. Maintainer access required.",
   },
   {
     name: "loopover_open_pr",
@@ -1749,6 +1816,26 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver focus manifest.", await apiGet(`${prefix}/focus-manifest`));
+  },
+);
+
+// #7756: stdio mirror of the remote loopover_get_repo_onboarding_pack + the `maintain onboarding-pack` CLI.
+// Thin GET proxy of {repoBase}/onboarding-pack/preview (the same helper the CLI mirror calls); owner/repo
+// resolve from args like the sibling get-repo tools, and bare `refresh: true` forwards ?refresh=true exactly
+// as the CLI does (omit the query otherwise so the server serves the cached preview).
+registerStdioTool(
+  "loopover_get_repo_onboarding_pack",
+  {
+    description: stdioToolDescription("loopover_get_repo_onboarding_pack"),
+    inputSchema: repoOnboardingPackShape,
+  },
+  async ({ owner, repo, refresh }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const query = refresh === true ? "?refresh=true" : "";
+    return toolResult(
+      `LoopOver onboarding pack preview for ${owner}/${repo} (preview-only, not published).`,
+      await apiGet(`${prefix}/onboarding-pack/preview${query}`),
+    );
   },
 );
 
@@ -2961,6 +3048,24 @@ registerStdioTool(
   },
 );
 
+// #7753: stdio mirror of the remote loopover_propose_action + the `maintain propose` CLI. POSTs to the same
+// {repoBase}/agent/pending-actions route the CLI hits, with the identical stripUndefined body so absent optional
+// fields are omitted. Stages the action into the approval queue -- the route never executes it until approved.
+registerStdioTool(
+  "loopover_propose_action",
+  {
+    description: stdioToolDescription("loopover_propose_action"),
+    inputSchema: proposeActionShape,
+  },
+  async ({ owner, repo, pullNumber, actionClass, reason, label, reviewBody, mergeMethod, closeComment }: any) => {
+    const payload = await apiPost(
+      `${toolRepoBase(owner, repo)}/agent/pending-actions`,
+      stripUndefined({ pullNumber, actionClass, reason, label, reviewBody, mergeMethod, closeComment }),
+    );
+    return toolResult(`Staged ${actionClass} on ${owner}/${repo}#${pullNumber} into the approval queue.`, payload);
+  },
+);
+
 registerStdioTool(
   "loopover_decide_pending_action",
   {
@@ -3032,6 +3137,23 @@ registerStdioTool(
   },
   );
 
+// #7798: read-only mirror of GET {repoBase}/selftune/overrides/audit — the same trail the
+// `maintain selftune-audit` CLI verb prints. The API enforces maintainer authorization.
+registerStdioTool(
+  "loopover_get_selftune_override_audit",
+  {
+    description: stdioToolDescription("loopover_get_selftune_override_audit"),
+    inputSchema: selftuneOverrideAuditShape,
+  },
+  async ({ owner, repo, limit }: any) => {
+    // The schema already rejects a non-positive limit, so an omitted limit is the only way to the server's
+    // default cap -- matching the route's own behaviour when ?limit is absent.
+    const query = limit ? `?limit=${encodeURIComponent(limit)}` : "";
+    const payload = await apiGet(`${toolRepoBase(owner, repo)}/selftune/overrides/audit${query}`);
+    return toolResult(`Self-tune override audit for ${owner}/${repo}.`, payload);
+  },
+);
+
 // #7752: read-side counterpart to the pause/resume/set-level write tools above. Proxies the same
 // GET {repoBase}/automation-state the `maintain automation-state` CLI already calls — no duplicated HTTP path.
 // Summary is intentionally branch-free (no ?? / ?. / ternaries) so codecov/patch stays at 100%; the full
@@ -3066,6 +3188,24 @@ registerStdioTool(
     );
   },
 );
+
+// #7755: stdio mirror of the remote loopover_generate_contributor_issue_drafts + the `maintain
+// generate-issue-drafts` CLI. Proxies POST {repoBase}/contributor-issue-drafts/generate (the same route the
+// CLI hits). The route re-applies its own explicit_create_requires_dry_run_false guard, so forwarding the
+// schema-defaulted dryRun/create verbatim keeps create-safety exact: `create` alone (dryRun still true) is
+// rejected; only an explicit {create:true, dryRun:false} reaches the write path.
+registerStdioTool(
+  "loopover_generate_contributor_issue_drafts",
+  {
+    description: stdioToolDescription("loopover_generate_contributor_issue_drafts"),
+    inputSchema: generateContributorIssueDraftsShape,
+  },
+  async ({ owner, repo, dryRun, create, limit }: any) => {
+    const payload = await apiPost(`${toolRepoBase(owner, repo)}/contributor-issue-drafts/generate`, { dryRun, create, limit });
+    return toolResult(`Contributor issue drafts for ${owner}/${repo}.`, payload);
+  },
+);
+
 // ── Write-tools (#6149): pure LOCAL-execution spec builders. loopover NEVER performs the write -- each tool
 // returns a spec the caller runs with its OWN gh creds. Brings the local stdio server to parity with the
 // miner-auto-dev profile's recommendedTools, using the same @loopover/engine builders as the remote server.
@@ -3663,6 +3803,7 @@ function printMaintainHelp() {
       `                               actions: ${MAINTAIN_ACTION_CLASSES.join(", ")}`,
       `                               levels:  ${MAINTAIN_AUTONOMY_LEVELS.join(", ")}`,
       "  precision [--window-days N]  Show gate false-positive telemetry (blocked-then-merged per gate type).",
+      "  selftune-audit [--limit N]   Show the self-tune override audit trail (why an override promoted/cleared).",
       "  outcome-calibration          Show slop-band merge rates and recommendation-outcome calibration.",
       "             [--window-days N]  Bound the recommendation window (default: full history).",
       "  onboarding-pack [--refresh]  Preview the repo's contributor onboarding pack.",
@@ -3803,6 +3944,22 @@ export async function maintainCli(args: any) {
     emit(payload, lines.join("\n"));
     return;
   }
+  if (subcommand === "selftune-audit") {
+    // #7798 self-tune override audit: read-only mirror of GET {repoBase}/selftune/overrides/audit (the same
+    // trail the remote loopover_get_selftune_override_audit tool returns). The API enforces maintainer
+    // authorization; the CLI never decides locally. Optional --limit caps the rows the same way the route's
+    // ?limit query does (a non-positive value falls through to the server default).
+    const limit = Number(options.limit);
+    const query = limit > 0 ? `?limit=${encodeURIComponent(limit)}` : "";
+    const payload = await apiGet(`${repoBase}/selftune/overrides/audit${query}`);
+    const audit = payload.audit ?? [];
+    const lines = [
+      `Self-tune override audit for ${repoFullName}: ${audit.length} event(s).`,
+      ...audit.map((event: any) => `- ${event.createdAt} ${event.eventType}${event.detail ? ` ${event.detail}` : ""}`),
+    ];
+    emit(payload, lines.join("\n"));
+    return;
+  }
   if (subcommand === "outcome-calibration") {
     // #6735 outcome calibration: read-only measurement of whether higher-slop bands merge less often and how
     // agent recommendations panned out. Same --window-days handling the sibling precision command uses (a
@@ -3939,7 +4096,7 @@ export async function maintainCli(args: any) {
     return;
   }
   throw new Error(
-    `Unknown maintain subcommand: ${subcommand}. Use status | queue | propose <action-class> <pull-number> | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | outcome-calibration | onboarding-pack | audit-feed | automation-state | refresh-docs | generate-issue-drafts | plan-issues.`,
+    `Unknown maintain subcommand: ${subcommand}. Use status | queue | propose <action-class> <pull-number> | approve <id> | reject <id> | pause | resume | set-level <action> <level> | precision | selftune-audit | outcome-calibration | onboarding-pack | audit-feed | automation-state | refresh-docs | generate-issue-drafts | plan-issues.`,
   );
 }
 
@@ -5155,7 +5312,7 @@ function printHelp() {
   loopover-mcp doctor [--profile name] [--cwd path] [--exit-code] [--json]
   loopover-mcp cache status|list|clear [--json]
   loopover-mcp init-client --print codex|claude|cursor|mcp|vscode [--agent-profile miner-planner|maintainer-triage|repo-owner-intake] [--json]
-  loopover-mcp maintain status|queue|approve|reject|pause|resume|set-level|precision|outcome-calibration|onboarding-pack|audit-feed|automation-state|refresh-docs|generate-issue-drafts --repo owner/repo [--json] (see \`loopover-mcp maintain --help\`)
+  loopover-mcp maintain status|queue|approve|reject|pause|resume|set-level|precision|selftune-audit|outcome-calibration|onboarding-pack|audit-feed|automation-state|refresh-docs|generate-issue-drafts --repo owner/repo [--json] (see \`loopover-mcp maintain --help\`)
   loopover-mcp decision-pack --login <github-login> [--json]
   loopover-mcp repo-decision --login <github-login> --repo owner/repo [--json]
   loopover-mcp contributor-profile [--login <github-login>] [--json]

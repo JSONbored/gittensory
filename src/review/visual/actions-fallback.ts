@@ -355,6 +355,19 @@ export type FallbackShot = { fileName: string; png: Uint8Array };
 // rounded up, and a generous per-artifact byte cap (well above what ~20 full-page PNGs need in practice).
 const MAX_FALLBACK_SHOTS = 24;
 
+// GitHub caps list endpoints at 100 items/page, so a single `per_page=100` read silently truncates: a run
+// with >100 attached artifacts pushes the target artifact onto page 2+ and the pre-#8014 single-page read
+// returned [] exactly as if no artifact existed. Walk the `Link: rel="next"` header instead, bounded so a
+// pathological response (or a mock that always advertises a next page) can't turn one read into an unbounded
+// fetch loop -- the same bounded-walker treatment preview-url.ts's findAcrossPages gave this module's sibling
+// reads (#7779/#7805), with the same bound of 10.
+const ARTIFACT_LIST_MAX_PAGES = 10;
+
+/** Mirrors preview-url.ts's hasNextPage: does a `Link` header advertise a rel="next" page? */
+function hasNextArtifactPage(link: string | null): boolean {
+  return Boolean(link?.split(",").some((part) => /rel="next"/.test(part)));
+}
+
 function githubApiHeaders(token: string): Headers {
   const headers = new Headers();
   headers.set("accept", "application/vnd.github+json");
@@ -377,17 +390,25 @@ export async function fetchFallbackArtifactShots(params: {
   const base = `https://api.github.com/repos/${params.repo.owner}/${params.repo.repo}`;
   const repoLabel = `${params.repo.owner}/${params.repo.repo}`;
   try {
-    const listResponse = await timeoutFetch(`${base}/actions/runs/${params.runId}/artifacts?per_page=100`, {
-      headers: githubApiHeaders(params.token),
-      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-      githubRateLimitAdmission: params.rateLimitAdmissionKey !== undefined,
-      ...(params.rateLimitAdmissionKey ? { githubRateLimitAdmissionKey: params.rateLimitAdmissionKey } : {}),
-    });
-    if (!listResponse.ok) return [];
-    const listPayload = (await listResponse.json().catch(() => null)) as {
-      artifacts?: Array<{ id: number; name: string; expired?: boolean; size_in_bytes?: number }>;
-    } | null;
-    const artifact = listPayload?.artifacts?.find((a) => a.name === FALLBACK_ARTIFACT_NAME && a.expired !== true);
+    // Page 1's request is byte-identical to the pre-pagination single read (page 1 is GitHub's default, so
+    // the bare URL is left unchanged); the `&page=N` cursor is appended for page 2+ only (#8014).
+    const firstPageUrl = `${base}/actions/runs/${params.runId}/artifacts?per_page=100`;
+    let artifact: { id: number; name: string; expired?: boolean; size_in_bytes?: number } | undefined;
+    for (let page = 1; page <= ARTIFACT_LIST_MAX_PAGES; page += 1) {
+      const listResponse = await timeoutFetch(page === 1 ? firstPageUrl : `${firstPageUrl}&page=${page}`, {
+        headers: githubApiHeaders(params.token),
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+        githubRateLimitAdmission: params.rateLimitAdmissionKey !== undefined,
+        ...(params.rateLimitAdmissionKey ? { githubRateLimitAdmissionKey: params.rateLimitAdmissionKey } : {}),
+      });
+      if (!listResponse.ok) return [];
+      const listPayload = (await listResponse.json().catch(() => null)) as {
+        artifacts?: Array<{ id: number; name: string; expired?: boolean; size_in_bytes?: number }>;
+      } | null;
+      artifact = listPayload?.artifacts?.find((a) => a.name === FALLBACK_ARTIFACT_NAME && a.expired !== true);
+      if (artifact) break;
+      if (!hasNextArtifactPage(listResponse.headers.get("link"))) break;
+    }
     if (!artifact) return [];
     if (typeof artifact.size_in_bytes === "number" && artifact.size_in_bytes > MAX_ARTIFACT_BYTES) {
       console.log(JSON.stringify({ event: "visual_fallback_artifact_too_large", repo: repoLabel, runId: params.runId, bytes: artifact.size_in_bytes }));
