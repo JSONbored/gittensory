@@ -35,7 +35,9 @@ import type { ContributionProfile } from "./contribution-profile.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 import { isDiscoveryPlaneEnabled, queryDiscoveryIndex, recordDiscoveryTelemetry } from "./discovery-index-client.js";
 import type { queryDiscoveryIndex as QueryDiscoveryIndexFn } from "./discovery-index-client.js";
-import type { DiscoveryIndexQuery } from "@loopover/engine";
+import type { DiscoveryIndexQuery, SignalStore } from "@loopover/engine";
+import { appendEvent, readEvents } from "./event-ledger.js";
+import { createSignalTrackingStore } from "./signal-tracking-store.js";
 
 
 export type ParsedDiscoverArgs =
@@ -100,6 +102,10 @@ export type RunDiscoverOptions = {
   initPolicyDocCache?: () => PolicyDocCacheStore;
   initPolicyVerdictCache?: () => PolicyVerdictCacheStore;
   initRankedCandidatesStore?: () => RankedCandidatesStore;
+  /** #7982: records each real-run eligibility exclusion as a rule-fired signal, so it can later be scored for
+   *  precision the same way ORB's own gate blockers will be. Same "nice to have, own try/catch, degrade to a
+   *  no-op" discipline as the caches/stores above -- a signal-tracking write failure must never abort discovery. */
+  initSignalTrackingStore?: () => SignalStore;
   fetchCandidateIssuesWithSummary?: (
     targets: FanoutTarget[],
     githubToken: string,
@@ -275,6 +281,44 @@ function renderRateLimitLine(result: Pick<DiscoverResult, "rateLimitRemaining" |
   const remaining = result.rateLimitRemaining === null ? "unknown" : String(result.rateLimitRemaining);
   const resetSuffix = result.rateLimitResetAt === null ? "" : ` (resets ${result.rateLimitResetAt})`;
   return `rate-limit remaining: ${remaining}${resetSuffix}`;
+}
+
+// #7982: the default SignalStore, backed by the miner's own shared local event ledger (the same lazily-opened
+// singleton every other appendEvent/readEvents default caller already uses) -- no extra lifecycle management
+// needed here, matching this store's own "nice to have, own try/catch" treatment below.
+function initDefaultSignalTrackingStore(): SignalStore {
+  return createSignalTrackingStore({ appendEvent, readEvents });
+}
+
+// #7982: records each real-run eligibility exclusion as a rule-fired signal (ruleId = the exclusion reason,
+// e.g. "missing_eligibility_label"), so it can later be scored for precision. Best-effort: a store-open
+// failure or a single write failure never aborts discovery -- same discipline as the caches/stores in
+// runDiscover's real-run branch (own try/catch, degrade silently). Deliberately NOT called from the dry-run
+// branch: a dry run previews what a real run would do (including its own noopQueueStore for the portfolio
+// queue) and must not itself contribute real data to a precision report.
+async function recordEligibilityExclusionSignals(
+  excluded: ReadonlyArray<{ candidate: { repoFullName: string; issueNumber: number }; reason: string }>,
+  options: Pick<RunDiscoverOptions, "initSignalTrackingStore" | "nowMs">,
+): Promise<void> {
+  if (excluded.length === 0) return;
+  let store: SignalStore | null = null;
+  try {
+    store = (options.initSignalTrackingStore ?? initDefaultSignalTrackingStore)();
+  } catch {
+    store = null;
+  }
+  if (!store) return;
+  const occurredAt = new Date(options.nowMs ?? Date.now()).toISOString();
+  for (const entry of excluded) {
+    await store
+      .recordRuleFired({
+        ruleId: entry.reason,
+        targetKey: `${entry.candidate.repoFullName}#issue-${entry.candidate.issueNumber}`,
+        outcome: "exclude",
+        occurredAt,
+      })
+      .catch(() => undefined);
+  }
 }
 
 export function renderDiscoverSummary(result: DiscoverResult): string {
@@ -547,6 +591,7 @@ export async function runDiscover(args: string[], options: RunDiscoverOptions = 
       fanOut.issues,
       profilesByRepo as Map<string, ContributionProfile>,
     );
+    await recordEligibilityExclusionSignals(excluded, options);
 
     // Pass any caller-supplied per-tenant goal specs through to the ranker so lane fit uses the tenant's
     // conventions instead of silently falling back to loopover's defaults (#4784); the fallback is surfaced via

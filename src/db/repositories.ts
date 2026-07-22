@@ -3521,6 +3521,41 @@ export async function listAuditEventsForTarget(
   }));
 }
 
+/** A raw `audit_events` row projected for a caller that keys its own domain data inside `metadataJson` rather
+ *  than the fixed `outcome`/`detail` columns — #7982's `signal.rule_fired:*`/`signal.human_override:*` event
+ *  types are the first consumer (see `src/review/signal-tracking-wire.ts`). `metadata` is best-effort parsed:
+ *  a corrupt row (should never happen — every writer round-trips through `jsonString`) degrades to `{}` rather
+ *  than throwing, since a single bad row must never break a whole precision report. */
+export type AuditEventByType = {
+  targetKey: string | null;
+  detail: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+/** Every `audit_events` row for an EXACT `eventType`, at or after `sinceIso`, oldest first (the read order a
+ *  precision/repeat-count report over time needs — unlike {@link listAuditEventsForTarget}'s newest-first
+ *  "recent activity" order). Unscoped by target/actor: matches this table's `audit_events_type_created_idx`
+ *  index exactly, so a caller querying one event type over a window stays an efficient index range scan. */
+export async function listAuditEventsByType(env: Env, eventType: string, sinceIso: string, limit = 500): Promise<AuditEventByType[]> {
+  const rows = await getDb(env.DB)
+    .select({ targetKey: auditEvents.targetKey, detail: auditEvents.detail, metadataJson: auditEvents.metadataJson, createdAt: auditEvents.createdAt })
+    .from(auditEvents)
+    .where(and(eq(auditEvents.eventType, eventType), gte(auditEvents.createdAt, sinceIso)))
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id))
+    .limit(clampInteger(limit, 1, 2000));
+  return rows.map((row) => {
+    let metadata: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(row.metadataJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) metadata = parsed as Record<string, unknown>;
+    } catch {
+      /* corrupt row -- fail open to {} per this function's own doc comment */
+    }
+    return { targetKey: row.targetKey, detail: row.detail, metadata, createdAt: row.createdAt };
+  });
+}
+
 export async function getFreshOfficialMinerDetection(env: Env, login: string, now = nowIso()): Promise<OfficialGittensorMinerDetection | null> {
   const [row] = await getDb(env.DB).select().from(officialMinerDetections).where(and(eq(officialMinerDetections.login, login.toLowerCase()), gte(officialMinerDetections.expiresAt, now))).limit(1);
   return row ? toOfficialMinerDetection(row) : null;

@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeDefaultEventLedger } from "../../packages/loopover-miner/lib/event-ledger.js";
 import { initPolicyDocCacheStore } from "../../packages/loopover-miner/lib/policy-doc-cache.js";
 import { initPolicyVerdictCacheStore } from "../../packages/loopover-miner/lib/policy-verdict-cache.js";
 import {
@@ -21,6 +22,21 @@ const NOW = Date.parse("2026-07-09T12:00:00.000Z");
 
 const roots: string[] = [];
 const stores: Array<{ close(): void }> = [];
+
+// #7982: none of this file's runDiscover calls inject initSignalTrackingStore (most don't produce any
+// excluded candidates, and the ones that do only assert on payload.excluded/portfolioQueue, not on
+// signal-tracking itself -- that gets its own dedicated coverage below). Without this redirect, the DEFAULT
+// SignalStore falls back to the real on-disk event ledger under ~/.config/loopover-miner, exactly the
+// LOOPOVER_MINER_CONFIG_DIR redirect tempPolicyDocCacheStore's own comment already warns about for the OTHER
+// default-store fallbacks -- same class of leak, same fix. closeDefaultEventLedger() resets the module-level
+// singleton each test so a later test's redirected path is never masked by an earlier one's cached handle.
+let previousConfigDir: string | undefined;
+beforeEach(() => {
+  const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-ledger-"));
+  roots.push(root);
+  previousConfigDir = process.env.LOOPOVER_MINER_CONFIG_DIR;
+  process.env.LOOPOVER_MINER_CONFIG_DIR = root;
+});
 
 function tempQueueStore() {
   const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-"));
@@ -105,6 +121,9 @@ function indexCandidate(overrides: Record<string, unknown> = {}) {
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   closeDefaultPortfolioQueueStore();
+  closeDefaultEventLedger();
+  if (previousConfigDir === undefined) delete process.env.LOOPOVER_MINER_CONFIG_DIR;
+  else process.env.LOOPOVER_MINER_CONFIG_DIR = previousConfigDir;
   vi.restoreAllMocks();
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
@@ -1621,6 +1640,108 @@ describe("runDiscover onResult hook (#6522)", () => {
       expect(
         portfolioQueue.listQueue("acme/widgets").map((e) => e.identifier),
       ).toEqual(["issue:1"]);
+    });
+
+    describe("eligibility-exclusion signal tracking (#7982)", () => {
+      function fakeSignalStore() {
+        const fired: Array<{ ruleId: string; targetKey: string; outcome: string }> = [];
+        return {
+          fired,
+          store: {
+            recordRuleFired: vi.fn(async (event: { ruleId: string; targetKey: string; outcome: string }) => {
+              fired.push({ ruleId: event.ruleId, targetKey: event.targetKey, outcome: event.outcome });
+            }),
+            recordHumanOverride: vi.fn(async () => undefined),
+            queryRuleHistory: vi.fn(async () => ({ fired: [], overrides: [] })),
+          },
+        };
+      }
+
+      it("records a rule-fired signal for every real-run exclusion, keyed by reason + repo#issue-N", async () => {
+        const issues = [
+          fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }),
+          fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+          fanOutIssue({ issueNumber: 3, labels: ["bug"] }),
+        ];
+        const { opts } = discoverWith(issues, new Map([["acme/widgets", trustworthyProfile]]));
+        const { fired, store } = fakeSignalStore();
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const exitCode = await runDiscover(["acme/widgets", "--json"], { ...opts, initSignalTrackingStore: () => store });
+        expect(exitCode).toBe(0);
+        expect(fired).toEqual([
+          { ruleId: "exclusion_label", targetKey: "acme/widgets#issue-2", outcome: "exclude" },
+          { ruleId: "missing_eligibility_label", targetKey: "acme/widgets#issue-3", outcome: "exclude" },
+        ]);
+      });
+
+      it("records nothing when nothing was excluded", async () => {
+        const issues = [fanOutIssue({ issueNumber: 1, labels: ["help wanted"] })];
+        const { opts } = discoverWith(issues, new Map([["acme/widgets", trustworthyProfile]]));
+        const { fired, store } = fakeSignalStore();
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        await runDiscover(["acme/widgets", "--json"], { ...opts, initSignalTrackingStore: () => store });
+        expect(fired).toEqual([]);
+        expect(store.recordRuleFired).not.toHaveBeenCalled();
+      });
+
+      it("never records anything on a --dry-run, even when the same run would exclude candidates for real", async () => {
+        const issues = [
+          fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }),
+          fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+        ];
+        const { opts } = discoverWith(issues, new Map([["acme/widgets", trustworthyProfile]]));
+        const { fired, store } = fakeSignalStore();
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const exitCode = await runDiscover(["acme/widgets", "--json", "--dry-run"], { ...opts, initSignalTrackingStore: () => store });
+        expect(exitCode).toBe(0);
+        const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+        expect(payload.excluded).toHaveLength(1);
+        expect(fired).toEqual([]);
+        expect(store.recordRuleFired).not.toHaveBeenCalled();
+      });
+
+      it("a store-open failure degrades to a no-op rather than aborting discovery", async () => {
+        const issues = [
+          fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }),
+          fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+        ];
+        const { opts } = discoverWith(issues, new Map([["acme/widgets", trustworthyProfile]]));
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const exitCode = await runDiscover(["acme/widgets", "--json"], {
+          ...opts,
+          initSignalTrackingStore: () => {
+            throw new Error("store unavailable");
+          },
+        });
+        expect(exitCode).toBe(0);
+        const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+        expect(payload.excluded).toHaveLength(1);
+      });
+
+      it("a per-event recording failure is swallowed and does not stop the remaining events from being recorded", async () => {
+        const issues = [
+          fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }),
+          fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+          fanOutIssue({ issueNumber: 3, labels: ["bug"] }),
+        ];
+        const { opts } = discoverWith(issues, new Map([["acme/widgets", trustworthyProfile]]));
+        let calls = 0;
+        const recordRuleFired = vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("write failed");
+        });
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const exitCode = await runDiscover(["acme/widgets", "--json"], {
+          ...opts,
+          initSignalTrackingStore: () => ({
+            recordRuleFired,
+            recordHumanOverride: vi.fn(async () => undefined),
+            queryRuleHistory: vi.fn(async () => ({ fired: [], overrides: [] })),
+          }),
+        });
+        expect(exitCode).toBe(0);
+        expect(recordRuleFired).toHaveBeenCalledTimes(2);
+      });
     });
 
     it("SAFE DEFAULT: filters nothing for a low-confidence/empty profile", async () => {
