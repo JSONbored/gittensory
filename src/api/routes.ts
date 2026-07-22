@@ -2618,35 +2618,54 @@ export function createApp() {
     });
   });
 
-  app.get("/v1/installations", async (c) =>
-    c.json({
-      installations: await listInstallations(c.env),
-      health: (await listInstallationHealth(c.env)).map(enrichInstallationHealth),
-    }),
-  );
+  // #7661: tenant self-service. A non-operator browser session sees only its own installations (and their
+  // health); an operator or a server-to-server token keeps the unscoped fleet view (scope === null).
+  app.get("/v1/installations", async (c) => {
+    const gate = await resolveInstallationSelfServiceScope(c);
+    if (!gate.ok) return c.json({ error: gate.error }, gate.status);
+    const scope = gate.scope;
+    const [installations, health] = await Promise.all([listInstallations(c.env), listInstallationHealth(c.env)]);
+    return c.json({
+      installations: scope ? installations.filter((installation) => isInstallationInScope(scope, installation.id)) : installations,
+      health: (scope ? health.filter((record) => isInstallationInScope(scope, record.installationId)) : health).map(enrichInstallationHealth),
+    });
+  });
 
   app.get("/v1/installations/:id/health", async (c) => {
+    const gate = await resolveInstallationSelfServiceScope(c);
+    if (!gate.ok) return c.json({ error: gate.error }, gate.status);
     const installationId = Number(c.req.param("id"));
     if (!Number.isFinite(installationId)) return c.json({ error: "invalid_installation_id" }, 400);
     const health = await getInstallationHealth(c.env, installationId);
     if (!health) return c.json({ error: "installation_health_not_found" }, 404);
+    // A scoped tenant may only read its own installation; another tenant's id returns the SAME not-found shape
+    // so cross-tenant existence never leaks.
+    if (gate.scope && !isInstallationInScope(gate.scope, installationId)) return c.json({ error: "installation_health_not_found" }, 404);
     return c.json(enrichInstallationHealth(health));
   });
 
   app.get("/v1/installations/:id/repair", async (c) => {
+    const gate = await resolveInstallationSelfServiceScope(c);
+    if (!gate.ok) return c.json({ error: gate.error }, gate.status);
     const installationId = Number(c.req.param("id"));
     if (!Number.isFinite(installationId)) return c.json({ error: "invalid_installation_id" }, 400);
     const health = await getInstallationHealth(c.env, installationId);
     if (!health) return c.json({ error: "installation_health_not_found" }, 404);
+    if (gate.scope && !isInstallationInScope(gate.scope, installationId)) return c.json({ error: "installation_health_not_found" }, 404);
     return c.json(await buildInstallationRepairDiagnostics(c.env, health));
   });
 
   app.post("/v1/installations/:id/repair/refresh", async (c) => {
+    const gate = await resolveInstallationSelfServiceScope(c);
+    if (!gate.ok) return c.json({ error: gate.error }, gate.status);
     const installationId = Number(c.req.param("id"));
     if (!Number.isFinite(installationId)) return c.json({ error: "invalid_installation_id" }, 400);
+    // Scope-check BEFORE the refresh mutation so a tenant can never trigger a refresh on another tenant's installation.
+    if (gate.scope && !isInstallationInScope(gate.scope, installationId)) return c.json({ error: "installation_not_found" }, 404);
     const refreshed = await refreshInstallationHealthForInstallation(c.env, installationId);
     if (!refreshed) return c.json({ error: "installation_not_found" }, 404);
     const health = await getInstallationHealth(c.env, installationId);
+    /* v8 ignore next -- refreshInstallationHealthForInstallation upserts a health record whenever it returns a truthy installation, so this is an unreachable defensive guard after a successful refresh. */
     if (!health) return c.json({ error: "installation_health_not_found" }, 404);
     return c.json({ ...(await buildInstallationRepairDiagnostics(c.env, health)), refreshed: true });
   });
@@ -6547,6 +6566,7 @@ function issueQualityMap(repoFullName: string, report: IssueQualityReport | unde
 function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: "session" }>, path: string): boolean {
   if (isAuthorizedGitHubSessionLogin(env, identity.actor)) return true;
   if (path.startsWith("/v1/app/")) return true;
+  if (isInstallationSelfServicePath(path)) return true; // #7661: the route's own resolveInstallationSelfServiceScope scopes a non-operator session to its own installations (others → filtered / 404)
   if (isIssueQualityPath(path)) return true;
   if (isRepoSettingsPath(path)) return true;
   if (isRepoActivationPath(path)) return true;
@@ -6575,6 +6595,41 @@ function canSessionAccessPath(env: Env, identity: Extract<AuthIdentity, { kind: 
   // requireContributorAccess then enforces actor === login (self-only).
   if (isExtensionContributorContextPath(path) && isExtensionContributorScopedSession(identity)) return true;
   return false;
+}
+
+// #7661: the installation health/repair self-service routes a hosted tenant may reach for THEIR OWN
+// installation. The coarse allowlist only lets a session past the middleware; per-installation ownership is
+// enforced in the handler by resolveInstallationSelfServiceScope below.
+function isInstallationSelfServicePath(path: string): boolean {
+  return /^\/v1\/installations(?:\/[^/]+\/(?:health|repair|repair\/refresh))?$/.test(path);
+}
+
+type InstallationSelfServiceGate =
+  | { ok: true; scope: ControlPanelAccessScope | null }
+  | { ok: false; status: 401 | 403; error: string };
+
+// Resolve tenant self-service access for the installation routes (#7661), reusing the maintainer-dashboard's
+// exact identity → role-gate → `loadControlPanelAccessScope` pattern. A browser-session non-operator is scoped
+// to its own installations (`scope` non-null); an operator or a server-to-server token gets the unscoped view
+// (`scope: null`), matching how every other /v1/app-scoped surface treats operators and service tokens.
+async function resolveInstallationSelfServiceScope(c: ProtectedRouteContext): Promise<InstallationSelfServiceGate> {
+  const identity = await authenticateRequestIdentity(c);
+  /* v8 ignore next -- requiresApiToken("/v1/installations…") means the global middleware already 401'd a missing identity before this handler runs; kept as a type-safe defensive guard. */
+  if (!identity) return { ok: false, status: 401, error: "unauthorized" };
+  const summary = await getRoleSummaryForIdentity(c.env, identity);
+  if (!summary.roles.some((role) => role === "maintainer" || role === "owner" || role === "operator")) {
+    return { ok: false, status: 403, error: "insufficient_role" };
+  }
+  const scope =
+    identity.kind === "session" && !summary.roles.includes("operator") ? await loadControlPanelAccessScope(c.env, identity.actor) : null;
+  return { ok: true, scope };
+}
+
+// Whether a scoped (non-operator) tenant owns `installationId`. `scope.installationIds` is the authoritative set
+// of the tenant's own account installations (plus any they maintain), computed by the same
+// `loadControlPanelAccessScope` call the maintainer-dashboard uses — so this never grants cross-tenant access.
+function isInstallationInScope(scope: ControlPanelAccessScope, installationId: number): boolean {
+  return scope.installationIds.includes(installationId);
 }
 
 function isRepoSettingsPath(path: string): boolean {
