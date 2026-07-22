@@ -36,6 +36,7 @@ describe("loopover-miner package skeleton (#2287)", () => {
     expect(miner.bin).toEqual({
       "loopover-miner": "bin/loopover-miner.js",
       "loopover-miner-mcp": "bin/loopover-miner-mcp.js",
+      "loopover-miner-hosted": "bin/loopover-miner-hosted.js",
     });
     expect(miner.publishConfig).toEqual(mcp.publishConfig);
     expect(miner.dependencies["@loopover/engine"]).toBeDefined();

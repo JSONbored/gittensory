@@ -8,6 +8,9 @@ import { FORBIDDEN_CONTENT } from "./forbidden-content.js";
 const ALLOWED = [
   /^bin\/loopover-miner\.(js|d\.ts)$/,
   /^bin\/loopover-miner-mcp\.(js|d\.ts)$/,
+  // Hosted-container entry point (#7182) -- not REQUIRED like bin/loopover-miner.js, matching
+  // loopover-miner-mcp's own treatment above (an additional bin, not the package's primary CLI).
+  /^bin\/loopover-miner-hosted\.(js|d\.ts)$/,
   /^lib\/[a-z0-9-]+\.(js|d\.ts)$/,
   /^package\.json$/,
   /^README\.md$/,

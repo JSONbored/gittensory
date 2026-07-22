@@ -24,7 +24,8 @@
   },
   "bin": {
     "loopover-miner": "bin/loopover-miner.js",
-    "loopover-miner-mcp": "bin/loopover-miner-mcp.js"
+    "loopover-miner-mcp": "bin/loopover-miner-mcp.js",
+    "loopover-miner-hosted": "bin/loopover-miner-hosted.js"
   },
   "files": [
     "bin",
