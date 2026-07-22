@@ -145,9 +145,8 @@ describe("isSafeHttpUrl", () => {
 });
 
 describe("isSafeEndpointUrl", () => {
-  it("additionally permits wss / ws for chain endpoints", () => {
+  it("additionally permits wss for chain endpoints", () => {
     expect(isSafeEndpointUrl("wss://entrypoint.example.com")).toBe(true);
-    expect(isSafeEndpointUrl("ws://node.example.com")).toBe(true);
     expect(isSafeEndpointUrl("https://api.example.com")).toBe(true);
   });
 
@@ -156,7 +155,11 @@ describe("isSafeEndpointUrl", () => {
     expect(isSafeEndpointUrl("wss://localhost")).toBe(false);
   });
 
-  it("rejects non-ws/https protocols", () => {
+  // #8017: plain ws: is the plaintext counterpart to wss:, the same relationship http:/https: has -- and
+  // isSafeHttpUrl already rejects http: for exactly that reason. The doc comment above always said "secure
+  // WebSocket endpoints"; the code just didn't match it until now.
+  it("rejects non-wss/https protocols, including plain unencrypted ws: (#8017)", () => {
+    expect(isSafeEndpointUrl("ws://node.example.com")).toBe(false);
     expect(isSafeEndpointUrl("http://example.com")).toBe(false);
     expect(isSafeEndpointUrl("ftp://example.com")).toBe(false);
   });

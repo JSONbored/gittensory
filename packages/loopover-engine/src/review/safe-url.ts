@@ -7,8 +7,8 @@
 //
 // Rejects non-HTTPS (isSafeHttpUrl), localhost / `*.localhost` / .local / .internal, and private/
 // loopback/link-local IPs in any literal notation (decimal `2130706433`, hex `0x7f000001`, octal,
-// short `127.1`, and the IPv6 forms). isSafeEndpointUrl additionally permits wss:/ws: for base-layer
-// chain endpoints.
+// short `127.1`, and the IPv6 forms). isSafeEndpointUrl additionally permits wss: (not plain ws:,
+// #8017) for base-layer chain endpoints.
 
 function parseIpv4Component(part: string): number | null {
   if (/^0x[0-9a-f]+$/i.test(part)) return parseInt(part, 16);
@@ -109,8 +109,10 @@ export function isSafeHttpUrl(raw: string): boolean {
   return !hostIsPrivateOrLocal(url.hostname);
 }
 
-/** Like isSafeHttpUrl but also permits secure WebSocket endpoints (`wss:`, `ws:`) — base-layer chain
- *  endpoints (subtensor RPC/WSS/archive) are probed via JSON-RPC, not HTTP. Same SSRF host/IP guard. */
+/** Like isSafeHttpUrl but also permits the secure WebSocket endpoint (`wss:`) — base-layer chain endpoints
+ *  (subtensor RPC/WSS/archive) are probed via JSON-RPC, not HTTP. Same SSRF host/IP guard. Plain `ws:` is
+ *  REJECTED (#8017): it is the plaintext counterpart to `wss:`, the same relationship `http:`/`https:` has —
+ *  and `isSafeHttpUrl` above already rejects `http:` for exactly that reason. */
 export function isSafeEndpointUrl(raw: string): boolean {
   let url: URL;
   try {
@@ -118,6 +120,6 @@ export function isSafeEndpointUrl(raw: string): boolean {
   } catch {
     return false;
   }
-  if (!["https:", "wss:", "ws:"].includes(url.protocol)) return false;
+  if (!["https:", "wss:"].includes(url.protocol)) return false;
   return !hostIsPrivateOrLocal(url.hostname);
 }
