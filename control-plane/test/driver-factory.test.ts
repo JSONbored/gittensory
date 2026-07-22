@@ -69,21 +69,21 @@ test("withRealDatabaseDriver: overrides provisionDatabase/dropDatabase, forwards
   assert.deepEqual(calls, ["real-provision"]);
   // The fake's own provisionDatabase never ran -- its `databases` set stays empty even though the composed
   // driver's provisionDatabase resolved successfully.
-  assert.equal(base.databases.has("acme"), false);
+  assert.equal(base.databases.has("orb:acme"), false);
 
   await composed.dropDatabase(REQUEST);
   assert.deepEqual(calls, ["real-provision", "real-drop"]);
 
   // Every non-database step still runs against `base` exactly as before composition.
   await composed.createContainer(REQUEST);
-  assert.ok(base.containers.has("acme"));
+  assert.ok(base.containers.has("orb:acme"));
   assert.equal(await composed.containerExists(REQUEST), true);
   await composed.injectSecrets(REQUEST);
-  assert.ok(base.injectedSecrets.has("acme"));
+  assert.ok(base.injectedSecrets.has("orb:acme"));
   await composed.destroyContainer(REQUEST);
-  assert.equal(base.containers.has("acme"), false);
+  assert.equal(base.containers.has("orb:acme"), false);
   await composed.revokeSecrets(REQUEST);
-  assert.equal(base.injectedSecrets.has("acme"), false);
+  assert.equal(base.injectedSecrets.has("orb:acme"), false);
 });
 
 test("withRealContainerDriver: overrides createContainer/destroyContainer/containerExists, forwards every other step to base", async () => {
@@ -110,13 +110,13 @@ test("withRealContainerDriver: overrides createContainer/destroyContainer/contai
   assert.deepEqual(calls, ["real-create", "real-exists", "real-destroy"]);
   // The fake's own createContainer never ran -- its `containers` set stays empty even though the composed
   // driver's own lifecycle calls all resolved successfully.
-  assert.equal(base.containers.has("acme"), false);
+  assert.equal(base.containers.has("orb:acme"), false);
 
   // Every non-container step still runs against `base` exactly as before composition.
   const details = await composed.provisionDatabase(REQUEST);
   assert.equal(details.host, "fake-acme.control-plane.invalid");
   await composed.injectSecrets(REQUEST);
-  assert.ok(base.injectedSecrets.has("acme"));
+  assert.ok(base.injectedSecrets.has("orb:acme"));
 });
 
 test("createTenantProvisioningDriver: falls back to the fake container behavior when containerBindings is omitted or empty", async () => {
