@@ -61,11 +61,17 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Throwaway credential for the job-scoped ephemeral Postgres SERVICE CONTAINER below — deliberately
+      # not a repository secret: the container exists only for this job's lifetime, is reachable only from
+      # the runner's localhost, and holds nothing but synthetic test rows. Single-sourced here so the
+      # service env and the test step can never drift.
+      PG_TEST_PASSWORD: devpw
     services:
       postgres:
         image: postgres:18-alpine
         env:
-          POSTGRES_PASSWORD: devpw
+          POSTGRES_PASSWORD: ${{ env.PG_TEST_PASSWORD }}
           POSTGRES_DB: loopover
         ports:
           - 5432:5432
@@ -94,7 +100,7 @@ jobs:
         run: npm run build --workspace @loopover/engine
 
       - name: Postgres integration test (real PG)
-        run: PG_TEST_URL=postgres://postgres:devpw@localhost:5432/loopover npx vitest run test/integration/selfhost-pg.test.ts test/integration/selfhost-pg-calibration.test.ts
+        run: PG_TEST_URL=postgres://postgres:${{ env.PG_TEST_PASSWORD }}@localhost:5432/loopover npx vitest run test/integration/selfhost-pg.test.ts test/integration/selfhost-pg-calibration.test.ts
 
       - name: Build the self-host bundle
         run: node --experimental-strip-types scripts/build-selfhost.ts
