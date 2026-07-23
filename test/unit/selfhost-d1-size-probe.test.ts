@@ -170,7 +170,10 @@ describe("fetchD1TableRowCount", () => {
       calls.push({ url: requestUrl(input), method: init?.method ?? "GET" });
       const body = JSON.parse(String(init?.body ?? "{}")) as { sql: string; params: string[] };
       capturedParams = body.params;
-      expect(body.sql).toContain("signal_type IN (?1, ?2, ?3, ?4)");
+      // Derived from the list itself so growing LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES (as the #3810
+      // recurrences keep doing) can never silently desync this pin from the probe's real SQL.
+      const expectedPlaceholders = LATEST_ONLY_SIGNAL_SNAPSHOT_TYPES.map((_, index) => `?${index + 1}`).join(", ");
+      expect(body.sql).toContain(`signal_type IN (${expectedPlaceholders})`);
       return new Response(envelope([{ results: [{ total: 20225, dedup_total: 107, dedup_distinct_keys: 36 }], success: true, meta: {} }]));
     };
     const row = await fetchD1TableRowCount(config, "signal_snapshots", fetchImpl);
