@@ -167,6 +167,7 @@ export * from "./calibration/backtest-corpus.js";
 export * from "./calibration/backtest-score.js";
 export * from "./calibration/backtest-compare.js";
 export * from "./calibration/backtest-report.js";
+export * from "./calibration/backtest-track-record.js";
 // #8087 shipped this file but never added its barrel export -- every existing consumer happened to import
 // it via the direct relative source path instead, so this was latent rather than broken. Fixing it here
 // since #8138 is the first consumer that actually needs the package-name import (@loopover/engine), the
