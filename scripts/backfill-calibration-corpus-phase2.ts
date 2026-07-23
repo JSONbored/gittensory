@@ -24,6 +24,7 @@ import {
   patchFiredMetadataWithDiff,
   patchOverrideMetadataToReversed,
   patchOverrideMetadataToSamePrMerged,
+  patchFiredMetadataWithReasonCode,
   renderPhase2Report,
   type HistoricalCloseSide,
   type Phase2Report,
@@ -31,7 +32,7 @@ import {
 } from "./backfill-calibration-corpus-phase2-core.js";
 import { BACKFILL_RULE_ID } from "./backfill-calibration-corpus-core.js";
 
-type Pass = "successors" | "raw-context";
+type Pass = "successors" | "raw-context" | "reason-codes";
 type Args = {
   db: string;
   remote: boolean;
@@ -61,7 +62,7 @@ function parseArgs(argv: string[]): Args {
     }
     else if (flag === "--pass") {
       const value = argv[++i];
-      if (value !== "successors" && value !== "raw-context") throw new Error(`--pass must be successors or raw-context, got ${value}`);
+      if (value !== "successors" && value !== "raw-context" && value !== "reason-codes") throw new Error(`--pass must be successors, raw-context, or reason-codes, got ${value}`);
       args.pass = value;
     } else if (flag === "--max-requests") args.maxRequests = Number(argv[++i]);
     else if (flag === "--state-file") args.stateFile = argv[++i]!;
@@ -461,6 +462,39 @@ async function runRawContextPass(args: Args, budget: RequestBudget, state: Curso
   return report;
 }
 
+/** Pass C (#8243): copy the ledger's own decision reasonCode onto each phase-1 fired row — DB-only, no
+ *  GitHub. The backfill era's confidence axis is flat (constant 1.0 from the retired legacy writer), so
+ *  reason class (AI-judgment dual_review_declined vs deterministic codes) is the era's only
+ *  within-corpus discriminator. Idempotent via the patcher's already-tagged null. */
+async function runReasonCodesPass(args: Args): Promise<Phase2Report> {
+  const report: Phase2Report = { pass: "reason-codes", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, matchedSamePrMerged: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
+  const decisionRows = await executeSql(
+    args,
+    `SELECT repo, number, json_extract(decision_json, '$.reasonCode') AS reason FROM review_targets WHERE kind = 'pull_request' AND decision_json IS NOT NULL`,
+  );
+  const reasonByTarget = new Map<string, string>();
+  for (const row of decisionRows) {
+    if (typeof row.repo === "string" && typeof row.reason === "string" && row.reason !== "") {
+      reasonByTarget.set(`${row.repo}#${row.number}`, row.reason);
+    }
+  }
+  for (const row of await loadBackfillRows(args, "fired")) {
+    report.scanned += 1;
+    const reason = reasonByTarget.get(row.target_key);
+    if (!reason) {
+      report.noMatch += 1;
+      continue;
+    }
+    const patched = patchFiredMetadataWithReasonCode(row.metadata_json, reason);
+    if (patched === null) report.alreadyPatched += 1;
+    else if (args.apply) {
+      await applyMetadataUpdate(args, backfillFiredId(row.target_key), patched);
+      report.patched += 1;
+    } else report.patched += 1;
+  }
+  return report;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const pgConnection = resolvePgConnection(args.pgPresent, args.pgValue, process.env.DATABASE_URL);
@@ -473,7 +507,9 @@ async function main(): Promise<void> {
       ? args.planIn
         ? await runSuccessorsFromPlan(args)
         : await runSuccessorsPass(args, budget, state)
-      : await runRawContextPass(args, budget, state);
+      : args.pass === "raw-context"
+        ? await runRawContextPass(args, budget, state)
+        : await runReasonCodesPass(args);
   await pgSession?.close();
   writeFileSync(args.stateFile, `${JSON.stringify(state, null, 2)}\n`);
   console.log(renderPhase2Report(report, args.apply ? "apply" : "dry-run"));

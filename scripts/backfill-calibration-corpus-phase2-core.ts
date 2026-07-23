@@ -20,6 +20,11 @@ export const RETRO_SUCCESSOR_PROVENANCE = "github_successor_scan";
 export const RETRO_SAME_PR_MERGED_PROVENANCE = "github_same_pr_merged";
 /** Distinct provenance for pass B's re-fetched raw context. */
 export const RAW_CONTEXT_REFETCH_PROVENANCE = "github_raw_context_refetch";
+/** Provenance for pass C's reason-code enrichment (#8243): the ledger's own decision reasonCode copied
+ *  onto the fired row so AI-judgment closes (dual_review_declined) are segmentable from deterministic
+ *  ones — the backfill era's confidence axis is flat (a constant 1.0 from the retired legacy writer),
+ *  so reason class is the only within-era discriminator the corpus has. */
+export const REASON_CODE_ENRICHMENT_PROVENANCE = "review_targets_reason_code";
 
 /** A phase-1 backfilled close decision, hydrated with the GitHub truth the wrapper fetched. */
 export type HistoricalCloseSide = {
@@ -131,7 +136,7 @@ export function patchFiredMetadataWithDiff(metadataJson: string, diff: string): 
 }
 
 export type Phase2Report = {
-  pass: "successors" | "raw-context";
+  pass: "successors" | "raw-context" | "reason-codes";
   scanned: number;
   patched: number;
   alreadyPatched: number;
@@ -153,7 +158,7 @@ export type Phase2Report = {
 export function renderPhase2Report(report: Phase2Report, mode: "dry-run" | "apply"): string {
   const lines = [
     `Calibration corpus backfill phase 2 (${mode}) — pass ${report.pass}, provenance ${
-      report.pass === "successors" ? RETRO_SUCCESSOR_PROVENANCE : RAW_CONTEXT_REFETCH_PROVENANCE
+      report.pass === "successors" ? RETRO_SUCCESSOR_PROVENANCE : report.pass === "raw-context" ? RAW_CONTEXT_REFETCH_PROVENANCE : REASON_CODE_ENRICHMENT_PROVENANCE
     }`,
     `  scanned: ${report.scanned}  patched: ${report.patched}  already-patched: ${report.alreadyPatched}  no-match/skipped: ${report.noMatch}`,
     ...(report.pass === "successors"
@@ -165,6 +170,18 @@ export function renderPhase2Report(report: Phase2Report, mode: "dry-run" | "appl
   ];
   if (report.resumeFrom) lines.push(`  resume from: ${report.resumeFrom} (state file updated)`);
   return lines.join("\n");
+}
+
+/**
+ * Patch a phase-1 fired row's metadata with the ledger's own decision reasonCode (#8243). Idempotent
+ * (already-tagged rows return null) and never guesses (unparseable metadata or a blank code return null).
+ */
+export function patchFiredMetadataWithReasonCode(metadataJson: string, reasonCode: string): string | null {
+  const metadata = parseObject(metadataJson);
+  if (!metadata) return null;
+  if (typeof metadata.reasonCode === "string") return null;
+  if (reasonCode.trim() === "") return null;
+  return JSON.stringify({ ...metadata, reasonCode: reasonCode.trim(), reasonCodeProvenance: REASON_CODE_ENRICHMENT_PROVENANCE });
 }
 
 function parseObject(json: string): Record<string, unknown> | null {

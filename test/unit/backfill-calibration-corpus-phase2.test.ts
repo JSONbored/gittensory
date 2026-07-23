@@ -8,9 +8,11 @@ import {
   patchFiredMetadataWithDiff,
   patchOverrideMetadataToReversed,
   patchOverrideMetadataToSamePrMerged,
+  patchFiredMetadataWithReasonCode,
   renderPhase2Report,
   RETRO_SUCCESSOR_PROVENANCE,
   RETRO_SAME_PR_MERGED_PROVENANCE,
+  REASON_CODE_ENRICHMENT_PROVENANCE,
   RAW_CONTEXT_REFETCH_PROVENANCE,
   type HistoricalCloseSide,
   type Phase2Report,
@@ -131,6 +133,22 @@ describe("metadata patchers (#8170)", () => {
   });
 });
 
+describe("patchFiredMetadataWithReasonCode (#8243)", () => {
+  it("tags the fired row with the ledger's reasonCode + provenance, exactly once, never guessing", () => {
+    const original = JSON.stringify({ confidence: 1, backfilled: true });
+    const patched = JSON.parse(patchFiredMetadataWithReasonCode(original, "dual_review_declined")!) as Record<string, unknown>;
+    expect(patched.reasonCode).toBe("dual_review_declined");
+    expect(patched.reasonCodeProvenance).toBe(REASON_CODE_ENRICHMENT_PROVENANCE);
+    expect(patched.backfilled).toBe(true); // phase-1 fields survive
+    // Idempotent + never-guess arms.
+    expect(patchFiredMetadataWithReasonCode(JSON.stringify(patched), "checks_failed")).toBeNull();
+    expect(patchFiredMetadataWithReasonCode(original, "   ")).toBeNull();
+    expect(patchFiredMetadataWithReasonCode("not-json", "checks_failed")).toBeNull();
+    // Whitespace-trimmed code.
+    expect((JSON.parse(patchFiredMetadataWithReasonCode(original, "  scope_failure ")!) as Record<string, unknown>).reasonCode).toBe("scope_failure");
+  });
+});
+
 describe("ids + report rendering (#8170)", () => {
   it("derives the deterministic phase-1 row ids (the only rows the passes may touch)", () => {
     expect(backfillOverrideId("acme/widgets#7")).toBe("backfill:ai_consensus_defect:acme/widgets#7:override");
@@ -149,6 +167,8 @@ describe("ids + report rendering (#8170)", () => {
       "apply",
     );
     expect(exhausted).toContain(RAW_CONTEXT_REFETCH_PROVENANCE);
+    const reasonPass = renderPhase2Report({ ...base, pass: "reason-codes" }, "dry-run");
+    expect(reasonPass).toContain(REASON_CODE_ENRICHMENT_PROVENANCE);
     expect(exhausted).toContain("budget exhausted");
     expect(exhausted).toContain("resume from: acme/widgets#7");
   });
