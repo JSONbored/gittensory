@@ -54,6 +54,7 @@ test("parseAmsPolicySpec: valid raw config normalizes every field and keeps non-
     maxTurnsPerIteration: 10,
     selfLoopAutonomy: "observe",
     networkAllowlist: { ecosystems: ["npm"], extraHosts: ["api.example.com"] },
+    minRankAutotuneEnabled: false,
   });
   assert.deepEqual(parsed.warnings, []);
 });
