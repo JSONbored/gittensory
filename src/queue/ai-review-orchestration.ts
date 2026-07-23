@@ -20,7 +20,7 @@ import {
   type TransientLockClaim,
 } from "./transient-locks";
 import { buildPullRequestAdvisory } from "../rules/advisory";
-import { getDecryptedRepositoryAiKey, getRepository, listCheckSummaries, listPullRequestFiles } from "../db/repositories";
+import { recordAuditEvent, getDecryptedRepositoryAiKey, getRepository, listCheckSummaries, listPullRequestFiles } from "../db/repositories";
 import { createInstallationToken } from "../github/app";
 import type { AgentActionMode } from "../settings/agent-execution";
 import { buildAiReviewDiff } from "../review/review-diff";
@@ -721,6 +721,19 @@ export async function runAiReviewForAdvisory(
       improvementSignal: args.improvementSignal === true,
     });
     if (result.status !== "ok") return undefined;
+    // #8229 stage 0: persist each reviewer's stance for the provider track records — best-effort like every
+    // calibration write (a vote-store failure must never affect the review), one audit event per reviewer,
+    // attribution already swap-proof from the runner (votes attach at leg production time).
+    for (const vote of result.reviewerVotes) {
+      await recordAuditEvent(env, {
+        eventType: "reviewer_vote",
+        actor: vote.reviewer,
+        targetKey: `${args.repoFullName}#${args.pr.number}`,
+        outcome: "completed",
+        detail: vote.votedFail ? "flagged a blocking defect" : "did not flag a blocking defect",
+        metadata: { repoFullName: args.repoFullName, vote: vote.votedFail ? "fail" : "non_fail" },
+      }).catch(() => undefined);
+    }
     const findings: AdvisoryFinding[] = [];
     if (result.consensusDefect) {
       findings.push({

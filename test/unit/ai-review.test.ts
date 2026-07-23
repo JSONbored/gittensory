@@ -1680,6 +1680,49 @@ describe("runLoopOverAiReview self-host dual-AI plan (#dual-ai-combiner)", () =>
     expect([...seen].sort()).toEqual(["claude-code", "codex"]);
   });
 
+  it("#8229 stage 0: reviewerVotes attribute each stance to the model that produced it — split case, both stances distinct", async () => {
+    const env = planEnv(
+      { reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "consensus" },
+      async (model) =>
+        model === "codex"
+          ? { response: reviewJson({ present: true, title: "Race condition in src/x.ts" }) }
+          : { response: reviewJson({ present: false }) },
+    );
+    const result = await runLoopOverAiReview(env, { ...baseInput, mode: "block" });
+    if (result.status !== "ok") throw new Error("expected ok");
+    // The tie-break judge re-runs order-swapped internally on disagreement — attribution must be immune
+    // to it because votes attach at leg production time, not slot interpretation.
+    const votes = [...result.reviewerVotes].sort((a, b) => a.reviewer.localeCompare(b.reviewer));
+    expect(votes).toEqual([
+      { reviewer: "claude-code", votedFail: false },
+      { reviewer: "codex", votedFail: true },
+    ]);
+  });
+
+  it("#8229 stage 0: an unparseable leg casts NO vote — never a fabricated stance for its model", async () => {
+    const env = planEnv(
+      { reviewers: [{ model: "claude-code" }, { model: "codex" }], combine: "consensus" },
+      async (model) =>
+        model === "claude-code" ? { response: "not json at all" } : { response: reviewJson({ present: false }) },
+    );
+    const result = await runLoopOverAiReview(env, { ...baseInput, mode: "block" });
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.reviewerVotes).toEqual([{ reviewer: "codex", votedFail: false }]);
+  });
+
+  it("#8229 stage 0: advisory-only runs carry no votes (block-mode corpus only)", async () => {
+    const run = vi.fn(async () => ({ response: reviewJson() }));
+    const env = createTestEnv({
+      AI: { run } as unknown as Ai,
+      AI_SUMMARIES_ENABLED: "true",
+      AI_PUBLIC_COMMENTS_ENABLED: "true",
+      AI_DAILY_NEURON_BUDGET: "100000",
+    });
+    const result = await runLoopOverAiReview(env, baseInput);
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.reviewerVotes).toEqual([]);
+  });
+
   it("single + BYOK: the provider writes the advisory; the one decision reviewer runs via the router", async () => {
     vi.stubGlobal(
       "fetch",

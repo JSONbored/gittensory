@@ -392,6 +392,11 @@ export type LoopOverAiReviewResult =
       inconclusive: boolean;
       estimatedNeurons: number;
       reviewerCount: number;
+      /** Per-reviewer stances for the provider track records (#8229 stage 0). Attribution attaches at leg
+       *  PRODUCTION time (a.review ↔ primary.model, b.review ↔ secondary.model), so the tie-break judge's
+       *  order-swap — which operates downstream on copies — can never misattribute a vote. Block-mode only
+       *  (the gate corpus is what the track records score against); empty in advisory-only runs. */
+      reviewerVotes: { reviewer: string; votedFail: boolean }[];
       inlineFindings: InlineFinding[];
       /** Combined improvement/value judgment (#4743), public-safe and ready to render. ALWAYS present (`null`
        *  when `input.improvementSignal` is falsy, when neither reviewer emitted a usable judgment, or when the
@@ -2338,6 +2343,7 @@ export async function runLoopOverAiReview(
   }
 
   let consensusDefect: AiConsensusDefect | null = null;
+  const reviewerVotes: { reviewer: string; votedFail: boolean }[] = [];
   let secondReview: ModelReview | null = null;
   let aiReviewSplit = false;
   let splitConfidence: number | undefined;
@@ -2375,6 +2381,9 @@ export async function runLoopOverAiReview(
       ]);
       if (a.fallbackNote) fallbackNotes.push(a.fallbackNote);
       if (b.fallbackNote) fallbackNotes.push(b.fallbackNote);
+      // #8229 stage 0: attach votes HERE, where slot↔model is unambiguous by construction.
+      if (a.review) reviewerVotes.push({ reviewer: primary.model, votedFail: a.review.blockers.length > 0 });
+      if (b.review) reviewerVotes.push({ reviewer: secondary.model, votedFail: b.review.blockers.length > 0 });
       secondReview = b.review;
       // Combine per the configured strategy (#dual-ai-combiner). Default `consensus` is byte-identical to the
       // historical logic: block only on agreement, lone blocker → split, a missing opinion → inconclusive
@@ -2435,6 +2444,8 @@ export async function runLoopOverAiReview(
           )
         : ({ review: advisoryReview } as ReviewerOpinionOutcome);
       if (a.fallbackNote) fallbackNotes.push(a.fallbackNote);
+      // #8229 stage 0: single-reviewer stance, attributed to the model that actually produced it.
+      if (a.review) reviewerVotes.push({ reviewer: primary.model, votedFail: a.review.blockers.length > 0 });
       const combined = combineReviews([a.review], { strategy: "single" });
       consensusDefect = combined.defect;
       inconclusive = combined.inconclusive;
@@ -2498,6 +2509,7 @@ export async function runLoopOverAiReview(
   return {
     status: "ok",
     advisoryNotes,
+    reviewerVotes,
     consensusDefect,
     split: aiReviewSplit,
     // Carry the split's calibrated confidence (#8) so the caller can apply the same `aiReviewCloseConfidence`
