@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.7.0](https://github.com/JSONbored/loopover/compare/miner-v3.6.0...miner-v3.7.0) (2026-07-23)
+
+
+### Features
+
+* **engine:** AMS calibration corpus — pair predicted gate verdicts with realized PR outcomes ([#8200](https://github.com/JSONbored/loopover/issues/8200)) ([d40421e](https://github.com/JSONbored/loopover/commit/d40421e226bca36a9c322e1d44826a8f110115f6)), closes [#8183](https://github.com/JSONbored/loopover/issues/8183)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^3.6.0 to ^3.7.0
+
 ## [3.6.0](https://github.com/JSONbored/loopover/compare/miner-v3.5.0...miner-v3.6.0) (2026-07-23)
 
 
