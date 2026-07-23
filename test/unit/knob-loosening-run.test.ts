@@ -278,9 +278,14 @@ describe("processor + endpoint wiring (#8176)", () => {
     expect((await app.request("/v1/internal/calibration/knobs", {}, env)).status).toBe(401);
     const res = await app.request("/v1/internal/calibration/knobs", { headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` } }, env);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { knobs: Array<{ knobId: string; flagEnabled: boolean }> };
-    expect(body.knobs.map((knob) => knob.knobId).sort()).toEqual(["ai_review_close_confidence", "satisfaction_floor"]);
+    const body = (await res.json()) as { knobs: Array<{ knobId: string; flagEnabled: boolean; applyMode: string }> };
+    // #8224: report-only knobs list too, labeled by applyMode — the operator sees evidence surfaces
+    // before any flip-to-live exists.
+    expect(body.knobs.map((knob) => knob.knobId).sort()).toEqual(["ai_review_close_confidence", "satisfaction_floor", "slop_gate_score"]);
     expect(body.knobs.every((knob) => knob.flagEnabled === false)).toBe(true);
+    const byId = Object.fromEntries(body.knobs.map((knob) => [knob.knobId, knob]));
+    expect(byId.slop_gate_score!.applyMode).toBe("report_only");
+    expect(byId.ai_review_close_confidence!.applyMode).toBe("live");
     expect(JSON.stringify(body)).not.toMatch(/reward|payout|trust|wallet|hotkey|issueText|modelResponse/i);
   });
 });

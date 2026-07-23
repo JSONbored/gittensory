@@ -38,7 +38,9 @@ function sanitizeForCheckRun(text: string): string {
 }
 
 const DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE = 0.93;
-const DEFAULT_SLOP_BLOCK_THRESHOLD = 60;
+/** Exported to mirror the src twin (#8224): loopover's LOOSENABLE_KNOBS registry anchors the slop knob's
+ *  shipped value on this constant (divided by 100 onto the corpus's confidence scale). Value unchanged. */
+export const DEFAULT_SLOP_BLOCK_THRESHOLD = 60;
 
 export type GateCheckConclusion = "success" | "failure" | "action_required" | "neutral" | "skipped";
 

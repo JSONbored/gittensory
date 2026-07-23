@@ -11,7 +11,7 @@ import {
   SATISFACTION_FLOOR_SPLIT_SEED,
 } from "../../src/services/satisfaction-floor-loosening";
 import { LINKED_ISSUE_SATISFACTION_CONFIDENCE_FLOOR } from "../../src/services/linked-issue-satisfaction";
-import { DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE } from "../../src/rules/advisory";
+import { DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE, DEFAULT_SLOP_BLOCK_THRESHOLD } from "../../src/rules/advisory";
 import { buildKnobReliabilityRecs, buildReportOnlyKnobRecs } from "../../src/review/loosening-recs";
 
 const AI_KNOB = LOOSENABLE_KNOBS.ai_review_close_confidence!;
@@ -21,6 +21,7 @@ describe("LOOSENABLE_KNOBS registry invariants (#8159)", () => {
     expect(LOOSENABLE_KNOBS.satisfaction_floor).toEqual({
       knobId: "satisfaction_floor",
       ruleId: SATISFACTION_FLOOR_RULE_ID,
+      orientation: "floor",
       shippedValue: LINKED_ISSUE_SATISFACTION_CONFIDENCE_FLOOR,
       candidates: SATISFACTION_FLOOR_LOOSENING_CANDIDATES,
       hardMinimum: SATISFACTION_FLOOR_HARD_MINIMUM,
@@ -50,11 +51,25 @@ describe("LOOSENABLE_KNOBS registry invariants (#8159)", () => {
     const knobs = Object.values(LOOSENABLE_KNOBS);
     for (const knob of knobs) {
       expect(knob.candidates.length).toBeGreaterThan(0);
-      for (const candidate of knob.candidates) {
-        expect(candidate).toBeLessThan(knob.shippedValue);
-        expect(candidate).toBeGreaterThanOrEqual(knob.hardMinimum);
+      // #8224: orientation decides which side of shipped the loosening ladder sits on.
+      if (knob.orientation === "ceiling") {
+        expect(typeof knob.hardMaximum).toBe("number"); // a ceiling knob MUST declare its upper bound
+        for (const candidate of knob.candidates) {
+          expect(candidate).toBeGreaterThan(knob.shippedValue);
+          expect(candidate).toBeLessThanOrEqual(knob.hardMaximum!);
+        }
+        expect([...knob.candidates].sort((a, b) => a - b)).toEqual([...knob.candidates]); // nearest-first (ascending)
+        // The live apply path and the tightening ladder are floor-only machinery today — a ceiling knob
+        // may not go live (or declare a ladder) until their storage/validation generalizes.
+        expect(knob.applyMode).toBe("report_only");
+        expect(knob.tightening).toBeUndefined();
+      } else {
+        for (const candidate of knob.candidates) {
+          expect(candidate).toBeLessThan(knob.shippedValue);
+          expect(candidate).toBeGreaterThanOrEqual(knob.hardMinimum);
+        }
+        expect([...knob.candidates].sort((a, b) => b - a)).toEqual([...knob.candidates]); // nearest-first (descending)
       }
-      expect([...knob.candidates].sort((a, b) => b - a)).toEqual([...knob.candidates]); // nearest-first
       expect(knob.minVisibleCases).toBeGreaterThan(0);
       expect(knob.minHeldOutCases).toBeGreaterThan(0);
       expect(["live", "report_only"]).toContain(knob.applyMode);
@@ -377,3 +392,125 @@ describe("evaluateKnobDrift on the close-confidence knob (#8212)", () => {
     );
   });
 });
+
+// ── #8224: the slop ceiling knob — report-only registration + orientation-aware evaluation ─────────────────
+
+const SLOP_KNOB = LOOSENABLE_KNOBS.slop_gate_score!;
+
+function slopCase(targetKey: string, confidence: number, label: "reversed" | "confirmed"): BacktestCase {
+  return {
+    ruleId: SLOP_KNOB.ruleId,
+    targetKey,
+    outcome: "above_threshold",
+    label,
+    firedAt: "2026-06-01T00:00:00.000Z",
+    decidedAt: "2026-06-02T00:00:00.000Z",
+    metadata: { confidence },
+  };
+}
+
+const slopProbe = POOL.map((key) => slopCase(key, 0.99, "confirmed"));
+const slopSplit = splitBacktestCorpus(slopProbe, SLOP_KNOB.heldOutFraction, SLOP_KNOB.splitSeed);
+const slopVisibleKeys = slopSplit.visible.map((c) => c.targetKey);
+const slopHeldOutKeys = slopSplit.heldOut.map((c) => c.targetKey);
+
+// Band blocks at 0.62 the humans REVERSED (the gate over-blocked): shipped 0.60 fires them; raising the
+// cap to 0.65 stops firing exactly those — precision up. A deep-high confirmed anchor per slice keeps a
+// true positive on both sides of every comparison.
+function slopLooseningFriendlyCorpus(): BacktestCase[] {
+  const cases: BacktestCase[] = [];
+  for (const key of slopVisibleKeys.slice(0, SLOP_KNOB.minVisibleCases + 6)) cases.push(slopCase(key, 0.62, "reversed"));
+  for (const key of slopHeldOutKeys.slice(0, SLOP_KNOB.minHeldOutCases + 3)) cases.push(slopCase(key, 0.62, "reversed"));
+  cases.push(slopCase(slopVisibleKeys[SLOP_KNOB.minVisibleCases + 10]!, 0.9, "confirmed"));
+  cases.push(slopCase(slopHeldOutKeys[SLOP_KNOB.minHeldOutCases + 6]!, 0.9, "confirmed"));
+  return cases;
+}
+
+describe("slop_gate_score registry entry (#8224)", () => {
+  it("pins the ceiling entry: shipped from the gate constant, ascending ladder, report-only, no autonomy plumbing implied", () => {
+    expect(SLOP_KNOB).toEqual({
+      knobId: "slop_gate_score",
+      ruleId: "slop_gate_score",
+      orientation: "ceiling",
+      shippedValue: DEFAULT_SLOP_BLOCK_THRESHOLD / 100,
+      candidates: [0.65, 0.7],
+      hardMinimum: DEFAULT_SLOP_BLOCK_THRESHOLD / 100,
+      hardMaximum: 0.7,
+      minVisibleCases: 50,
+      minHeldOutCases: 12,
+      heldOutFraction: 0.25,
+      splitSeed: "slop-gate-loosening-v1",
+      applyMode: "report_only",
+      overrideFlagKey: "slop_gate_score_override",
+      looseningEventType: "calibration.slop_gate_score_loosened",
+      autotuneEnvVar: "SLOP_GATE_SCORE_AUTOTUNE_ENABLED",
+    });
+    expect(LOOSENABLE_KNOBS.quality_gate_score).toBeUndefined(); // stays out until a global shipped default exists
+  });
+
+  it("evaluateKnobLoosening proposes the smallest RAISE for a ceiling knob when both splits support it", () => {
+    const proposal = evaluateKnobLoosening(SLOP_KNOB, slopLooseningFriendlyCorpus());
+    expect(proposal).not.toBeNull();
+    expect(proposal!.currentValue).toBe(0.6);
+    expect(proposal!.proposedValue).toBe(0.65); // the smaller of the two raises
+    expect(proposal!.visible.verdict).toBe("improved");
+    expect(proposal!.heldOut.verdict).not.toBe("regressed");
+  });
+
+  it("refuses to raise past the hard maximum, even from an already-raised current value", () => {
+    expect(evaluateKnobLoosening(SLOP_KNOB, slopLooseningFriendlyCorpus(), SLOP_KNOB.hardMaximum!)).toBeNull();
+  });
+
+  it("never proposes on a sample below the knob's floors", () => {
+    expect(evaluateKnobLoosening(SLOP_KNOB, slopLooseningFriendlyCorpus().slice(0, 10))).toBeNull();
+  });
+
+  it("drift labels are orientation-aware: an ABOVE-live dominating alternative reads LOOSER for a ceiling knob (and is suppressible)", () => {
+    const report = evaluateKnobDrift(SLOP_KNOB, slopLooseningFriendlyCorpus());
+    expect(report).not.toBeNull();
+    expect(report!.dominatingValue).toBe(0.65);
+    expect(report!.direction).toBe("looser"); // a floor knob would have labeled the same move "tighter"
+  });
+
+  it("DEFENSIVE: a ceiling knob missing its hardMaximum can never loosen and its drift pool collapses to at-or-below shipped", () => {
+    // The structural invariant forbids this shape in the shipped registry; the evaluators still refuse
+    // rather than treat an absent bound as infinity.
+    const { hardMaximum: _dropped, ...rest } = SLOP_KNOB;
+    const unbounded = rest as LoosenableKnob;
+    expect(evaluateKnobLoosening(unbounded, slopLooseningFriendlyCorpus())).toBeNull();
+    const report = evaluateKnobDrift(unbounded, slopLooseningFriendlyCorpus());
+    expect(report).toBeNull(); // every above-shipped alternative is filtered out; shipped === live
+  });
+
+  it("the generic report-only proposals path picks the slop knob up with zero new plumbing", async () => {
+    const proposals = await loadReportOnlyKnobProposalsForTest();
+    expect(proposals.some((proposal) => proposal.knobId === "slop_gate_score")).toBe(true);
+  });
+});
+
+// Seed a friendly corpus into a real signal store and run the SHIPPED default-registry path — the exact
+// call selftune-wire makes each pass.
+async function loadReportOnlyKnobProposalsForTest() {
+  const { createTestEnv } = await import("../helpers/d1");
+  const { createSignalStore } = await import("../../src/review/signal-tracking-wire");
+  const { loadReportOnlyKnobProposals } = await import("../../src/services/satisfaction-floor-loosening-run");
+  const env = createTestEnv();
+  const store = createSignalStore(env);
+  const now = Date.now();
+  for (const [i, backtestCase] of slopLooseningFriendlyCorpus().entries()) {
+    await store.recordRuleFired({
+      ruleId: SLOP_KNOB.ruleId,
+      targetKey: backtestCase.targetKey,
+      outcome: "above_threshold",
+      occurredAt: new Date(now - 10_000 - i).toISOString(),
+      metadata: { confidence: backtestCase.metadata!.confidence as number },
+    });
+    await store.recordHumanOverride({
+      ruleId: SLOP_KNOB.ruleId,
+      targetKey: backtestCase.targetKey,
+      verdict: backtestCase.label,
+      occurredAt: new Date(now - i).toISOString(),
+    });
+  }
+  return loadReportOnlyKnobProposals(env, now);
+}

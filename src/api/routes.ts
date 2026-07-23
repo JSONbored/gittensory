@@ -322,7 +322,7 @@ import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
 import { loadPublicRulePrecision } from "../review/public-rule-precision";
 import { loadCalibrationTrend } from "../services/rule-calibration-trend";
 import { isSatisfactionFloorAutotuneEnabled, loadSatisfactionFloorStatus, runSatisfactionFloorLoosening } from "../services/satisfaction-floor-loosening-run";
-import { loadLiveKnobStatuses } from "../services/knob-loosening-run";
+import { loadAllKnobStatuses } from "../services/knob-loosening-run";
 import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { loadPublicReviewVolumeTrend } from "../services/public-review-volume-trend";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
@@ -4840,7 +4840,7 @@ export function createApp() {
   // The #8161 surface generalized across EVERY live registry knob (#8176): one endpoint, one projector,
   // per-knob flag state + shipped/live/override values + applied history (both split verdicts). Same
   // deliberate non-flag-gating and INTERNAL_JOB_TOKEN posture as the satisfaction-floor read above.
-  app.get("/v1/internal/calibration/knobs", async (c) => c.json({ knobs: await loadLiveKnobStatuses(c.env) }));
+  app.get("/v1/internal/calibration/knobs", async (c) => c.json({ knobs: await loadAllKnobStatuses(c.env) }));
 
   app.post("/v1/internal/jobs/refresh-registry", async (c) => {
     const message: JobMessage = { type: "refresh-registry", requestedBy: "api" };

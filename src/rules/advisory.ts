@@ -1227,7 +1227,9 @@ function buildQualityGateWarning(policy: GateCheckPolicy): AdvisoryFinding | nul
 }
 
 // Default block threshold = the `high` band (60), used when a maintainer sets slop: block without a minScore.
-const DEFAULT_SLOP_BLOCK_THRESHOLD = 60;
+/** Exported for the LOOSENABLE_KNOBS registry (#8224): the slop knob's shipped value anchors on this
+ *  constant (divided by 100 onto the corpus's confidence scale). */
+export const DEFAULT_SLOP_BLOCK_THRESHOLD = 60;
 
 function buildSlopGateBlocker(policy: GateCheckPolicy): AdvisoryFinding | null {
   if (gateMode(policy.slopGateMode) !== "block") return null;

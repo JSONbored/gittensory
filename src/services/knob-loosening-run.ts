@@ -476,6 +476,9 @@ export type KnobRepoOverride = { repoFullName: string; value: number };
 
 export type KnobStatus = {
   knobId: string;
+  /** The registry's apply contract for this knob (#8224): report_only knobs surface evidence here and in
+   *  the advisor but their apply path refuses — the operator sees WHAT would move before anything can. */
+  applyMode: "live" | "report_only";
   flagEnabled: boolean;
   /** The tighten direction's own flag (#8225) — null for a knob that declares no tightening ladder. */
   tightenFlagEnabled: boolean | null;
@@ -620,6 +623,7 @@ export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<Kn
 
   return {
     knobId: knob.knobId,
+    applyMode: knob.applyMode,
     flagEnabled,
     tightenFlagEnabled,
     shippedValue: knob.shippedValue,
@@ -633,12 +637,21 @@ export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<Kn
 }
 
 /** Every live knob's status (satisfaction floor included — the generic projector reads its legacy
- *  proposal spelling), for GET /v1/internal/calibration/knobs. */
+ *  proposal spelling). Consumed by the advisor's reliability recs, which stay live-only by design. */
 export async function loadLiveKnobStatuses(env: Env, knobs: readonly LoosenableKnob[] = Object.values(LOOSENABLE_KNOBS)): Promise<KnobStatus[]> {
   const statuses: KnobStatus[] = [];
   for (const knob of knobs) {
     if (knob.applyMode !== "live") continue;
     statuses.push(await loadKnobStatus(env, knob));
   }
+  return statuses;
+}
+
+/** EVERY registry knob's status, report-only included (#8224), for GET /v1/internal/calibration/knobs —
+ *  the operator must see a report-only knob's evidence (drift, reliability, proposals-to-be) with its
+ *  applyMode label, not discover it only when someone files the flip-to-live issue. */
+export async function loadAllKnobStatuses(env: Env, knobs: readonly LoosenableKnob[] = Object.values(LOOSENABLE_KNOBS)): Promise<KnobStatus[]> {
+  const statuses: KnobStatus[] = [];
+  for (const knob of knobs) statuses.push(await loadKnobStatus(env, knob));
   return statuses;
 }

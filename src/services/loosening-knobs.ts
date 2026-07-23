@@ -20,17 +20,28 @@ import {
   type BacktestComparison,
 } from "@loopover/engine";
 import { LINKED_ISSUE_SATISFACTION_CONFIDENCE_FLOOR } from "./linked-issue-satisfaction";
-import { DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE } from "../rules/advisory";
+import { DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE, DEFAULT_SLOP_BLOCK_THRESHOLD } from "../rules/advisory";
 
 export type LoosenableKnob = {
   /** Stable id — used in override flag keys, audit events, and advisor labels. Never rename. */
   knobId: string;
   ruleId: string;
   shippedValue: number;
-  /** Candidate loosened values, nearest-to-shipped first — the smallest evidence-cleared step wins. */
+  /** Which way LOOSER points (#8224): a `floor` knob (a rule fires at/above the value; every pre-#8224
+   *  entry) loosens DOWNWARD; a `ceiling` knob (a gate blocks at/above the value — slop) loosens UPWARD,
+   *  raising the cap so fewer PRs block. The classifier math is identical either way (both knob families
+   *  fire on value >= threshold, so buildConfidenceThresholdClassifier applies unchanged) — orientation
+   *  only decides which side of shipped the candidates sit on and which hard bound applies. */
+  orientation: "floor" | "ceiling";
+  /** Candidate loosened values, nearest-to-shipped first — the smallest evidence-cleared step wins.
+   *  Floor knobs: strictly below shipped, descending. Ceiling knobs: strictly above shipped, ascending. */
   candidates: readonly number[];
-  /** No backtest result, however good, may loosen below this. */
+  /** Floor knobs: no backtest result, however good, may loosen below this. Ceiling knobs declare the
+   *  mirror bound in {@link LoosenableKnob.hardMaximum} instead and set this to the shipped value (it
+   *  still bounds the drift pool's tighter side). */
   hardMinimum: number;
+  /** Ceiling knobs only (#8224): no backtest result may loosen (raise) the cap above this. */
+  hardMaximum?: number;
   minVisibleCases: number;
   minHeldOutCases: number;
   heldOutFraction: number;
@@ -76,6 +87,7 @@ export const LOOSENABLE_KNOBS: Readonly<Record<string, LoosenableKnob>> = Object
   satisfaction_floor: {
     knobId: "satisfaction_floor",
     ruleId: "linked_issue_scope_mismatch",
+    orientation: "floor",
     shippedValue: LINKED_ISSUE_SATISFACTION_CONFIDENCE_FLOOR,
     candidates: [0.45, 0.4, 0.35, 0.3],
     hardMinimum: 0.3,
@@ -99,6 +111,7 @@ export const LOOSENABLE_KNOBS: Readonly<Record<string, LoosenableKnob>> = Object
   ai_review_close_confidence: {
     knobId: "ai_review_close_confidence",
     ruleId: "ai_consensus_defect",
+    orientation: "floor",
     shippedValue: DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE,
     candidates: [0.9, 0.85],
     hardMinimum: 0.85,
@@ -124,6 +137,36 @@ export const LOOSENABLE_KNOBS: Readonly<Record<string, LoosenableKnob>> = Object
       autotuneEnvVar: "AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED",
       eventType: "calibration.ai_review_close_confidence_tightened",
     },
+  },
+  // #8224: the slop gate's block threshold enters REPORT-ONLY — proposals surface with full evidence in
+  // the advisor and the knobs endpoint; the apply path refuses until a flip-to-live ships as its own
+  // reviewed change, and per #8224 that issue gets filed only AFTER proposals with real evidence exist.
+  // The registry's first CEILING knob: the gate blocks when slopRisk/100 >= this value (advisory.ts's
+  // recordRuleFired writes confidence = risk/100 with shipped DEFAULT_SLOP_BLOCK_THRESHOLD), so LOOSER
+  // means RAISING the cap. Bounds rationale (tighter than close-confidence's, per the issue): this value
+  // gates contributor-facing verdicts directly, so two small steps (+0.05, +0.10) and a hard ceiling of
+  // 0.70 — beyond that a "slop gate" that only blocks 70+/100 risk isn't gating. Sample floors match the
+  // close-confidence knob's strictest-in-registry 50/12 given score noisiness.
+  //
+  // quality_gate_score deliberately does NOT enter (#8224's recorded finding): qualityGateMinScore is
+  // per-repo nullable with NO global shipped default, and a registry entry anchors the whole discipline
+  // on the shipped constant. It stays out until a global default exists.
+  slop_gate_score: {
+    knobId: "slop_gate_score",
+    ruleId: "slop_gate_score",
+    orientation: "ceiling",
+    shippedValue: DEFAULT_SLOP_BLOCK_THRESHOLD / 100,
+    candidates: [0.65, 0.7],
+    hardMinimum: DEFAULT_SLOP_BLOCK_THRESHOLD / 100,
+    hardMaximum: 0.7,
+    minVisibleCases: 50,
+    minHeldOutCases: 12,
+    heldOutFraction: 0.25,
+    splitSeed: "slop-gate-loosening-v1",
+    applyMode: "report_only",
+    overrideFlagKey: "slop_gate_score_override",
+    looseningEventType: "calibration.slop_gate_score_loosened",
+    autotuneEnvVar: "SLOP_GATE_SCORE_AUTOTUNE_ENABLED",
   },
 });
 
@@ -155,7 +198,13 @@ export function evaluateKnobLoosening(
   if (visible.length < knob.minVisibleCases || heldOut.length < knob.minHeldOutCases) return null;
 
   for (const candidate of knob.candidates) {
-    if (candidate >= currentValue || candidate < knob.hardMinimum) continue;
+    // Orientation decides which way "looser" points (#8224): floor knobs step DOWN toward hardMinimum,
+    // ceiling knobs step UP toward hardMaximum. Same evidence discipline either way.
+    const loosens =
+      knob.orientation === "ceiling"
+        ? candidate > currentValue && candidate <= (knob.hardMaximum ?? currentValue)
+        : candidate < currentValue && candidate >= knob.hardMinimum;
+    if (!loosens) continue;
     const visibleComparison = compareOnSlice(knob.ruleId, visible, currentValue, candidate);
     if (visibleComparison.verdict !== "improved") continue;
     const heldOutComparison = compareOnSlice(knob.ruleId, heldOut, currentValue, candidate);
@@ -268,8 +317,11 @@ export function evaluateKnobDrift(
 
   // #8225: a declared tightening ladder joins the pool, so the sentinel's tighter findings and the tighten
   // apply path judge the SAME candidate values (bounded by the ladder's own hard maximum via declaration).
+  // #8224: ceiling knobs bound the pool from above (hardMaximum) instead of below.
   const alternatives = [...new Set([knob.shippedValue, ...knob.candidates, ...(knob.tightening?.candidates ?? [])])]
-    .filter((value) => value !== liveValue && value >= knob.hardMinimum)
+    .filter((value) =>
+      value !== liveValue && (knob.orientation === "ceiling" ? value <= (knob.hardMaximum ?? knob.shippedValue) : value >= knob.hardMinimum),
+    )
     .sort((left, right) => Math.abs(left - liveValue) - Math.abs(right - liveValue) || right - left);
 
   for (const alternative of alternatives) {
@@ -282,7 +334,13 @@ export function evaluateKnobDrift(
       ruleId: knob.ruleId,
       liveValue,
       dominatingValue: alternative,
-      direction: alternative === knob.shippedValue ? "shipped" : alternative < liveValue ? "looser" : "tighter",
+      // Orientation decides the label (#8224): for a ceiling knob a HIGHER alternative is the looser one.
+      direction:
+        alternative === knob.shippedValue
+          ? "shipped"
+          : (knob.orientation === "ceiling" ? alternative > liveValue : alternative < liveValue)
+            ? "looser"
+            : "tighter",
       visibleCases: visible.length,
       heldOutCases: heldOut.length,
       visible: visibleComparison,
