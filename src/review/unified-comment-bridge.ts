@@ -452,6 +452,12 @@ export type UnifiedCommentBridgeArgs = {
    *  applies. Absent (default; the processor only resolves this when linkedIssueSatisfactionGateMode !=
    *  "off") ⇒ no section is rendered, byte-identical to today. */
   linkedIssueSatisfaction?: { status: "addressed" | "partial" | "unaddressed"; rationale: string } | undefined;
+  /** Threshold-only backtest advisory (#8138), already rendered to Markdown by the processor
+   *  (thresholdBacktestBlock, src/services/threshold-backtest.ts) — passed straight through to
+   *  buildUnifiedReviewInput's field of the same name. Presentation only. Absent/empty (default; the
+   *  processor only resolves this when a PR's diff changes a known confidence threshold constant) ⇒ no
+   *  section is rendered, byte-identical to today. */
+  thresholdBacktest?: string | undefined;
 };
 
 /**
@@ -886,6 +892,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     ...(args.maxFindingsCaps !== undefined ? { maxFindingsCaps: args.maxFindingsCaps } : {}),
     ...(args.findingCategories !== undefined ? { inlineFindings: args.findingCategories } : {}),
     ...(args.linkedIssueSatisfaction !== undefined ? { linkedIssueSatisfaction: args.linkedIssueSatisfaction } : {}),
+    ...(args.thresholdBacktest !== undefined ? { thresholdBacktest: args.thresholdBacktest } : {}),
     ...(blockerFixHandoffBlocks.length > 0 ? { blockerFixContext: blockerFixHandoffBlocks } : {}),
   });
   // The gate already produced 0/1 reviewer notes from a synthesis of the model pair; reflect the caller's

@@ -167,6 +167,12 @@ export * from "./calibration/backtest-corpus.js";
 export * from "./calibration/backtest-score.js";
 export * from "./calibration/backtest-compare.js";
 export * from "./calibration/backtest-report.js";
+// #8087 shipped this file but never added its barrel export -- every existing consumer happened to import
+// it via the direct relative source path instead, so this was latent rather than broken. Fixing it here
+// since #8138 is the first consumer that actually needs the package-name import (@loopover/engine), the
+// same way scripts/backtest-corpus-export.ts already imports BacktestCase.
+export * from "./calibration/backtest-split.js";
+export * from "./calibration/backtest-threshold.js";
 export {
   GOVERNOR_LEDGER_EVENT_TYPES,
   normalizeGovernorLedgerEvent,

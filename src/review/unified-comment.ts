@@ -203,6 +203,14 @@ export interface UnifiedReviewInput {
    *  (default; the host only resolves this when `review.linkedIssueSatisfaction` is on) ⇒ no section is
    *  rendered, byte-identical to today. */
   linkedIssueSatisfaction?: { status: "addressed" | "partial" | "unaddressed"; rationale: string };
+  /** Threshold-only backtest advisory (#8138, epic #8082): already-rendered Markdown (via
+   *  `thresholdBacktestBlock`/`renderBacktestComparison`, `src/services/threshold-backtest.ts` /
+   *  `@loopover/engine`) reporting whether a PR's changed confidence threshold regresses precision/recall
+   *  against real historical outcomes. A STRING, not structured data — this module is a self-contained port
+   *  with no imports (see the file header), so rendering happens in the caller, not here. PRESENTATION
+   *  ONLY — never changes `status`/the gate verdict. Absent/empty (default; only set when the host detected
+   *  a changed known threshold constant) ⇒ no section is rendered, byte-identical to today. */
+  thresholdBacktest?: string;
   /** The review's line-anchored inline findings (only their `category` is read), used ONLY to render a compact
    *  category-tally line (#2150). Structural shape so an `InlineFinding[]` is assignable without importing it —
    *  this renderer stays self-contained. Absent/empty (default; the host passes them only when it produced
@@ -819,6 +827,14 @@ export function renderUnifiedReviewComment(input: UnifiedReviewInput, ctx: Unifi
     blocks.push(details("Linked issue satisfaction", satisfactionBody, undefined, collapsiblesOpen));
   }
 
+  // Threshold-only backtest advisory (#8138): same additive, collapsed-by-default, never-verdict-affecting
+  // shape as the linked-issue satisfaction section immediately above. Already-rendered Markdown -- see
+  // UnifiedReviewInput.thresholdBacktest's own doc comment for why this module doesn't render it itself.
+  const thresholdBacktestBody = input.thresholdBacktest?.trim() ?? "";
+  if (thresholdBacktestBody && verbosity !== "quiet") {
+    blocks.push(details("Threshold backtest", thresholdBacktestBody, "never blocks the verdict", collapsiblesOpen));
+  }
+
   if (verbosity !== "quiet") {
     for (const c of ctx.extraCollapsibles ?? []) {
       if (c.body.trim()) {
@@ -865,6 +881,7 @@ export function buildUnifiedReviewInput(opts: {
   reviewEffort?: { band: 1 | 2 | 3 | 4 | 5; minutes: number };
   maxFindingsCaps?: { blockers: number | null; nits: number | null };
   linkedIssueSatisfaction?: { status: "addressed" | "partial" | "unaddressed"; rationale: string };
+  thresholdBacktest?: string;
   inlineFindings?: ReadonlyArray<{ category?: UnifiedFindingCategory | undefined }>;
   blockerFixContext?: ReadonlyArray<{ path: string; line?: number; body: string }>;
 }): UnifiedReviewInput {
@@ -886,6 +903,7 @@ export function buildUnifiedReviewInput(opts: {
     ...(opts.reviewEffort !== undefined ? { reviewEffort: opts.reviewEffort } : {}),
     ...(opts.maxFindingsCaps !== undefined ? { maxFindingsCaps: opts.maxFindingsCaps } : {}),
     ...(opts.linkedIssueSatisfaction !== undefined ? { linkedIssueSatisfaction: opts.linkedIssueSatisfaction } : {}),
+    ...(opts.thresholdBacktest !== undefined ? { thresholdBacktest: opts.thresholdBacktest } : {}),
     ...(opts.inlineFindings !== undefined ? { inlineFindings: opts.inlineFindings } : {}),
     ...(opts.blockerFixContext !== undefined ? { blockerFixContext: opts.blockerFixContext } : {}),
   };

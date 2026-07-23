@@ -493,6 +493,8 @@ import { copycatWouldActOnPersistedScore } from "../signals/copycat";
 import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { runLoopOverLinkedIssueSatisfaction } from "../services/linked-issue-satisfaction-run";
 import { MAX_BODY_CHARS, MAX_DIFF_CHARS, MAX_ISSUE_TEXT_CHARS } from "../services/linked-issue-satisfaction";
+import { persistThresholdBacktestRuns, runThresholdBacktestAdvisory } from "../services/threshold-backtest-run";
+import { thresholdBacktestBlock } from "../services/threshold-backtest";
 import { decidePublicSurface } from "../signals/settings-preview";
 import {
   buildFocusManifestGuidance,
@@ -7377,6 +7379,41 @@ export async function maybeAddScreenshotTableAdvisoryFinding(
   }
 }
 
+const THRESHOLD_BACKTEST_WATCHED_PATHS = new Set(["src/services/linked-issue-satisfaction.ts", "src/rules/advisory.ts"]);
+
+/**
+ * Threshold-only backtest advisory (#8138, epic #8082) — independent of any gate mode setting; this checks
+ * whether the PR's OWN diff changes a known confidence-threshold constant, not anything about a linked
+ * issue or AI review. Returns the rendered Markdown block for the comment's "Threshold backtest" section
+ * (via `thresholdBacktestBlock`), or `""` when nothing applies — matching every other advisory resolver in
+ * this file's "empty/absent means no section" contract.
+ *
+ * Cheap to skip: a path check against `files` before paying for `buildSecretScanDiff`'s full, UNBUDGETED
+ * string build (`detectChangedThresholds` needs every hunk, unlike `buildAiReviewDiff`'s bounded view — see
+ * that function's own doc comment for why the two diff builders aren't interchangeable here). Fail-safe,
+ * like `runLinkedIssueSatisfactionForAdvisory` below: any error is swallowed (logged, not thrown) so the
+ * gate/review pass this is called from always finalizes regardless. `runThresholdBacktestAdvisory`'s own
+ * SignalStore read and `persistThresholdBacktestRuns`'s own write already fail open internally; this is
+ * defense-in-depth against anything else in the chain (e.g. a malformed diff) throwing.
+ */
+export async function resolveThresholdBacktestAdvisory(
+  env: Env,
+  repoFullName: string,
+  pr: { number: number },
+  files: Awaited<ReturnType<typeof listPullRequestFiles>>,
+): Promise<string> {
+  if (!files.some((file) => THRESHOLD_BACKTEST_WATCHED_PATHS.has(file.path))) return "";
+  try {
+    const { changed, comparisons } = await runThresholdBacktestAdvisory(env, buildSecretScanDiff(files));
+    if (comparisons.length === 0) return "";
+    await persistThresholdBacktestRuns(env, repoFullName, pr.number, changed, comparisons);
+    return thresholdBacktestBlock(comparisons);
+  } catch (error) {
+    console.error(JSON.stringify({ level: "error", event: "threshold_backtest_failed", repoFullName, pullNumber: pr.number, error: errorMessage(error) }));
+    return "";
+  }
+}
+
 /**
  * Run the linked-issue satisfaction assessment for advisory purposes (#1961/#3906) — opt-in via
  * `linkedIssueSatisfactionGateMode != "off"`. Assesses only the PR's PRIMARY (first) linked issue: v1 chooses
@@ -8896,6 +8933,10 @@ async function maybePublishPrPublicSurface(
   // unified comment. Declared undefined/null-equivalent by default so an unopted-in repo (linkedIssueSatisfactionGateMode:
   // "off", the default) or a caught error never threads a section into the comment.
   let linkedIssueSatisfaction: { status: "addressed" | "partial" | "unaddressed"; rationale: string } | null = null;
+  // Threshold-only backtest advisory (#8138, epic #8082), same hoisting reason as linkedIssueSatisfaction
+  // above. Empty string (not computed, or nothing to report) never threads a section into the comment --
+  // see UnifiedReviewInput.thresholdBacktest's own doc comment for the "no section when empty" contract.
+  let thresholdBacktest = "";
   // inlineFindings is present ONLY on a FRESH review (cache miss) with inline comments enabled; the AI cache
   // round-trips notes + reviewerCount + the gate findings (so a cache hit replays consensus/split/inconclusive
   // blockers — see below), but NOT inlineFindings, so a cache hit never re-posts inline comments (#inline-comments).
@@ -9439,6 +9480,9 @@ async function maybePublishPrPublicSurface(
         });
       }
     }
+    // Threshold-only backtest advisory (#8138, epic #8082): independent of linkedIssueSatisfactionGateMode
+    // above -- see resolveThresholdBacktestAdvisory's own doc comment for why.
+    thresholdBacktest = await resolveThresholdBacktestAdvisory(env, repoFullName, pr, await getReviewFiles());
     // Content-lane linked-issue deliverable check (#content-lane-deliverable, opt-in via
     // contentLaneDeliverableGateMode). Independent gate mode from the AI-based satisfaction assessment above --
     // `off` (default) short-circuits before any fetch, so this is byte-identical to before this feature existed
@@ -11173,6 +11217,7 @@ async function maybePublishPrPublicSurface(
         ...(aiReview !== undefined ? { aiReview } : {}),
         advisoryFindings: advisory.findings,
         ...(linkedIssueSatisfaction !== null ? { linkedIssueSatisfaction } : {}),
+        ...(thresholdBacktest ? { thresholdBacktest } : {}),
         // review.auto_merge_summary (#2051/#4147): deterministic, no-AI — reuses the SAME ciState/
         // mergeStateLabel/gate/linkedIssues facts this pass already resolved for mergeReadiness and the gate
         // verdict above, no extra fetch. gatePassing mirrors the gate's own "no hard blocker" definition
