@@ -319,6 +319,7 @@ import { isFairnessAnalyticsEnabled, resolveFairnessAnalyticsManifestOverride } 
 import { isRagEnabled } from "../review/rag-wire";
 import { getPublicStats, isPublicStatsEnabled, resolvePublicStatsManifestOverride } from "../review/public-stats";
 import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
+import { loadCalibrationTrend } from "../services/rule-calibration-trend";
 import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { loadPublicReviewVolumeTrend } from "../services/public-review-volume-trend";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
@@ -4805,6 +4806,12 @@ export function createApp() {
   // Bearer-gated by the `/v1/internal/*` middleware (INTERNAL_JOB_TOKEN); handleInternalCalibration re-checks it.
   // Fails safe to an empty-but-shaped report when there is no review signal yet. Aggregate counts only.
   app.get("/v1/internal/calibration", (c) => handleInternalCalibration(c.req.raw, c.env, internalOpsAgentConfig(c.env)));
+
+  // Operator calibration trend (#8113): weekly per-rule fired/decided/precision plus backtest-run verdict
+  // counts, re-bucketed live from audit_events (no cron rollup — see rule-calibration-trend.ts's header). Sibling
+  // of /v1/internal/calibration above, same INTERNAL_JOB_TOKEN gate via the /v1/internal/* middleware.
+  // Aggregate counts and rule ids only — no PR content, no raw context.
+  app.get("/v1/internal/calibration-trend", async (c) => c.json(await loadCalibrationTrend(c.env)));
 
   app.post("/v1/internal/jobs/refresh-registry", async (c) => {
     const message: JobMessage = { type: "refresh-registry", requestedBy: "api" };
