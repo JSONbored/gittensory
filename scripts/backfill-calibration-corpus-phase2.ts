@@ -147,8 +147,10 @@ async function githubFetch(budget: RequestBudget, path: string, accept = "applic
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-// ~4 req/s ceiling: sequential scans at full speed are what tripped the burst limit across hours.
-const REQUEST_FLOOR_MS = 250;
+// Default ~0.66 req/s (~2,400/hr): the scan shares the operator's PERSONAL token pool with everything
+// else they run, so it deliberately stays under half the primary limit and far from the burst
+// heuristics. Override per run with BACKFILL_REQUEST_FLOOR_MS when the pool is otherwise idle.
+const REQUEST_FLOOR_MS = Math.max(Number(process.env.BACKFILL_REQUEST_FLOOR_MS) || 1500, 100);
 let lastRequestAt = 0;
 async function pace(): Promise<void> {
   const wait = lastRequestAt + REQUEST_FLOOR_MS - Date.now();
