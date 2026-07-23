@@ -22,6 +22,23 @@ export const SCAN_TARGETS = [
   "apps/loopover-ui/content",
 ];
 
+/** How long a freshly-published npm latest may lead the pinned copy before the mismatch hard-fails.
+ *  Rationale (#8179-era fix): on an active release evening the automation publishes several versions and
+ *  files its sync PR within minutes — but every branch/gate in flight goes red on a mismatch that is
+ *  neither the branch's fault nor actionable from it (three same-night cascades on 2026-07-23 alone).
+ *  A mismatch INSIDE the window warns (the sync PR lands the real fix); a mismatch OLDER than the window
+ *  is genuine staleness — the #3047 discipline — and still hard-fails. */
+export const KNOWN_LATEST_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** PURE: does a pinned-copy mismatch fail, or merely warn? Fails when the latest's publish time is
+ *  unknown (offline enforcement stays strict) or older than the grace window. */
+export function isMismatchBeyondGrace(publishedAtIso: string | null, nowMs: number): boolean {
+  if (!publishedAtIso) return true;
+  const publishedMs = Date.parse(publishedAtIso);
+  if (!Number.isFinite(publishedMs)) return true;
+  return nowMs - publishedMs > KNOWN_LATEST_GRACE_WINDOW_MS;
+}
+
 export type StaleVersionMatchers = {
   floorVersion: string;
   minorLabel: string;
@@ -39,10 +56,15 @@ async function main() {
   // required check one-shot-closes a contributor PR. Set LOOPOVER_MCP_LATEST_VERSION to make it fully
   // offline/deterministic. The deterministic stale-version-string scan below always runs regardless.
   let latest = process.env.LOOPOVER_MCP_LATEST_VERSION ?? null;
+  // Publish time of `latest` (for the grace window below). Stays null under the env override, so offline
+  // enforcement remains strict — a mismatch there always fails.
+  let latestPublishedAt: string | null = null;
   let latestSkipReason = null;
   if (!latest) {
     try {
-      latest = await fetchLatestVersion();
+      const release = await fetchLatestRelease();
+      latest = release.latest;
+      latestPublishedAt = release.publishedAt;
     } catch (error) {
       latestSkipReason = error instanceof Error ? error.message : "unknown error";
     }
@@ -59,8 +81,14 @@ async function main() {
     if (write) {
       writeKnownLatestVersion(sourceLatestPath, latest);
       console.log(`${SOURCE_LATEST_PATH}: updated known latest ${sourceLatest} -> ${latest}`);
+    } else if (isMismatchBeyondGrace(latestPublishedAt, Date.now())) {
+      failures.push(
+        `${SOURCE_LATEST_PATH}: known latest ${sourceLatest} does not match npm dist-tags.latest ${latest} (published ${latestPublishedAt ?? "unknown"}, beyond the ${KNOWN_LATEST_GRACE_WINDOW_MS / 3_600_000}h grace window)`,
+      );
     } else {
-      failures.push(`${SOURCE_LATEST_PATH}: known latest ${sourceLatest} does not match npm dist-tags.latest ${latest}`);
+      console.warn(
+        `::warning::${SOURCE_LATEST_PATH}: known latest ${sourceLatest} is behind npm dist-tags.latest ${latest}, published within the grace window -- the scheduled sync PR is the fix; not failing this build`,
+      );
     }
   } else if (!latest) {
     console.warn(
@@ -177,7 +205,7 @@ export function readMinimumSupportedVersion(path: string): string {
   return match[1]!;
 }
 
-export function fetchLatestVersion(): Promise<string> {
+export function fetchLatestRelease(): Promise<{ latest: string; publishedAt: string | null }> {
   return new Promise((resolve, reject) => {
     const request = get(registryUrl, { headers: { accept: "application/json" } }, (response) => {
       let body = "";
@@ -191,12 +219,14 @@ export function fetchLatestVersion(): Promise<string> {
           return;
         }
         try {
-          const latest = JSON.parse(body)?.["dist-tags"]?.latest;
+          const parsed = JSON.parse(body);
+          const latest = parsed?.["dist-tags"]?.latest;
           if (typeof latest !== "string" || !/^\d+\.\d+\.\d+$/.test(latest)) {
             reject(new Error("npm registry did not return a stable latest version"));
             return;
           }
-          resolve(latest);
+          const publishedAt = typeof parsed?.time?.[latest] === "string" ? parsed.time[latest] : null;
+          resolve({ latest, publishedAt });
         } catch (error) {
           reject(error);
         }

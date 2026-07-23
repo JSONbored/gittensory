@@ -7,6 +7,8 @@ import {
   buildStaleVersionMatchers,
   collectSourceFiles,
   collectVersionCopyFailures,
+  isMismatchBeyondGrace,
+  KNOWN_LATEST_GRACE_WINDOW_MS,
   isMinimumSupportedContext,
   isTextSource,
   readMinimumSupportedVersion,
@@ -250,5 +252,23 @@ describe("check-ui-mcp-version-copy script (#6292)", () => {
       expect(out).not.toContain("updated known latest");
       expect(out).toContain("MCP UI version copy ok");
     });
+  });
+});
+
+describe("isMismatchBeyondGrace (#8179-era release-treadmill fix)", () => {
+  const NOW = Date.parse("2026-07-23T09:00:00.000Z");
+
+  it("a mismatch against a freshly-published latest warns (within the grace window)", () => {
+    expect(isMismatchBeyondGrace(new Date(NOW - 60_000).toISOString(), NOW)).toBe(false);
+    expect(isMismatchBeyondGrace(new Date(NOW - KNOWN_LATEST_GRACE_WINDOW_MS + 1000).toISOString(), NOW)).toBe(false);
+  });
+
+  it("a mismatch older than the grace window is genuine staleness and fails", () => {
+    expect(isMismatchBeyondGrace(new Date(NOW - KNOWN_LATEST_GRACE_WINDOW_MS - 1000).toISOString(), NOW)).toBe(true);
+  });
+
+  it("stays STRICT when the publish time is unknown or garbled — offline/env-override enforcement never softens", () => {
+    expect(isMismatchBeyondGrace(null, NOW)).toBe(true);
+    expect(isMismatchBeyondGrace("not-a-time", NOW)).toBe(true);
   });
 });
