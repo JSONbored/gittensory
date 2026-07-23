@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { splitBacktestCorpus, type BacktestCase } from "@loopover/engine";
-import { evaluateKnobDrift, evaluateKnobLoosening, LOOSENABLE_KNOBS, type LoosenableKnob } from "../../src/services/loosening-knobs";
+import { evaluateKnobDrift, evaluateKnobLoosening, evaluateKnobTightening, LOOSENABLE_KNOBS, type LoosenableKnob } from "../../src/services/loosening-knobs";
 import {
   SATISFACTION_FLOOR_HARD_MINIMUM,
   SATISFACTION_FLOOR_HELD_OUT_FRACTION,
@@ -58,6 +58,21 @@ describe("LOOSENABLE_KNOBS registry invariants (#8159)", () => {
       expect(knob.minVisibleCases).toBeGreaterThan(0);
       expect(knob.minHeldOutCases).toBeGreaterThan(0);
       expect(["live", "report_only"]).toContain(knob.applyMode);
+    }
+    for (const knob of knobs) {
+      // #8225: a declared tightening ladder must be structurally safe — ascending candidates strictly
+      // above shipped, none past the hard maximum, its own distinct env var and event type.
+      if (!knob.tightening) continue;
+      expect(knob.tightening.candidates.length).toBeGreaterThan(0);
+      for (const candidate of knob.tightening.candidates) {
+        expect(candidate).toBeGreaterThan(knob.shippedValue);
+        expect(candidate).toBeLessThanOrEqual(knob.tightening.hardMaximum);
+      }
+      expect([...knob.tightening.candidates].sort((a, b) => a - b)).toEqual([...knob.tightening.candidates]); // nearest-first
+      expect(knob.tightening.maxSacrifice).toBeGreaterThanOrEqual(0);
+      expect(["precision", "recall"]).toContain(knob.tightening.mustImprove);
+      expect(knob.tightening.autotuneEnvVar).not.toBe(knob.autotuneEnvVar);
+      expect(knob.tightening.eventType).not.toBe(knob.looseningEventType);
     }
     expect(new Set(knobs.map((knob) => knob.knobId)).size).toBe(knobs.length);
     expect(new Set(knobs.map((knob) => knob.splitSeed)).size).toBe(knobs.length);
@@ -118,6 +133,85 @@ describe("evaluateKnobLoosening on the close-confidence knob (#8159)", () => {
 
   it("refuses to step below the hard minimum even from an already-loosened current value", () => {
     expect(evaluateKnobLoosening(AI_KNOB, aiLooseningFriendlyCorpus(), AI_KNOB.hardMinimum)).toBeNull();
+  });
+});
+
+// ── #8225: the direction mirror — can the knob be justifiably TIGHTENED? ────────────────────────────────────
+
+function aiTighteningFriendlyCorpus(): BacktestCase[] {
+  // Band firings at 0.94 a human REVERSED: shipped 0.93 trusts them (missed reversals — false negatives);
+  // the first tightening candidate 0.95 catches them — recall improves, precision holds at 1 (every
+  // predicted-reversed case really was reversed), so the sacrifice budget is untouched.
+  const cases: BacktestCase[] = [];
+  for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.94, "reversed"));
+  for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.94, "reversed"));
+  // Deep-low reversed anchors keep a true positive on both sides of every comparison.
+  cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+  cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+  return cases;
+}
+
+describe("evaluateKnobTightening (#8225)", () => {
+  it("proposes the smallest ladder step with full evidence when both splits support it under the declared orientation", () => {
+    const proposal = evaluateKnobTightening(AI_KNOB, aiTighteningFriendlyCorpus());
+    expect(proposal).not.toBeNull();
+    expect(proposal!.knobId).toBe("ai_review_close_confidence");
+    expect(proposal!.currentValue).toBe(DEFAULT_AI_REVIEW_CLOSE_CONFIDENCE);
+    expect(proposal!.proposedValue).toBe(0.95);
+    expect(proposal!.visible.verdict).toBe("improved");
+    expect(proposal!.heldOut.verdict).not.toBe("regressed");
+  });
+
+  it("returns null for a knob that declares no ladder — tightening is opt-in per knob, never implied", () => {
+    expect(evaluateKnobTightening(LOOSENABLE_KNOBS.satisfaction_floor!, aiTighteningFriendlyCorpus())).toBeNull();
+  });
+
+  it("never tightens on a sample below the knob's floors", () => {
+    const thin = [
+      ...visibleKeys.slice(0, AI_KNOB.minVisibleCases - 1).map((key) => aiCase(key, 0.94, "reversed")),
+      ...heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3).map((key) => aiCase(key, 0.94, "reversed")),
+    ];
+    expect(evaluateKnobTightening(AI_KNOB, thin)).toBeNull();
+  });
+
+  it("refuses to step above the hard maximum even from an already-tightened current value", () => {
+    expect(evaluateKnobTightening(AI_KNOB, aiTighteningFriendlyCorpus(), AI_KNOB.tightening!.hardMaximum)).toBeNull();
+  });
+
+  it("skips candidates at/below the current value: from 0.95 only 0.97 is a raise", () => {
+    // Band moves to 0.96 so the remaining raise (0.97) is the one the evidence supports.
+    const cases: BacktestCase[] = [];
+    for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.96, "reversed"));
+    for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.96, "reversed"));
+    cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+    cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+    const proposal = evaluateKnobTightening(AI_KNOB, cases, 0.95);
+    expect(proposal).not.toBeNull();
+    expect(proposal!.proposedValue).toBe(0.97);
+  });
+
+  it("returns null when no candidate improves the win axis (uniform confirmed corpus)", () => {
+    const uniform = [
+      ...visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6).map((key) => aiCase(key, 0.99, "confirmed")),
+      ...heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3).map((key) => aiCase(key, 0.99, "confirmed")),
+    ];
+    expect(evaluateKnobTightening(AI_KNOB, uniform)).toBeNull();
+  });
+
+  it("returns null when the visible split improves but the held-out split regresses (the transposed Pareto floor holds)", () => {
+    // Visible: reversed band at 0.94 (a raise wins). Held-out: CONFIRMED at 0.94 — the raise misflags them,
+    // an over-budget precision sacrifice on that slice.
+    const cases: BacktestCase[] = [];
+    for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.94, "reversed"));
+    for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.94, "confirmed"));
+    cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+    cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+    expect(evaluateKnobTightening(AI_KNOB, cases)).toBeNull();
+  });
+
+  it("is deterministic: the same corpus and current value always produce the same proposal", () => {
+    const corpus = aiTighteningFriendlyCorpus();
+    expect(evaluateKnobTightening(AI_KNOB, corpus)).toEqual(evaluateKnobTightening(AI_KNOB, corpus));
   });
 });
 
@@ -257,6 +351,24 @@ describe("evaluateKnobDrift on the close-confidence knob (#8212)", () => {
     expect(report).not.toBeNull();
     expect(report!.dominatingValue).toBe(0.9); // the equidistant tie prefers the tighter alternative
     expect(report!.direction).toBe("tighter");
+  });
+
+  it("#8225: a declared tightening ladder joins the drift pool — a tighter NON-shipped candidate can now dominate from shipped", () => {
+    // Reversed band at 0.94: live 0.93 misses them; the ladder's 0.95 catches them (recall up, precision
+    // held) — before #8225 the pool ended at shipped, so this stale-config shape was invisible from 0.93.
+    const cases: BacktestCase[] = [];
+    for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.94, "reversed"));
+    for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.94, "reversed"));
+    cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+    cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+    const report = evaluateKnobDrift(AI_KNOB, cases);
+    expect(report).not.toBeNull();
+    expect(report!.direction).toBe("tighter");
+    expect(report!.dominatingValue).toBe(0.95);
+
+    // A ladder-less twin keeps the pre-#8225 pool: 0.95 is invisible, so this corpus reports nothing.
+    const { tightening: _dropped, ...ladderless } = AI_KNOB;
+    expect(evaluateKnobDrift(ladderless as LoosenableKnob, cases)).toBeNull();
   });
 
   it("is deterministic: the same corpus and live value always produce the same report", () => {

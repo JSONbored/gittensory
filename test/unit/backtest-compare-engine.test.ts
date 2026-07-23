@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // packages/loopover-engine/src/**, so only a source-path import exercises the .ts these branches live in
 // (the dist-importing twin in packages/loopover-engine/test/ covers the built barrel for the workspace
 // suite). Same pattern as backtest-corpus-engine.test.ts / miner-deny-hook-synthesis.test.ts.
-import { compareBacktestScores } from "../../packages/loopover-engine/src/calibration/backtest-compare";
+import { compareBacktestScores, compareDirectionalBacktestScores } from "../../packages/loopover-engine/src/calibration/backtest-compare";
 import type { BacktestScoreReport } from "../../packages/loopover-engine/src/calibration/backtest-score";
 
 function report(overrides: Partial<BacktestScoreReport> = {}): BacktestScoreReport {
@@ -69,5 +69,63 @@ describe("compareBacktestScores (#8086)", () => {
     expect(() => compareBacktestScores(report(), report({ ruleId: "other_rule" }))).toThrow(
       "cannot compare backtest scores for different rules: missing_linked_issue vs other_rule",
     );
+  });
+});
+
+describe("compareDirectionalBacktestScores (#8225)", () => {
+  const RECALL_WIN = { mustImprove: "recall" as const, maxSacrifice: 0.1 };
+
+  it("recall up with a WITHIN-BUDGET precision drop is improved — the sacrificed axis appears in NEITHER list", () => {
+    const comparison = compareDirectionalBacktestScores(report(), report({ recall: 0.7, precision: 0.45 }), RECALL_WIN);
+    expect(comparison.improvedAxes).toEqual(["recall"]);
+    expect(comparison.regressedAxes).toEqual([]);
+    expect(comparison.verdict).toBe("improved");
+  });
+
+  it("an OVER-BUDGET sacrifice-axis drop is regressed, even with the win axis up", () => {
+    const comparison = compareDirectionalBacktestScores(report(), report({ recall: 0.9, precision: 0.3 }), RECALL_WIN);
+    expect(comparison.regressedAxes).toEqual(["precision"]);
+    expect(comparison.verdict).toBe("regressed");
+  });
+
+  it("ANY drop on the win axis is regressed, whatever the other axis does", () => {
+    const comparison = compareDirectionalBacktestScores(report(), report({ recall: 0.49, precision: 0.9 }), RECALL_WIN);
+    expect(comparison.regressedAxes).toEqual(["recall"]);
+    expect(comparison.improvedAxes).toEqual(["precision"]);
+    expect(comparison.verdict).toBe("regressed");
+  });
+
+  it("a lone sacrifice-axis gain is unchanged — no evidence the step earned its keep on the axis it exists to win", () => {
+    const comparison = compareDirectionalBacktestScores(report(), report({ precision: 0.9 }), RECALL_WIN);
+    expect(comparison.improvedAxes).toEqual(["precision"]);
+    expect(comparison.regressedAxes).toEqual([]);
+    expect(comparison.verdict).toBe("unchanged");
+  });
+
+  it("a null win axis can never yield improved; a null sacrifice axis is excluded — unknown stays unknown", () => {
+    const nullWin = compareDirectionalBacktestScores(report({ recall: null }), report({ recall: 0.9, precision: 0.9 }), RECALL_WIN);
+    expect(nullWin.verdict).toBe("unchanged");
+    const nullSacrifice = compareDirectionalBacktestScores(report(), report({ recall: 0.7, precision: null }), RECALL_WIN);
+    expect(nullSacrifice.improvedAxes).toEqual(["recall"]);
+    expect(nullSacrifice.verdict).toBe("improved");
+    const equal = compareDirectionalBacktestScores(report(), report(), RECALL_WIN);
+    expect(equal.verdict).toBe("unchanged");
+  });
+
+  it("mustImprove precision flips the sacrifice axis to recall (the rule-firing frame)", () => {
+    const comparison = compareDirectionalBacktestScores(report(), report({ precision: 0.7, recall: 0.42 }), { mustImprove: "precision", maxSacrifice: 0.1 });
+    expect(comparison.improvedAxes).toEqual(["precision"]);
+    expect(comparison.regressedAxes).toEqual([]);
+    expect(comparison.verdict).toBe("improved");
+    const overBudget = compareDirectionalBacktestScores(report(), report({ precision: 0.7, recall: 0.3 }), { mustImprove: "precision", maxSacrifice: 0.1 });
+    expect(overBudget.verdict).toBe("regressed");
+  });
+
+  it("throws on mismatched rules and on a negative or non-finite sacrifice bound — caller bugs, not comparisons", () => {
+    expect(() => compareDirectionalBacktestScores(report(), report({ ruleId: "other_rule" }), RECALL_WIN)).toThrow(
+      "cannot compare backtest scores for different rules: missing_linked_issue vs other_rule",
+    );
+    expect(() => compareDirectionalBacktestScores(report(), report(), { mustImprove: "recall", maxSacrifice: -0.1 })).toThrow("maxSacrifice");
+    expect(() => compareDirectionalBacktestScores(report(), report(), { mustImprove: "recall", maxSacrifice: Number.NaN })).toThrow("maxSacrifice");
   });
 });

@@ -8,7 +8,7 @@
 import type { BacktestScoreReport } from "./backtest-score.js";
 
 /** The two comparable axes of a {@link BacktestScoreReport}. */
-type ComparisonAxis = "precision" | "recall";
+export type ComparisonAxis = "precision" | "recall";
 
 export type BacktestComparison = {
   ruleId: string;
@@ -48,5 +48,67 @@ export function compareBacktestScores(baseline: BacktestScoreReport, candidate: 
     regressedAxes,
     improvedAxes,
     verdict: regressedAxes.length > 0 ? "regressed" : improvedAxes.length > 0 ? "improved" : "unchanged",
+  };
+}
+
+/** The explicit axes orientation of a directional comparison (#8225): which axis the change exists to move
+ *  (and must move strictly up to earn "improved"), and how much the OTHER axis may be sacrificed for it. */
+export type DirectionalOrientation = {
+  mustImprove: ComparisonAxis;
+  /** Absolute drop the non-`mustImprove` axis may suffer before the trade is a regression. */
+  maxSacrifice: number;
+};
+
+/**
+ * Direction-aware comparator for a deliberate axis trade (#8225) -- a TIGHTENING exists to move one axis at
+ * a bounded cost to the other, so reusing the symmetric {@link compareBacktestScores} blind would brand
+ * every honest trade "regressed" the moment the sacrificed axis dips. Which axis is which depends on the
+ * corpus polarity (for the confidence-threshold classifier the positive class is "predicted reversed", so
+ * RAISING a threshold helps recall and risks precision -- the inverse of the rule-firing frame), hence the
+ * orientation is the CALLER's explicit declaration, never an assumption baked in here. The re-oriented
+ * floor:
+ *   • the `mustImprove` axis must move STRICTLY up for an "improved" verdict, and any drop on it is
+ *     "regressed" -- a trade that loses the axis it exists to win is simply wrong;
+ *   • the other axis may drop by at most `maxSacrifice`; a within-bound drop is the accepted trade and
+ *     appears in NEITHER axis list, an over-bound drop is "regressed", and a gain still counts;
+ *   • a null on either side of an axis excludes that axis entirely -- unknown stays unknown, exactly as in
+ *     the symmetric comparator (so a corpus with no judgeable win-axis can never yield "improved").
+ * Throws on a rule mismatch or a non-finite/negative bound: both are caller bugs, not valid comparisons.
+ */
+export function compareDirectionalBacktestScores(
+  baseline: BacktestScoreReport,
+  candidate: BacktestScoreReport,
+  orientation: DirectionalOrientation,
+): BacktestComparison {
+  if (baseline.ruleId !== candidate.ruleId) {
+    throw new Error(`cannot compare backtest scores for different rules: ${baseline.ruleId} vs ${candidate.ruleId}`);
+  }
+  if (!Number.isFinite(orientation.maxSacrifice) || orientation.maxSacrifice < 0) {
+    throw new Error(`maxSacrifice must be a non-negative finite number, got ${orientation.maxSacrifice}`);
+  }
+  const sacrificeAxis: ComparisonAxis = orientation.mustImprove === "precision" ? "recall" : "precision";
+  const regressedAxes: ComparisonAxis[] = [];
+  const improvedAxes: ComparisonAxis[] = [];
+  const winBaseline = baseline[orientation.mustImprove];
+  const winCandidate = candidate[orientation.mustImprove];
+  if (winBaseline !== null && winCandidate !== null) {
+    if (winCandidate < winBaseline) regressedAxes.push(orientation.mustImprove);
+    else if (winCandidate > winBaseline) improvedAxes.push(orientation.mustImprove);
+  }
+  const sacBaseline = baseline[sacrificeAxis];
+  const sacCandidate = candidate[sacrificeAxis];
+  if (sacBaseline !== null && sacCandidate !== null) {
+    if (sacBaseline - sacCandidate > orientation.maxSacrifice) regressedAxes.push(sacrificeAxis);
+    else if (sacCandidate > sacBaseline) improvedAxes.push(sacrificeAxis);
+  }
+  return {
+    ruleId: baseline.ruleId,
+    baseline,
+    candidate,
+    regressedAxes,
+    improvedAxes,
+    // "improved" requires the WIN axis specifically -- a lone gain on the sacrifice axis is not what the
+    // trade is for, so it stays "unchanged" (harmless, but no evidence the step earned its keep).
+    verdict: regressedAxes.length > 0 ? "regressed" : improvedAxes.includes(orientation.mustImprove) ? "improved" : "unchanged",
   };
 }

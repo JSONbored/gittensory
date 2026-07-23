@@ -22,7 +22,16 @@ import {
 } from "@loopover/engine";
 import { createSignalStore } from "../review/signal-tracking-wire";
 import { recordAuditEvent } from "../db/repositories";
-import { evaluateKnobDrift, evaluateKnobLoosening, LOOSENABLE_KNOBS, type KnobDriftReport, type KnobLooseningProposal, type LoosenableKnob } from "./loosening-knobs";
+import {
+  evaluateKnobDrift,
+  evaluateKnobLoosening,
+  evaluateKnobTightening,
+  LOOSENABLE_KNOBS,
+  type KnobDriftReport,
+  type KnobLooseningProposal,
+  type KnobTighteningProposal,
+  type LoosenableKnob,
+} from "./loosening-knobs";
 
 const CORPUS_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000; // mirrors threshold-backtest-run's 90-day window
 
@@ -41,15 +50,27 @@ export function isKnobAutotuneEnabled(env: Env, knob: LoosenableKnob): boolean {
   return value === "1" || value === "true" || value === "on" || value === "yes";
 }
 
+/** Truthy-string env flag for `knob`'s TIGHTENING autonomy (#8225) — a separate, default-off var per
+ *  direction, so tighten-autonomy is opted into independently of the loosening loop. Always false for a
+ *  knob that declares no ladder. */
+export function isKnobTightenEnabled(env: Env, knob: LoosenableKnob): boolean {
+  if (!knob.tightening) return false;
+  const raw = (env as unknown as Record<string, unknown>)[knob.tightening.autotuneEnvVar];
+  const value = (typeof raw === "string" ? raw : "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "on" || value === "yes";
+}
+
 /**
- * Read a knob's live override. Null (caller uses the shipped default) when: the knob's autotune flag is
- * off, no override row exists, or the stored value fails validation — an override may only ever sit BELOW
- * the shipped value and AT/ABOVE the hard minimum, so a corrupted/hand-edited row can never tighten the
- * knob or loosen it past safety. Fail-safe null on any DB error.
+ * Read a knob's live override. Null (caller uses the shipped default) when no override row exists or the
+ * stored value fails DIRECTION-AWARE validation (#8225): a value BELOW shipped (a loosening) requires the
+ * loosening autotune flag and must sit at/above the hard minimum; a value ABOVE shipped (a tightening)
+ * requires a declared ladder AND its own tighten flag and must sit at/below the ladder's hard maximum. So
+ * flipping either direction's flag off instantly restores shipped behavior for that direction, and a
+ * corrupted/hand-edited row can never move the knob past either bound. Fail-safe null on any DB error.
  */
 export async function getKnobOverride(env: Env, knob: LoosenableKnob): Promise<number | null> {
-  if (!isKnobAutotuneEnabled(env, knob)) return null;
-  return readValidatedOverrideRow(env, knob, knob.overrideFlagKey);
+  if (!isKnobAutotuneEnabled(env, knob) && !isKnobTightenEnabled(env, knob)) return null;
+  return readValidatedOverrideRow(env, knob, knob.overrideFlagKey, { allowTightened: true });
 }
 
 /** Per-repo override storage (#8216): one system_flags key per (knob, repo) beside the global key. The
@@ -70,21 +91,34 @@ export function repoKnobOverrideFlagKey(knob: LoosenableKnob, repoFullName: stri
  * autotune flag gates EVERY scope — flipping it off restores shipped behavior everywhere instantly.
  */
 export async function getKnobOverrideForRepo(env: Env, knob: LoosenableKnob, repoFullName: string | null): Promise<number | null> {
-  if (!isKnobAutotuneEnabled(env, knob)) return null;
+  if (!isKnobAutotuneEnabled(env, knob) && !isKnobTightenEnabled(env, knob)) return null;
   if (repoFullName !== null) {
-    const repoValue = await readValidatedOverrideRow(env, knob, repoKnobOverrideFlagKey(knob, repoFullName));
+    // Repo-scoped rows stay LOOSENING-ONLY (#8225): the tighten loop applies globally, so an above-shipped
+    // repo row has no legitimate writer and is rejected as corruption rather than honored.
+    const repoValue = await readValidatedOverrideRow(env, knob, repoKnobOverrideFlagKey(knob, repoFullName), { allowTightened: false });
     if (repoValue !== null) return repoValue;
   }
-  return readValidatedOverrideRow(env, knob, knob.overrideFlagKey);
+  return readValidatedOverrideRow(env, knob, knob.overrideFlagKey, { allowTightened: true });
 }
 
-async function readValidatedOverrideRow(env: Env, knob: LoosenableKnob, key: string): Promise<number | null> {
+async function readValidatedOverrideRow(env: Env, knob: LoosenableKnob, key: string, opts: { allowTightened: boolean }): Promise<number | null> {
   try {
     const row = await env.DB.prepare("SELECT value FROM system_flags WHERE key = ?").bind(key).first<{ value: string }>();
     if (!row) return null;
     const parsed = Number(row.value);
-    if (!Number.isFinite(parsed) || parsed >= knob.shippedValue || parsed < knob.hardMinimum) return null;
-    return parsed;
+    if (!Number.isFinite(parsed)) return null;
+    // Loosening side: below shipped, at/above the hard minimum, and the loosening flag must be ON.
+    if (parsed < knob.shippedValue) {
+      return parsed >= knob.hardMinimum && isKnobAutotuneEnabled(env, knob) ? parsed : null;
+    }
+    // Tightening side (#8225): above shipped, at/below the ladder's hard maximum, ladder declared, its own
+    // flag ON, and only where the caller allows a tightened row. A value EQUAL to shipped is meaningless
+    // as an override and is rejected in both directions.
+    const ladder = knob.tightening;
+    if (opts.allowTightened && ladder && parsed > knob.shippedValue && parsed <= ladder.hardMaximum && isKnobTightenEnabled(env, knob)) {
+      return parsed;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -273,6 +307,82 @@ export async function runPerRepoKnobLoosening(env: Env, knob: LoosenableKnob, no
   return results;
 }
 
+// ── Tightening apply path (#8225, epic #8211 track D) ────────────────────────────────────────────────────
+
+export type KnobTighteningRunResult =
+  | { applied: false; reason: "no_ladder" | "report_only" | "flag_off" | "no_proposal" | "already_applied" }
+  | { applied: true; proposal: KnobTighteningProposal };
+
+/**
+ * Evaluate and (when justified) apply a backtest-gated TIGHTENING of `knob` — the direction mirror of
+ * {@link runKnobLoosening}, with the same discipline transposed: only knobs declaring a ladder, only live
+ * knobs, only with the tighten flag ON, and the write path independently refuses anything that isn't a
+ * strict, bounded raise. Persists the same override row plus the ladder's own audit event type carrying
+ * both direction-aware split comparisons. Audit write is best-effort; the override write throws.
+ */
+export async function runKnobTightening(env: Env, knob: LoosenableKnob, nowMs: number = Date.now()): Promise<KnobTighteningRunResult> {
+  const ladder = knob.tightening;
+  if (!ladder) return { applied: false, reason: "no_ladder" };
+  if (knob.applyMode !== "live") return { applied: false, reason: "report_only" };
+  if (!isKnobTightenEnabled(env, knob)) return { applied: false, reason: "flag_off" };
+
+  const currentValue = (await getKnobOverride(env, knob)) ?? knob.shippedValue;
+  if (currentValue >= ladder.hardMaximum) return { applied: false, reason: "already_applied" };
+
+  const { fired, overrides } = await createSignalStore(env).queryRuleHistory(knob.ruleId, nowMs - CORPUS_LOOKBACK_MS);
+  const proposal = evaluateKnobTightening(knob, buildBacktestCorpus(knob.ruleId, fired, overrides), currentValue);
+  if (!proposal) return { applied: false, reason: "no_proposal" };
+  // Defense in depth: the write path independently refuses anything that isn't a strict, bounded raise.
+  if (proposal.proposedValue <= currentValue || proposal.proposedValue > ladder.hardMaximum) {
+    return { applied: false, reason: "no_proposal" };
+  }
+
+  await env.DB.prepare(
+    "INSERT INTO system_flags (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+  )
+    .bind(knob.overrideFlagKey, String(proposal.proposedValue))
+    .run();
+
+  await recordAuditEvent(env, {
+    eventType: ladder.eventType,
+    actor: "loopover",
+    targetKey: knob.ruleId,
+    outcome: "completed",
+    detail: `${knob.knobId} tightened ${proposal.currentValue} -> ${proposal.proposedValue} (backtest-gated, direction-aware: win axis up within the sacrifice budget)`,
+    metadata: { proposal },
+  }).catch(() => undefined);
+
+  return { applied: true, proposal };
+}
+
+/** The cron-tick wrapper for the tighten direction — one evaluation per laddered knob, failing SAFE; an
+ *  applied step emits ONE structured error-level alert on the same notify path as the loosening wrapper. */
+export async function runScheduledKnobTightening(env: Env, knob: LoosenableKnob): Promise<KnobTighteningRunResult | null> {
+  try {
+    const result = await runKnobTightening(env, knob);
+    if (result.applied) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "calibration_knob_tightened",
+          ev: knob.knobId,
+          at: new Date().toISOString(),
+          currentValue: result.proposal.currentValue,
+          proposedValue: result.proposal.proposedValue,
+          visibleCases: result.proposal.visibleCases,
+          heldOutCases: result.proposal.heldOutCases,
+        }),
+      );
+    }
+    return result;
+  } catch (error) {
+    console.warn(
+      JSON.stringify({ level: "warn", event: "knob_tightening_tick_failed", ev: knob.knobId, error: error instanceof Error ? error.message : "unknown error" }),
+    );
+    return null;
+  }
+}
+
 // ── Config-drift sentinel (#8213, epic #8211 track A) ────────────────────────────────────────────────────
 
 /** Truthy-string flag for the drift sentinel — default off, so a deploy is byte-identical until opted in. */
@@ -352,6 +462,8 @@ export async function runConfigDriftSentinel(env: Env, knobs: readonly Loosenabl
 
 export type KnobAppliedEntry = {
   at: string;
+  /** Which direction's apply wrote this entry (#8225) — projected from the audit event type. */
+  direction: "loosened" | "tightened";
   currentValue: number | null;
   proposedValue: number | null;
   visibleCases: number | null;
@@ -365,6 +477,8 @@ export type KnobRepoOverride = { repoFullName: string; value: number };
 export type KnobStatus = {
   knobId: string;
   flagEnabled: boolean;
+  /** The tighten direction's own flag (#8225) — null for a knob that declares no tightening ladder. */
+  tightenFlagEnabled: boolean | null;
   shippedValue: number;
   /** The value the live consumption actually uses right now: the validated override when the flag is on,
    *  else the shipped constant. */
@@ -412,13 +526,18 @@ function verdictOrNull(value: unknown): string | null {
  */
 export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<KnobStatus> {
   const flagEnabled = isKnobAutotuneEnabled(env, knob);
+  const tightenFlagEnabled = knob.tightening ? isKnobTightenEnabled(env, knob) : null;
 
   let storedOverride: number | null = null;
   try {
     const row = await env.DB.prepare("SELECT value FROM system_flags WHERE key = ?").bind(knob.overrideFlagKey).first<{ value: string }>();
     if (row) {
       const parsed = Number(row.value);
-      if (Number.isFinite(parsed) && parsed < knob.shippedValue && parsed >= knob.hardMinimum) storedOverride = parsed;
+      // Direction-aware display bounds (#8225): a lingering row in EITHER direction is shown regardless of
+      // flag state — an operator must see what would take effect the moment the matching flag flips.
+      const loosened = parsed < knob.shippedValue && parsed >= knob.hardMinimum;
+      const tightened = knob.tightening !== undefined && parsed > knob.shippedValue && parsed <= knob.tightening.hardMaximum;
+      if (Number.isFinite(parsed) && (loosened || tightened)) storedOverride = parsed;
     }
   } catch {
     storedOverride = null;
@@ -441,9 +560,13 @@ export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<Kn
     /* degrade to an empty listing -- the endpoint must not throw on a read blip */
   }
 
+  // The value consumption actually uses right now — getKnobOverride enforces the per-direction flag
+  // gating (#8225), so a lingering row whose direction's flag is off correctly reads as shipped here
+  // while still appearing in storedOverride above.
+  const liveValue = (await getKnobOverride(env, knob)) ?? knob.shippedValue;
+
   let drift: KnobDriftReport | null = null;
   try {
-    const liveValue = flagEnabled && storedOverride !== null ? storedOverride : knob.shippedValue;
     const { fired, overrides } = await createSignalStore(env).queryRuleHistory(knob.ruleId, Date.now() - CORPUS_LOOKBACK_MS);
     drift = evaluateKnobDrift(knob, buildBacktestCorpus(knob.ruleId, fired, overrides), liveValue);
   } catch {
@@ -464,9 +587,12 @@ export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<Kn
 
   const applied: KnobAppliedEntry[] = [];
   try {
-    const rows = await env.DB.prepare("SELECT created_at, metadata_json FROM audit_events WHERE event_type = ? ORDER BY created_at DESC LIMIT ?")
-      .bind(knob.looseningEventType, KNOB_STATUS_HISTORY_LIMIT)
-      .all<{ created_at: string; metadata_json: string }>();
+    // One history, both directions (#8225): a knob with no ladder binds its loosening type twice, which is
+    // an equality match — no behavior change for ladder-less knobs.
+    const tighteningEventType = knob.tightening?.eventType ?? knob.looseningEventType;
+    const rows = await env.DB.prepare("SELECT created_at, event_type, metadata_json FROM audit_events WHERE event_type IN (?, ?) ORDER BY created_at DESC LIMIT ?")
+      .bind(knob.looseningEventType, tighteningEventType, KNOB_STATUS_HISTORY_LIMIT)
+      .all<{ created_at: string; event_type: string; metadata_json: string }>();
     /* v8 ignore next -- .all() over a live D1/TestD1 always yields a defined results array; the ?? [] guards
      * a future driver-shape change, mirroring loadSatisfactionFloorStatus's identical note. */
     for (const row of rows.results ?? []) {
@@ -479,6 +605,7 @@ export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<Kn
       }
       applied.push({
         at: row.created_at,
+        direction: row.event_type === knob.looseningEventType ? "loosened" : "tightened",
         currentValue: numberOrNull(proposal.currentValue) ?? numberOrNull(proposal.currentFloor),
         proposedValue: numberOrNull(proposal.proposedValue) ?? numberOrNull(proposal.proposedFloor),
         visibleCases: numberOrNull(proposal.visibleCases),
@@ -494,8 +621,9 @@ export async function loadKnobStatus(env: Env, knob: LoosenableKnob): Promise<Kn
   return {
     knobId: knob.knobId,
     flagEnabled,
+    tightenFlagEnabled,
     shippedValue: knob.shippedValue,
-    liveValue: flagEnabled && storedOverride !== null ? storedOverride : knob.shippedValue,
+    liveValue,
     storedOverride,
     repoOverrides,
     drift,

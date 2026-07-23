@@ -108,6 +108,31 @@ loosening loop owns that direction). One alert per drift episode: a standing unc
 re-alerts, a changed one does, and recovery clears the episode. The sentinel is **alert-only** — it never
 writes a knob value — and the knobs status endpoint shows each knob's current drift report regardless of
 the flag, so a standing drift is always visible.
+## Tightening under the same evidence standard
+
+Historically the two directions ran on different evidence regimes: loosening moved only on Pareto-floored
+backtests, while tightening lived in a legacy loop (precision circuit-breakers plus a shadow-soaked
+advisor). The tightening unification brings threshold *raises* under the same backtest standard — with the
+axes orientation made **explicit** instead of reused blind. A deliberate tightening exists to move one axis
+at a bounded cost to the other; which axis is which depends on corpus polarity (for the confidence-threshold
+classifier, the positive class is "predicted reversed", so raising a bar helps *recall* and risks
+*precision* — the inverse of the rule-firing frame). Each knob's optional tightening ladder therefore
+declares its own orientation: the axis a raise must strictly improve, and the maximum sacrifice the other
+axis may suffer per comparison slice before the trade is a regression.
+
+Everything else is the loosening discipline transposed verbatim: the same split seed and fraction (held-out
+membership is identical in both directions), the same never-on-noise sample floors, smallest step first, a
+hard maximum no evidence may cross, and per-direction double gating — the tighten loop and the above-shipped
+override read are both gated by the ladder's **own** default-off flag, separate from the loosening flag, so
+each direction's autonomy is opted into independently and flipping either flag off instantly restores the
+shipped default for that direction. A declared ladder also joins the drift sentinel's candidate pool, so
+tighter-alternative findings and the tighten apply path judge the same values under the same floors.
+
+The legacy tightening triggers that are *not* threshold moves stay bespoke on purpose: the merge/close
+precision circuit-breakers are boolean capability breakers judged on realized outcomes (the strongest
+evidence regime there is), and re-basing them on fired-signal backtests would weaken, not strengthen, their
+grounds. Their behavior is pinned byte-stable by their own suites.
+
 ## Reliability curves
 
 Beside the candidate-ladder machinery, each live knob's status now carries its rule's

@@ -89,6 +89,7 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     LOOPOVER_AUTO_FILE_DRIFT_ISSUES: "false",
     SATISFACTION_FLOOR_AUTOTUNE_ENABLED: "false",
     AI_REVIEW_CLOSE_CONFIDENCE_AUTOTUNE_ENABLED: "false",
+    AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED: "false",
     CONFIG_DRIFT_SENTINEL_ENABLED: "false",
     // Deliberately NOT "JSONbored/gittensory" (the old pre-rename repo name most test fixtures use as their
     // generic placeholder repoFullName) and NOT "JSONbored/loopover" (the real self-repo default) -- either

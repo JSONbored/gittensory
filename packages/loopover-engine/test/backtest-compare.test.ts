@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { compareBacktestScores, type BacktestScoreReport } from "../dist/index.js";
+import { compareBacktestScores, compareDirectionalBacktestScores, type BacktestScoreReport } from "../dist/index.js";
 
 function report(overrides: Partial<BacktestScoreReport> = {}): BacktestScoreReport {
   return {
@@ -60,4 +60,16 @@ test("compareBacktestScores: mismatched ruleIds throw, naming both rules", () =>
     () => compareBacktestScores(report(), report({ ruleId: "other_rule" })),
     /cannot compare backtest scores for different rules: missing_linked_issue vs other_rule/,
   );
+});
+
+test("barrel: the public entrypoint re-exports the direction-aware comparator (#8225)", () => {
+  assert.equal(typeof compareDirectionalBacktestScores, "function");
+});
+
+test("compareDirectionalBacktestScores: win axis up + within-budget sacrifice is improved; over-budget regresses", () => {
+  const orientation = { mustImprove: "recall" as const, maxSacrifice: 0.1 };
+  const ok = compareDirectionalBacktestScores(report(), report({ recall: 0.7, precision: 0.45 }), orientation);
+  assert.equal(ok.verdict, "improved");
+  const over = compareDirectionalBacktestScores(report(), report({ recall: 0.9, precision: 0.3 }), orientation);
+  assert.equal(over.verdict, "regressed");
 });

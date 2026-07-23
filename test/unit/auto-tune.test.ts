@@ -11,6 +11,7 @@ import {
   maybeAutoClearHoldOnly,
   planAutoTune,
   planCloseAutoTune,
+  RISK_MERGE_PRECISION,
   shouldAutoClear,
   shouldAutoClearClose,
 } from "../../src/review/auto-tune";
@@ -462,5 +463,36 @@ describe("computeTuningRecommendations (#self-improve)", () => {
       ]),
     );
     expect(recs.map((r) => r.project)).toEqual(["alpha", "zeta"]);
+  });
+});
+
+describe("T3 byte-stability pins (#8225 migration map)", () => {
+  it("the advisor tighten trigger's constants and payload stay byte-stable until its registry cutover lands", () => {
+    // #8225 migrated the MECHANISM (direction-aware registry tightening) but deliberately NOT this trigger:
+    // its target tunable (qualityGateMinScore) has no global shipped default to declare a knob around. Until
+    // that cutover is its own reviewed diff, the trigger's behavior is pinned here byte-for-byte.
+    expect(RISK_MERGE_PRECISION).toBe(0.9);
+    const row: GateEvalRow = {
+      project: "acme/widgets",
+      wouldMerge: 12,
+      mergeConfirmed: 10,
+      mergeFalse: 2,
+      wouldClose: 0,
+      closeConfirmed: 0,
+      closeFalse: 0,
+      hold: 0,
+      decided: 12,
+      mergePrecision: 10 / 12,
+      closePrecision: null,
+      weightedMergeConfirmed: 10,
+      weightedCloseConfirmed: 0,
+      weightedMergePrecision: 10 / 12,
+      weightedClosePrecision: null,
+    };
+    const recs = computeTuningRecommendations({ rows: [row], hasSignal: true });
+    const tighten = recs.find((rec) => rec.overridePayload !== undefined);
+    expect(tighten).toBeDefined();
+    expect(tighten!.severity).toBe("warn");
+    expect(tighten!.overridePayload).toEqual({ confidenceFloor: 0.95 }); // TIGHTEN_FLOOR_TARGET === READY bar
   });
 });

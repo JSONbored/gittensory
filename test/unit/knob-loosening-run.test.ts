@@ -16,9 +16,12 @@ import {
   loadLiveKnobStatuses,
   runPerRepoKnobLoosening,
   PER_REPO_LOOSENING_MAX_REPOS_PER_TICK,
+  isKnobTightenEnabled,
   runConfigDriftSentinel,
   runKnobLoosening,
+  runKnobTightening,
   runScheduledKnobLoosening,
+  runScheduledKnobTightening,
 } from "../../src/services/knob-loosening-run";
 import {
   SATISFACTION_FLOOR_LOOSENING_EVENT_TYPE,
@@ -580,5 +583,233 @@ describe("loadKnobStatus / loadLiveKnobStatuses (#8161 generalized)", () => {
     // Parameterized: a report-only knob is excluded from the surface.
     const reportOnly = { ...AI_KNOB, knobId: "future_knob", applyMode: "report_only" as const };
     expect((await loadLiveKnobStatuses(createTestEnv(), [reportOnly])).map((s) => s.knobId)).toEqual([]);
+  });
+});
+
+// ── #8225: the tighten direction — separate flag, direction-aware storage, transposed apply path ────────────
+
+const LADDER = AI_KNOB.tightening!;
+const tightenEnv = (overrides: Partial<Env> = {}) => createTestEnv({ AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED: "true" as never, ...overrides });
+
+// Band firings at 0.94 a human REVERSED: shipped 0.93 trusts them; the 0.95 raise catches them — recall up
+// with precision held (every predicted-reversed case really was reversed). Same membership-probe technique
+// as the loosening seeder, plus deep-low reversed anchors so precision has a denominator on both sides.
+async function seedAiTighteningFriendlyHistory(env: Env): Promise<void> {
+  const pool = Array.from({ length: 400 }, (_, i) => `acme/widgets#${i + 1}`);
+  const probe = pool.map((targetKey) => ({
+    ruleId: AI_KNOB.ruleId,
+    targetKey,
+    outcome: "unaddressed",
+    label: "confirmed" as const,
+    firedAt: "2026-07-01T00:00:00.000Z",
+    decidedAt: "2026-07-02T00:00:00.000Z",
+  }));
+  const { visible, heldOut } = splitBacktestCorpus(probe, AI_KNOB.heldOutFraction, AI_KNOB.splitSeed);
+  const store = createSignalStore(env);
+  const now = Date.now();
+  const keys = [
+    ...visible.slice(0, AI_KNOB.minVisibleCases + 4).map((c) => c.targetKey),
+    ...heldOut.slice(0, AI_KNOB.minHeldOutCases + 2).map((c) => c.targetKey),
+  ];
+  for (const [i, targetKey] of keys.entries()) {
+    await store.recordRuleFired({
+      ruleId: AI_KNOB.ruleId,
+      targetKey,
+      outcome: "unaddressed",
+      occurredAt: new Date(now - 10_000 - i).toISOString(),
+      metadata: { confidence: 0.94 },
+    });
+    await store.recordHumanOverride({ ruleId: AI_KNOB.ruleId, targetKey, verdict: "reversed", occurredAt: new Date(now - i).toISOString() });
+  }
+  for (const targetKey of [visible[AI_KNOB.minVisibleCases + 5]!.targetKey, heldOut[AI_KNOB.minHeldOutCases + 3]!.targetKey]) {
+    await store.recordRuleFired({
+      ruleId: AI_KNOB.ruleId,
+      targetKey,
+      outcome: "unaddressed",
+      occurredAt: new Date(now - 20_000).toISOString(),
+      metadata: { confidence: 0.2 },
+    });
+    await store.recordHumanOverride({ ruleId: AI_KNOB.ruleId, targetKey, verdict: "reversed", occurredAt: new Date(now - 5000).toISOString() });
+  }
+}
+
+describe("isKnobTightenEnabled / direction-aware override read (#8225)", () => {
+  it("parses the ladder's own var; a ladder-less knob is ALWAYS off, whatever the env says", () => {
+    for (const value of ["1", "true", "on", "yes", " TRUE "]) {
+      expect(isKnobTightenEnabled({ AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED: value } as unknown as Env, AI_KNOB)).toBe(true);
+    }
+    for (const value of ["false", "0", "", undefined, 1 as unknown as string]) {
+      expect(isKnobTightenEnabled({ AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED: value } as unknown as Env, AI_KNOB)).toBe(false);
+    }
+    expect(isKnobTightenEnabled({ AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED: "true" } as unknown as Env, SATISFACTION_KNOB)).toBe(false);
+  });
+
+  it("a tightened row needs ITS flag: readable with tighten ON, shipped-inert with tighten OFF (loosening flag irrelevant)", async () => {
+    const env = tightenEnv();
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, "0.95");
+    expect(await getKnobOverride(env, AI_KNOB)).toBe(0.95);
+
+    const offEnv = enabledEnv(); // loosening ON, tighten OFF — the tightened row must NOT act
+    await setOverrideRow(offEnv, AI_KNOB.overrideFlagKey, "0.95");
+    expect(await getKnobOverride(offEnv, AI_KNOB)).toBeNull();
+  });
+
+  it("direction validation rejects above-hard-maximum, equal-to-shipped, and a LOOSENED row when only tighten is on", async () => {
+    const env = tightenEnv();
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, String(LADDER.hardMaximum + 0.01));
+    expect(await getKnobOverride(env, AI_KNOB)).toBeNull();
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, String(AI_KNOB.shippedValue));
+    expect(await getKnobOverride(env, AI_KNOB)).toBeNull();
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, "0.9"); // a loosening — needs the LOOSENING flag, which is off
+    expect(await getKnobOverride(env, AI_KNOB)).toBeNull();
+  });
+
+  it("per-repo rows stay loosening-only: a tightened repo row is rejected and the global tightened row wins", async () => {
+    const env = tightenEnv();
+    await setOverrideRow(env, repoKnobOverrideFlagKey(AI_KNOB, "acme/widgets"), "0.97");
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, "0.95");
+    expect(await getKnobOverrideForRepo(env, AI_KNOB, "acme/widgets")).toBe(0.95);
+  });
+});
+
+describe("runKnobTightening (#8225)", () => {
+  it("refuses in order: no ladder, report-only, flag off — before any evaluation work", async () => {
+    expect(await runKnobTightening(tightenEnv(), SATISFACTION_KNOB)).toEqual({ applied: false, reason: "no_ladder" });
+    const reportOnly = { ...AI_KNOB, applyMode: "report_only" as const };
+    expect(await runKnobTightening(tightenEnv(), reportOnly)).toEqual({ applied: false, reason: "report_only" });
+    expect(await runKnobTightening(createTestEnv(), AI_KNOB)).toEqual({ applied: false, reason: "flag_off" });
+  });
+
+  it("returns no_proposal on an empty corpus and already_applied at the hard maximum", async () => {
+    expect(await runKnobTightening(tightenEnv(), AI_KNOB)).toEqual({ applied: false, reason: "no_proposal" });
+    const env = tightenEnv();
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, String(LADDER.hardMaximum));
+    expect(await runKnobTightening(env, AI_KNOB)).toEqual({ applied: false, reason: "already_applied" });
+  });
+
+  it("applies a backtest-cleared raise: writes the override row + the ladder's own audit event", async () => {
+    const env = tightenEnv();
+    await seedAiTighteningFriendlyHistory(env);
+    const result = await runKnobTightening(env, AI_KNOB);
+    expect(result.applied).toBe(true);
+    if (!result.applied) throw new Error("unreachable");
+    expect(result.proposal.proposedValue).toBe(0.95);
+
+    expect(await getKnobOverride(env, AI_KNOB)).toBe(0.95);
+    const events = await env.DB.prepare("SELECT metadata_json FROM audit_events WHERE event_type = ?")
+      .bind(LADDER.eventType)
+      .all<{ metadata_json: string }>();
+    expect(events.results).toHaveLength(1);
+    const proposal = (JSON.parse(events.results![0]!.metadata_json) as { proposal: { currentValue: number; proposedValue: number } }).proposal;
+    expect(proposal).toMatchObject({ currentValue: AI_KNOB.shippedValue, proposedValue: 0.95 });
+  });
+
+  it("defense in depth: the write path independently refuses a non-raise or above-maximum proposal, whatever the evaluator claims", async () => {
+    const env = tightenEnv();
+    const base = {
+      knobId: AI_KNOB.knobId,
+      ruleId: AI_KNOB.ruleId,
+      visibleCases: 60,
+      heldOutCases: 15,
+      visible: {} as never,
+      heldOut: {} as never,
+    };
+    const spy = vi.spyOn(looseningKnobs, "evaluateKnobTightening");
+    spy.mockReturnValueOnce({ ...base, currentValue: AI_KNOB.shippedValue, proposedValue: AI_KNOB.shippedValue });
+    expect(await runKnobTightening(env, AI_KNOB)).toEqual({ applied: false, reason: "no_proposal" });
+    spy.mockReturnValueOnce({ ...base, currentValue: AI_KNOB.shippedValue, proposedValue: LADDER.hardMaximum + 0.01 });
+    expect(await runKnobTightening(env, AI_KNOB)).toEqual({ applied: false, reason: "no_proposal" });
+    expect(await getKnobOverride(env, AI_KNOB)).toBeNull(); // nothing was written either time
+  });
+
+  it("the audit-event write is best-effort: a rejecting recordAuditEvent still applies the override (the catch arm)", async () => {
+    const env = tightenEnv();
+    await seedAiTighteningFriendlyHistory(env);
+    const repositories = await import("../../src/db/repositories");
+    vi.spyOn(repositories, "recordAuditEvent").mockRejectedValue(new Error("audit write down"));
+    const result = await runKnobTightening(env, AI_KNOB);
+    expect(result.applied).toBe(true);
+    expect(await getKnobOverride(env, AI_KNOB)).toBe(0.95);
+  });
+});
+
+describe("runScheduledKnobTightening + tick wiring (#8225)", () => {
+  it("emits exactly ONE structured error-level alert on an applied step, none on the settled re-run", async () => {
+    const env = tightenEnv();
+    await seedAiTighteningFriendlyHistory(env);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const applied = await runScheduledKnobTightening(env, AI_KNOB);
+    expect(applied?.applied).toBe(true);
+    const alerts = errorSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.includes("calibration_knob_tightened"));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain('"ev":"ai_review_close_confidence"');
+
+    errorSpy.mockClear();
+    const second = await runScheduledKnobTightening(env, AI_KNOB); // starts from the tightened value
+    expect(second?.applied).toBe(false);
+    expect(errorSpy.mock.calls.filter((call) => String(call[0]).includes("calibration_knob_tightened"))).toHaveLength(0);
+  });
+
+  it("fails SAFE on a thrown evaluation (Error and non-Error alike), never rethrowing into the queue", async () => {
+    const env = tightenEnv();
+    env.DB = { prepare: () => { throw new Error("store down"); } } as never;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect(await runScheduledKnobTightening(env, AI_KNOB)).toBeNull();
+    expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("knob_tightening_tick_failed"))).toBe(true);
+
+    const stringThrowEnv = tightenEnv();
+    stringThrowEnv.DB = { prepare: () => { throw "string boom"; } } as never;
+    expect(await runScheduledKnobTightening(stringThrowEnv, AI_KNOB)).toBeNull();
+    expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('"error":"unknown error"'))).toBe(true);
+  });
+
+  it("the calibration tick runs the tighten loop ONLY under its own flag — loosening-only envs never tighten", async () => {
+    const looseningOnly = enabledEnv();
+    await seedAiTighteningFriendlyHistory(looseningOnly);
+    await processJob(looseningOnly, { type: "satisfaction-floor-loosening", requestedBy: "schedule" });
+    expect(await getKnobOverride(tightenEnv({ DB: looseningOnly.DB }), AI_KNOB)).toBeNull();
+
+    const tightenOn = tightenEnv();
+    await seedAiTighteningFriendlyHistory(tightenOn);
+    await processJob(tightenOn, { type: "satisfaction-floor-loosening", requestedBy: "schedule" });
+    expect(await getKnobOverride(tightenOn, AI_KNOB)).toBe(0.95);
+  });
+});
+
+describe("loadKnobStatus with a tightening ladder (#8225)", () => {
+  it("reports tightenFlagEnabled (null without a ladder), a lingering tightened row flag-OFF, and the tightened live value flag-ON", async () => {
+    const env = tightenEnv();
+    await setOverrideRow(env, AI_KNOB.overrideFlagKey, "0.95");
+    const status = await loadKnobStatus(env, AI_KNOB);
+    expect(status.tightenFlagEnabled).toBe(true);
+    expect(status.storedOverride).toBe(0.95);
+    expect(status.liveValue).toBe(0.95);
+
+    const offEnv = createTestEnv();
+    await setOverrideRow(offEnv, AI_KNOB.overrideFlagKey, "0.95");
+    const offStatus = await loadKnobStatus(offEnv, AI_KNOB);
+    expect(offStatus.tightenFlagEnabled).toBe(false);
+    expect(offStatus.storedOverride).toBe(0.95); // the lingering row stays visible
+    expect(offStatus.liveValue).toBe(AI_KNOB.shippedValue); // but does not act
+
+    expect((await loadKnobStatus(createTestEnv(), SATISFACTION_KNOB)).tightenFlagEnabled).toBeNull();
+  });
+
+  it("projects BOTH directions into one history with the direction tag", async () => {
+    const env = tightenEnv();
+    await seedAiTighteningFriendlyHistory(env);
+    expect((await runKnobTightening(env, AI_KNOB)).applied).toBe(true);
+    await recordAuditEvent(env, {
+      eventType: AI_KNOB.looseningEventType,
+      actor: "loopover",
+      targetKey: AI_KNOB.ruleId,
+      outcome: "completed",
+      detail: "fixture loosening",
+      metadata: { proposal: { currentValue: 0.93, proposedValue: 0.9, visibleCases: 60, heldOutCases: 15 } },
+    });
+    const status = await loadKnobStatus(env, AI_KNOB);
+    expect(status.applied.map((entry) => entry.direction).sort()).toEqual(["loosened", "tightened"]);
+    const tightened = status.applied.find((entry) => entry.direction === "tightened")!;
+    expect(tightened.proposedValue).toBe(0.95);
   });
 });

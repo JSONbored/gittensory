@@ -13,6 +13,7 @@
 import {
   buildConfidenceThresholdClassifier,
   compareBacktestScores,
+  compareDirectionalBacktestScores,
   scoreBacktest,
   splitBacktestCorpus,
   type BacktestCase,
@@ -45,6 +46,27 @@ export type LoosenableKnob = {
   looseningEventType: string;
   /** Truthy-string wrangler var double-gating this knob's autotune loop AND its override read. */
   autotuneEnvVar: string;
+  /** OPTIONAL tightening ladder (#8225, epic #8211 track D) — declared only for knobs whose tighter drift
+   *  findings may ACT. Tightening is judged by the direction-aware comparator under the ladder's OWN
+   *  declared axes orientation (win axis strictly up; the other bounded), never the symmetric floor
+   *  reused blind. Its autonomy is gated by its OWN env var, separate from loosening and default off. */
+  tightening?: KnobTighteningLadder;
+};
+
+export type KnobTighteningLadder = {
+  /** Candidate tightened values, nearest-to-shipped first — the smallest evidence-cleared raise wins. */
+  candidates: readonly number[];
+  /** No backtest result, however good, may tighten above this. */
+  hardMaximum: number;
+  /** The EXPLICIT axes orientation of this knob's tightening trade (#8225): which axis a raise exists to
+   *  win (for the confidence-threshold corpus polarity, RAISING helps recall and risks precision) and the
+   *  bounded sacrifice the other axis may suffer per comparison slice. */
+  mustImprove: "precision" | "recall";
+  maxSacrifice: number;
+  /** Truthy-string wrangler var gating the tighten loop AND the above-shipped override read. Default off. */
+  autotuneEnvVar: string;
+  /** Audit event type a tightening apply writes — one stable type per knob-direction, forever. */
+  eventType: string;
 };
 
 export const LOOSENABLE_KNOBS: Readonly<Record<string, LoosenableKnob>> = Object.freeze({
@@ -88,6 +110,20 @@ export const LOOSENABLE_KNOBS: Readonly<Record<string, LoosenableKnob>> = Object
     overrideFlagKey: "ai_review_close_confidence_override",
     looseningEventType: "calibration.ai_review_close_confidence_loosened",
     autotuneEnvVar: "AI_REVIEW_CLOSE_CONFIDENCE_AUTOTUNE_ENABLED",
+    // #8225's first tightening ladder: a HIGHER close-confidence bar means FEWER auto-closes — strictly
+    // caution-ward, the correct direction to trust first. Two steps, hard ceiling 0.97, tight sacrifice
+    // budget.
+    tightening: {
+      candidates: [0.95, 0.97],
+      hardMaximum: 0.97,
+      // Corpus polarity: the threshold classifier's positive class is "predicted reversed", so raising the
+      // bar catches MORE genuinely-reversed closes (recall, the win) at the risk of withholding good ones
+      // (precision, the bounded sacrifice — at most 5 points per slice).
+      mustImprove: "recall",
+      maxSacrifice: 0.05,
+      autotuneEnvVar: "AI_REVIEW_CLOSE_CONFIDENCE_TIGHTEN_ENABLED",
+      eventType: "calibration.ai_review_close_confidence_tightened",
+    },
   },
 });
 
@@ -123,6 +159,59 @@ export function evaluateKnobLoosening(
     const visibleComparison = compareOnSlice(knob.ruleId, visible, currentValue, candidate);
     if (visibleComparison.verdict !== "improved") continue;
     const heldOutComparison = compareOnSlice(knob.ruleId, heldOut, currentValue, candidate);
+    if (heldOutComparison.verdict === "regressed") continue;
+    return {
+      knobId: knob.knobId,
+      ruleId: knob.ruleId,
+      currentValue,
+      proposedValue: candidate,
+      visibleCases: visible.length,
+      heldOutCases: heldOut.length,
+      visible: visibleComparison,
+      heldOut: heldOutComparison,
+    };
+  }
+  return null;
+}
+
+export type KnobTighteningProposal = {
+  knobId: string;
+  ruleId: string;
+  currentValue: number;
+  proposedValue: number;
+  visibleCases: number;
+  heldOutCases: number;
+  visible: BacktestComparison;
+  heldOut: BacktestComparison;
+};
+
+/**
+ * Evaluate whether `knob` can be justifiably TIGHTENED from `currentValue` (#8225) — the direction mirror
+ * of {@link evaluateKnobLoosening} with the orientation made explicit instead of reused blind: the smallest
+ * declared candidate ABOVE `currentValue` (never above the ladder's hard maximum) whose direction-aware
+ * verdict is strictly `"improved"` on the visible split AND non-`"regressed"` on the held-out split, where
+ * improved means the ladder's declared win axis strictly up and any cost on the other axis within its
+ * declared sacrifice bound.
+ * Same split seed/fraction and the same never-on-noise sample floors as the loosening side — held-out
+ * membership is identical for both directions of the same knob. Null when the knob declares no ladder, the
+ * corpus is too small, no candidate qualifies, or the current value already sits at/above the hard maximum.
+ * Pure and deterministic — same knob + corpus + value ⇒ same proposal.
+ */
+export function evaluateKnobTightening(
+  knob: LoosenableKnob,
+  cases: readonly BacktestCase[],
+  currentValue: number = knob.shippedValue,
+): KnobTighteningProposal | null {
+  const ladder = knob.tightening;
+  if (!ladder) return null;
+  const { visible, heldOut } = splitBacktestCorpus(cases, knob.heldOutFraction, knob.splitSeed);
+  if (visible.length < knob.minVisibleCases || heldOut.length < knob.minHeldOutCases) return null;
+
+  for (const candidate of ladder.candidates) {
+    if (candidate <= currentValue || candidate > ladder.hardMaximum) continue;
+    const visibleComparison = compareTighteningOnSlice(knob.ruleId, visible, currentValue, candidate, ladder);
+    if (visibleComparison.verdict !== "improved") continue;
+    const heldOutComparison = compareTighteningOnSlice(knob.ruleId, heldOut, currentValue, candidate, ladder);
     if (heldOutComparison.verdict === "regressed") continue;
     return {
       knobId: knob.knobId,
@@ -177,7 +266,9 @@ export function evaluateKnobDrift(
   const { visible, heldOut } = splitBacktestCorpus(cases, knob.heldOutFraction, knob.splitSeed);
   if (visible.length < knob.minVisibleCases || heldOut.length < knob.minHeldOutCases) return null;
 
-  const alternatives = [...new Set([knob.shippedValue, ...knob.candidates])]
+  // #8225: a declared tightening ladder joins the pool, so the sentinel's tighter findings and the tighten
+  // apply path judge the SAME candidate values (bounded by the ladder's own hard maximum via declaration).
+  const alternatives = [...new Set([knob.shippedValue, ...knob.candidates, ...(knob.tightening?.candidates ?? [])])]
     .filter((value) => value !== liveValue && value >= knob.hardMinimum)
     .sort((left, right) => Math.abs(left - liveValue) - Math.abs(right - liveValue) || right - left);
 
@@ -205,4 +296,16 @@ function compareOnSlice(ruleId: string, slice: readonly BacktestCase[], currentV
   const baseline = scoreBacktest(ruleId, slice, buildConfidenceThresholdClassifier(currentValue));
   const proposed = scoreBacktest(ruleId, slice, buildConfidenceThresholdClassifier(candidate));
   return compareBacktestScores(baseline, proposed);
+}
+
+function compareTighteningOnSlice(
+  ruleId: string,
+  slice: readonly BacktestCase[],
+  currentValue: number,
+  candidate: number,
+  ladder: KnobTighteningLadder,
+): BacktestComparison {
+  const baseline = scoreBacktest(ruleId, slice, buildConfidenceThresholdClassifier(currentValue));
+  const proposed = scoreBacktest(ruleId, slice, buildConfidenceThresholdClassifier(candidate));
+  return compareDirectionalBacktestScores(baseline, proposed, { mustImprove: ladder.mustImprove, maxSacrifice: ladder.maxSacrifice });
 }

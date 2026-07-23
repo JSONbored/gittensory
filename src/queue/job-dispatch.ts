@@ -31,7 +31,7 @@ import { isPrReconciliationEnabled, resolvePrReconciliationManifestOverride, run
 import { isActiveReviewReconciliationEnabled, resolveActiveReviewReconciliationManifestOverride, runActiveReviewReconciliation } from "../review/active-review-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import { isSatisfactionFloorAutotuneEnabled, runScheduledSatisfactionFloorLoosening } from "../services/satisfaction-floor-loosening-run";
-import { GENERIC_LIVE_KNOBS, isConfigDriftSentinelEnabled, isKnobAutotuneEnabled, runConfigDriftSentinel, runPerRepoKnobLoosening, runScheduledKnobLoosening } from "../services/knob-loosening-run";
+import { GENERIC_LIVE_KNOBS, isConfigDriftSentinelEnabled, isKnobAutotuneEnabled, isKnobTightenEnabled, runConfigDriftSentinel, runPerRepoKnobLoosening, runScheduledKnobLoosening, runScheduledKnobTightening } from "../services/knob-loosening-run";
 import { runSelfTuneBreaker } from "../review/outcomes-wire";
 import { isRagEnabled } from "../review/rag-wire";
 import { processSubmitDraft } from "../services/draft";
@@ -358,6 +358,9 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
           // inherit global. Bounded per tick with a rotating cursor; fail-safe internally.
           await runPerRepoKnobLoosening(env, knob);
         }
+        // #8225: the tighten direction rides the same tick under its OWN per-knob default-off var —
+        // direction autonomy is opted into separately, never inherited from the loosening flag.
+        if (isKnobTightenEnabled(env, knob)) await runScheduledKnobTightening(env, knob);
       }
       // #8213: the drift sentinel rides the same calibration tick, behind its own default-off flag.
       // Alert-only — it never writes a knob value — and internally fail-safe per knob.
