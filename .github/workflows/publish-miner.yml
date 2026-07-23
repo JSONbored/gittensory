@@ -89,6 +89,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # packages/loopover-miner imports @loopover/engine (lib/ams-policy.ts and others). That package's
+      # dist/ is gitignored (see ci.yml's own build --workspace @loopover/engine step, and
+      # publish-mcp.yml's identical step for the same reason) -- without building it first, miner's own
+      # build below fails with "Cannot find module '@loopover/engine' or its corresponding type
+      # declarations" (TS2307), confirmed live when this validate job actually got exercised for the
+      # first time against miner code that imports engine.
+      - name: Build loopover-engine
+        run: npm run build --workspace @loopover/engine
+
       # Real tsc build (in-place emit -- see packages/loopover-miner/tsconfig.json; the emitted .js/.d.ts
       # is gitignored, so this is the only place it ever exists), same as ci.yml's own "Build miner CLI"
       # step, followed by node --check syntax validation over every bin/lib file (the same two-part

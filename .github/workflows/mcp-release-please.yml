@@ -156,6 +156,29 @@ jobs:
             fi
           done
 
+      # All four packages share ONE .release-please-manifest.json (separate-pull-requests: true still
+      # means every component reads/writes that same file), so merging any one component's Release PR
+      # immediately makes every OTHER open Release PR's copy of that file stale, surfacing as a GitHub
+      # merge conflict -- confirmed live 2026-07-23: PR #8146 (engine-and-dependents) went CONFLICTING
+      # the moment PR #8145 (ui-kit) merged, purely from manifest-file drift, no real content collision.
+      # release-please self-heals this by regenerating/force-pushing its own branches on every run, but
+      # only once someone merges the SIBLING PR that caused the conflict -- the actual fix is shrinking
+      # the window multiple Release PRs can sit open at once. Auto-merging them the moment CI goes green
+      # does that: GitHub's own auto-merge only fires once every required check (including this repo's
+      # full CI suite) passes, so this adds no less scrutiny than a human clicking merge -- it just
+      # removes the wait for a human to notice. Scoped to the exact "autorelease: pending" label
+      # release-please's own action applies, so this can never touch a contributor or maintainer PR.
+      - name: Auto-merge this run's own Release PRs once CI is green
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          numbers="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --label "autorelease: pending" --json number --jq '.[].number')"
+          for number in $numbers; do
+            echo "Enabling auto-merge on release-please PR #$number."
+            gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --squash || echo "::warning::Could not enable auto-merge on #$number (already enabled, or not yet mergeable) -- continuing."
+          done
+
       # release-please creates the component tag + GitHub Release with GITHUB_TOKEN, which (by
       # GitHub's recursion-prevention rule) does NOT fire push/tag-based workflows. workflow_dispatch
       # IS exempt from that rule, so dispatch the OIDC publish workflow explicitly, telling it
