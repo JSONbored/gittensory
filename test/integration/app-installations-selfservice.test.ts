@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { createSessionForGitHubUser } from "../../src/auth/security";
-import { upsertInstallation, upsertInstallationHealth } from "../../src/db/repositories";
+import { getRepositorySettings, upsertInstallation, upsertInstallationHealth, upsertRepositoryFromGitHub, upsertRepositorySettings } from "../../src/db/repositories";
 import type { InstallationHealthRecord } from "../../src/types";
 import { createTestEnv } from "../helpers/d1";
 
@@ -260,6 +260,185 @@ describe("tenant self-service installation health/repair (#7661)", () => {
       refreshed: true,
       installation: { status: expect.any(String) },
     });
+  });
+});
+
+// #7676: installation-scoped bulk pause/dry-run. Same tenant-vs-tenant isolation as the health/repair siblings
+// above (resolveAppInstallationScope / installationRecordInScope), layered on top of the existing strictly-
+// per-repo PUT /v1/repos/:owner/:repo/settings.
+describe("installation-scoped bulk agent pause/dry-run (#7676)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function seedInstallation(env: Env, id: number, login: string): Promise<void> {
+    await upsertInstallation(env, {
+      installation: {
+        id,
+        account: { login, id, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "read" },
+        events: ["issues", "pull_request", "repository"],
+      },
+    });
+  }
+
+  async function seedInstalledRepo(env: Env, installationId: number, owner: string, name: string): Promise<void> {
+    await upsertRepositoryFromGitHub(env, { name, full_name: `${owner}/${name}`, private: false, owner: { login: owner } }, installationId);
+  }
+
+  function cookie(token: string): Record<string, string> {
+    return { cookie: `loopover_session=${token}` };
+  }
+
+  function apiHeaders(env: Env): Record<string, string> {
+    return { authorization: `Bearer ${env.LOOPOVER_API_TOKEN}`, "content-type": "application/json" };
+  }
+
+  async function bulkRequest(app: ReturnType<typeof createApp>, env: Env, installationId: number | string, headers: Record<string, string>, body: unknown) {
+    return app.request(
+      `/v1/app/installations/${installationId}/agent/bulk-settings`,
+      { method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) },
+      env,
+    );
+  }
+
+  it("rejects an unauthenticated caller and a session with no maintainer/owner/operator role", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 700, "tenant-a");
+
+    expect((await bulkRequest(app, env, 700, {}, { agentPaused: true })).status).toBe(401);
+
+    const { token } = await createSessionForGitHubUser(env, { login: "nobody", id: 71 });
+    const forbidden = await bulkRequest(app, env, 700, cookie(token), { agentPaused: true });
+    expect(forbidden.status).toBe(403);
+    await expect(forbidden.json()).resolves.toMatchObject({ error: "insufficient_role" });
+  });
+
+  it("rejects a non-numeric installation id, an unknown installation, and a malformed body", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 700, "tenant-a");
+    const { token } = await createSessionForGitHubUser(env, { login: "tenant-a", id: 5701 });
+
+    const invalidId = await bulkRequest(app, env, "not-a-number", cookie(token), { agentPaused: true });
+    expect(invalidId.status).toBe(400);
+    await expect(invalidId.json()).resolves.toMatchObject({ error: "invalid_installation_id" });
+
+    const missing = await bulkRequest(app, env, 999, cookie(token), { agentPaused: true });
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ error: "installation_not_found" });
+
+    const malformed = await bulkRequest(app, env, 700, cookie(token), { agentPaused: "not-a-boolean" });
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toMatchObject({ error: "invalid_bulk_agent_settings" });
+
+    // An unrecognized field is rejected outright (.strict()), not silently dropped.
+    const extraField = await bulkRequest(app, env, 700, cookie(token), { agentPaused: true, gatePack: "oss-anti-slop" });
+    expect(extraField.status).toBe(400);
+
+    // Genuinely unparseable JSON (not just schema-invalid) -- the .catch(() => null) arm.
+    const unparseable = await app.request(
+      "/v1/app/installations/700/agent/bulk-settings",
+      { method: "PUT", headers: { "content-type": "application/json", ...cookie(token) }, body: "{not valid json" },
+      env,
+    );
+    expect(unparseable.status).toBe(400);
+    await expect(unparseable.json()).resolves.toMatchObject({ error: "invalid_bulk_agent_settings" });
+  });
+
+  it("never lets tenant A bulk-pause tenant B's installation", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 700, "tenant-a");
+    await seedInstallation(env, 800, "tenant-b");
+    await seedInstalledRepo(env, 800, "tenant-b", "repo-1");
+    const { token: tokenA } = await createSessionForGitHubUser(env, { login: "tenant-a", id: 5701 });
+
+    const foreign = await bulkRequest(app, env, 800, cookie(tokenA), { agentPaused: true });
+    expect(foreign.status).toBe(403);
+    await expect(foreign.json()).resolves.toMatchObject({ error: "forbidden_installation" });
+
+    // Confirms the 403 is enforced BEFORE any write: tenant-b's repo settings are completely untouched.
+    expect((await getRepositorySettings(env, "tenant-b/repo-1")).agentPaused).toBe(false);
+  });
+
+  it("applies agentPaused/agentDryRun across every installed repo in the tenant's own installation, and only those repos", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 700, "tenant-a");
+    await seedInstalledRepo(env, 700, "tenant-a", "repo-1");
+    await seedInstalledRepo(env, 700, "tenant-a", "repo-2");
+    // A second, unrelated installation -- proves the bulk write is scoped to installation 700 only.
+    await seedInstallation(env, 800, "tenant-b");
+    await seedInstalledRepo(env, 800, "tenant-b", "repo-3");
+    const { token: tokenA } = await createSessionForGitHubUser(env, { login: "tenant-a", id: 5701 });
+
+    const res = await bulkRequest(app, env, 700, cookie(tokenA), { agentPaused: true, agentDryRun: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; installationId: number; repoCount: number; repoFullNames: string[]; applied: object };
+    expect(body).toMatchObject({ ok: true, installationId: 700, repoCount: 2, applied: { agentPaused: true, agentDryRun: true } });
+    expect(body.repoFullNames.sort()).toEqual(["tenant-a/repo-1", "tenant-a/repo-2"]);
+
+    expect((await getRepositorySettings(env, "tenant-a/repo-1")).agentPaused).toBe(true);
+    expect((await getRepositorySettings(env, "tenant-a/repo-1")).agentDryRun).toBe(true);
+    expect((await getRepositorySettings(env, "tenant-a/repo-2")).agentPaused).toBe(true);
+    // The unrelated installation's repo is completely untouched.
+    expect((await getRepositorySettings(env, "tenant-b/repo-3")).agentPaused).toBe(false);
+  });
+
+  it("supports setting only one of the two flags, preserving the other's existing value", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 700, "tenant-a");
+    await seedInstalledRepo(env, 700, "tenant-a", "repo-1");
+    // repo-1 already has agentDryRun on from an earlier per-repo edit, before any bulk call.
+    const current = await getRepositorySettings(env, "tenant-a/repo-1");
+    await upsertRepositorySettings(env, { ...current, agentDryRun: true, repoFullName: "tenant-a/repo-1" });
+    const { token: tokenA } = await createSessionForGitHubUser(env, { login: "tenant-a", id: 5701 });
+
+    const res = await bulkRequest(app, env, 700, cookie(tokenA), { agentPaused: true });
+    expect(res.status).toBe(200);
+
+    const updated = await getRepositorySettings(env, "tenant-a/repo-1");
+    expect(updated.agentPaused).toBe(true);
+    expect(updated.agentDryRun).toBe(true); // untouched -- the omitted field was never overwritten to false
+  });
+
+  it("succeeds as a no-op for an installation with zero currently-installed repos", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 700, "tenant-a");
+    const { token: tokenA } = await createSessionForGitHubUser(env, { login: "tenant-a", id: 5701 });
+
+    const res = await bulkRequest(app, env, 700, cookie(tokenA), { agentPaused: true });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ ok: true, repoCount: 0, repoFullNames: [] });
+  });
+
+  it("lets an operator (static api token) bulk-pause any tenant's installation, with a distinct audit event", async () => {
+    const app = createApp();
+    const env = createTestEnv({ ADMIN_GITHUB_LOGINS: "" });
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+    await seedInstallation(env, 800, "tenant-b");
+    await seedInstalledRepo(env, 800, "tenant-b", "repo-3");
+
+    const res = await bulkRequest(app, env, 800, apiHeaders(env), { agentDryRun: true });
+    expect(res.status).toBe(200);
+    expect((await getRepositorySettings(env, "tenant-b/repo-3")).agentDryRun).toBe(true);
+
+    const events = await env.DB.prepare("SELECT event_type, target_key, actor FROM audit_events WHERE event_type = ?")
+      .bind("installation.agent_bulk_settings_updated")
+      .all<{ event_type: string; target_key: string; actor: string }>();
+    expect(events.results).toHaveLength(1);
+    expect(events.results[0]).toMatchObject({ target_key: "installation#800", actor: "api" });
   });
 });
 

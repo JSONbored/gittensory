@@ -45,6 +45,7 @@ import {
   getCommandUsefulnessSummary,
   getFreshOfficialMinerDetection,
   getIssue,
+  getInstallation,
   getInstallationHealth,
   getLatestRepoGithubTotalsSnapshot,
   getLatestScoringModelSnapshot,
@@ -77,6 +78,7 @@ import {
   listLatestRepoGithubTotalsSnapshots,
   listInstallationHealth,
   listInstallations,
+  listInstalledRepoFullNamesForInstallation,
   listIssues,
   listGateOutcomeAuditEventRollups,
   listIssueSignalSample,
@@ -945,6 +947,13 @@ const maintainerSettingsSchema = z
     autonomy: z.record(z.string().trim().min(1).max(32), z.enum(["observe", "auto_with_approval", "auto"])),
   })
   .partial();
+
+// #7676 installation-scoped bulk pause/dry-run: the same two per-repo flags maintainerSettingsSchema already
+// validates, picked out on their own so a tenant with many repos under one installation can flip both at once
+// instead of one PUT /v1/repos/:owner/:repo/settings call per repo. Deliberately just these two fields -- not
+// a general bulk settings merge -- and deliberately separate from the global operator kill-switch
+// (getGlobalAgentFrozenState), which stays its own singleton untouched by this.
+const installationBulkAgentSettingsSchema = maintainerSettingsSchema.pick({ agentPaused: true, agentDryRun: true }).strict();
 
 // downgradeQualityGateMode (the settings-write-path "block" -> "advisory" downgrade for
 // qualityGateMode/#2267) was removed here: qualityGateMode is config-as-code only now (Batch C,
@@ -2711,6 +2720,45 @@ export function createApp() {
     const refreshed = await refreshInstallationHealthForInstallation(c.env, installationId);
     if (!refreshed) return c.json({ error: "installation_not_found" }, 404);
     return c.json({ ...(await buildInstallationRepairDiagnostics(c.env, refreshed)), refreshed: true });
+  });
+
+  // #7676: a hosted tenant with multiple repos under one installation had no way to pause/dry-run all of
+  // them at once -- only the strictly-per-repo PUT /v1/repos/:owner/:repo/settings existed. Layers on top
+  // of it: applies the same agentPaused/agentDryRun flags across every currently-installed repo in the
+  // installation in one call. Distinct from the global operator kill-switch (getGlobalAgentFrozenState),
+  // which stays a deliberately separate singleton this never touches. Same tenant-vs-tenant isolation as
+  // this route family's siblings above (resolveAppInstallationScope / installationRecordInScope) -- an
+  // operator sees/writes any installation, a non-operator session only their own.
+  app.put("/v1/app/installations/:id/agent/bulk-settings", async (c) => {
+    const resolved = await resolveAppInstallationScope(c);
+    if (resolved instanceof Response) return resolved;
+    const installationId = Number(c.req.param("id"));
+    if (!Number.isFinite(installationId)) return c.json({ error: "invalid_installation_id" }, 400);
+    const installation = await getInstallation(c.env, installationId);
+    if (!installation) return c.json({ error: "installation_not_found" }, 404);
+    if (!installationRecordInScope(resolved.scope, { installationId: installation.id, accountLogin: installation.accountLogin })) {
+      return c.json({ error: "forbidden_installation" }, 403);
+    }
+    const body = await c.req.json().catch(() => null);
+    const parsed = installationBulkAgentSettingsSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "invalid_bulk_agent_settings", issues: parsed.error.issues }, 400);
+    const changes = Object.fromEntries(Object.entries(parsed.data).filter(([, value]) => value !== undefined)) as Partial<RepositorySettings>;
+    const repoFullNames = await listInstalledRepoFullNamesForInstallation(c.env, installationId);
+    await Promise.all(
+      repoFullNames.map(async (repoFullName) => {
+        const current = await getRepositorySettings(c.env, repoFullName);
+        await upsertRepositorySettings(c.env, { ...current, ...changes, repoFullName });
+      }),
+    );
+    await recordAuditEvent(c.env, {
+      eventType: "installation.agent_bulk_settings_updated",
+      actor: resolved.identity.actor,
+      targetKey: `installation#${installationId}`,
+      outcome: "completed",
+      detail: `Applied bulk agent settings across ${repoFullNames.length} repo(s).`,
+      metadata: { installationId, repoCount: repoFullNames.length, fields: Object.keys(changes) },
+    });
+    return c.json({ ok: true, installationId, repoCount: repoFullNames.length, repoFullNames, applied: changes });
   });
 
   app.get("/v1/repos", async (c) => c.json(await listRepositories(c.env)));
