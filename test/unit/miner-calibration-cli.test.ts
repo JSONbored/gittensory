@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCalibrationCli } from "../../packages/loopover-miner/lib/calibration-cli.js";
+import { runCalibrationCli, toAmsRealizedOutcomes } from "../../packages/loopover-miner/lib/calibration-cli.js";
 import { initEventLedger, resolveEventLedgerDbPath } from "../../packages/loopover-miner/lib/event-ledger.js";
 import {
   initPredictionLedger,
@@ -106,6 +106,45 @@ describe("loopover-miner calibration CLI (#4849)", () => {
     expect(runCalibrationCli(["--json"], env)).toBe(0);
     const report = JSON.parse(String(log.mock.calls[0]?.[0]));
     expect(report.rows[0]).toMatchObject({ mergeConfirmed: 1, mergeFalse: 0 }); // latest "merged" confirmed the merge
+  });
+
+  it("prints the #8183 corpus stats line: labeled cases with class counts + engine build, aggregates only", () => {
+    const env = envForTempStores();
+    seedPrediction(env, 42, "merge"); // merged -> confirmed
+    seedPrediction(env, 43, "merge"); // closed -> reversed
+    seedOutcomeEvent(env, { prNumber: 42, decision: "merged" });
+    seedOutcomeEvent(env, { prNumber: 43, decision: "closed" });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    expect(runCalibrationCli([], env)).toBe(0);
+    const output = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(output).toContain("corpus (ams_gate_prediction): 2 case(s) | confirmed 1 | reversed 1 | engine build(s): 1.0.0");
+    expect(output).not.toContain("#42"); // corpus CONTENT never prints -- aggregates only
+  });
+
+  it("renders the explicit empty-corpus line and embeds corpus stats under --json (#8183)", () => {
+    const env = envForTempStores();
+    seedPrediction(env, 1, "merge"); // pending: no outcome -> zero labeled cases
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(runCalibrationCli([], env)).toBe(0);
+    expect(log.mock.calls.map((c) => String(c[0])).join("\n")).toContain("corpus: no labeled cases yet");
+
+    log.mockClear();
+    seedOutcomeEvent(env, { prNumber: 1, decision: "merged" });
+    expect(runCalibrationCli(["--json"], env)).toBe(0);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(report.corpus).toEqual({ ruleId: "ams_gate_prediction", cases: 1, confirmed: 1, reversed: 0, engineVersions: ["1.0.0"] });
+  });
+
+  it("toAmsRealizedOutcomes drops events without a usable repoFullName (#8183)", () => {
+    // Direct mapper call: LedgerEntry.repoFullName is nullable for other event kinds, and the mapper must
+    // never fabricate a repo for a malformed pr_outcome row.
+    const rows = toAmsRealizedOutcomes([
+      { id: 1, seq: 1, type: "pr_outcome", repoFullName: null, payload: { prNumber: 5, decision: "merged" }, createdAt: "2026-07-01T00:00:00.000Z" },
+      { id: 2, seq: 2, type: "pr_outcome", repoFullName: "  ", payload: { prNumber: 6, decision: "merged" }, createdAt: "2026-07-01T00:00:00.000Z" },
+      { id: 3, seq: 3, type: "pr_outcome", repoFullName: "acme/widgets", payload: { prNumber: 7, decision: "closed" }, createdAt: "2026-07-01T00:00:00.000Z" },
+    ] as never);
+    expect(rows).toEqual([{ repoFullName: "acme/widgets", prNumber: 7, decision: "closed", recordedAt: "2026-07-01T00:00:00.000Z" }]);
   });
 
   it("rejects an unknown option with exit code 1", () => {

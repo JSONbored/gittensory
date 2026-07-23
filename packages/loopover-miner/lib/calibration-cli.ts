@@ -2,6 +2,8 @@
 // verdicts (prediction-ledger) with the realized PR outcomes it later observed (event-ledger `pr_outcome`
 // events), via the pure buildCalibrationReport join. Opens both local stores, maps their rows to the
 // calibration record shapes, renders, and closes. Never modifies the live scoring/calibration logic.
+import { AMS_GATE_PREDICTION_RULE_ID, buildAmsPredictionCorpus, computeAmsCorpusStats } from "@loopover/engine";
+import type { AmsPredictionRecord, AmsRealizedOutcome } from "@loopover/engine";
 import { buildCalibrationReport } from "./calibration.js";
 import { initEventLedger, resolveEventLedgerDbPath } from "./event-ledger.js";
 import type { LedgerEntry } from "./event-ledger.js";
@@ -48,6 +50,37 @@ export function toOutcomeRecords(events: LedgerEntry[]): ObservedOutcomeRecord[]
   return [...latest.values()];
 }
 
+/** Project prediction-ledger rows into the engine adapter's record shape (#8183). Exported for the same
+ *  reuse reason as {@link toPredictionRecords}. */
+export function toAmsPredictionRecords(rows: PredictionLedgerEntry[]): AmsPredictionRecord[] {
+  return rows.map((row) => ({
+    repoFullName: row.repoFullName,
+    targetId: row.targetId,
+    headSha: row.headSha,
+    conclusion: row.conclusion,
+    readinessScore: row.readinessScore,
+    engineVersion: row.engineVersion,
+    ts: row.ts,
+  }));
+}
+
+/** Reduce pr_outcome events to the engine adapter's realized-outcome shape — latest per (repo, PR), the
+ *  same reduction contract readPrOutcomes documents (#8183). */
+export function toAmsRealizedOutcomes(events: LedgerEntry[]): AmsRealizedOutcome[] {
+  const latest = new Map<string, AmsRealizedOutcome>();
+  for (const event of events) {
+    if (event?.type !== MINER_PR_OUTCOME_EVENT) continue;
+    const prNumber = event.payload?.prNumber;
+    const decision = event.payload?.decision;
+    if (typeof prNumber !== "number" || !Number.isInteger(prNumber) || typeof decision !== "string") continue;
+    if (typeof event.repoFullName !== "string" || !event.repoFullName.trim()) continue;
+    const key = `${event.repoFullName}:${prNumber}`;
+    latest.delete(key); // re-key so a later outcome supersedes in iteration order too (mirrors readPrOutcomes)
+    latest.set(key, { repoFullName: event.repoFullName, prNumber, decision, recordedAt: event.createdAt });
+  }
+  return [...latest.values()];
+}
+
 function renderReportText(report: CalibrationReport): void {
   if (!report.hasSignal) {
     console.log("calibration: no decided predictions yet (predictions need a realized merge/close outcome).");
@@ -84,12 +117,24 @@ export function runCalibrationCli(args: string[] = [], env: Record<string, strin
   try {
     predictionStore = initPredictionLedger(resolvePredictionLedgerDbPath(env));
     eventLedger = initEventLedger(resolveEventLedgerDbPath(env));
-    const report = buildCalibrationReport(
-      toPredictionRecords(predictionStore.readPredictions()),
-      toOutcomeRecords(eventLedger.readEvents()),
-    );
-    if (json) console.log(JSON.stringify(report, null, 2));
-    else renderReportText(report);
+    const predictionRows = predictionStore.readPredictions();
+    const events = eventLedger.readEvents();
+    const report = buildCalibrationReport(toPredictionRecords(predictionRows), toOutcomeRecords(events));
+    // #8183: the labeled backtest corpus over the same two ledgers — aggregate numbers only, the local
+    // evidence base every later AMS backtest (#8184+) replays against. Corpus content never prints.
+    const corpusStats = computeAmsCorpusStats(buildAmsPredictionCorpus(toAmsPredictionRecords(predictionRows), toAmsRealizedOutcomes(events)));
+    if (json) {
+      console.log(JSON.stringify({ ...report, corpus: { ruleId: AMS_GATE_PREDICTION_RULE_ID, ...corpusStats } }, null, 2));
+    } else {
+      renderReportText(report);
+      console.log(
+        corpusStats.cases === 0
+          ? "corpus: no labeled cases yet (a case needs a directional prediction AND a realized merge/close outcome)."
+          : // engineVersions is never empty alongside cases > 0: appendPrediction refuses a blank
+            // engineVersion at the ledger boundary (normalizePredictionInput's invalid_engine_version).
+            `corpus (${AMS_GATE_PREDICTION_RULE_ID}): ${corpusStats.cases} case(s) | confirmed ${corpusStats.confirmed} | reversed ${corpusStats.reversed} | engine build(s): ${corpusStats.engineVersions.join(", ")}`,
+      );
+    }
     return 0;
   } catch (error) {
     return reportCliFailure(json, describeCliError(error));
