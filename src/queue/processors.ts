@@ -196,6 +196,7 @@ import {
   buildPullRequestAdvisory,
   evaluateGateCheck,
   recordConfiguredGateBlockerSignals,
+  recordGateScoreSignals,
   resolveAiReviewLowConfidenceHold,
 } from "../rules/advisory";
 import { hasValidationNote, isTestPath } from "../signals/test-evidence";
@@ -10410,6 +10411,8 @@ async function maybePublishPrPublicSurface(
           await recordConfiguredGateBlockerSignals(env, advisory, gatePolicy, repoFullName, pr.number, {
             aiReviewDiff: buildAiReviewDiff(await getReviewFiles()),
           });
+          // #8223: the score gates leave labeled evidence too — fired whenever they actually evaluated.
+          await recordGateScoreSignals(env, gatePolicy, repoFullName, pr.number);
         }
         // Deterministic content/registry surface lane (#1255) — flag-gated + per-repo allowlist, byte-identical when
         // off (evaluateWithSurfaceLane returns the generic evaluation unchanged and resolves no files). A metagraphed

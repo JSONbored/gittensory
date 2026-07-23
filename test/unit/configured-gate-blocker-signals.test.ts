@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
+import { recordGateScoreSignals,
   RAW_CONTEXT_MAX_DIFF_CHARS,
   recordConfiguredGateBlockerSignals,
   type GateCheckPolicy,
@@ -241,5 +241,68 @@ describe("recordConfiguredGateBlockerSignals — raw context capture (#8130)", (
     );
     expect((await createSignalStore(env).queryRuleHistory("linked_issue_scope_mismatch", 0)).fired).toEqual([]);
     expect((await createSignalStore(env).queryRuleHistory("missing_linked_issue", 0)).fired).toHaveLength(1);
+  });
+});
+
+// ── #8223: score-gate fired signals — slop + quality capture ────────────────────────────────────────────────
+
+describe("recordGateScoreSignals (#8223)", () => {
+  it("fires slop_gate_score in block mode with the normalized score, threshold-crossing outcome, and rawSignal (never diff)", async () => {
+    const env = createTestEnv();
+    await recordGateScoreSignals(env, { slopGateMode: "block", slopRisk: 72, slopGateMinScore: 60 }, "owner/repo", 7);
+    const history = await createSignalStore(env).queryRuleHistory("slop_gate_score", 0);
+    expect(history.fired).toHaveLength(1);
+    expect(history.fired[0]).toMatchObject({
+      targetKey: "owner/repo#7",
+      outcome: "above_threshold",
+      metadata: { confidence: 0.72, rawSignal: "deterministic slop risk 72/100 vs threshold 60/100 (mode block)" },
+    });
+    expect(JSON.stringify(history.fired[0]!.metadata)).not.toContain("diff");
+  });
+
+  it("fires slop below-threshold with the default block threshold when no minScore is configured", async () => {
+    const env = createTestEnv();
+    await recordGateScoreSignals(env, { slopGateMode: "block", slopRisk: 30 }, "owner/repo", 7);
+    const history = await createSignalStore(env).queryRuleHistory("slop_gate_score", 0);
+    expect(history.fired[0]).toMatchObject({ outcome: "below_threshold", metadata: { confidence: 0.3 } });
+  });
+
+  it("records NOTHING for slop outside block mode or with a null risk — the gate never evaluated the score", async () => {
+    const env = createTestEnv();
+    await recordGateScoreSignals(env, { slopGateMode: "advisory", slopRisk: 72 }, "owner/repo", 7);
+    await recordGateScoreSignals(env, { slopGateMode: "block" }, "owner/repo", 7);
+    expect((await createSignalStore(env).queryRuleHistory("slop_gate_score", 0)).fired).toEqual([]);
+  });
+
+  it("fires quality_gate_score in advisory mode too — pass AND fail evaluations both leave corpus evidence", async () => {
+    const env = createTestEnv();
+    await recordGateScoreSignals(env, { qualityGateMode: "advisory", readinessScore: 80, qualityGateMinScore: 70 }, "owner/repo", 7);
+    await recordGateScoreSignals(env, { qualityGateMode: "advisory", readinessScore: 40, qualityGateMinScore: 70 }, "owner/repo", 8);
+    const history = await createSignalStore(env).queryRuleHistory("quality_gate_score", 0);
+    expect(history.fired).toHaveLength(2);
+    expect(history.fired.map((event) => event.outcome).sort()).toEqual(["at_or_above_threshold", "below_threshold"]);
+    expect(history.fired.map((event) => event.metadata?.confidence).sort()).toEqual([0.4, 0.8]);
+  });
+
+  it("records NOTHING for quality when the mode is off or a score/threshold is missing", async () => {
+    const env = createTestEnv();
+    await recordGateScoreSignals(env, { qualityGateMode: "off", readinessScore: 40, qualityGateMinScore: 70 }, "owner/repo", 7);
+    await recordGateScoreSignals(env, { qualityGateMode: "advisory", qualityGateMinScore: 70 }, "owner/repo", 7);
+    await recordGateScoreSignals(env, { qualityGateMode: "advisory", readinessScore: 40 }, "owner/repo", 7);
+    expect((await createSignalStore(env).queryRuleHistory("quality_gate_score", 0)).fired).toEqual([]);
+  });
+
+  it("degrades silently when the SignalStore write rejects — the call resolves normally", async () => {
+    vi.spyOn(signalTrackingWire, "createSignalStore").mockReturnValue({
+      recordRuleFired: async () => {
+        throw new Error("signal store down");
+      },
+      recordHumanOverride: async () => undefined,
+      queryRuleHistory: async () => ({ fired: [], overrides: [] }),
+    });
+    await expect(
+      recordGateScoreSignals(createTestEnv(), { slopGateMode: "block", slopRisk: 72 }, "owner/repo", 7),
+    ).resolves.toBeUndefined();
+    vi.restoreAllMocks();
   });
 });

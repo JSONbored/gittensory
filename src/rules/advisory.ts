@@ -175,6 +175,17 @@ export const AI_JUDGMENT_BLOCKER_CODES = new Set<string>(["ai_consensus_defect",
  * (#8104). That one code is wired by #8101 at its own upstream push / reversal sites — including it here
  * would double-count fired/reversed history. Keep this list in sync with `isConfiguredGateBlocker`'s body.
  */
+/** The two score-gate rule ids #8223 captures — knobs whose decisions previously left NO labeled
+ *  evidence (`slopGateMinScore` / `qualityGateMinScore` gate real verdicts but recorded no
+ *  `signal.rule_fired` events, so no corpus could ever form for them). Included in the reversal list
+ *  below: a human undoing the bot outcome on a PR where a score gate evaluated IS the labeled evidence
+ *  the knob registry needs to backtest these thresholds — the same reversal semantic every other entry
+ *  carries (justified per the issue's extend-only-if-qualified requirement: slop carries direct gate
+ *  authority in block mode; quality is advisory-only but its threshold is registry-governable, and a
+ *  reversal labels the overall bot outcome its score contributed to, which is exactly the corpus label
+ *  the drift/loosening evaluators consume). */
+export const GATE_SCORE_SIGNAL_CODES: readonly string[] = Object.freeze(["slop_gate_score", "quality_gate_score"]);
+
 export const CONFIGURED_GATE_BLOCKER_SIGNAL_CODES: readonly string[] = Object.freeze([
   "missing_linked_issue",
   "duplicate_pr_risk",
@@ -188,6 +199,7 @@ export const CONFIGURED_GATE_BLOCKER_SIGNAL_CODES: readonly string[] = Object.fr
   "content_lane_deliverable_missing",
   "lockfile_tamper_risk",
   CLA_CONSENT_MISSING_CODE,
+  ...GATE_SCORE_SIGNAL_CODES,
 ]);
 
 /** Fixed lookback for reversal→HumanOverrideEvent pairing (#8104) — 30 days in milliseconds. */
@@ -1128,6 +1140,71 @@ export async function recordConfiguredGateBlockerSignals(
         .catch(() => undefined);
     }),
   );
+}
+
+/**
+ * Record a fired signal for each score gate that actually EVALUATED its score this pass (#8223) -- the
+ * same filter the pure evaluation applies: slop evaluates only in `block` mode with a non-null risk
+ * (mirrors {@link buildSlopGateBlocker}); quality evaluates whenever its mode is not `off` with both a
+ * score and a threshold present (mirrors {@link buildQualityGateWarning}), pass or fail alike -- a corpus
+ * needs both outcomes to backtest a threshold. Metadata carries the score normalized to [0, 1]
+ * (both scores are 0-100 integers per normalizeScore; divided by 100 to be confidence-equivalent for
+ * buildConfidenceThresholdClassifier replays) plus the detection's own detail string as `rawSignal` --
+ * never diff content, per #8130's raw-context audit posture for computed-score rules. Best-effort like
+ * every calibration write: a failure never affects the verdict.
+ */
+export async function recordGateScoreSignals(
+  env: Env,
+  policy: GateCheckPolicy,
+  repoFullName: string,
+  prNumber: number,
+): Promise<void> {
+  const store = createSignalStore(env);
+  const targetKey = `${repoFullName}#${prNumber}`;
+  const occurredAt = nowIso();
+  const writes: Promise<void>[] = [];
+
+  const slopMode = gateMode(policy.slopGateMode);
+  const slopRisk = normalizeScore(policy.slopRisk);
+  if (slopMode === "block" && slopRisk !== null) {
+    const slopMin = normalizeScore(policy.slopGateMinScore) ?? DEFAULT_SLOP_BLOCK_THRESHOLD;
+    writes.push(
+      store
+        .recordRuleFired({
+          ruleId: "slop_gate_score",
+          targetKey,
+          outcome: slopRisk >= slopMin ? "above_threshold" : "below_threshold",
+          occurredAt,
+          metadata: {
+            confidence: slopRisk / 100,
+            rawSignal: `deterministic slop risk ${slopRisk}/100 vs threshold ${slopMin}/100 (mode ${slopMode})`,
+          },
+        })
+        .catch(() => undefined),
+    );
+  }
+
+  const qualityMode = gateMode(policy.qualityGateMode);
+  const readinessScore = normalizeScore(policy.readinessScore);
+  const qualityMin = normalizeScore(policy.qualityGateMinScore);
+  if (qualityMode !== "off" && readinessScore !== null && qualityMin !== null) {
+    writes.push(
+      store
+        .recordRuleFired({
+          ruleId: "quality_gate_score",
+          targetKey,
+          outcome: readinessScore < qualityMin ? "below_threshold" : "at_or_above_threshold",
+          occurredAt,
+          metadata: {
+            confidence: readinessScore / 100,
+            rawSignal: `public readiness score ${readinessScore}/100 vs threshold ${qualityMin}/100 (mode ${qualityMode})`,
+          },
+        })
+        .catch(() => undefined),
+    );
+  }
+
+  await Promise.all(writes);
 }
 
 function buildQualityGateWarning(policy: GateCheckPolicy): AdvisoryFinding | null {
