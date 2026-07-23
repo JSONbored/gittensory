@@ -7,8 +7,10 @@ import {
   matchRetroSuccessors,
   patchFiredMetadataWithDiff,
   patchOverrideMetadataToReversed,
+  patchOverrideMetadataToSamePrMerged,
   renderPhase2Report,
   RETRO_SUCCESSOR_PROVENANCE,
+  RETRO_SAME_PR_MERGED_PROVENANCE,
   RAW_CONTEXT_REFETCH_PROVENANCE,
   type HistoricalCloseSide,
   type Phase2Report,
@@ -101,6 +103,16 @@ describe("metadata patchers (#8170)", () => {
     expect(patchOverrideMetadataToReversed('["array"]', match)).toBeNull();
   });
 
+  it("labels a same-PR reopened+merged decision reversed with its own provenance — the definitive class", () => {
+    const original = JSON.stringify({ verdict: "confirmed", backfilled: true });
+    const patched = JSON.parse(patchOverrideMetadataToSamePrMerged(original, "2026-07-05T00:00:00.000Z")!) as Record<string, unknown>;
+    expect(patched.verdict).toBe("reversed");
+    expect(patched.retroLabel).toEqual({ provenance: RETRO_SAME_PR_MERGED_PROVENANCE, mergedAt: "2026-07-05T00:00:00.000Z" });
+    // Same idempotency + never-guess contract as the successor patcher.
+    expect(patchOverrideMetadataToSamePrMerged(JSON.stringify(patched), "later")).toBeNull();
+    expect(patchOverrideMetadataToSamePrMerged("not-json", "t")).toBeNull();
+  });
+
   it("patches a fired row with the bounded diff exactly once", () => {
     const original = JSON.stringify({ confidence: 0.95, backfilled: true });
     const patched = JSON.parse(patchFiredMetadataWithDiff(original, "diff --git a/x b/x")!) as Record<string, unknown>;
@@ -126,12 +138,12 @@ describe("ids + report rendering (#8170)", () => {
   });
 
   it("renders both passes' reports, including the budget-exhausted resumable form", () => {
-    const base: Phase2Report = { pass: "successors", scanned: 5, patched: 2, alreadyPatched: 1, noMatch: 2, matchedSameAuthor: 1, matchedSharedIssueOnly: 1, requestsUsed: 42, exhaustedBudget: false, resumeFrom: null };
+    const base: Phase2Report = { pass: "successors", scanned: 5, patched: 2, alreadyPatched: 1, noMatch: 2, matchedSameAuthor: 1, matchedSharedIssueOnly: 1, matchedSamePrMerged: 1, requestsUsed: 42, exhaustedBudget: false, resumeFrom: null };
     const report = renderPhase2Report(base, "dry-run");
     expect(report).toContain(RETRO_SUCCESSOR_PROVENANCE);
     expect(report).toContain("scanned: 5");
     // The apply decision hinges on this split (same-author = strong; shared-issue-only = routine duplicate competition).
-    expect(report).toContain("same-author rework 1, shared-issue-only (different author) 1");
+    expect(report).toContain("same-PR reopened+merged 1 (definitive), same-author rework 1, shared-issue-only (different author) 1");
     const exhausted = renderPhase2Report(
       { ...base, pass: "raw-context", exhaustedBudget: true, resumeFrom: "acme/widgets#7" },
       "apply",

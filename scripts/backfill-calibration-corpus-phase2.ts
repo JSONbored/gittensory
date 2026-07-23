@@ -21,6 +21,7 @@ import {
   matchRetroSuccessors,
   patchFiredMetadataWithDiff,
   patchOverrideMetadataToReversed,
+  patchOverrideMetadataToSamePrMerged,
   renderPhase2Report,
   type HistoricalCloseSide,
   type Phase2Report,
@@ -191,7 +192,7 @@ function splitTargetKey(targetKey: string): { repo: string; number: number } | n
 }
 
 async function runSuccessorsPass(args: Args, budget: RequestBudget, state: CursorState): Promise<Phase2Report> {
-  const report: Phase2Report = { pass: "successors", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
+  const report: Phase2Report = { pass: "successors", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, matchedSamePrMerged: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
   const rows = loadBackfillRows(args, "override").filter((row) => !state.successorsResumeFrom || row.target_key > state.successorsResumeFrom);
 
   const byRepo = new Map<string, BackfillRow[]>();
@@ -216,9 +217,21 @@ async function runSuccessorsPass(args: Args, budget: RequestBudget, state: Curso
       const split = splitTargetKey(row.target_key)!;
 
       const closedPull = await githubJson<GithubPull>(budget, `/repos/${repo}/pulls/${split.number}`);
-      if (!closedPull || closedPull.merged_at) {
-        // Gone, or actually merged (not a standing bot-close) — not a reversal candidate.
-        report.noMatch += 1;
+      if (!closedPull) {
+        report.noMatch += 1; // deleted repo/PR — never guess
+        state.successorsResumeFrom = row.target_key;
+        continue;
+      }
+      if (closedPull.merged_at) {
+        // The close-verdict PR ITSELF merged: the operator reopened + merged it — a definitive same-PR
+        // reversal, the strongest label class this pass produces (no heuristics involved).
+        report.matchedSamePrMerged += 1;
+        const samePrPatched = patchOverrideMetadataToSamePrMerged(row.metadata_json, closedPull.merged_at);
+        if (samePrPatched === null) report.alreadyPatched += 1;
+        else if (args.apply) {
+          applyMetadataUpdate(args, backfillOverrideId(row.target_key), samePrPatched);
+          report.patched += 1;
+        } else report.patched += 1;
         state.successorsResumeFrom = row.target_key;
         continue;
       }
@@ -271,7 +284,7 @@ async function runSuccessorsPass(args: Args, budget: RequestBudget, state: Curso
 }
 
 async function runRawContextPass(args: Args, budget: RequestBudget, state: CursorState): Promise<Phase2Report> {
-  const report: Phase2Report = { pass: "raw-context", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
+  const report: Phase2Report = { pass: "raw-context", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, matchedSamePrMerged: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
   const rows = loadBackfillRows(args, "fired").filter((row) => !state.rawContextResumeFrom || row.target_key > state.rawContextResumeFrom);
   const repoPrivacy = new Map<string, boolean>();
 

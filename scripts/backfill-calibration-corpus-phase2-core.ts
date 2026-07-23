@@ -15,6 +15,9 @@ import { BACKFILL_RULE_ID } from "./backfill-calibration-corpus-core.js";
 
 /** Distinct provenance for pass A's retro labels — never confusable with phase 1's decision-level rows. */
 export const RETRO_SUCCESSOR_PROVENANCE = "github_successor_scan";
+/** Provenance for the strongest retro label: the close-verdict PR ITSELF later merged (the operator
+ *  reopened + merged it) — a definitive same-PR reversal needing no successor heuristics at all. */
+export const RETRO_SAME_PR_MERGED_PROVENANCE = "github_same_pr_merged";
 /** Distinct provenance for pass B's re-fetched raw context. */
 export const RAW_CONTEXT_REFETCH_PROVENANCE = "github_raw_context_refetch";
 
@@ -98,6 +101,22 @@ export function patchOverrideMetadataToReversed(metadataJson: string, match: Ret
 }
 
 /**
+ * Patch a phase-1 override row for the same-PR reversal: GitHub says the close-verdict PR itself MERGED
+ * (the operator reopened + merged it) — the decision was overridden on its own target, no heuristics
+ * involved. Same idempotency contract as {@link patchOverrideMetadataToReversed}.
+ */
+export function patchOverrideMetadataToSamePrMerged(metadataJson: string, mergedAt: string): string | null {
+  const metadata = parseObject(metadataJson);
+  if (!metadata) return null;
+  if (metadata.verdict === "reversed") return null;
+  return JSON.stringify({
+    ...metadata,
+    verdict: "reversed",
+    retroLabel: { provenance: RETRO_SAME_PR_MERGED_PROVENANCE, mergedAt },
+  });
+}
+
+/**
  * Patch a phase-1 fired row's metadata with the re-fetched PR diff — the field the live #8130 capture
  * records for this rule (`metadata.diff`, same bound). Returns null when raw context is already present
  * (either captured live or patched by an earlier run), when the diff is empty, or on unparseable metadata.
@@ -122,6 +141,9 @@ export type Phase2Report = {
    *  competition in this culture — the winner merging does not make closing the loser wrong. */
   matchedSameAuthor: number;
   matchedSharedIssueOnly: number;
+  /** The close-verdict PR itself later merged — definitive reversals, no heuristics (see the operator's
+   *  own reopen-and-merge history; the strongest label class this pass produces). */
+  matchedSamePrMerged: number;
   requestsUsed: number;
   exhaustedBudget: boolean;
   resumeFrom: string | null;
@@ -135,7 +157,9 @@ export function renderPhase2Report(report: Phase2Report, mode: "dry-run" | "appl
     }`,
     `  scanned: ${report.scanned}  patched: ${report.patched}  already-patched: ${report.alreadyPatched}  no-match/skipped: ${report.noMatch}`,
     ...(report.pass === "successors"
-      ? [`  match heuristics: same-author rework ${report.matchedSameAuthor}, shared-issue-only (different author) ${report.matchedSharedIssueOnly}`]
+      ? [
+          `  match classes: same-PR reopened+merged ${report.matchedSamePrMerged} (definitive), same-author rework ${report.matchedSameAuthor}, shared-issue-only (different author) ${report.matchedSharedIssueOnly}`,
+        ]
       : []),
     `  GitHub requests used: ${report.requestsUsed}${report.exhaustedBudget ? " (budget exhausted — resumable)" : ""}`,
   ];
