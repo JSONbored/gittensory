@@ -301,7 +301,7 @@ describe("recordGateScoreSignals (#8223)", () => {
       queryRuleHistory: async () => ({ fired: [], overrides: [] }),
     });
     await expect(
-      recordGateScoreSignals(createTestEnv(), { slopGateMode: "block", slopRisk: 72 }, "owner/repo", 7),
+      recordGateScoreSignals(createTestEnv(), { slopGateMode: "block", slopRisk: 72, qualityGateMode: "advisory", readinessScore: 40, qualityGateMinScore: 70 }, "owner/repo", 7),
     ).resolves.toBeUndefined();
     vi.restoreAllMocks();
   });
