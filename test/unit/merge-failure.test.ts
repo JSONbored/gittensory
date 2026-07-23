@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyMergeFailure, MERGE_RETRY_CAP } from "../../src/services/merge-failure";
+import { classifyMergeFailure, isNoNewBaseCommitsMessage, MERGE_RETRY_CAP } from "../../src/services/merge-failure";
 
 /** Build an Octokit-style RequestError: an Error carrying an HTTP `.status`. */
 function httpError(status: number, message: string): Error {
@@ -55,5 +55,16 @@ describe("classifyMergeFailure", () => {
 
   it("exposes a positive retry cap for the executor", () => {
     expect(MERGE_RETRY_CAP).toBeGreaterThan(0);
+  });
+});
+
+describe("isNoNewBaseCommitsMessage", () => {
+  it("REGRESSION (LOOPOVER-24, regressed shape): matches GitHub's 422 'no new commits on the base branch' text", () => {
+    expect(isNoNewBaseCommitsMessage("There are no new commits on the base branch. - https://docs.github.com/rest/pulls/pulls#update-a-pull-request-branch")).toBe(true);
+  });
+
+  it("does not match unrelated update-branch failures (conflicts, transients)", () => {
+    expect(isNoNewBaseCommitsMessage("merge conflict between base and head")).toBe(false);
+    expect(isNoNewBaseCommitsMessage("network timeout")).toBe(false);
   });
 });

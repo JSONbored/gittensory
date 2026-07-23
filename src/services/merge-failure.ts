@@ -30,6 +30,15 @@ export function isMergeConflictMessage(message: string): boolean {
   return /merge conflict|not mergeable|cannot be merged|has conflicts|conflicts? with the base/i.test(message);
 }
 
+/** True for the 422 "There are no new commits on the base branch." update-branch rejection (LOOPOVER-24,
+ *  regressed shape): the readiness check saw mergeable_state "behind" but the head already contained every
+ *  base commit by the time update-branch fired -- a stale-mergeable-state race, not a failure. The PR is in
+ *  exactly the state update_branch exists to reach, so the executor treats it as benign (audit-only, no
+ *  Sentry capture), same as {@link isMergeConflictMessage}'s update_branch carve-out. */
+export function isNoNewBaseCommitsMessage(message: string): boolean {
+  return /no new commits on the base branch/i.test(message);
+}
+
 /** True for the transient "Base branch was modified. Review and try the merge again." 405 — a benign
  *  TOCTOU race (the base advanced between plan and merge) that a re-attempt against the new base resolves. */
 function isBaseBranchMovedMessage(message: string): boolean {

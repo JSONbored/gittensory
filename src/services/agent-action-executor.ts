@@ -15,7 +15,7 @@ import {
   upsertGlobalContributorBlacklist,
 } from "../db/repositories";
 import { isAuthorBlacklisted } from "../settings/contributor-blacklist";
-import { classifyMergeFailure, isMergeConflictMessage, MERGE_RETRY_CAP } from "./merge-failure";
+import { classifyMergeFailure, isMergeConflictMessage, isNoNewBaseCommitsMessage, MERGE_RETRY_CAP } from "./merge-failure";
 import { notifyActionToDiscord, notifyActionToSlack, type NotifyOutcome } from "./notify-discord";
 import { resolveDispositionReason } from "../review/outcomes-wire";
 import { cancelInFlightWorkflowRunsForHeadSha, createInstallationToken, githubErrorStatus, isGitHubRateLimitedError } from "../github/app";
@@ -626,6 +626,11 @@ export async function executeAgentMaintenanceActions(env: Env, ctx: AgentActionE
         // (see forceUpdateBranch's own doc comment), exactly like every other "couldn't rebase, review anyway"
         // path. The branch owner, not the bot, needs to resolve the conflict -- paging on every naturally-
         // diverged PR this happens to hit isn't warranted. Still recorded by the audit() call above.
+      } else if (action.actionClass === "update_branch" && isNoNewBaseCommitsMessage(errorMessage(error))) {
+        // LOOPOVER-24 (regressed shape): a 422 "There are no new commits on the base branch." means the head
+        // was already up to date when update-branch fired -- the readiness check acted on a stale/cached
+        // mergeable_state read. Nothing went wrong and nothing is stuck: the caller falls through to reviewing
+        // the current head exactly as in the conflict case above. Audit-only; never a Sentry page.
       } else {
         // Non-merge action classes have no retry loop -- a single failure here is already this pass's terminal
         // outcome (the planner may re-attempt on the next sweep if the underlying condition clears itself), so

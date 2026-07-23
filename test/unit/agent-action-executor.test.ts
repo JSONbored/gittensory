@@ -1472,6 +1472,23 @@ describe("executeAgentMaintenanceActions (#778 gate stack)", () => {
     captureSpy.mockRestore();
   });
 
+  it("REGRESSION (LOOPOVER-24, regressed shape): a 422 'no new commits on the base branch' update_branch failure does not page Sentry", async () => {
+    const env = createTestEnv({});
+    // The readiness check saw a stale "behind" mergeable_state; the head was already up to date when
+    // update-branch fired. GitHub rejects with this 422 -- a benign no-op, not a failure to page on.
+    vi.mocked(updatePullRequestBranch).mockRejectedValueOnce(
+      Object.assign(new Error("There are no new commits on the base branch. - https://docs.github.com/rest/pulls/pulls#update-a-pull-request-branch"), { status: 422 }),
+    );
+    const captureSpy = vi.spyOn(sentryModule, "captureError");
+
+    const outcomes = await executeAgentMaintenanceActions(env, ctx(), [updateBranch]);
+
+    expect(outcomes[0]).toMatchObject({ actionClass: "update_branch", outcome: "error" });
+    expect((await auditFor(env, "update_branch"))?.outcome).toBe("error");
+    expect(captureSpy).not.toHaveBeenCalled();
+    captureSpy.mockRestore();
+  });
+
   it("a non-conflict update_branch failure still pages Sentry (#agent_action_execution_failed unchanged)", async () => {
     const env = createTestEnv({});
     vi.mocked(updatePullRequestBranch).mockRejectedValueOnce(new Error("network timeout"));
