@@ -14,6 +14,7 @@
 import { buildBacktestCorpus } from "@loopover/engine";
 import { createSignalStore } from "../review/signal-tracking-wire";
 import { recordAuditEvent } from "../db/repositories";
+import { evaluateKnobLoosening, LOOSENABLE_KNOBS, type KnobLooseningProposal } from "./loosening-knobs";
 import {
   evaluateSatisfactionFloorLoosening,
   SATISFACTION_FLOOR_HARD_MINIMUM,
@@ -272,4 +273,25 @@ export async function loadSatisfactionFloorStatus(env: Env): Promise<Satisfactio
     storedOverride,
     applied,
   };
+}
+
+/**
+ * Evaluate every REPORT-ONLY registry knob (#8159) against its own corpus — proposals surface with full
+ * evidence in the advisor, but nothing is ever written for these knobs: their apply stays refused until
+ * each one's consumption plumbing ships as its own reviewed change (see LOOSENABLE_KNOBS' applyMode doc).
+ * Fail-safe per knob: a corpus error skips that knob rather than breaking the advisor pass.
+ */
+export async function loadReportOnlyKnobProposals(env: Env, nowMs: number = Date.now()): Promise<KnobLooseningProposal[]> {
+  const proposals: KnobLooseningProposal[] = [];
+  for (const knob of Object.values(LOOSENABLE_KNOBS)) {
+    if (knob.applyMode !== "report_only") continue;
+    try {
+      const { fired, overrides } = await createSignalStore(env).queryRuleHistory(knob.ruleId, nowMs - CORPUS_LOOKBACK_MS);
+      const proposal = evaluateKnobLoosening(knob, buildBacktestCorpus(knob.ruleId, fired, overrides));
+      if (proposal) proposals.push(proposal);
+    } catch {
+      /* one knob's read blip must not hide the others' proposals */
+    }
+  }
+  return proposals;
 }

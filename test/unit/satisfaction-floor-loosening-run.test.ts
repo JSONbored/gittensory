@@ -3,6 +3,7 @@ import { splitBacktestCorpus } from "@loopover/engine";
 import {
   getSatisfactionFloorOverride,
   isSatisfactionFloorAutotuneEnabled,
+  loadReportOnlyKnobProposals,
   loadSatisfactionFloorRecState,
   runSatisfactionFloorLoosening,
   runScheduledSatisfactionFloorLoosening,
@@ -265,5 +266,47 @@ describe("loadSatisfactionFloorRecState (#8160)", () => {
     const state = await loadSatisfactionFloorRecState(env);
     expect(state.flagEnabled).toBe(false);
     expect(state.proposal?.currentFloor).toBe(0.5);
+  });
+});
+
+describe("loadReportOnlyKnobProposals (#8159)", () => {
+  it("returns [] on an empty corpus and never touches live-mode knobs", async () => {
+    expect(await loadReportOnlyKnobProposals(enabledEnv())).toEqual([]);
+  });
+
+  it("surfaces a proposal for the close-confidence knob from its own (backfill-shaped) corpus", async () => {
+    const env = enabledEnv();
+    const knob = (await import("../../src/services/loosening-knobs")).LOOSENABLE_KNOBS.ai_review_close_confidence!;
+    const { splitBacktestCorpus } = await import("@loopover/engine");
+    const pool = Array.from({ length: 400 }, (_, i) => ({
+      ruleId: knob.ruleId,
+      targetKey: `acme/widgets#${i + 1}`,
+      outcome: "close",
+      label: "confirmed" as const,
+      firedAt: "2026-06-01T00:00:00.000Z",
+      decidedAt: "2026-06-02T00:00:00.000Z",
+    }));
+    const { visible, heldOut } = splitBacktestCorpus(pool, knob.heldOutFraction, knob.splitSeed);
+    const store = createSignalStore(env);
+    const now = Date.now();
+    const seed = async (targetKey: string, confidence: number, verdict: "confirmed" | "reversed") => {
+      await store.recordRuleFired({ ruleId: knob.ruleId, targetKey, outcome: "close", occurredAt: new Date(now - 10_000).toISOString(), metadata: { confidence } });
+      await store.recordHumanOverride({ ruleId: knob.ruleId, targetKey, verdict, occurredAt: new Date(now - 5000).toISOString() });
+    };
+    for (const c of visible.slice(0, knob.minVisibleCases + 6)) await seed(c.targetKey, 0.91, "confirmed");
+    for (const c of heldOut.slice(0, knob.minHeldOutCases + 3)) await seed(c.targetKey, 0.91, "confirmed");
+    await seed(visible[knob.minVisibleCases + 10]!.targetKey, 0.5, "reversed");
+    await seed(heldOut[knob.minHeldOutCases + 6]!.targetKey, 0.5, "reversed");
+
+    const proposals = await loadReportOnlyKnobProposals(env);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]!.knobId).toBe("ai_review_close_confidence");
+    expect(proposals[0]!.proposedValue).toBe(0.9);
+  });
+
+  it("a knob's read blip is skipped, not thrown", async () => {
+    const env = enabledEnv();
+    env.DB = { prepare: () => { throw new Error("boom"); } } as never;
+    expect(await loadReportOnlyKnobProposals(env)).toEqual([]);
   });
 });

@@ -237,6 +237,7 @@ describe("runSelfTune — shadow-soak over loopover's own outcome data", () => {
   it("appends the loosening-loop recs exactly once per pass, on the first repo only (#8160)", async () => {
     const state = await import("../../src/services/satisfaction-floor-loosening-run");
     const spy = vi.spyOn(state, "loadSatisfactionFloorRecState");
+    const reportOnlySpy = vi.spyOn(state, "loadReportOnlyKnobProposals");
     const env = createTestEnv({ LOOPOVER_REVIEW_SELFTUNE: "true" });
     await seedRegisteredRepo(env, "owner/repo", ACTING_AUTONOMY);
     await seedRegisteredRepo(env, "owner/other", ACTING_AUTONOMY);
@@ -246,8 +247,9 @@ describe("runSelfTune — shadow-soak over loopover's own outcome data", () => {
     await processJob(env, { type: "selftune", requestedBy: "schedule" });
 
     // Two repos in the pass, ONE deployment-global loosening-state read: the recs are appended on the
-    // first repo's iteration only, never once per repo.
+    // first repo's iteration only, never once per repo. Same contract for the report-only knob pass (#8159).
     expect(spy).toHaveBeenCalledTimes(1);
+    expect(reportOnlySpy).toHaveBeenCalledTimes(1);
   });
 
   it("FLAG-ON via the processor: a stale in-flight selftune job runs the tick (defense-in-depth gate)", async () => {

@@ -41,8 +41,8 @@ import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { errorMessage } from "../utils/json";
 import { computeTuningRecommendations, type GateEvalReport, type GateEvalRow } from "./auto-tune";
-import { buildSatisfactionFloorLooseningRecs } from "./loosening-recs";
-import { loadSatisfactionFloorRecState } from "../services/satisfaction-floor-loosening-run";
+import { buildReportOnlyKnobRecs, buildSatisfactionFloorLooseningRecs } from "./loosening-recs";
+import { loadReportOnlyKnobProposals, loadSatisfactionFloorRecState } from "../services/satisfaction-floor-loosening-run";
 import { runAutoApplyRecommendations, type StorageEnv } from "./auto-apply";
 
 /** True when the self-improvement loop is enabled. Flag-OFF (default) → every export below is a no-op. Truthy
@@ -161,7 +161,12 @@ export async function runSelfTune(env: Env): Promise<void> {
         // design — runAutoApplyRecommendations below only ever consumes recs carrying a TIGHTENING
         // overridePayload, so these are report-only here and can never be promoted by the apply path.
         // Appended once per pass (deployment-global state), on the first repo's iteration.
-        if (repoFullName === repos[0]) recs.push(...buildSatisfactionFloorLooseningRecs(await loadSatisfactionFloorRecState(env, nowMs)));
+        if (repoFullName === repos[0]) {
+          recs.push(...buildSatisfactionFloorLooseningRecs(await loadSatisfactionFloorRecState(env, nowMs)));
+          // #8159: report-only registry knobs surface their evidence in the same pass -- payload-less, so
+          // the apply path below ignores them identically.
+          recs.push(...buildReportOnlyKnobRecs(await loadReportOnlyKnobProposals(env, nowMs)));
+        }
         // runAutoApplyRecommendations only ever consumes recs that carry a TIGHTENING overridePayload, shadow-
         // soaks them, and promotes a soaked override only when isStrictlyTightening + evidence + soak pass.
         await runAutoApplyRecommendations(env as unknown as StorageEnv, {

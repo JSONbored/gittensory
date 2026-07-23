@@ -11,15 +11,9 @@
 // via the SignalStore). Scoped to exactly this one scalar; generalizing to other loosenable knobs is the
 // rest of epic #8121, decomposed separately, and requires its own explicit approval per that epic's
 // Boundaries.
-import {
-  buildConfidenceThresholdClassifier,
-  compareBacktestScores,
-  scoreBacktest,
-  splitBacktestCorpus,
-  type BacktestCase,
-  type BacktestComparison,
-} from "@loopover/engine";
+import type { BacktestCase, BacktestComparison } from "@loopover/engine";
 import { LINKED_ISSUE_SATISFACTION_CONFIDENCE_FLOOR } from "./linked-issue-satisfaction";
+import { evaluateKnobLoosening, LOOSENABLE_KNOBS } from "./loosening-knobs";
 
 export const SATISFACTION_FLOOR_RULE_ID = "linked_issue_scope_mismatch";
 
@@ -52,42 +46,22 @@ export type SatisfactionFloorLooseningProposal = {
   heldOut: BacktestComparison;
 };
 
-/**
- * Evaluate whether the satisfaction confidence floor can be safely loosened, per #8121's approved gate:
- * the smallest candidate step below `currentFloor` (never below {@link SATISFACTION_FLOOR_HARD_MINIMUM})
- * whose backtest verdict is strictly `"improved"` on the visible split AND non-`"regressed"` on the
- * held-out split. Returns null when the corpus is too small, no candidate qualifies, or `currentFloor` is
- * already at/below the hard minimum (a previously-applied loosening never compounds past it). Pure and
- * deterministic — same corpus + floor ⇒ same proposal.
- */
 export function evaluateSatisfactionFloorLoosening(
   cases: readonly BacktestCase[],
   currentFloor: number = LINKED_ISSUE_SATISFACTION_CONFIDENCE_FLOOR,
 ): SatisfactionFloorLooseningProposal | null {
-  const { visible, heldOut } = splitBacktestCorpus(cases, SATISFACTION_FLOOR_HELD_OUT_FRACTION, SATISFACTION_FLOOR_SPLIT_SEED);
-  if (visible.length < SATISFACTION_FLOOR_MIN_VISIBLE_CASES || heldOut.length < SATISFACTION_FLOOR_MIN_HELD_OUT_CASES) return null;
-
-  for (const candidate of SATISFACTION_FLOOR_LOOSENING_CANDIDATES) {
-    if (candidate >= currentFloor || candidate < SATISFACTION_FLOOR_HARD_MINIMUM) continue;
-    const visibleComparison = compareOnSlice(visible, currentFloor, candidate);
-    if (visibleComparison.verdict !== "improved") continue;
-    const heldOutComparison = compareOnSlice(heldOut, currentFloor, candidate);
-    if (heldOutComparison.verdict === "regressed") continue;
-    return {
-      ruleId: SATISFACTION_FLOOR_RULE_ID,
-      currentFloor,
-      proposedFloor: candidate,
-      visibleCases: visible.length,
-      heldOutCases: heldOut.length,
-      visible: visibleComparison,
-      heldOut: heldOutComparison,
-    };
-  }
-  return null;
-}
-
-function compareOnSlice(slice: readonly BacktestCase[], currentFloor: number, candidate: number): BacktestComparison {
-  const baseline = scoreBacktest(SATISFACTION_FLOOR_RULE_ID, slice, buildConfidenceThresholdClassifier(currentFloor));
-  const proposed = scoreBacktest(SATISFACTION_FLOOR_RULE_ID, slice, buildConfidenceThresholdClassifier(candidate));
-  return compareBacktestScores(baseline, proposed);
+  // #8159: delegates to the generic knob evaluator with the registry entry whose values/seed are pinned
+  // (by test) to this module's own legacy constants -- behavior and held-out membership are byte-stable
+  // across the refactor. This wrapper only re-shapes the field names the #8121 consumers already use.
+  const proposal = evaluateKnobLoosening(LOOSENABLE_KNOBS.satisfaction_floor!, cases, currentFloor);
+  if (!proposal) return null;
+  return {
+    ruleId: SATISFACTION_FLOOR_RULE_ID,
+    currentFloor: proposal.currentValue,
+    proposedFloor: proposal.proposedValue,
+    visibleCases: proposal.visibleCases,
+    heldOutCases: proposal.heldOutCases,
+    visible: proposal.visible,
+    heldOut: proposal.heldOut,
+  };
 }

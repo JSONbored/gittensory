@@ -11,6 +11,7 @@
 // advisor's apply path. PURE — no IO; the caller supplies the loop's state.
 import type { TuningRec } from "./auto-tune";
 import type { SatisfactionFloorLooseningProposal } from "../services/satisfaction-floor-loosening";
+import type { KnobLooseningProposal } from "../services/loosening-knobs";
 
 /** The advisor list is per-project elsewhere; the satisfaction floor is deployment-global, so its recs use
  *  this fixed pseudo-project label rather than impersonating any repo. */
@@ -58,4 +59,22 @@ export function buildSatisfactionFloorLooseningRecs(input: SatisfactionFloorRecI
     });
   }
   return recs;
+}
+
+/**
+ * Recs for REPORT-ONLY registry knobs (#8159): the evidence surfaces exactly like a live knob's proposal,
+ * but the action line states plainly that this knob's apply is not wired — enabling it is a per-knob,
+ * reviewed decision (its consumption plumbing changes real authority), never a flag flip. Same hard
+ * boundary: no overridePayload, ever.
+ */
+export function buildReportOnlyKnobRecs(proposals: readonly KnobLooseningProposal[]): TuningRec[] {
+  return proposals.map((proposal) => ({
+    project: `global:${proposal.knobId}`,
+    severity: "good" as const,
+    message:
+      `Backtest-cleared LOOSENING evidence for ${proposal.knobId} (report-only): ${proposal.currentValue} → ${proposal.proposedValue}. ` +
+      `Visible split ${proposal.visible.verdict} (${proposal.visibleCases} case(s), precision ${pct(proposal.visible.baseline.precision)} → ${pct(proposal.visible.candidate.precision)}); ` +
+      `held-out split ${proposal.heldOut.verdict} (${proposal.heldOutCases} case(s)). ` +
+      "This knob has no override consumer yet — applying requires shipping its consumption plumbing as its own reviewed change.",
+  }));
 }
