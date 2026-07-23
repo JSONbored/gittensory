@@ -11,11 +11,13 @@ const runDiscover = vi.fn(async (_args: string[]) => 0);
 const runManagePoll = vi.fn(async (_args: string[]) => 0);
 const runAttempt = vi.fn(async (_args: string[]) => 0);
 const startAmsHealthServer = vi.fn(async (_options: HealthServerOptions) => ({ close: (cb: () => void) => cb() }));
+const resolveTenantSecret = vi.fn(async (_env: Record<string, string | undefined>) => null as { secretValue: string; secretType: string } | null);
 
 vi.mock("../../packages/loopover-miner/lib/discover-cli.js", () => ({ runDiscover }));
 vi.mock("../../packages/loopover-miner/lib/manage-poll.js", () => ({ runManagePoll }));
 vi.mock("../../packages/loopover-miner/lib/attempt-cli.js", () => ({ runAttempt }));
 vi.mock("../../packages/loopover-miner/lib/ams-health-server.js", () => ({ startAmsHealthServer }));
+vi.mock("../../packages/loopover-miner/lib/tenant-credential-resolution.js", () => ({ resolveTenantSecret }));
 
 const { isHostedCycleCommand, runHostedEntry } = await import("../../packages/loopover-miner/lib/hosted-entry.js");
 
@@ -137,5 +139,64 @@ describe("runHostedEntry (#7182)", () => {
   it("defaults env to process.env when no override is passed", async () => {
     const exitCode = await runHostedEntry(["discover"]);
     expect(typeof exitCode).toBe("number");
+  });
+
+  // #8246: resolveTenantSecret is called once per wake, with whatever env was resolved -- proves the #8202
+  // bootstrap-secret mechanism is wired for AMS. It's best-effort by design (see tenant-secret-resolution.ts),
+  // so neither a null nor a real result should ever change whether/how the cycle command itself dispatches.
+  describe("tenant secret resolution (#8246)", () => {
+    it("calls resolveTenantSecret with the resolved env before dispatching the cycle command", async () => {
+      const env = { LOOPOVER_MINER_CONFIG_DIR: stateDir, LOOPOVER_TENANT_SECRET_TOKEN: "orbsec_x" };
+
+      await runHostedEntry(["discover"], { env });
+
+      expect(resolveTenantSecret).toHaveBeenCalledExactlyOnceWith(env);
+    });
+
+    it("still dispatches normally when no tenant secret resolves (self-host/unprovisioned -- the common case)", async () => {
+      resolveTenantSecret.mockResolvedValueOnce(null);
+
+      const exitCode = await runHostedEntry(["discover"], { env: { LOOPOVER_MINER_CONFIG_DIR: stateDir } });
+
+      expect(exitCode).toBe(0);
+      expect(runDiscover).toHaveBeenCalledWith([]);
+    });
+
+    it("still dispatches normally when a real tenant secret resolves", async () => {
+      resolveTenantSecret.mockResolvedValueOnce({ secretValue: "postgres://tenant-acme@neon/acme", secretType: "tenant_db_credential" });
+
+      const exitCode = await runHostedEntry(["discover"], { env: { LOOPOVER_MINER_CONFIG_DIR: stateDir } });
+
+      expect(exitCode).toBe(0);
+      expect(runDiscover).toHaveBeenCalledWith([]);
+    });
+
+    it("logs the resolved secretType when a tenant secret resolves", async () => {
+      resolveTenantSecret.mockResolvedValueOnce({ secretValue: "postgres://tenant-acme@neon/acme", secretType: "tenant_db_credential" });
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await runHostedEntry(["discover"], { env: { LOOPOVER_MINER_CONFIG_DIR: stateDir } });
+
+      const entry = log.mock.calls.map((call) => JSON.parse(call[0] as string) as { event?: string }).find((parsed) => parsed.event === "ams_hosted_entry_tenant_secret_resolved");
+      expect(entry).toEqual({ event: "ams_hosted_entry_tenant_secret_resolved", resolved: true, secretType: "tenant_db_credential" });
+      log.mockRestore();
+    });
+
+    it("logs a null secretType when no tenant secret resolves", async () => {
+      resolveTenantSecret.mockResolvedValueOnce(null);
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await runHostedEntry(["discover"], { env: { LOOPOVER_MINER_CONFIG_DIR: stateDir } });
+
+      const entry = log.mock.calls.map((call) => JSON.parse(call[0] as string) as { event?: string }).find((parsed) => parsed.event === "ams_hosted_entry_tenant_secret_resolved");
+      expect(entry).toEqual({ event: "ams_hosted_entry_tenant_secret_resolved", resolved: false, secretType: null });
+      log.mockRestore();
+    });
+
+    it("never calls resolveTenantSecret for an unknown cycle name (the early-return path)", async () => {
+      await runHostedEntry(["loop"], { env: { LOOPOVER_MINER_CONFIG_DIR: stateDir } });
+
+      expect(resolveTenantSecret).not.toHaveBeenCalled();
+    });
   });
 });

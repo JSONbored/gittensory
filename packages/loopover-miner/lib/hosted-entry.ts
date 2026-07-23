@@ -5,13 +5,16 @@
 // up, then dispatches to exactly ONE existing unattended-cycle command
 // (docs/unattended-scheduling.md's `discover`/`manage poll`, plus `attempt`) reused in-process -- these
 // functions already return the miner's own 0=success/2=failure exit-code contract unmodified; this file adds
-// no new exit-code vocabulary, it only wraps the health server's lifecycle around one of them.
+// no new exit-code vocabulary, it only wraps the health server's lifecycle around one of them. Also resolves
+// this tenant's #8202/#8246 bootstrap credential once per wake (tenant-credential-resolution.ts) -- best-effort,
+// purely to prove that mechanism is wired for AMS; no cycle command reads the result today.
 import type { Server } from "node:http";
 import { access } from "node:fs/promises";
 import { runAttempt } from "./attempt-cli.js";
 import { runDiscover } from "./discover-cli.js";
 import { runManagePoll } from "./manage-poll.js";
 import { resolveMinerStateDir } from "./status.js";
+import { resolveTenantSecret } from "./tenant-credential-resolution.js";
 import { startAmsHealthServer, type ReadinessProbe } from "./ams-health-server.js";
 
 /** The one-shot cycle commands a hosted tenant can be woken to run -- deliberately NOT `loop` (the
@@ -63,6 +66,12 @@ export async function runHostedEntry(cliArgs: string[], options: RunHostedEntryO
     console.error(JSON.stringify({ event: "ams_hosted_entry_unknown_cycle", cycleName: cycleName ?? null, known: Object.keys(HOSTED_CYCLE_COMMANDS) }));
     return 2;
   }
+
+  // #8246: best-effort, resolved once per wake -- proves the #8202 bootstrap-secret mechanism is wired for AMS
+  // too. No consumer exists for the resolved value yet (this package has no Postgres-backed store today), so
+  // this never blocks or fails the actual cycle dispatch below.
+  const tenantSecret = await resolveTenantSecret(env);
+  console.log(JSON.stringify({ event: "ams_hosted_entry_tenant_secret_resolved", resolved: tenantSecret !== null, secretType: tenantSecret?.secretType ?? null }));
 
   let server: Server | undefined;
   try {
