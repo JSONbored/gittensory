@@ -5,6 +5,7 @@
 //
 //   tsx scripts/backfill-calibration-corpus-phase2.ts --pass successors  --db loopover [--remote] [--apply]
 //   tsx scripts/backfill-calibration-corpus-phase2.ts --pass raw-context --db loopover [--remote] [--apply]
+//   … --pg postgres://…   runs against a self-host Postgres instead (#8171's driver; bare --pg uses DATABASE_URL)
 //
 // Both passes are dry-run by default, resumable (--state-file, default .backfill-phase2-state.json — the
 // cursor survives budget exhaustion), and hard-capped on GitHub requests per run (--max-requests, default
@@ -14,6 +15,7 @@
 // deterministic `backfill:` prefix are ever touched — live capture rows are out of reach by construction.
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { openPgDatabase, resolvePgConnection, type PgCliSession } from "./pg-cli.js";
 import { extractLinkedIssueNumbers } from "../src/db/repositories.js";
 import {
   backfillFiredId,
@@ -30,21 +32,42 @@ import {
 import { BACKFILL_RULE_ID } from "./backfill-calibration-corpus-core.js";
 
 type Pass = "successors" | "raw-context";
-type Args = { db: string; remote: boolean; apply: boolean; pass: Pass; maxRequests: number; stateFile: string };
+type Args = {
+  db: string;
+  remote: boolean;
+  apply: boolean;
+  pass: Pass;
+  maxRequests: number;
+  stateFile: string;
+  pgPresent: boolean;
+  pgValue: string | undefined;
+  /** Opt-in for the weak class: shared-issue matches by a DIFFERENT author are routine duplicate
+   *  competition in this culture, NOT bot-was-wrong evidence — excluded from apply unless forced. */
+  includeSharedIssueOnly: boolean;
+  planOut: string | undefined;
+  planIn: string | undefined;
+};
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { db: "loopover", remote: false, apply: false, pass: "successors", maxRequests: 300, stateFile: ".backfill-phase2-state.json" };
+  const args: Args = { db: "loopover", remote: false, apply: false, pass: "successors", maxRequests: 300, stateFile: ".backfill-phase2-state.json", pgPresent: false, pgValue: undefined, includeSharedIssueOnly: false, planOut: undefined, planIn: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === "--remote") args.remote = true;
     else if (flag === "--apply") args.apply = true;
     else if (flag === "--db") args.db = argv[++i]!;
+    else if (flag === "--pg") {
+      args.pgPresent = true;
+      if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith("--")) args.pgValue = argv[++i];
+    }
     else if (flag === "--pass") {
       const value = argv[++i];
       if (value !== "successors" && value !== "raw-context") throw new Error(`--pass must be successors or raw-context, got ${value}`);
       args.pass = value;
     } else if (flag === "--max-requests") args.maxRequests = Number(argv[++i]);
     else if (flag === "--state-file") args.stateFile = argv[++i]!;
+    else if (flag === "--include-shared-issue-only") args.includeSharedIssueOnly = true;
+    else if (flag === "--plan-out") args.planOut = argv[++i];
+    else if (flag === "--plan-in") args.planIn = argv[++i];
   }
   if (!Number.isFinite(args.maxRequests) || args.maxRequests < 1) throw new Error("--max-requests must be a positive number");
   return args;
@@ -89,11 +112,48 @@ class RequestBudget {
 async function githubFetch(budget: RequestBudget, path: string, accept = "application/vnd.github+json"): Promise<Response> {
   const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN (or GH_TOKEN) is required for the GitHub-truth passes");
-  budget.spend();
-  return fetch(`https://api.github.com${path}`, {
-    headers: { authorization: `Bearer ${token}`, accept, "user-agent": "loopover-backfill-phase2" },
-    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-  });
+  // Two hard-won lessons baked in (#8170's production runs):
+  //   • a single transient network blip must not kill a multi-thousand-request pass ('fetch failed'
+  //     at ~90% through a scan) — bounded retries on thrown fetches and 5xx;
+  //   • GitHub's SECONDARY (burst) limit 403s must be WAITED OUT, not fatal: pace requests to a floor
+  //     interval, and on 403/429 honor Retry-After (default 90s, cap 5 min) before retrying. A paced
+  //     stall costs minutes; a dead run costs the whole scan plus the budget it already spent.
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    await pace();
+    budget.spend();
+    try {
+      const response = await fetch(`https://api.github.com${path}`, {
+        headers: { authorization: `Bearer ${token}`, accept, "user-agent": "loopover-backfill-phase2" },
+        signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      });
+      if ((response.status === 403 || response.status === 429) && attempt < 5) {
+        const retryAfter = Number(response.headers.get("retry-after"));
+        const waitMs = Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 90_000, 300_000);
+        console.error(`GitHub ${response.status} on ${path} — waiting ${Math.round(waitMs / 1000)}s for the burst limit (attempt ${attempt}/5)`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+      if (response.status >= 500 && attempt < 5) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+// ~4 req/s ceiling: sequential scans at full speed are what tripped the burst limit across hours.
+const REQUEST_FLOOR_MS = 250;
+let lastRequestAt = 0;
+async function pace(): Promise<void> {
+  const wait = lastRequestAt + REQUEST_FLOOR_MS - Date.now();
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  lastRequestAt = Date.now();
 }
 
 async function githubJson<T>(budget: RequestBudget, path: string): Promise<T | null> {
@@ -168,10 +228,18 @@ function readState(path: string): CursorState {
 
 type BackfillRow = { id: string; target_key: string; metadata_json: string; created_at: string };
 
-function loadBackfillRows(args: Args, kind: "override" | "fired"): BackfillRow[] {
-  const rows = d1Execute(
-    args.db,
-    args.remote,
+// #8171's driver seam: when --pg selected a connection, every read/write below rides the selfhost adapter
+// (same dialect translation as the deployed engine); otherwise the wrangler/D1 path is unchanged.
+let pgSession: PgCliSession | null = null;
+
+async function executeSql(args: Args, sql: string): Promise<Array<Record<string, unknown>>> {
+  if (pgSession) return (await pgSession.db.prepare(sql).all<Record<string, unknown>>()).results ?? [];
+  return d1Execute(args.db, args.remote, sql);
+}
+
+async function loadBackfillRows(args: Args, kind: "override" | "fired"): Promise<BackfillRow[]> {
+  const rows = await executeSql(
+    args,
     `SELECT id, target_key, metadata_json, created_at FROM audit_events WHERE id LIKE 'backfill:${BACKFILL_RULE_ID}:%:${kind}' ORDER BY target_key`,
   );
   return rows.filter(
@@ -180,8 +248,8 @@ function loadBackfillRows(args: Args, kind: "override" | "fired"): BackfillRow[]
   );
 }
 
-function applyMetadataUpdate(args: Args, id: string, metadataJson: string): void {
-  d1Execute(args.db, args.remote, `UPDATE audit_events SET metadata_json = ${sqlStringLiteral(metadataJson)} WHERE id = ${sqlStringLiteral(id)}`);
+async function applyMetadataUpdate(args: Args, id: string, metadataJson: string): Promise<void> {
+  await executeSql(args, `UPDATE audit_events SET metadata_json = ${sqlStringLiteral(metadataJson)} WHERE id = ${sqlStringLiteral(id)}`);
 }
 
 function splitTargetKey(targetKey: string): { repo: string; number: number } | null {
@@ -191,9 +259,49 @@ function splitTargetKey(targetKey: string): { repo: string; number: number } | n
   return Number.isFinite(number) ? { repo: targetKey.slice(0, hash), number } : null;
 }
 
+type PlanEntry =
+  | { class: "same_pr_merged"; targetKey: string; mergedAt: string }
+  | { class: "same_author" | "shared_issue_only"; targetKey: string; supersededBy: number; heuristics: RetroSuccessorMatch["heuristics"] };
+
+/** Replay a previously scanned plan against the selected store — zero GitHub requests. The plan is the
+ *  dry-run's own match output, so cloud and self-host stores (same seeded targets, same deterministic ids)
+ *  apply identically without re-spending the API budget. */
+async function runSuccessorsFromPlan(args: Args): Promise<Phase2Report> {
+  const report: Phase2Report = { pass: "successors", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, matchedSamePrMerged: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
+  const plan = JSON.parse(readFileSync(args.planIn!, "utf8")) as PlanEntry[];
+  const rowsById = new Map((await loadBackfillRows(args, "override")).map((row) => [row.id, row]));
+  for (const entry of plan) {
+    report.scanned += 1;
+    const row = rowsById.get(backfillOverrideId(entry.targetKey));
+    if (!row) {
+      report.noMatch += 1;
+      continue;
+    }
+    let patched: string | null;
+    if (entry.class === "same_pr_merged") {
+      report.matchedSamePrMerged += 1;
+      patched = patchOverrideMetadataToSamePrMerged(row.metadata_json, entry.mergedAt);
+    } else {
+      if (entry.class === "same_author") report.matchedSameAuthor += 1;
+      else {
+        report.matchedSharedIssueOnly += 1;
+        if (!args.includeSharedIssueOnly) continue; // counted, never applied without the explicit opt-in
+      }
+      patched = patchOverrideMetadataToReversed(row.metadata_json, { targetKey: entry.targetKey, supersededBy: entry.supersededBy, heuristics: entry.heuristics });
+    }
+    if (patched === null) report.alreadyPatched += 1;
+    else if (args.apply) {
+      await applyMetadataUpdate(args, backfillOverrideId(entry.targetKey), patched);
+      report.patched += 1;
+    } else report.patched += 1;
+  }
+  return report;
+}
+
 async function runSuccessorsPass(args: Args, budget: RequestBudget, state: CursorState): Promise<Phase2Report> {
   const report: Phase2Report = { pass: "successors", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, matchedSamePrMerged: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
-  const rows = loadBackfillRows(args, "override").filter((row) => !state.successorsResumeFrom || row.target_key > state.successorsResumeFrom);
+  const rows = (await loadBackfillRows(args, "override")).filter((row) => !state.successorsResumeFrom || row.target_key > state.successorsResumeFrom);
+  const plan: PlanEntry[] = [];
 
   const byRepo = new Map<string, BackfillRow[]>();
   for (const row of rows) {
@@ -202,6 +310,7 @@ async function runSuccessorsPass(args: Args, budget: RequestBudget, state: Curso
     (byRepo.get(split.repo) ?? byRepo.set(split.repo, []).get(split.repo)!).push(row);
   }
 
+  try {
   outer: for (const [repo, repoRows] of byRepo) {
     const oldestClosedAt = repoRows.reduce((min, row) => (row.created_at < min ? row.created_at : min), repoRows[0]!.created_at);
     const successors = await fetchMergedSuccessors(budget, repo, oldestClosedAt);
@@ -226,10 +335,11 @@ async function runSuccessorsPass(args: Args, budget: RequestBudget, state: Curso
         // The close-verdict PR ITSELF merged: the operator reopened + merged it — a definitive same-PR
         // reversal, the strongest label class this pass produces (no heuristics involved).
         report.matchedSamePrMerged += 1;
+        plan.push({ class: "same_pr_merged", targetKey: row.target_key, mergedAt: closedPull.merged_at });
         const samePrPatched = patchOverrideMetadataToSamePrMerged(row.metadata_json, closedPull.merged_at);
         if (samePrPatched === null) report.alreadyPatched += 1;
         else if (args.apply) {
-          applyMetadataUpdate(args, backfillOverrideId(row.target_key), samePrPatched);
+          await applyMetadataUpdate(args, backfillOverrideId(row.target_key), samePrPatched);
           report.patched += 1;
         } else report.patched += 1;
         state.successorsResumeFrom = row.target_key;
@@ -265,13 +375,19 @@ async function runSuccessorsPass(args: Args, budget: RequestBudget, state: Curso
         state.successorsResumeFrom = row.target_key;
         continue;
       }
-      if (match.heuristics.sameAuthorFileOverlap) report.matchedSameAuthor += 1;
+      const matchClass = match.heuristics.sameAuthorFileOverlap ? "same_author" : "shared_issue_only";
+      if (matchClass === "same_author") report.matchedSameAuthor += 1;
       else report.matchedSharedIssueOnly += 1;
+      plan.push({ class: matchClass, targetKey: row.target_key, supersededBy: match.supersededBy, heuristics: match.heuristics });
+      if (matchClass === "shared_issue_only" && !args.includeSharedIssueOnly && args.apply) {
+        state.successorsResumeFrom = row.target_key;
+        continue; // counted + planned for the record, never applied without the explicit opt-in
+      }
       const patched = patchOverrideMetadataToReversed(row.metadata_json, match);
       if (patched === null) {
         report.alreadyPatched += 1;
       } else if (args.apply) {
-        applyMetadataUpdate(args, backfillOverrideId(row.target_key), patched);
+        await applyMetadataUpdate(args, backfillOverrideId(row.target_key), patched);
         report.patched += 1;
       } else {
         report.patched += 1; // dry-run: counted as "would patch"
@@ -279,13 +395,18 @@ async function runSuccessorsPass(args: Args, budget: RequestBudget, state: Curso
       state.successorsResumeFrom = row.target_key;
     }
   }
+  } finally {
+    // Persisted even when a fetch ultimately fails mid-pass: the plan-so-far plus the cursor make the
+    // next run a cheap resume instead of a from-scratch re-scan.
+    if (args.planOut) writeFileSync(args.planOut, `${JSON.stringify(plan, null, 2)}\n`);
+  }
   report.requestsUsed = budget.used;
   return report;
 }
 
 async function runRawContextPass(args: Args, budget: RequestBudget, state: CursorState): Promise<Phase2Report> {
   const report: Phase2Report = { pass: "raw-context", scanned: 0, patched: 0, alreadyPatched: 0, noMatch: 0, matchedSameAuthor: 0, matchedSharedIssueOnly: 0, matchedSamePrMerged: 0, requestsUsed: 0, exhaustedBudget: false, resumeFrom: null };
-  const rows = loadBackfillRows(args, "fired").filter((row) => !state.rawContextResumeFrom || row.target_key > state.rawContextResumeFrom);
+  const rows = (await loadBackfillRows(args, "fired")).filter((row) => !state.rawContextResumeFrom || row.target_key > state.rawContextResumeFrom);
   const repoPrivacy = new Map<string, boolean>();
 
   for (const row of rows) {
@@ -321,7 +442,7 @@ async function runRawContextPass(args: Args, budget: RequestBudget, state: Curso
     if (patched === null) {
       report.alreadyPatched += 1;
     } else if (args.apply) {
-      applyMetadataUpdate(args, backfillFiredId(row.target_key), patched);
+      await applyMetadataUpdate(args, backfillFiredId(row.target_key), patched);
       report.patched += 1;
     } else {
       report.patched += 1;
@@ -334,10 +455,18 @@ async function runRawContextPass(args: Args, budget: RequestBudget, state: Curso
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const pgConnection = resolvePgConnection(args.pgPresent, args.pgValue, process.env.DATABASE_URL);
+  if (pgConnection) pgSession = openPgDatabase(pgConnection);
   const state = readState(args.stateFile);
   const budget = new RequestBudget(args.maxRequests);
 
-  const report = args.pass === "successors" ? await runSuccessorsPass(args, budget, state) : await runRawContextPass(args, budget, state);
+  const report =
+    args.pass === "successors"
+      ? args.planIn
+        ? await runSuccessorsFromPlan(args)
+        : await runSuccessorsPass(args, budget, state)
+      : await runRawContextPass(args, budget, state);
+  await pgSession?.close();
   writeFileSync(args.stateFile, `${JSON.stringify(state, null, 2)}\n`);
   console.log(renderPhase2Report(report, args.apply ? "apply" : "dry-run"));
   if (!args.apply) {
