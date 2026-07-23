@@ -1205,7 +1205,24 @@ jobs:
           # so the false branch must be an empty string (falsy), not the literal string "false" (which JS
           # treats as truthy) -- that's why this is a `&& 'true' || ''` expression, not a bare boolean.
           COVERAGE_NO_THRESHOLDS: ${{ (github.event_name == 'pull_request' && vars.SCOPED_TEST_SELECTION_ENABLED != 'false' && needs.changes.outputs.rees != 'true' && needs.changes.outputs.controlPlane != 'true' && needs.changes.outputs.engine != 'true' && needs.changes.outputs.backendConfig != 'true' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.discoveryIndex == 'true')) && 'true' || '' }}
-        run: npx vitest run --coverage --mergeReports=all-blob-reports
+        run: |
+          # Unlike the per-shard --changed run (validate-tests above), --mergeReports exits 1 (not 0) when
+          # every merged shard's report represents zero matched test files -- confirmed live: PR #8168, a
+          # pure docs-only scoped PR where all 3 shards legitimately matched nothing, printed vitest's own
+          # "No test files found, exiting with code 1" and failed here even with COVERAGE_NO_THRESHOLDS
+          # already disabling the threshold check that comment block above describes. Only treat that exact
+          # case as success, and only when COVERAGE_NO_THRESHOLDS is set (i.e. this run is the scoped case
+          # to begin with) -- in the unscoped full-suite case, "no test files found" while merging would be
+          # a real, surprising break worth failing loudly on, not a legitimate outcome to paper over.
+          set -o pipefail
+          if npx vitest run --coverage --mergeReports=all-blob-reports 2>&1 | tee vitest-merge-output.log; then
+            exit 0
+          fi
+          if [ -n "$COVERAGE_NO_THRESHOLDS" ] && grep -q "No test files found" vitest-merge-output.log; then
+            echo "Merged report matched zero test files, which is expected for this scoped, test-free PR -- not a failure."
+            exit 0
+          fi
+          exit 1
 
   # Diff-scoped security gate: fails only on vulnerabilities this PR introduces.
   # Ambient advisories in untouched deps are handled by Renovate + the scheduled
