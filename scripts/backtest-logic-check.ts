@@ -122,6 +122,7 @@ async function main() {
       skippedCount,
       headSha: args.headSha,
       baseSha: args.baseSha,
+      corpusChecksum: manifest.checksum,
     }),
   );
 
@@ -132,6 +133,7 @@ async function main() {
       comparison,
       headSha: args.headSha,
       baseSha: args.baseSha,
+      corpusChecksum: manifest.checksum,
       replayableCount: replayable.length,
       skippedCount,
       createdAt: new Date().toISOString(),

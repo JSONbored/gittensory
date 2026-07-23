@@ -194,10 +194,12 @@ describe("backtest-logic-check-core renderLogicBacktestComment (#8139)", () => {
       skippedCount: 0,
       headSha: "abcdef1234567890",
       baseSha: "1234567890abcdef",
+      corpusChecksum: "feedfacecafe0123456789",
     });
     expect(comment.startsWith(`${LOGIC_BACKTEST_COMMENT_MARKER}\n## Logic backtest`)).toBe(true);
     expect(comment).toContain("Replayed 12 historical case(s) for `linked_issue_scope_mismatch`");
     expect(comment).toContain("base (`1234567`) and head (`abcdef1`)");
+    expect(comment).toContain("corpus checksum `feedfacecafe`");
     expect(comment).toContain("### Backtest comparison: `linked_issue_scope_mismatch`");
     expect(comment).toContain("never blocks merge (#8105)");
     expect(comment).not.toContain("lacked captured raw context");
@@ -209,6 +211,7 @@ describe("backtest-logic-check-core renderLogicBacktestComment (#8139)", () => {
       skippedCount: 5,
       headSha: "abcdef1234567890",
       baseSha: "1234567890abcdef",
+      corpusChecksum: "feedfacecafe0123456789",
     });
     expect(comment).toContain("5 historical case(s) lacked captured raw context and were skipped.");
   });
@@ -229,6 +232,7 @@ describe("backtest-logic-check-core buildLogicBacktestAuditInsertSql (#8139)", (
       comparison,
       headSha: "abcdef1234567890",
       baseSha: "1234567890abcdef",
+      corpusChecksum: "feedfacecafe0123456789",
       replayableCount: 1,
       skippedCount: 2,
       createdAt: "2026-07-22T12:00:00.000Z",
@@ -246,6 +250,7 @@ describe("backtest-logic-check-core buildLogicBacktestAuditInsertSql (#8139)", (
     expect(metadata.comparison).toEqual(comparison);
     expect(metadata.headSha).toBe("abcdef1234567890");
     expect(metadata.baseSha).toBe("1234567890abcdef");
+    expect(metadata.corpusChecksum).toBe("feedfacecafe0123456789");
     expect(metadata.replayableCount).toBe(1);
     expect(metadata.skippedCount).toBe(2);
   });

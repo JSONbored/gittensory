@@ -131,14 +131,15 @@ export function runLogicBacktest(
 export const LOGIC_BACKTEST_COMMENT_MARKER = "<!-- loopover-logic-backtest -->";
 
 /**
- * Render the standalone advisory PR comment: marker, what was replayed against what, the engine's own
- * comparison Markdown (#8088), and the never-blocks-merge note. Deliberately its OWN comment, not a section
- * of ORB's unified review comment — see #8139's Boundaries (this CI job runs outside the Worker's review
- * flow, and joining that comment would need new Worker↔CI coupling).
+ * Render the standalone advisory PR comment: marker, what was replayed against what (including the corpus
+ * checksum — the freeze point that makes the run independently re-runnable, see #8084's manifest), the
+ * engine's own comparison Markdown (#8088), and the never-blocks-merge note. Deliberately its OWN comment,
+ * not a section of ORB's unified review comment — see #8139's Boundaries (this CI job runs outside the
+ * Worker's review flow, and joining that comment would need new Worker↔CI coupling).
  */
 export function renderLogicBacktestComment(
   comparison: BacktestComparison,
-  info: { replayableCount: number; skippedCount: number; headSha: string; baseSha: string },
+  info: { replayableCount: number; skippedCount: number; headSha: string; baseSha: string; corpusChecksum: string },
 ): string {
   const skippedNote = info.skippedCount > 0 ? ` ${info.skippedCount} historical case(s) lacked captured raw context and were skipped.` : "";
   return [
@@ -146,7 +147,8 @@ export function renderLogicBacktestComment(
     "## Logic backtest",
     "",
     `Replayed ${info.replayableCount} historical case(s) for \`${comparison.ruleId}\` through the base` +
-      ` (\`${info.baseSha.slice(0, 7)}\`) and head (\`${info.headSha.slice(0, 7)}\`) versions of its detection logic.${skippedNote}`,
+      ` (\`${info.baseSha.slice(0, 7)}\`) and head (\`${info.headSha.slice(0, 7)}\`) versions of its detection logic` +
+      ` (corpus checksum \`${info.corpusChecksum.slice(0, 12)}\`).${skippedNote}`,
     "",
     renderBacktestComparison(comparison),
     "_Advisory only — this check never blocks merge (#8105)._",
@@ -164,7 +166,9 @@ export function sqlStringLiteral(value: string): string {
  * THRESHOLD_BACKTEST_EVENT_TYPE events, same audit_events columns recordAuditEvent writes (the CLI runs
  * outside the Worker, so it goes through `wrangler d1 execute` instead of the repositories module; the
  * caller supplies id/createdAt so this stays clock-free like the rest of this file). `metadata.comparison`
- * is the field backtest-track-record.ts's reader already looks for.
+ * is the field backtest-track-record.ts's reader already looks for; `corpusChecksum` + the two shas are
+ * the freeze point (#8136's reproducibility posture) — enough for a skeptic to re-export the corpus,
+ * verify the checksum, and re-run both sides of this exact comparison independently.
  */
 export function buildLogicBacktestAuditInsertSql(input: {
   id: string;
@@ -172,6 +176,7 @@ export function buildLogicBacktestAuditInsertSql(input: {
   comparison: BacktestComparison;
   headSha: string;
   baseSha: string;
+  corpusChecksum: string;
   replayableCount: number;
   skippedCount: number;
   createdAt: string;
@@ -180,6 +185,7 @@ export function buildLogicBacktestAuditInsertSql(input: {
     comparison: input.comparison,
     headSha: input.headSha,
     baseSha: input.baseSha,
+    corpusChecksum: input.corpusChecksum,
     replayableCount: input.replayableCount,
     skippedCount: input.skippedCount,
   });
