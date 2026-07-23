@@ -50,12 +50,17 @@ function warnProvisioningPagerDutyFailed(tenantName: string, error: unknown): vo
 
 /** Build the alert payload for a provisioning or deprovisioning failure (#7667). Pure -- no IO. `error` is
  *  coerced through the same {@link pagerDutyFailMessage} helper the IO path uses for its own failure logging, so
- *  the paged summary and any local warn log agree on the same truncated message. */
+ *  the paged summary and any local warn log agree on the same truncated message. `secretRef` (#8202, optional)
+ *  is included in `customDetails` when the caller already had one at failure time -- provisionTenant's own
+ *  best-effort revoke (provisioning.ts) is the primary defense against a dangling broker secret, but a revoke
+ *  can itself fail (e.g. broker unreachable), so the page still needs to hand an operator something to manually
+ *  revoke by rather than nothing at all. */
 export function buildProvisioningPagerDutyAlert(input: {
   tenantName: string;
   product: string;
   phase: "provision" | "deprovision";
   error: unknown;
+  secretRef?: string;
 }): ProvisioningPagerDutyAlert {
   const message = pagerDutyFailMessage(input.error);
   return {
@@ -65,7 +70,13 @@ export function buildProvisioningPagerDutyAlert(input: {
     summary: `${input.product} tenant ${input.phase} failed for ${input.tenantName}: ${message}`,
     severity: "critical",
     dedupKey: `control_plane_${input.phase}_failed:${input.product}:${input.tenantName}`,
-    customDetails: { tenantName: input.tenantName, product: input.product, phase: input.phase, message },
+    customDetails: {
+      tenantName: input.tenantName,
+      product: input.product,
+      phase: input.phase,
+      message,
+      ...(input.secretRef !== undefined ? { secretRef: input.secretRef } : {}),
+    },
   };
 }
 

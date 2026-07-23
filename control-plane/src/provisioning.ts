@@ -69,8 +69,9 @@ function pageAndRethrow(
   phase: "provision" | "deprovision",
   error: unknown,
   options: ProvisioningPagerDutyOptions,
+  secretRef?: string,
 ): never {
-  const alert = buildProvisioningPagerDutyAlert({ tenantName: tenant.name, product, phase, error });
+  const alert = buildProvisioningPagerDutyAlert({ tenantName: tenant.name, product, phase, error, secretRef });
   const notify = options.notify ?? notifyProvisioningFailure;
   const env = options.env ?? process.env;
   const warnNotifyFailed = (notifyError: unknown): void => {
@@ -93,9 +94,13 @@ function pageAndRethrow(
  *  just the tenant identity every other step operates on. `createContainer` is in turn called with `database`
  *  still attached AND `bootstrapSecret` newly attached (#8202) whenever `injectSecrets` returned one -- a real
  *  container driver delivers it into the container's own cold-boot environment. A step failure pages (#7667) and
- *  always rethrows — provisioning never fails silently. `onFailure` (#7677, optional) runs first in that failure
- *  path — the caller's seam for persisting the `"failed"` lifecycle state — and is best-effort: its own
- *  rejection is swallowed so it can never mask the step error. */
+ *  always rethrows — provisioning never fails silently. If `createContainer` is what failed AFTER `injectSecrets`
+ *  already succeeded (#8202), this function best-effort revokes that just-injected secret itself before
+ *  rethrowing -- since it always throws rather than returning on failure, no caller ever gets a chance to persist
+ *  `secretRef` for a later `deprovisionTenant` otherwise, which would permanently orphan a live credential in the
+ *  broker. `onFailure` (#7677, optional) runs after that in the same failure path — the caller's seam for
+ *  persisting the `"failed"` lifecycle state — and, like the revoke attempt, is best-effort: neither's own
+ *  rejection can mask the step error. */
 export async function provisionTenant(
   tenant: Tenant,
   product: Product,
@@ -112,12 +117,34 @@ export async function provisionTenant(
     secretRef = injected.secretRef;
     await driver.createContainer({ ...request, database, ...(injected.bootstrapSecret !== undefined ? { bootstrapSecret: injected.bootstrapSecret } : {}) });
   } catch (error) {
+    // #8202: injectSecrets can succeed (custodying a real secret + minting secretRef) and createContainer can
+    // still fail right after it (Cloudflare quota, a transient container-API error) -- since this function
+    // always rethrows rather than returning on a step failure, secretRef would otherwise never reach the caller
+    // to persist and later revoke, permanently orphaning a live, exchangeable credential in the broker (this
+    // was unreachable before #8202: injectSecrets used to be the LAST step, so nothing after it could fail once
+    // secretRef was set). Best-effort revoke it here, before rethrowing, so this function cleans up after
+    // itself rather than counting on a caller that has no way to know the secret exists. Swallowed like
+    // onFailure below: a revoke failure (e.g. broker unreachable) must never mask the real provisioning error --
+    // that's exactly why the PagerDuty alert below still carries secretRef, as an operator's last resort.
+    if (secretRef !== undefined) {
+      await driver.revokeSecrets({ ...request, secretRef }).catch((revokeError: unknown) => {
+        console.warn(
+          JSON.stringify({
+            event: "provisioning_orphaned_secret_revoke_failed",
+            tenant: tenant.name,
+            product,
+            secretRef,
+            message: pagerDutyFailMessage(revokeError),
+          }),
+        );
+      });
+    }
     // #7677 (ratified 2026-07-21): give the caller its chance to transition the tenant's registry record to
     // "failed" BEFORE the rethrow, so a customer polling the read path sees a terminal "Setup failed" instead
     // of a record stuck at "provisioning" forever. Best-effort by design: a failure writing the failed state
     // must never mask the provisioning error itself, which still pages and rethrows exactly as before.
     if (onFailure) await onFailure().catch(() => undefined);
-    pageAndRethrow(tenant, product, "provision", error, pagerDuty);
+    pageAndRethrow(tenant, product, "provision", error, pagerDuty, secretRef);
   }
   return { tenant, product, state: "active", database, ...(secretRef !== undefined ? { secretRef } : {}) };
 }
@@ -141,7 +168,9 @@ export async function deprovisionTenant(
     await driver.dropDatabase(request);
     await driver.destroyContainer(request);
   } catch (error) {
-    pageAndRethrow(tenant, product, "deprovision", error, pagerDuty);
+    // secretRef is already known here (the caller's own input, not something this function minted) -- passed
+    // along so an operator paged for a deprovision failure doesn't have to go look it up separately.
+    pageAndRethrow(tenant, product, "deprovision", error, pagerDuty, secretRef);
   }
   return { tenant, product, state: "torn down" };
 }

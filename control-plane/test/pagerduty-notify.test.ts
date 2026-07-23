@@ -43,6 +43,18 @@ test("buildProvisioningPagerDutyAlert: provision failure builds a critical alert
   });
 });
 
+test("buildProvisioningPagerDutyAlert: includes secretRef in customDetails when given (#8202)", () => {
+  const alert = buildProvisioningPagerDutyAlert({
+    tenantName: "acme",
+    product: "orb",
+    phase: "provision",
+    error: new Error("container quota exceeded"),
+    secretRef: "orbenr_abc",
+  });
+
+  assert.equal(alert.customDetails.secretRef, "orbenr_abc");
+});
+
 test("buildProvisioningPagerDutyAlert: deprovision failure coerces a non-Error thrown value (#7667)", () => {
   const alert = buildProvisioningPagerDutyAlert({
     tenantName: "acme",
