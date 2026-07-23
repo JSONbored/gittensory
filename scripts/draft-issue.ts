@@ -7,17 +7,29 @@
 // export-d1-core.ts. NEVER publishes anything, NEVER touches labels/milestones — see the core's own
 // boundary comment.
 //
-//   tsx scripts/draft-issue.ts --prompt "<loose intent>" --output <draft.md> [--root .]
-//   tsx scripts/draft-issue.ts --prompt-file <intent.txt> --output <draft.md> [--root .]
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+//   tsx scripts/draft-issue.ts --prompt "<loose intent>" --output <draft.md> [--root .] [--misses <file.json>]
+//   tsx scripts/draft-issue.ts --prompt-file <intent.txt> --output <draft.md> [--root .] [--misses <file.json>]
+//
+// #8118: every draft automatically applies the accumulated drafting-miss lessons from
+// scripts/drafting-misses.json (recorded via scripts/record-drafting-miss.ts) when that file exists;
+// --misses points at a different file. A malformed misses file fails the draft loudly — see
+// parseDraftingMisses's own fail-loud rationale.
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { draftIssueBody, type CorpusFile } from "../src/services/issue-drafting.js";
+import {
+  DEFAULT_DRAFTING_MISSES_FILE,
+  draftIssueBody,
+  parseDraftingMisses,
+  type CorpusFile,
+  type DraftingMiss,
+} from "../src/services/issue-drafting.js";
 
 type Args = {
   prompt: string | undefined;
   promptFile: string | undefined;
   output: string | undefined;
   root: string;
+  misses: string | undefined;
 };
 
 // The corpus mirrors where real precedent lives (the gate's own wantedPaths, minus content-free dirs).
@@ -27,15 +39,28 @@ const SKIP_DIR_NAMES = new Set(["node_modules", "dist", "coverage", ".turbo"]);
 const MAX_FILE_BYTES = 512 * 1024;
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { prompt: undefined, promptFile: undefined, output: undefined, root: "." };
+  const args: Args = { prompt: undefined, promptFile: undefined, output: undefined, root: ".", misses: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === "--prompt") args.prompt = argv[++i];
     else if (flag === "--prompt-file") args.promptFile = argv[++i];
     else if (flag === "--output") args.output = argv[++i];
     else if (flag === "--root") args.root = argv[++i]!;
+    else if (flag === "--misses") args.misses = argv[++i];
   }
   return args;
+}
+
+// #8118: apply the accumulated misses on EVERY draft — the default file is picked up automatically when it
+// exists, so the loop needs no flag to keep working; an explicitly-passed path must exist (a typo silently
+// drafting without the checklist would defeat the loop).
+function loadDraftingMisses(root: string, explicitPath: string | undefined): DraftingMiss[] {
+  const path = explicitPath ?? join(root, DEFAULT_DRAFTING_MISSES_FILE);
+  if (!existsSync(path)) {
+    if (explicitPath) throw new Error(`--misses file not found: ${explicitPath}`);
+    return [];
+  }
+  return parseDraftingMisses(readFileSync(path, "utf8"));
 }
 
 function collectCorpus(root: string): CorpusFile[] {
@@ -65,16 +90,18 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const prompt = args.prompt ?? (args.promptFile ? readFileSync(args.promptFile, "utf8") : undefined);
   if (!prompt || !args.output) {
-    console.error("Usage: tsx scripts/draft-issue.ts (--prompt <text> | --prompt-file <file>) --output <draft.md> [--root .]");
+    console.error("Usage: tsx scripts/draft-issue.ts (--prompt <text> | --prompt-file <file>) --output <draft.md> [--root .] [--misses <file.json>]");
     process.exit(2);
   }
 
   const corpus = collectCorpus(args.root);
-  const result = draftIssueBody(prompt, corpus);
+  const misses = loadDraftingMisses(args.root, args.misses);
+  const result = draftIssueBody(prompt, corpus, { misses });
   writeFileSync(args.output, result.body);
   console.error(
     `drafted from ${corpus.length} corpus file(s): ${result.groundedTerms.length} term(s) grounded, ` +
-      `${result.ungroundedTerms.length} UNGROUNDED marker(s) to resolve by hand → ${args.output}`,
+      `${result.ungroundedTerms.length} UNGROUNDED marker(s) to resolve by hand, ` +
+      `${misses.length} recorded miss(es) applied → ${args.output}`,
   );
   console.error("review + edit before publishing — this tool never publishes, and labels/milestone stay your call.");
 }

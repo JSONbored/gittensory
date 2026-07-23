@@ -33,11 +33,33 @@ export type GroundingMatch = { path: string; line: number; text: string };
 /** A term from the loose prompt that WAS grounded in real precedent. */
 export type GroundedTerm = GroundingTerm & { matches: readonly GroundingMatch[] };
 
+/** One recorded drafting miss (#8118): a real post-merge gap traceable to a draft that should have
+ *  specified something and didn't. Recorded manually by the maintainer after the fact — this module never
+ *  auto-detects gaps, it only learns from the ones a human already confirmed. */
+export type DraftingMiss = {
+  /** ISO timestamp of when the miss was recorded. */
+  recordedAt: string;
+  /** The loose prompt the flawed draft was generated from. */
+  loosePrompt: string;
+  /** What the draft should have specified but didn't — written as a reusable lesson. */
+  missing: string;
+  /** Optional gap category ("unstated-anti-pattern", "unverified-signature", …) used to dedupe the
+   *  checklist: two misses in one category render as one checklist line with a ×N count. */
+  category?: string;
+};
+
+/** Repo-relative default location of the misses file, shared by the recorder and drafter CLIs (#8118) —
+ *  a plain committed JSON file per the issue's "no new database" boundary. The core only exports the
+ *  string; reading/writing it stays the thin consumers' IO. */
+export const DEFAULT_DRAFTING_MISSES_FILE = "scripts/drafting-misses.json";
+
 export type IssueDraftOptions = {
   /** Cap on distinct terms extracted from the prompt (default 12). */
   maxTerms?: number;
   /** Cap on matches kept per grounded term (default 3). */
   maxMatchesPerTerm?: number;
+  /** Accumulated drafting misses (#8118) — rendered into every draft as a pre-publish checklist. */
+  misses?: readonly DraftingMiss[];
 };
 
 export type IssueDraftResult = {
@@ -144,6 +166,54 @@ export function groundTerm(
     (a, b) => pathRank(a.path) - pathRank(b.path) || lineRank(a.text) - lineRank(b.text) || a.path.localeCompare(b.path) || a.line - b.line,
   );
   return { ...groundingTerm, matches: matches.slice(0, Math.max(1, maxMatchesPerTerm)) };
+}
+
+/**
+ * Parse the drafting-misses file's JSON content (#8118) into validated {@link DraftingMiss} records.
+ * FAIL-LOUD, deliberately: this is the maintainer's own accumulated learning data, and silently dropping a
+ * malformed lesson would defeat the entire feedback loop — a broken file should stop the draft, not shrink
+ * the checklist. (Contrast with the corpus parsers' fail-open posture, which protect a live review pass.)
+ */
+export function parseDraftingMisses(json: string): DraftingMiss[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("drafting-misses file is not valid JSON");
+  }
+  if (!Array.isArray(parsed)) throw new Error("drafting-misses file must be a JSON array of miss records");
+  return parsed.map((entry, index) => {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    if (typeof record.recordedAt !== "string" || !record.recordedAt || typeof record.loosePrompt !== "string" || typeof record.missing !== "string" || !record.missing) {
+      throw new Error(`drafting miss #${index} is malformed — need recordedAt, loosePrompt, and a non-empty missing lesson`);
+    }
+    const miss: DraftingMiss = { recordedAt: record.recordedAt, loosePrompt: record.loosePrompt, missing: record.missing };
+    if (typeof record.category === "string" && record.category) miss.category = record.category;
+    return miss;
+  });
+}
+
+/** Collapse recorded misses into checklist lines: one line per category (uncategorized misses stay
+ *  one-per-lesson), counting repeats and keeping the most recently recorded lesson text as the actionable
+ *  wording. Sorted by label for byte-stable drafts. */
+function groupDraftingMisses(misses: readonly DraftingMiss[]): Array<{ label: string; count: number; lesson: string }> {
+  const groups = new Map<string, { label: string; count: number; lesson: string; lessonAt: string }>();
+  for (const miss of misses) {
+    const key = miss.category ?? `uncategorized:${miss.missing}`;
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, { label: miss.category ?? "one-off", count: 1, lesson: miss.missing, lessonAt: miss.recordedAt });
+    } else {
+      existing.count += 1;
+      if (miss.recordedAt > existing.lessonAt) {
+        existing.lesson = miss.missing;
+        existing.lessonAt = miss.recordedAt;
+      }
+    }
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, group]) => ({ label: group.label, count: group.count, lesson: group.lesson }));
 }
 
 /** True when a cited path is graded by Codecov's patch gate (coverage.include: `src/**` and the engine's
@@ -264,6 +334,17 @@ export function draftIssueBody(prompt: string, corpus: readonly CorpusFile[], op
   );
   for (const path of citedPaths) lines.push(`- \`${path}\``);
   if (citedPaths.length === 0) lines.push("- <!-- MAINTAINER: no grounded files to cite — add the real anchors by hand. -->");
+
+  // #8118: the accumulated-misses checklist — every recorded post-merge gap becomes a concrete
+  // double-check on every subsequent draft, so the tool gets better instead of repeating its misses.
+  // Same "resolve, then delete" contract as the UNGROUNDED markers: it must never survive publishing.
+  const misses = options.misses ?? [];
+  if (misses.length > 0) {
+    lines.push("", "## Pre-publish checklist — learned from recorded drafting misses. Resolve each item, then DELETE this section before publishing.", "");
+    for (const group of groupDraftingMisses(misses)) {
+      lines.push(`- [ ] ${group.label}${group.count > 1 ? ` (recorded ${group.count}×)` : ""}: ${group.lesson}`);
+    }
+  }
   lines.push("");
 
   return { body: lines.join("\n"), groundedTerms, ungroundedTerms };

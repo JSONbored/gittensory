@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_DRAFTING_MISSES_FILE,
   draftIssueBody,
   extractGroundingTerms,
   groundTerm,
+  parseDraftingMisses,
   type CorpusFile,
+  type DraftingMiss,
   type GroundingTerm,
 } from "../../src/services/issue-drafting";
 
@@ -234,5 +237,73 @@ describe("issue-drafting draftIssueBody (#8103)", () => {
     for (const forbidden of ["gh issue create", "--label", "milestone:", "auto-publish"]) {
       expect(result.body).not.toContain(forbidden);
     }
+  });
+});
+
+describe("issue-drafting parseDraftingMisses (#8118)", () => {
+  const validMiss = { recordedAt: "2026-07-20T00:00:00.000Z", loosePrompt: "add a thing", missing: "state the exact anti-pattern" };
+
+  it("parses valid records, keeping category only when present and non-empty", () => {
+    const parsed = parseDraftingMisses(JSON.stringify([validMiss, { ...validMiss, category: "unstated-anti-pattern" }, { ...validMiss, category: "" }]));
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0]).toEqual(validMiss);
+    expect(parsed[1]!.category).toBe("unstated-anti-pattern");
+    expect(parsed[2]!.category).toBeUndefined();
+  });
+
+  it("fails loud on invalid JSON, a non-array root, and malformed entries — a broken lesson file must stop the draft", () => {
+    expect(() => parseDraftingMisses("not json")).toThrow(/not valid JSON/);
+    expect(() => parseDraftingMisses('{"a":1}')).toThrow(/must be a JSON array/);
+    expect(() => parseDraftingMisses(JSON.stringify([null]))).toThrow(/miss #0 is malformed/);
+    expect(() => parseDraftingMisses(JSON.stringify([{ ...validMiss, missing: "" }]))).toThrow(/miss #0 is malformed/);
+    expect(() => parseDraftingMisses(JSON.stringify([validMiss, { recordedAt: "2026-07-20", loosePrompt: 5, missing: "x" }]))).toThrow(/miss #1 is malformed/);
+    expect(() => parseDraftingMisses(JSON.stringify([{ ...validMiss, recordedAt: "" }]))).toThrow(/miss #0 is malformed/);
+  });
+
+  it("shares one default misses-file location with the CLIs", () => {
+    expect(DEFAULT_DRAFTING_MISSES_FILE).toBe("scripts/drafting-misses.json");
+  });
+});
+
+describe("issue-drafting draftIssueBody misses checklist (#8118)", () => {
+  const miss = (overrides: Partial<DraftingMiss> = {}): DraftingMiss => ({
+    recordedAt: "2026-07-20T00:00:00.000Z",
+    loosePrompt: "add a thing",
+    missing: "verify the exact current function signature against the checkout, not memory",
+    ...overrides,
+  });
+
+  it("renders no checklist section when no misses are supplied (default and explicit empty)", () => {
+    expect(draftIssueBody("extend detectChangedThresholds", CORPUS).body).not.toContain("Pre-publish checklist");
+    expect(draftIssueBody("extend detectChangedThresholds", CORPUS, { misses: [] }).body).not.toContain("Pre-publish checklist");
+  });
+
+  it("renders every recorded miss as a checklist line the maintainer must resolve and delete", () => {
+    const result = draftIssueBody("extend detectChangedThresholds", CORPUS, {
+      misses: [miss(), miss({ category: "unstated-anti-pattern", missing: "name what does NOT satisfy the issue" })],
+    });
+    expect(result.body).toContain("## Pre-publish checklist — learned from recorded drafting misses. Resolve each item, then DELETE this section before publishing.");
+    expect(result.body).toContain("- [ ] one-off: verify the exact current function signature against the checkout, not memory");
+    expect(result.body).toContain("- [ ] unstated-anti-pattern: name what does NOT satisfy the issue");
+  });
+
+  it("collapses same-category repeats into one counted line carrying the most recent lesson", () => {
+    const result = draftIssueBody("extend detectChangedThresholds", CORPUS, {
+      misses: [
+        miss({ category: "unverified-signature", recordedAt: "2026-07-19T00:00:00.000Z", missing: "older lesson wording" }),
+        miss({ category: "unverified-signature", recordedAt: "2026-07-21T00:00:00.000Z", missing: "newer lesson wording" }),
+        miss({ category: "unverified-signature", recordedAt: "2026-07-20T00:00:00.000Z", missing: "middle lesson wording" }),
+      ],
+    });
+    expect(result.body).toContain("- [ ] unverified-signature (recorded 3×): newer lesson wording");
+    expect(result.body).not.toContain("older lesson wording");
+  });
+
+  it("keeps uncategorized misses one line per distinct lesson, sorted deterministically", () => {
+    const result = draftIssueBody("extend detectChangedThresholds", CORPUS, {
+      misses: [miss({ missing: "zeta lesson" }), miss({ missing: "alpha lesson" }), miss({ missing: "alpha lesson" })],
+    });
+    const checklistLines = result.body.split("\n").filter((line) => line.startsWith("- [ ] one-off"));
+    expect(checklistLines).toEqual(["- [ ] one-off (recorded 2×): alpha lesson", "- [ ] one-off: zeta lesson"]);
   });
 });
