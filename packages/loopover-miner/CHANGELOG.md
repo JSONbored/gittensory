@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.11.0](https://github.com/JSONbored/loopover/compare/miner-v3.10.0...miner-v3.11.0) (2026-07-23)
+
+
+### Features
+
+* **miner:** wire AMS's hosted entry point to the [#8202](https://github.com/JSONbored/loopover/issues/8202) tenant-secret bootstrap ([#8246](https://github.com/JSONbored/loopover/issues/8246)) ([#8263](https://github.com/JSONbored/loopover/issues/8263)) ([904ec7d](https://github.com/JSONbored/loopover/commit/904ec7dcc05d2d36c05063c43caa4e26378e7c41))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^3.10.0 to ^3.11.0
+
 ## [3.10.0](https://github.com/JSONbored/loopover/compare/miner-v3.9.0...miner-v3.10.0) (2026-07-23)
 
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.11.0](https://github.com/JSONbored/loopover/compare/engine-v3.10.0...engine-v3.11.0) (2026-07-23)
+
+
+### Features
+
+* **calibration:** claimed-confidence reliability curves with derived threshold suggestion ([#8252](https://github.com/JSONbored/loopover/issues/8252)) ([2defb4a](https://github.com/JSONbored/loopover/commit/2defb4a047d9660b31e5fd33f396aff9be89b335))
+* **calibration:** pure counterfactual fixture assembler per the replay contract ([#8220](https://github.com/JSONbored/loopover/issues/8220)) ([#8247](https://github.com/JSONbored/loopover/issues/8247)) ([7a8b9b6](https://github.com/JSONbored/loopover/commit/7a8b9b6dbc0510559acf7bb574e42e55032c384c))
+* **calibration:** unify tightening under the backtest evidence standard ([#8225](https://github.com/JSONbored/loopover/issues/8225)) ([#8267](https://github.com/JSONbored/loopover/issues/8267)) ([5ac47e1](https://github.com/JSONbored/loopover/commit/5ac47e1640090fedfe927d99c9c8057cf0bc1b07))
+
 ## [3.10.0](https://github.com/JSONbored/loopover/compare/engine-v3.9.0...engine-v3.10.0) (2026-07-23)
 
 
