@@ -22,8 +22,13 @@ RULESET_SCRIPT=/tmp/loopover-egress-ruleset.sh
 node /app/packages/loopover-miner/lib/generate-egress-firewall-config.js "$DNSMASQ_CONF" "$RULESET_SCRIPT"
 
 # Listens on 127.0.0.1 only (per the generated config's own bind-interfaces + listen-address) -- unreachable
-# from outside this container regardless of what else is on its network.
-dnsmasq --conf-file="$DNSMASQ_CONF" --pid-file=/var/run/dnsmasq.pid
+# from outside this container regardless of what else is on its network. --user/--group are explicit rather
+# than relying on dnsmasq's own default privilege drop (confirmed empirically: it already drops to nobody:65534
+# unprompted on this base image) -- explicit beats implicit for a root-invoked daemon, regardless of what the
+# current default happens to be. Deliberately `nobody`, not the `node` user the miner itself runs as: dnsmasq
+# needs none of node's file access, and running it as the SAME user as the application would only widen what a
+# dnsmasq-specific compromise could reach.
+dnsmasq --conf-file="$DNSMASQ_CONF" --pid-file=/var/run/dnsmasq.pid --user=nobody --group=nogroup
 
 # Docker writes its own /etc/resolv.conf pointing at its embedded DNS server -- nothing routes lookups through
 # dnsmasq until this container's OWN resolver config says to. Docker's own generated file says "this file can

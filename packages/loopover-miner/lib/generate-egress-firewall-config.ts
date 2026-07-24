@@ -36,20 +36,32 @@ export async function generateEgressFirewallConfig(
   return { allowedHostCount: entries.length, disabled };
 }
 
-function main(): void {
-  const [, , dnsmasqConfigPath, rulesetScriptPath] = process.argv;
+/** Injectable IO for {@link main} -- lets tests exercise the real CLI-entry logic in-process (asserting on
+ *  what gets logged/exited) without a subprocess, the same pattern `scripts/check-miner-deployment-docs.ts`'s
+ *  own `main(env, io)` already uses in this codebase. */
+export type GenerateEgressFirewallConfigIo = {
+  argv: string[];
+  log: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  exit: (code: number) => void;
+};
+
+export async function main(
+  io: GenerateEgressFirewallConfigIo = { argv: process.argv, log: console.log.bind(console), error: console.error.bind(console), exit: (code) => process.exit(code) },
+): Promise<void> {
+  const [, , dnsmasqConfigPath, rulesetScriptPath] = io.argv;
   if (!dnsmasqConfigPath || !rulesetScriptPath) {
-    console.error(JSON.stringify({ event: "egress_firewall_config_missing_args", message: "usage: generate-egress-firewall-config.js <dnsmasq-conf-path> <ruleset-script-path>" }));
-    process.exit(1);
+    io.error(JSON.stringify({ event: "egress_firewall_config_missing_args", message: "usage: generate-egress-firewall-config.js <dnsmasq-conf-path> <ruleset-script-path>" }));
+    io.exit(1);
+    return;
   }
-  generateEgressFirewallConfig(dnsmasqConfigPath, rulesetScriptPath)
-    .then(({ allowedHostCount, disabled }) => {
-      console.log(JSON.stringify({ event: "egress_firewall_config_generated", allowedHostCount, disabled, dnsmasqConfigPath, rulesetScriptPath }));
-    })
-    .catch((error: unknown) => {
-      console.error(JSON.stringify({ event: "egress_firewall_config_generation_failed", message: error instanceof Error ? error.message : String(error) }));
-      process.exit(1);
-    });
+  try {
+    const { allowedHostCount, disabled } = await generateEgressFirewallConfig(dnsmasqConfigPath, rulesetScriptPath);
+    io.log(JSON.stringify({ event: "egress_firewall_config_generated", allowedHostCount, disabled, dnsmasqConfigPath, rulesetScriptPath }));
+  } catch (error) {
+    io.error(JSON.stringify({ event: "egress_firewall_config_generation_failed", message: error instanceof Error ? error.message : String(error) }));
+    io.exit(1);
+  }
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main();
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) void main();

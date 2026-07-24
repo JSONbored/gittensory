@@ -6,8 +6,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
-import { generateEgressFirewallConfig } from "../../packages/loopover-miner/lib/generate-egress-firewall-config";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { generateEgressFirewallConfig, main } from "../../packages/loopover-miner/lib/generate-egress-firewall-config";
 
 const roots: string[] = [];
 
@@ -99,5 +99,99 @@ describe("generateEgressFirewallConfig (#7857)", () => {
     await expect(
       generateEgressFirewallConfig(join(outDir, "dnsmasq.conf"), join(outDir, "ruleset.sh"), { ...process.env, LOOPOVER_MINER_CONFIG_DIR: configDir }),
     ).resolves.toBeDefined();
+  });
+});
+
+// #7857: main() is the actual CLI entry egress-firewall-entrypoint.sh invokes -- exercised directly here via
+// injectable IO (mirroring scripts/check-miner-deployment-docs.ts's own main(env, io) pattern in this
+// codebase), not through a subprocess, so it's real, in-process v8 coverage rather than untestable CLI glue.
+function fakeIo(argv: string[]) {
+  return {
+    io: {
+      argv,
+      log: vi.fn((..._args: unknown[]) => undefined),
+      error: vi.fn((..._args: unknown[]) => undefined),
+      exit: vi.fn((_code: number) => undefined),
+    },
+  };
+}
+
+describe("main (#7857)", () => {
+  it("errors and exits 1 without attempting generation when either path arg is missing", async () => {
+    const { io } = fakeIo(["node", "generate-egress-firewall-config.js"]);
+
+    await main(io);
+
+    expect(io.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("egress_firewall_config_missing_args"));
+    expect(io.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(io.log).not.toHaveBeenCalled();
+  });
+
+  it("errors and exits 1 when only one of the two path args is given", async () => {
+    const { io } = fakeIo(["node", "generate-egress-firewall-config.js", "/tmp/dnsmasq.conf"]);
+
+    await main(io);
+
+    expect(io.exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("logs the real generated-config event and never exits on success", async () => {
+    const configDir = tempRoot();
+    const outDir = tempRoot();
+    const dnsmasqPath = join(outDir, "dnsmasq.conf");
+    const rulesetPath = join(outDir, "ruleset.sh");
+    const originalConfigDir = process.env.LOOPOVER_MINER_CONFIG_DIR;
+    process.env.LOOPOVER_MINER_CONFIG_DIR = configDir;
+    const { io } = fakeIo(["node", "generate-egress-firewall-config.js", dnsmasqPath, rulesetPath]);
+
+    try {
+      await main(io);
+    } finally {
+      if (originalConfigDir === undefined) delete process.env.LOOPOVER_MINER_CONFIG_DIR;
+      else process.env.LOOPOVER_MINER_CONFIG_DIR = originalConfigDir;
+    }
+
+    expect(io.exit).not.toHaveBeenCalled();
+    expect(io.error).not.toHaveBeenCalled();
+    expect(io.log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("egress_firewall_config_generated"));
+    expect(readFileSync(dnsmasqPath, "utf8")).toContain("ipset=/github.com/loopover_egress_allow");
+  });
+
+  it("errors and exits 1 (without throwing) when the underlying generation call itself fails", async () => {
+    // An output path under a directory that doesn't exist -- writeFileSync inside generateEgressFirewallConfig
+    // throws ENOENT, exercising main()'s own catch branch.
+    const { io } = fakeIo(["node", "generate-egress-firewall-config.js", "/nonexistent-dir-7857/dnsmasq.conf", "/nonexistent-dir-7857/ruleset.sh"]);
+
+    await main(io);
+
+    expect(io.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("egress_firewall_config_generation_failed"));
+    expect(io.exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("constructs its default IO from real process.argv/console/process.exit when no override is passed", async () => {
+    const originalArgv = process.argv;
+    const originalExit = process.exit;
+    const originalError = console.error;
+    const calls: { exit: number[]; error: string[] } = { exit: [], error: [] };
+    process.exit = ((code?: number) => {
+      calls.exit.push(code ?? 0);
+      return undefined as never;
+    }) as typeof process.exit;
+    console.error = (message?: unknown) => {
+      calls.error.push(String(message));
+    };
+    process.argv = ["node", "generate-egress-firewall-config.js"]; // missing both path args -- the cheapest real path to exercise
+
+    try {
+      await main();
+    } finally {
+      process.argv = originalArgv;
+      process.exit = originalExit;
+      console.error = originalError;
+    }
+
+    expect(calls.error).toHaveLength(1);
+    expect(calls.error[0]).toContain("egress_firewall_config_missing_args");
+    expect(calls.exit).toEqual([1]);
   });
 });
