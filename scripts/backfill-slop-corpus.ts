@@ -90,10 +90,15 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  },
-);
+// Entry guard (the audit-quality-gate-min-score.ts idiom): tests import this module's exported helpers,
+// so main() must run ONLY under direct execution — an import-time process.exit fails the whole vitest run
+// as an unhandled rejection even with every test green.
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
+}
